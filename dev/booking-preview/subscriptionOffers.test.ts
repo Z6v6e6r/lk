@@ -13,7 +13,7 @@ test('the cheapest eligible subscription is selected, with RA first on equal pri
 });
 test('event exclusions, unavailable offers and missing prices cannot become purchasable subscriptions', () => {
   assert.deepEqual(eligibleSubscriptionOffers('training', { ...context, excludedGroups: true }), []);
-  assert.equal(eligibleSubscriptionOffers('training', { ...context, raFits: false })[0].id, 'academy');
+  assert.deepEqual(eligibleSubscriptionOffers('training', { ...context, raFits: false }), []);
   assert.deepEqual(eligibleSubscriptionOffers('tournament', { ...context, raFits: false }), []);
   assert.deepEqual(eligibleSubscriptionOffers('training', context, SUBSCRIPTION_OFFERS.map(offer => ({ ...offer, available: false }))), []);
   for (const price of [0, -1, NaN, Infinity]) {
@@ -34,9 +34,18 @@ test('RA includes the whole eligible class and adds only the subscription price 
 test('a daily-hour purchase combines the subscription price and extra game time without making the order free', () => {
   const friendship = SUBSCRIPTION_OFFERS.find(offer => offer.id === 'friendship')!;
   const option = subscriptionOfferQuote(friendship, 'game', context, 'quarter', 6000)!;
-  assert.equal(option.amount, 500);
-  assert.equal(createPreviewOrder(option, null, friendship.price)?.total, 10300);
+  assert.equal(option.amount, 350, 'Extra half-hour receives the Friendship 30% discount');
+  assert.equal(createPreviewOrder(option, null, friendship.price)?.total, 10150);
   assert.equal(subscriptionOfferQuote(friendship, 'game', context, 'court', 6000), undefined);
+});
+test('Friendship 2.0 is offered for games and the Time for Friends tournament only', () => {
+  const twoHours = SUBSCRIPTION_OFFERS.find(offer => offer.id === 'friendship-2')!;
+  assert.equal(twoHours.price, 19800);
+  assert.equal(subscriptionOfferQuote(twoHours, 'game', { ...context, durationMinutes: 120 }, 'quarter', 8000)?.amount, 0);
+  assert.equal(subscriptionOfferQuote(twoHours, 'tournament', context), undefined);
+  assert.equal(subscriptionOfferQuote(twoHours, 'tournament', { ...context, friendsTournament: true })?.amount, 0);
+  assert.equal(subscriptionOfferQuote(twoHours, 'tournament', { ...context, friendsTournament: true })?.subscriptionPlan, 'friendship-2');
+  assert.deepEqual(eligibleSubscriptionOffers('training', { ...context, proDirection: true }), []);
 });
 test('using the daily quota retains the established subscription discount', () => {
   assert.equal(subscriptionOfferQuote(SUBSCRIPTION_OFFERS[1], 'training', { ...context, dailyQuota: 'used' })?.amount, 2750);

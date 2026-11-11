@@ -1,19 +1,24 @@
 export type ServiceKind = 'game' | 'training' | 'tournament';
-export type PaymentKind = 'full' | 'residency' | 'subscription' | 'pass';
+import { currentBenefit, DAILY_USAGE, type DailyUsage } from './privilegeRules.ts';
+
+export type PaymentKind = 'full' | 'residency' | 'subscription' | 'pass' | 'boost';
 export type Privileges = { residency: boolean; subscription: boolean; pass: boolean };
 export type Applicability = { subscription: boolean; pass: boolean };
-export type SubscriptionPlan = 'daily-training' | 'daily-hour' | 'ra';
+export type SubscriptionPlan = 'daily-training' | 'daily-hour' | 'friendship' | 'friendship-2' | 'ra';
 export type DailyQuota = 'available' | 'used';
-export type PaymentContext = { subscriptionPlan: SubscriptionPlan; dailyQuota: DailyQuota; excludedGroups: boolean; durationMinutes: number; raFits?: boolean };
+export type PaymentContext = { subscriptionPlan: SubscriptionPlan; dailyQuota: DailyQuota; excludedGroups: boolean; durationMinutes: number;
+  raFits?: boolean; boost?: boolean; activeLimitExceeded?: boolean; proDirection?: boolean; friendsTournament?: boolean; dailyUsage?: DailyUsage; proQuotaUsed?: boolean };
 export type SubscriptionBenefit = 'free-training' | 'free-hour' | 'partial-hour' | 'discount' | 'free-event';
 export type PaymentOption = {
   kind: PaymentKind;
   mode: 'book' | 'offer' | 'unavailable' | 'reference' | 'quote';
   amount: number | null;
   benefit?: SubscriptionBenefit;
-  reason?: 'excluded-group' | 'not-applicable' | 'training-only' | 'unknown-duration' | 'unknown-price';
+  subscriptionPlan?: SubscriptionPlan;
+  reason?: 'excluded-group' | 'not-applicable' | 'training-only' | 'unknown-duration' | 'unknown-price' | 'pro-direction' | 'active-limit' | 'daily-limit';
   freeMinutes?: number;
   paidMinutes?: number;
+  overtimeDiscount?: number;
 };
 
 // Display examples supplied by the owner. This is a local prototype, not an API
@@ -36,13 +41,25 @@ export const PRIVILEGE_PROFILES = [
 ] as const;
 
 export function readMatrixSettings(params: URLSearchParams) {
+  const legacy = PRIVILEGE_PROFILES.find(profile => profile.id === params.get('privileges')) || PRIVILEGE_PROFILES[0];
+  const owned = (key: keyof Privileges) => params.has(key) ? params.get(key) === '1' : legacy[key];
+  const profile = PRIVILEGE_PROFILES.find(profile => profile.subscription === owned('subscription') && profile.residency === owned('residency') && profile.pass === owned('pass'))!;
+  const rawPlan = params.get('subscriptionPlan');
+  const subscriptionPlan: SubscriptionPlan = rawPlan === 'ra' || rawPlan === 'friendship' || rawPlan === 'friendship-2' || rawPlan === 'daily-hour' ? rawPlan : 'daily-training';
+  const dailyUsage = DAILY_USAGE.find(usage => usage.id === params.get('dailyUsage'))?.id;
   return {
-    profile: PRIVILEGE_PROFILES.find(profile => profile.id === params.get('privileges')) || PRIVILEGE_PROFILES[0],
+    profile,
     applicability: { subscription: params.get('subscriptionFits') !== '0', pass: params.get('passFits') !== '0' },
-    subscriptionPlan: params.get('subscriptionPlan') === 'ra' ? 'ra' as const : params.get('subscriptionPlan') === 'daily-hour' ? 'daily-hour' as const : 'daily-training' as const,
+    subscriptionPlan,
     dailyQuota: params.get('dailyQuota') === 'used' ? 'used' as const : 'available' as const,
     excludedGroups: params.get('groupCategory') === 'excluded',
     raFits: params.get('raFits') !== '0',
+    boost: params.get('boost') === '1' && (profile.residency || profile.subscription),
+    activeLimitExceeded: params.get('activeLimitExceeded') === '1',
+    proDirection: params.get('groupCategory') === 'pro',
+    friendsTournament: params.get('friendsTournament') === '1',
+    dailyUsage,
+    proQuotaUsed: params.get('proQuotaUsed') === '1',
   };
 }
 
@@ -53,9 +70,12 @@ export function buildPaymentOptions(service: ServiceKind, privileges: Privileges
   const duration = context.durationMinutes ?? price.durationMinutes;
   const excluded = service === 'training' && context.excludedGroups === true;
   const subscriptionFits = plan === 'ra' ? context.raFits ?? fits.subscription : fits.subscription;
+  const currentSubscription = currentBenefit(service, privileges, context);
   let subscription: PaymentOption;
   if (excluded || !subscriptionFits) {
     subscription = { kind: 'subscription', mode: 'unavailable', amount: null, reason: excluded ? 'excluded-group' : 'not-applicable' };
+  } else if (currentSubscription) {
+    subscription = { ...currentSubscription, subscriptionPlan: plan };
   } else if (quota === 'used') {
     subscription = { kind: 'subscription', mode: privileges.subscription ? 'book' : 'offer', amount: price.residentPrice, benefit: 'discount' };
   } else if (plan === 'ra') {
@@ -73,19 +93,23 @@ export function buildPaymentOptions(service: ServiceKind, privileges: Privileges
     subscription = { kind: 'subscription', mode: privileges.subscription ? 'book' : 'offer', amount: 0,
       benefit: plan === 'daily-training' ? 'free-training' : 'free-hour', freeMinutes: plan === 'daily-hour' ? duration : undefined };
   }
-  const residency: PaymentOption = { kind: 'residency', mode: excluded ? 'unavailable' : privileges.residency ? 'book' : 'offer',
-    amount: excluded ? null : price.residentPrice, ...(excluded ? { reason: 'excluded-group' as const } : {}) };
+  const residencyExcluded = excluded || (service !== 'game' && context.proDirection === true);
+  const residency: PaymentOption = { kind: 'residency', mode: residencyExcluded ? 'unavailable' : privileges.residency ? 'book' : 'offer',
+    amount: residencyExcluded ? null : price.residentPrice, ...(residencyExcluded ? { reason: excluded ? 'excluded-group' as const : 'pro-direction' as const } : {}) };
   const pass: PaymentOption = { kind: 'pass', mode: !fits.pass ? 'unavailable' : privileges.pass ? 'book' : 'offer', amount: null };
-  const hasApplicablePrivilege = [subscription, residency, pass].some(option => option.mode === 'book');
-  const options: Record<PaymentKind, PaymentOption> = {
+  const boost = currentBenefit(service, privileges, context, true);
+  const hasApplicablePrivilege = [subscription, residency, pass, boost].some(option => option?.mode === 'book');
+  const options: Record<Exclude<PaymentKind, 'boost'>, PaymentOption> = {
     full: { kind: 'full', mode: hasApplicablePrivilege ? 'reference' : 'book', amount: price.price }, residency, subscription, pass,
   };
-  const order: PaymentKind[] = subscription.mode === 'book'
+  const order: Exclude<PaymentKind, 'boost'>[] = subscription.mode === 'book'
     ? (pass.mode === 'book' ? ['full', 'subscription', 'pass', 'residency'] : ['full', 'subscription', 'residency', 'pass'])
     : pass.mode === 'book'
       ? ['full', 'pass', ...(residency.mode === 'book' ? ['residency', 'subscription'] as const : ['subscription', 'residency'] as const)]
       : ['full', 'residency', 'subscription', 'pass'];
-  return order.map(kind => options[kind]);
+  const result = order.map(kind => options[kind]);
+  if (boost) result.splice(1, 0, boost);
+  return result;
 }
 
 export function formatRubles(amount: number) {
@@ -104,7 +128,7 @@ export function buildGamePaymentOptions(courtAmount: number | null, scope: GameP
   const options: PaymentOption[] = buildPaymentOptions('game', privileges, fits, context).map(option => {
     if (option.benefit === 'partial-hour' && option.paidMinutes && context.durationMinutes) {
       return { ...option, mode: option.mode === 'quote' ? 'book' : option.mode,
-        amount: Math.round(personalAmount * option.paidMinutes / context.durationMinutes * 100) / 100 };
+        amount: Math.round(personalAmount * option.paidMinutes / context.durationMinutes * (1 - (option.overtimeDiscount || 0) / 100) * 100) / 100 };
     }
     return { ...option,
       amount: option.amount == null ? null : option.amount === 0 ? 0

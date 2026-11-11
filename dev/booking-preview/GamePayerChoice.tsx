@@ -16,6 +16,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
     ? subscriptionOfferQuote(cheapestSubscription, 'game', context, 'quarter', courtAmount)
     : gameSubscriptionComparison(courtAmount, context);
   const residency = options.find(option => option.kind === 'residency');
+  const boost = options.find(option => option.kind === 'boost' && option.mode !== 'unavailable');
   const personalBase = courtAmount != null && Number.isFinite(courtAmount) && courtAmount > 0 ? Math.round(courtAmount * 100 / 4) / 100 : null;
   const price = (option: PaymentOption | undefined) => {
     if (personalBase == null) return 'Цена уточняется';
@@ -25,8 +26,8 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
   };
   const subscriptionNote = subscription?.reason === 'training-only' ? 'Тариф даёт бесплатную тренировку; скидка на игру — после использования дневного лимита'
     : subscription?.mode === 'unavailable' ? 'Тариф не подходит к этому событию'
-      : subscription?.benefit === 'partial-hour' ? `${subscription.freeMinutes} мин бесплатно · оплачиваются только ${subscription.paidMinutes} мин с подходящей подпиской`
-        : subscription?.benefit === 'discount' ? 'Скидка 30% · дневной лимит использован'
+      : subscription?.benefit === 'partial-hour' ? `${subscription.freeMinutes} мин бесплатно · доплата за ${subscription.paidMinutes} мин${subscription.overtimeDiscount ? ' со скидкой 30%' : ''}`
+        : subscription?.benefit === 'discount' ? `Скидка 30%${settings.activeLimitExceeded ? ' · больше 8 активных записей' : ' · дневной лимит использован'}`
           : 'С подходящей подпиской · дневной бесплатный лимит доступен';
   const discount = (option: PaymentOption | undefined) => personalBase != null && option?.amount != null
     && option.amount > 0 && option.amount < personalBase;
@@ -35,7 +36,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
     <label className={`matrix-payer matrix-payer--personal ${value === 'split' ? 'is-selected' : ''}`}>
       <input type="radio" name={name} checked={value === 'split'} onChange={() => onChange('split')} value="split" />
       <span className="matrix-payer-copy"><strong>Плачу за себя</strong><span>1 из 4 игроков · все варианты личной оплаты</span>
-        <span className="matrix-quarter-prices" role="group" aria-label="Три варианта стоимости личной доли">
+        <span className="matrix-quarter-prices" role="group" aria-label="Варианты стоимости личной доли">
           <span className="matrix-quarter-row matrix-quarter-row--base">
             <span><b>¼ стоимости корта</b><small>Без применения льгот</small></span>
             <span className="matrix-quarter-price"><strong>{personalBase != null ? formatRubles(personalBase) : 'Цена уточняется'}</strong></span>
@@ -48,6 +49,10 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
             <span><b>С Резидентством</b><small>{settings.profile.residency ? 'Ваша скидка 30%' : 'Скидка 30% при наличии Резидентства'}</small></span>
             <span className="matrix-quarter-price">{discount(residency) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(residency)}</strong></span>
           </span>
+          {boost && <span className="matrix-quarter-row matrix-quarter-row--boost">
+            <span><b>{boost.amount === 0 ? 'С Бустом — бесплатно' : 'С Бустом'}</b><small>{boost.benefit === 'partial-hour' ? `${boost.freeMinutes} мин бесплатно · доплата за ${boost.paidMinutes} мин со скидкой 30%` : boost.benefit === 'discount' ? 'Бесплатный лимит недоступен · скидка 30%' : 'Дневной лимит Буста доступен'}</small></span>
+            <span className="matrix-quarter-price">{discount(boost) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(boost)}</strong></span>
+          </span>}
         </span>
       </span>
     </label>

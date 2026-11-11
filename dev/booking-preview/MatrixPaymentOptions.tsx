@@ -13,12 +13,13 @@ function PaymentIcon({ kind }: { kind: PaymentKind }) {
     residency: 'm3 7 5 4 4-7 4 7 5-4-2 12H5L3 7ZM5 22h14',
     subscription: 'm3 7 9-5 9 5-9 5-9-5Zm0 5 9 5 9-5M3 17l9 5 9-5',
     pass: 'M3 5h18v5a2 2 0 0 0 0 4v5H3v-5a2 2 0 0 0 0-4V5Zm9 0v3m0 3v2m0 3v3',
+    boost: 'm13 2-9 12h7l-1 8L21 9h-8l1-7Z',
   };
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={paths[kind]} /></svg>;
 }
 
 const optionNames: Record<PaymentKind, string> = {
-  full: 'Полная цена', residency: 'С Резидентством', subscription: 'По подписке', pass: 'По абонементу Энергия 5',
+  full: 'Полная цена', residency: 'С Резидентством', subscription: 'По подписке', pass: 'По абонементу Энергия 5', boost: 'С Бустом — бесплатно',
 };
 
 export function MatrixPaymentOptions({ service, eventKey, disabled = false, excludesPrivileges = false, durationMinutes, gamePaymentScope, courtAmount = null }: { service: ServiceKind; eventKey: string; disabled?: boolean; excludesPrivileges?: boolean; durationMinutes?: number; gamePaymentScope?: GamePaymentScope; courtAmount?: number | null }) {
@@ -76,16 +77,17 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   };
 
   const title = (option: PaymentOption) => {
+    if (option.kind === 'boost') return option.amount === 0 ? 'С Бустом — бесплатно' : option.benefit === 'partial-hour' ? `С Бустом · ${option.freeMinutes} минут бесплатно` : `С Бустом · скидка ${price.discount}%`;
     if (isWholeCourt && option.kind === 'full') return 'Полная оплата за 4 игроков';
     if (isPersonalGame && option.kind === 'full') return 'Моя доля · ¼ стоимости';
     if (isPersonalGame && profile.subscription && option.kind === 'subscription' && option.mode === 'book') return 'Моя доля · по подписке';
     if (option.kind !== 'subscription') return optionNames[option.kind];
-    if (option.benefit === 'free-event') return 'По подписке РА — бесплатно';
+    if (option.benefit === 'free-event') return `По подписке ${option.subscriptionPlan === 'friendship-2' ? 'Дружба 2.0' : 'РА'} — бесплатно`;
     if (option.benefit === 'discount') return `По подписке · скидка ${price.discount}%`;
-    if (option.benefit === 'partial-hour') return 'По подписке · 60 минут бесплатно';
+    if (option.benefit === 'partial-hour') return `По подписке · ${option.freeMinutes} минут бесплатно`;
     if (!profile.subscription && !excludedGroup) return 'Бесплатно при наличии подписки';
     if (option.benefit === 'free-training') return 'По подписке · 1 тренировка в день';
-    if (option.benefit === 'free-hour') return 'По подписке · 1 час в день';
+    if (option.benefit === 'free-hour') return `По подписке · ${option.subscriptionPlan === 'friendship-2' ? '2 часа' : '1 час'} в день`;
     return 'Подписка';
   };
   const detail = (option: PaymentOption) => {
@@ -96,12 +98,13 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     if (option.mode === 'unavailable') return option.kind === 'subscription' ? 'Тариф подписки не подходит к этому событию' : 'Нет подходящего абонемента с доступными посещениями';
     if (option.kind === 'full') return isWholeCourt ? 'Оплата всего корта без применения льгот' : isPersonalGame ? 'Оплачиваете только своё участие, остальные игроки — своё' : 'Разовая запись без привилегий';
     if (option.kind === 'residency') return `Скидка ${price.discount}%${option.mode === 'offer' ? ' · можно оформить Резидентство' : ' · Резидентство уже действует'}`;
-    if (option.kind === 'subscription') {
+    if (option.kind === 'subscription' || option.kind === 'boost') {
       const prefix = option.mode === 'offer' ? 'Если оформить подходящий тариф. ' : '';
-      if (option.benefit === 'free-event') return `${prefix}Занятие входит в РА · без доплаты за участие`;
-      if (option.benefit === 'discount') return `${prefix}Дневной бесплатный лимит использован. Действует цена со скидкой по подписке`;
-      if (option.benefit === 'partial-hour') return `${prefix}${option.freeMinutes} минут бесплатно · ${option.amount != null ? `доплата за ${option.paidMinutes} минут — ${formatRubles(option.amount)}` : `за оставшиеся ${option.paidMinutes} минут нужна доплата. Формула уточняется`}`;
-      if (option.benefit === 'free-hour') return `${prefix}Дневной лимит доступен · запись на ${option.freeMinutes} мин. без доплаты`;
+      const source = option.kind === 'boost' ? 'Буст' : option.subscriptionPlan === 'friendship-2' ? 'Дружбу 2.0' : 'РА';
+      if (option.benefit === 'free-event') return `${prefix}Занятие входит в ${source} · без доплаты за участие${paymentContext.proDirection ? ' · ПРО: 1 событие в день' : ''}`;
+      if (option.benefit === 'discount') return `${prefix}${option.reason === 'active-limit' ? 'Больше 8 активных записей. ' : paymentContext.dailyQuota === 'used' ? 'Дневной бесплатный лимит использован. ' : ''}Скидка ${price.discount}% на запись`;
+      if (option.benefit === 'partial-hour') return `${prefix}${option.freeMinutes} минут бесплатно · ${option.amount != null ? `доплата за ${option.paidMinutes} минут — ${formatRubles(option.amount)}` : `за оставшиеся ${option.paidMinutes} минут нужна доплата. Формула уточняется`}${option.overtimeDiscount ? ' · на доплату действует скидка 30%' : ''}`;
+      if (option.benefit === 'free-hour') return `${prefix}Дневной лимит доступен · запись на ${option.freeMinutes} мин. без доплаты${option.kind === 'boost' ? ' · с Бустом' : ''}`;
       return `${prefix}Дневная бесплатная тренировка доступна · без списания абонемента`;
     }
     return option.mode === 'offer' ? '5 тренировок · первая запись входит в стоимость пакета' : `${passBalanceText(passRemaining)} · спишется 1 тренировка`;
@@ -167,7 +170,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   };
 
   return <section className="matrix-payment" aria-label={`Способы записи: ${price.name}`} data-service={service} data-event={eventKey}>
-    <header className="matrix-payment-heading"><div><h2>{registered ? 'Ваша запись' : checkout ? 'Оплата записи' : 'Выберите способ записи'}</h2><p>{price.name}{isPersonalGame ? ' · моя доля ¼' : isWholeCourt ? ' · плачу за всех' : ''}{Number.isFinite(duration) && duration > 0 ? ` · ${duration} мин` : ''}</p></div>
+    <header className="matrix-payment-heading"><div><h2>{registered ? 'Ваша запись' : checkout ? 'Оплата записи' : 'Выберите способ записи'}</h2><p>{price.name}{isPersonalGame ? ' · моя доля ¼' : isWholeCourt ? ' · плачу за всех' : ''}{Number.isFinite(duration) && duration > 0 ? ` · ${duration} мин` : ''}{service !== 'game' && paymentContext.proDirection ? ' · ПРО' : ''}{service === 'tournament' && paymentContext.friendsTournament ? ' · Время на друзей' : ''}</p></div>
     </header>
     {registered ? <div className="matrix-success" role="status">
       <strong>Вы записаны</strong><p>{submittedOption?.kind === 'pass' ? `Энергия 5 · списана 1 тренировка · ${passBalanceText(passRemaining)}` : submittedOption ? `${title(submittedOption)}${submittedOption.amount != null ? ` · ${amount(submittedOption)}` : ''}` : 'Место за вами. Детали записи доступны в личном кабинете.'}</p>
@@ -185,7 +188,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
       <fieldset className="matrix-options" disabled={busy}>
         <legend className="matrix-sr-only">Способы записи</legend>
         {options.filter(option => option.mode !== 'reference' && option.mode !== 'unavailable').map(option => {
-          const showBasePrice = (option.kind === 'residency' || option.kind === 'subscription')
+          const showBasePrice = (option.kind === 'residency' || option.kind === 'subscription' || option.kind === 'boost')
             && referenceAmount != null && option.amount != null && option.amount >= 0 && option.amount < referenceAmount;
           const copy = <><span className={`matrix-icon matrix-icon--${option.kind}`}><PaymentIcon kind={option.kind} /></span>
             <span className="matrix-option-copy"><strong>{title(option)}</strong><span>{detail(option)}</span></span>

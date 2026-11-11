@@ -15,8 +15,9 @@ export function withPersonalSubscription(options: PaymentOption[], hasSubscripti
     && option.amount != null && Number.isFinite(option.amount) && option.amount >= 0);
   if (!hasSubscription || !subscription) return options;
   const full = options.find(option => option.kind === 'full');
-  return [...(full ? [{ ...full, mode: 'reference' as const }] : []), subscription,
-    ...options.filter(option => option.kind !== 'full' && option.kind !== 'subscription')];
+  const boost = options.find(option => option.kind === 'boost' && option.mode === 'book' && option.amount != null && option.amount <= subscription.amount!);
+  return [...(full ? [{ ...full, mode: 'reference' as const }] : []), ...(boost ? [boost] : []), subscription,
+    ...options.filter(option => option.kind !== 'full' && option.kind !== 'subscription' && option !== boost)];
 }
 
 export function bookingButtonText(option: PaymentOption | undefined) {

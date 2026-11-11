@@ -1,8 +1,9 @@
 import { createRoot, type Root } from 'react-dom/client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import './preview.css';
-import { PRIVILEGE_PROFILES, readMatrixSettings } from './paymentMatrix';
+import { readMatrixSettings, type SubscriptionPlan } from './paymentMatrix';
 import { PREVIEW_RESIDENCY_PRICE } from './bookingCheckout';
+import { DAILY_USAGE, SUBSCRIPTION_PLANS, type DailyUsage } from './privilegeRules';
 
 const screens = [
   ['game-booking', 'Игра', 'Выбор станции, корта и времени'],
@@ -27,20 +28,33 @@ function Preview() {
   const [width, setWidth] = useState(params.get('width') === 'mobile' ? 'mobile' : 'desktop');
   const [revision, setRevision] = useState(0);
   const matrix = readMatrixSettings(params);
-  const [privileges, setPrivileges] = useState<string>(matrix.profile.id);
-  const [subscriptionFits, setSubscriptionFits] = useState(matrix.applicability.subscription);
+  const [subscription, setSubscription] = useState(matrix.profile.subscription);
+  const [residency, setResidency] = useState(matrix.profile.residency);
+  const [pass, setPass] = useState(matrix.profile.pass);
+  const [boost, setBoost] = useState(matrix.boost);
+  const [subscriptionPlan, setSubscriptionPlan] = useState<SubscriptionPlan>(matrix.subscriptionPlan === 'daily-hour' || matrix.subscriptionPlan === 'daily-training' ? 'friendship' : matrix.subscriptionPlan);
+  const [dailyQuota, setDailyQuota] = useState(matrix.dailyQuota);
+  const [activeLimitExceeded, setActiveLimitExceeded] = useState(matrix.activeLimitExceeded);
+  const [dailyUsage, setDailyUsage] = useState<DailyUsage>(matrix.dailyUsage || (matrix.dailyQuota === 'used' ? matrix.subscriptionPlan === 'friendship-2' ? 'game-two-hours' : 'game-hour' : 'none'));
+  const [groupCategory, setGroupCategory] = useState(matrix.proDirection ? 'pro' : matrix.excludedGroups ? 'excluded' : 'standard');
+  const [friendsTournament, setFriendsTournament] = useState(matrix.friendsTournament);
   const [passFits, setPassFits] = useState(matrix.applicability.pass);
-  const [subscriptionPlan, setSubscriptionPlan] = useState<string>(matrix.subscriptionPlan);
-  const [dailyQuota, setDailyQuota] = useState<string>(matrix.dailyQuota);
-  const [excludedGroups, setExcludedGroups] = useState(matrix.excludedGroups);
-  const [raFits, setRaFits] = useState(matrix.raFits);
   const [passRemaining, setPassRemaining] = useState(params.get('passRemaining') ?? '3');
   const [residencyPrice, setResidencyPrice] = useState(params.get('residencyPrice') ?? String(PREVIEW_RESIDENCY_PRICE));
-  const query = new URLSearchParams({ screen, state, width, privileges, subscriptionFits: subscriptionFits ? '1' : '0', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota, groupCategory: excludedGroups ? 'excluded' : 'standard', residencyPrice, raFits: raFits ? '1' : '0', passRemaining });
+  const boostAllowed = subscription || residency;
+  const hasPro = subscription && (subscriptionPlan === 'ra' || subscriptionPlan === 'friendship-2');
+  const proQuotaUsed = DAILY_USAGE.some(usage => usage.id === dailyUsage && 'pro' in usage && usage.pro);
+  const query = new URLSearchParams({ screen, state, width, subscription: subscription ? '1' : '0', residency: residency ? '1' : '0', pass: pass ? '1' : '0',
+    boost: boost && boostAllowed ? '1' : '0', subscriptionFits: '1', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota,
+    activeLimitExceeded: activeLimitExceeded ? '1' : '0', dailyUsage, proQuotaUsed: proQuotaUsed ? '1' : '0',
+    groupCategory, friendsTournament: friendsTournament ? '1' : '0', residencyPrice, raFits: '1', passRemaining });
   const frameUrl = `/dev/booking-preview/frame.html?${query}&reset=${revision}`;
-  const updateUrl = (key: string, value: string) => {
-    query.set(key, value);
-    history.replaceState(null, '', `?${query}`);
+  const serialized = query.toString();
+  useEffect(() => { history.replaceState(null, '', `?${serialized}`); }, [serialized]);
+  const changeDailyUsage = (value: DailyUsage) => { setDailyUsage(value); setDailyQuota(value === 'none' ? 'available' : 'used'); };
+  const changeDailyQuota = (used: boolean) => {
+    setDailyQuota(used ? 'used' : 'available');
+    setDailyUsage(used ? subscriptionPlan === 'friendship-2' ? 'game-two-hours' : 'game-hour' : 'none');
   };
 
   return <div className="preview-shell">
@@ -54,7 +68,7 @@ function Preview() {
           {index === 3 && <h2>Присоединение</h2>}
           {index === 6 && <h2>Дополнительно</h2>}
           <button className={screen === key ? 'is-active' : ''} aria-current={screen === key ? 'page' : undefined}
-            onClick={() => { setScreen(key); updateUrl('screen', key); }}>
+            onClick={() => setScreen(key)}>
             <strong>{title}</strong><span>{description}</span>
           </button>
         </div>)}
@@ -65,43 +79,51 @@ function Preview() {
       <header className="preview-toolbar">
         <div><strong>{screens.find(([key]) => key === screen)?.[1]}</strong><span>Локальный просмотр</span></div>
         <div className="preview-controls">
-          <label>Состояние <select value={state} onChange={event => { setState(event.target.value); updateUrl('state', event.target.value); }}>
+          <label>Состояние <select value={state} onChange={event => setState(event.target.value)}>
             {states.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select></label>
           <div className="preview-size" role="group" aria-label="Размер экрана">
-            <button aria-pressed={width === 'desktop'} onClick={() => { setWidth('desktop'); updateUrl('width', 'desktop'); }}>Широкий</button>
-            <button aria-pressed={width === 'mobile'} onClick={() => { setWidth('mobile'); updateUrl('width', 'mobile'); }}>390 px</button>
+            <button aria-pressed={width === 'desktop'} onClick={() => setWidth('desktop')}>Широкий</button>
+            <button aria-pressed={width === 'mobile'} onClick={() => setWidth('mobile')}>390 px</button>
           </div>
           <button className="preview-reset" onClick={() => setRevision(value => value + 1)}>Сбросить</button>
           <a href={frameUrl} target="_blank" rel="noreferrer">Открыть экран ↗</a>
         </div>
       </header>
       <section className="preview-privileges" aria-label="Условия матрицы">
-        <label>Ваши привилегии <select value={privileges} onChange={event => { setPrivileges(event.target.value); updateUrl('privileges', event.target.value); }}>
-          {PRIVILEGE_PROFILES.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-        </select></label>
-        <div className="preview-applicability">
-          {subscriptionPlan !== 'ra' && <label><input type="checkbox" checked={subscriptionFits} onChange={event => { setSubscriptionFits(event.target.checked); updateUrl('subscriptionFits', event.target.checked ? '1' : '0'); }} />Тариф подходит к событию</label>}
-          <label><input type="checkbox" checked={passFits} onChange={event => { setPassFits(event.target.checked); updateUrl('passFits', event.target.checked ? '1' : '0'); }} />Абонемент подходит</label>
-          <label><input type="checkbox" checked={raFits} onChange={event => { setRaFits(event.target.checked); updateUrl('raFits', event.target.checked ? '1' : '0'); }} />РА действует на событие</label>
+        <div className="preview-products">
+          <fieldset className="preview-product preview-product--subscription"><legend>1. Подписка</legend>
+            <label className="preview-check"><input type="checkbox" checked={subscription} onChange={event => { setSubscription(event.target.checked); if (!event.target.checked && !residency) setBoost(false); }} />Есть подписка</label>
+            <label className="preview-field">Выбор подписки<select value={subscriptionPlan} onChange={event => setSubscriptionPlan(event.target.value as SubscriptionPlan)}>
+              {SUBSCRIPTION_PLANS.map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
+            </select></label>
+            <p>{SUBSCRIPTION_PLANS.find(plan => plan.id === subscriptionPlan)?.description}</p>
+            <label className="preview-check"><input type="checkbox" checked={dailyQuota === 'used'} onChange={event => changeDailyQuota(event.target.checked)} />Занятие в день уже потрачено</label>
+            <label className="preview-check"><input type="checkbox" checked={activeLimitExceeded} onChange={event => setActiveLimitExceeded(event.target.checked)} />Больше 8 активных записей</label>
+            <small>После лимитов остаётся запись со скидкой 30% / 50%, кроме ПРО.</small>
+          </fieldset>
+          <fieldset className="preview-product"><legend>2. Резидентство</legend>
+            <label className="preview-check"><input type="checkbox" checked={residency} onChange={event => { setResidency(event.target.checked); if (!event.target.checked && !subscription) setBoost(false); }} />Есть Резидентство</label>
+            <label className="preview-field">Стоимость Резидентства, ₽<input type="number" min="0.01" step="0.01" value={residencyPrice} onChange={event => setResidencyPrice(event.target.value)} /></label>
+          </fieldset>
+          <fieldset className="preview-product"><legend>3. Абонемент Энергия 5</legend>
+            <label className="preview-check"><input type="checkbox" checked={pass} onChange={event => setPass(event.target.checked)} />Есть Энергия 5</label>
+            <label className="preview-field">Остаток тренировок<input type="number" min="0" max="5" step="1" value={passRemaining} onChange={event => setPassRemaining(event.target.value)} /></label>
+            <label className="preview-check"><input type="checkbox" checked={passFits} onChange={event => setPassFits(event.target.checked)} />Энергия 5 подходит к событию</label>
+          </fieldset>
+          <fieldset className="preview-product preview-product--boost"><legend>4. РАбуста</legend>
+            <label className="preview-check"><input type="checkbox" checked={boost && boostAllowed} disabled={!boostAllowed} onChange={event => setBoost(event.target.checked)} />Есть Буст</label>
+            <p>{!boostAllowed ? 'Нужны действующее Резидентство или любая подписка.' : !subscription ? 'С Резидентством — условия РА: 1 час игры или одно событие в день. ПРО не входит.' : subscriptionPlan === 'friendship-2' ? '2 часа игры + тренировка, турнир или ПРО. ПРО — не более 1 события в общем дневном лимите.' : subscriptionPlan === 'ra' ? '2 часа игры или два события, включая игру 1 час + тренировку / турнир. ПРО входит в общий лимит — не более 1 в день.' : '2 часа игры или две тренировки / турнира, либо игра 1 час + тренировка / турнир. ПРО не входит.'}</p>
+            {boost && boostAllowed && <label className="preview-field">Уже использовано сегодня<select value={dailyUsage} onChange={event => changeDailyUsage(event.target.value as DailyUsage)}>{DAILY_USAGE.filter(usage => hasPro || !('pro' in usage) || usage.id === dailyUsage).map(usage => <option key={usage.id} value={usage.id}>{usage.name}</option>)}</select></label>}
+          </fieldset>
         </div>
-        <div className="preview-subscription-rules">
-          <label>Тариф подписки<select value={subscriptionPlan} onChange={event => { setSubscriptionPlan(event.target.value); updateUrl('subscriptionPlan', event.target.value); }}>
-            <option value="daily-training">1 бесплатная тренировка в день</option><option value="daily-hour">1 бесплатный час в день</option><option value="ra">РА · занятие бесплатно</option>
-          </select></label>
-          <label>Дневной бесплатный лимит<select value={dailyQuota} onChange={event => { setDailyQuota(event.target.value); updateUrl('dailyQuota', event.target.value); }}>
-            <option value="available">Доступен</option><option value="used">Уже использован</option>
-          </select></label>
-          <label>Категория групповых<select value={excludedGroups ? 'excluded' : 'standard'} onChange={event => { setExcludedGroups(event.target.value === 'excluded'); updateUrl('groupCategory', event.target.value); }}>
-            <option value="standard">Обычная</option><option value="excluded">Без подписки и Резидентства</option>
-          </select></label>
-          <label>Стоимость Резидентства, ₽<input type="number" min="0.01" step="0.01" value={residencyPrice} onChange={event => { setResidencyPrice(event.target.value); updateUrl('residencyPrice', event.target.value); }} /></label>
-          <label>Остаток тренировок Энергии 5<input type="number" min="0" max="5" step="1" value={passRemaining} onChange={event => { setPassRemaining(event.target.value); updateUrl('passRemaining', event.target.value); }} /></label>
-        </div>
+        <div className="preview-event-rules"><label className="preview-field">Направление события<select value={groupCategory} onChange={event => setGroupCategory(event.target.value)}>
+          <option value="standard">Обычное</option><option value="pro">ПРО</option><option value="excluded">Групповая без подписки и Резидентства</option>
+        </select></label><label className="preview-check"><input type="checkbox" checked={friendsTournament} onChange={event => setFriendsTournament(event.target.checked)} />Турнир «Время на друзей»</label></div>
         <span>Корт 4 000 ₽/ч · моя ¼ — 1 000 ₽/ч · тренировка 5 500 ₽ · турнир 8 000 ₽</span>
       </section>
       <div className={`preview-stage preview-stage--${width}`}>
-        <iframe key={`${screen}-${state}-${revision}-${privileges}-${subscriptionFits}-${passFits}-${subscriptionPlan}-${dailyQuota}-${excludedGroups}-${residencyPrice}-${raFits}-${passRemaining}`} src={frameUrl} title="Интерфейс записи PadlHub"
+        <iframe key={`${serialized}-${revision}`} src={frameUrl} title="Интерфейс записи PadlHub"
           sandbox="allow-scripts allow-same-origin" />
       </div>
     </main>

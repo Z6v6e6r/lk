@@ -4,15 +4,18 @@ export type SubscriptionOffer = { id: string; name: string; plan: SubscriptionPl
 // Public catalog snapshot, read 2026-11-11. No customer data or live writes.
 export const SUBSCRIPTION_CATALOG_SOURCE = 'https://padlhub.su/lk/tournaments/summer-subscription/status';
 export const SUBSCRIPTION_OFFERS: readonly SubscriptionOffer[] = [
-  { id: 'friendship', name: 'Дружба', plan: 'daily-hour', price: 9800, services: ['game'], available: true },
+  { id: 'friendship', name: 'Дружба', plan: 'friendship', price: 9800, services: ['game'], available: true },
   { id: 'ra', name: 'РА', plan: 'ra', price: 23800, services: ['game', 'training', 'tournament'], available: true },
-  { id: 'academy', name: 'Академия', plan: 'daily-hour', price: 23800, services: ['training'], available: true },
+  // Price from the existing two-hour storefront product; local availability.
+  { id: 'friendship-2', name: 'Дружба 2.0', plan: 'friendship-2', price: 19800, services: ['game', 'tournament'], available: true },
 ];
 
 export function eligibleSubscriptionOffers(service: ServiceKind, context: Partial<PaymentContext>, offers = SUBSCRIPTION_OFFERS) {
   if (service === 'training' && context.excludedGroups) return [];
+  if (service !== 'game' && context.proDirection) return [];
   return offers.filter(offer => offer.available && Number.isFinite(offer.price) && offer.price > 0
-    && offer.services.includes(service) && !(offer.plan === 'ra' && context.raFits === false))
+    && offer.services.includes(service) && !(offer.plan === 'ra' && context.raFits === false)
+    && !(offer.plan === 'friendship-2' && service === 'tournament' && !context.friendsTournament))
     .sort((a, b) => a.price - b.price || (a.id === b.id ? 0 : a.id === 'ra' ? -1 : b.id === 'ra' ? 1 : a.id.localeCompare(b.id)));
 }
 
