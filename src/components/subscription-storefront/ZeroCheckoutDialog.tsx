@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCheckoutAuthEvent } from './CheckoutAuthProvider';
 import { isCheckoutReturn } from './zeroCheckoutOffers';
-import { armFastResume, bindFastQuote, cancelFastIntent, claimFastIntent, claimFastResume, readFastIntent } from './zeroCheckoutIntent';
-import { checkoutSessionToken, verifyFastCheckoutSession, type FastCheckoutSession } from './zeroCheckoutSession';
+import { armFastResume, bindFastQuote, cancelFastIntent, claimFastIntent, claimFastRestart, claimFastResume, readFastIntent } from './zeroCheckoutIntent';
+import { checkoutSessionToken, checkoutTransportMatches, resolveCheckoutPhone, verifyFastCheckoutSession, type FastCheckoutSession } from './zeroCheckoutSession';
 import { useAuth } from '../../context/AuthContext';
 import { AuthForm } from '../auth/AuthForm';
 import { CABINET_URL } from '../../consts/api_config';
-import { resolvePaymentPhone, StorefrontPaymentError } from './payment';
+import { StorefrontPaymentError } from './payment';
 import { resolvePromoCabinetUrl } from './promo';
 import { PATRIOTS_PLAN_ID } from './catalog';
 import { confirmZeroPayment, createZeroPayment, resumeZeroPayment, hasZeroAttempt, loadZeroOfferQuote, type ZeroOfferQuote, resolveZeroOffer, withZeroDeadline, ZERO_PENDING_MESSAGE } from './zeroCheckoutPayment';
@@ -39,12 +39,15 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy, fast, resumeExis
   const authenticated = auth.isAuthenticated && !auth.isRestoringSession && !auth.isLoading && !auth.needsPhoneVerification;
   const authReady = useRef(authenticated);
   useEffect(() => { authReady.current = authenticated; }, [authenticated]);
+  const dismissCheckout = useCallback((message: string) => {
+    window.dispatchEvent(new CustomEvent('padlhub:checkout-notice', { detail: message }));
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     alive.current = true;
     const previous = document.activeElement;
     const element = dialog.current;
-    element?.showModal();
     const onStorage = () => { if (hasZeroAttempt(offerKey)) setBlocked(true); };
     const visibility = () => setForeground(!document.hidden);
     document.addEventListener('visibilitychange', visibility);
@@ -57,6 +60,14 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy, fast, resumeExis
       if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
     };
   }, [offerKey]);
+
+  // Automatic authenticated checkout is headless; only login/terms/manual checkout opens a dialog.
+  const showDialog = !authenticated || (!fastActive && !resuming)
+    || !blocked && (offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms;
+  useEffect(() => {
+    if (showDialog && !dialog.current?.open) dialog.current?.showModal();
+    else if (!showDialog && dialog.current?.open) dialog.current?.close();
+  }, [showDialog]);
 
   useEffect(() => {
     if (resuming) { setLoading(false); return; }
@@ -75,6 +86,8 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy, fast, resumeExis
     if (!authenticated || busy.current || (!checkOnly && !resuming && (blocked || loading || price === null || ((offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms)))) return;
     busy.current = true; onBusy(true); setProcessing(true); setError(null);
     let operationActive = true;
+    let dismissMessage: string | null = null;
+    let navigating = false;
     const session = checkoutSessionToken();
     try {
       if (resuming && !session) throw new StorefrontPaymentError('Войдите в аккаунт перед оплатой.');
@@ -91,31 +104,43 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy, fast, resumeExis
         if (alive.current) setMessage(result.message);
         return;
       }
-      const phone = await withZeroDeadline(resolvePaymentPhone(), 12_000);
+      const phone = await withZeroDeadline(resolveCheckoutPhone(session, Boolean(offer.promo || offer.liveProductId || offer.target?.directProductId)), 12_000);
       if (!alive.current || !authReady.current) return;
       const canProceed = () => operationActive && alive.current && authReady.current && checkoutSessionToken() === session
+        && (!(offer.promo || offer.liveProductId || offer.target?.directProductId) || checkoutTransportMatches(session))
         && (!resuming || !!session && !document.hidden)
         && (!automatic || !!fast && readFastIntent(fast.id)?.phase === 'claimed' && !document.hidden);
-      const result = resuming
+      let result: Awaited<ReturnType<typeof createZeroPayment>> | Awaited<ReturnType<typeof resumeZeroPayment>> = resuming
         ? await withZeroDeadline(resumeZeroPayment(offerKey, phone, canProceed))
         : await withZeroDeadline(createZeroPayment(offerKey, phone, price!, canProceed, quote));
       if (!canProceed()) return;
+      if (result.status === 'restart' && automatic && fast) {
+        const freshQuote = await withZeroDeadline(loadZeroOfferQuote(offerKey));
+        if (!canProceed() || !claimFastRestart(fast.id, freshQuote)) throw new StorefrontPaymentError('Старая оплата закрыта. Нажмите «Оплатить» ещё раз, чтобы подтвердить актуальную цену.');
+        result = await withZeroDeadline(createZeroPayment(offerKey, phone, freshQuote.priceMinor, canProceed, freshQuote));
+        if (!canProceed()) return;
+      }
       setBlocked(true);
-      if (result.status === 'redirect') window.location.assign(result.paymentUrl);
-      else { setFastActive(false); setMessage(result.message); }
+      if (result.status === 'redirect') { navigating = true; window.location.assign(result.paymentUrl); }
+      else { setFastActive(false); setMessage(result.message); if (resuming || automatic) dismissMessage = result.message; }
     } catch (failure) {
       if (fast) cancelFastIntent(fast.id);
       if (alive.current) {
         setFastActive(false);
         setBlocked(hasZeroAttempt(offerKey));
-        setError(failure instanceof Error ? failure.message : 'Не удалось проверить результат. Попробуйте проверить статус позже.');
+        const message = failure instanceof Error ? failure.message : 'Не удалось проверить результат. Попробуйте проверить статус позже.';
+        setError(message); if (resuming || automatic) dismissMessage = message;
       }
     } finally {
       operationActive = false;
       busy.current = false; onBusy(false);
-      if (alive.current) setProcessing(false);
+      if (alive.current) {
+        setProcessing(false);
+        if (!navigating && (resuming || automatic)) dismissMessage ||= 'Переход к оплате прерван. Нажмите «Оплатить», чтобы продолжить.';
+        if (dismissMessage) dismissCheckout(dismissMessage);
+      }
     }
-  }, [authenticated, blocked, loading, price, offer.billingOptionId, patriotsPendingBenefits, terms, onBusy, offerKey, quote, fast, authEvent.interactiveIdentity, resuming]);
+  }, [authenticated, blocked, loading, price, offer.billingOptionId, patriotsPendingBenefits, terms, onBusy, offerKey, quote, fast, authEvent.interactiveIdentity, resuming, dismissCheckout, offer.promo, offer.liveProductId, offer.target?.directProductId]);
 
   useEffect(() => {
     if (!fast || !fastActive || fastStarted.current || !fast.resume && (blocked || loading || !quote)) return;
@@ -125,16 +150,16 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy, fast, resumeExis
     }
     catch (failure) {
       cancelFastIntent(fast.id); setFastActive(false);
-      setError(failure instanceof Error ? failure.message : 'Подтвердите предложение заново.'); return;
+      dismissCheckout(failure instanceof Error ? failure.message : 'Подтвердите предложение заново.'); return;
     }
     if (!authenticated || authEvent.pending || !foreground) return;
     if (!fast.initialIdentity && !fast.sessionBinding && !authEvent.interactiveIdentity) {
-      cancelFastIntent(fast.id); setFastActive(false); return;
+      cancelFastIntent(fast.id); setFastActive(false); dismissCheckout('Войдите заново и нажмите кнопку оплаты.'); return;
     }
     if (!fast.resume && (offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms) return;
     fastStarted.current = true;
     void submit(false, true);
-  }, [fast, fastActive, blocked, loading, quote, authenticated, authEvent.pending, authEvent.interactiveIdentity, foreground, submit, offer.billingOptionId, patriotsPendingBenefits, terms]);
+  }, [fast, fastActive, blocked, loading, quote, authenticated, authEvent.pending, authEvent.interactiveIdentity, foreground, submit, offer.billingOptionId, patriotsPendingBenefits, terms, dismissCheckout]);
 
   // A saved same-page purchase may resume on reload; this path can only read it.
   useEffect(() => {

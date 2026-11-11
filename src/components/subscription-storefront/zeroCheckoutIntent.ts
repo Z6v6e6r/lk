@@ -84,3 +84,12 @@ export function claimFastResume(id: string): boolean {
   if (!value?.resume || value.phase !== 'armed' || isCheckoutReturn()) return false;
   write({ ...value, phase: 'claimed' }); clearOAuthContinuation(id); return true;
 }
+
+/** Same trusted card click can replace a server-closed checkout at the exact displayed price. */
+export function claimFastRestart(id: string, quote: ZeroOfferQuote): boolean {
+  const value = readFastIntent(id);
+  if (!value?.resume || value.key !== 'friendship' || value.phase !== 'claimed'
+    || value.priceMinor <= 0 || quote.priceMinor !== value.priceMinor || isCheckoutReturn()) return false;
+  write({ ...value, resume: false, activationDays: quote.activationDays ?? null });
+  return true;
+}

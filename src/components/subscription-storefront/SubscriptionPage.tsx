@@ -138,6 +138,15 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     return () => { cancelled = true; };
   }, [cabinetUrl, previewView]);
 
+  useEffect(() => {
+    const onCheckoutNotice = (event: Event) => {
+      const message = (event as CustomEvent<unknown>).detail;
+      if (typeof message === 'string') setNotice(message);
+    };
+    window.addEventListener('padlhub:checkout-notice', onCheckoutNotice);
+    return () => window.removeEventListener('padlhub:checkout-notice', onCheckoutNotice);
+  }, []);
+
   function handleChoose(selection: SubscriptionPlanSelection, gesture?: Event) {
     if (previewView || !gesture) return;
     const key = fastOfferKey(selection.planId, selection.billingOptionId);

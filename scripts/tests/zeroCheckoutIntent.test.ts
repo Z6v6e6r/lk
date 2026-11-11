@@ -177,3 +177,16 @@ test('resume without a fresh catalogue price can only claim the saved purchase',
     assert.equal(claimFastResume(intent.id), true);
   } finally { h.restore(); }
 });
+
+test('fresh purchase after verified reset keeps the current trusted monthly price and is one-time', async () => {
+  const { claimFastRestart } = await import('../../src/components/subscription-storefront/zeroCheckoutIntent.ts');
+  const h = harness(); try {
+    const intent = createFastIntent('friendship', 980000, Object.assign(h.event(), { target: new h.w.Element('friendship') }), true);
+    assert.equal(claimFastRestart(intent.id, { priceMinor: 980000 }), false);
+    armFastResume(intent.id); claimFastResume(intent.id);
+    assert.equal(claimFastRestart(intent.id, { priceMinor: 990000 }), false);
+    assert.equal(claimFastRestart(intent.id, { priceMinor: 980000 }), true);
+    assert.equal(readFastIntent(intent.id)?.resume, false);
+    assert.equal(claimFastRestart(intent.id, { priceMinor: 980000 }), false);
+  } finally { h.restore(); }
+});

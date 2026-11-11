@@ -1,5 +1,5 @@
 import { parseZeroOperationLink } from './zeroCheckoutResume';
-import { parseZeroAttempt, type ZeroPaymentAttempt as Attempt } from './zeroCheckoutCustody';
+import { hasVerifiedCheckoutReset, parseZeroAttempt, type ZeroPaymentAttempt as Attempt } from './zeroCheckoutCustody';
 import { withSubscriptionPromoLock, recordOrdinarySubscriptionAttempt, subscriptionPromoAttemptKey } from './promoCodeAttempt';
 import { readSubscriptionPromoTransactionPaid } from '../../utils/subscriptionPromoCode';
 import { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, request, getServ2Origin } from '../../utils/apiClient';
@@ -297,7 +297,7 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
       if (!canProceed()) throw new Error('Checkout cancelled');
       if (offer.promo) {
         // Share the existing promo lock/marker with sub_hab. Only return URL differs.
-        const result = await createStorefrontPromoPayment(key, phone, returnUrl, expectedPrice);
+        const result = await createStorefrontPromoPayment(key, phone, returnUrl, expectedPrice, canProceed);
         if (result.transactionId) saveAttempt({ ...attempt, transactionId: result.transactionId });
         return result;
       }
@@ -391,6 +391,35 @@ export async function resumeZeroPayment(key: string, phone: string, canProceed: 
     const productId = offer.liveProductId || offer.promo?.productId || resolveStorefrontPromoTarget(offer.planId, offer.billingOptionId)?.directProductId;
     const accountKey = await subscriptionPromoAttemptKey(productId || key, phone);
     if (!current()) return pending;
+    let resetProbe: Awaited<ReturnType<typeof apiConfirmTournamentSubscriptionPurchase>> | null = null;
+    if (key === 'friendship' && offer.target && attempt.state !== 'paid') {
+      const response = await apiConfirmTournamentSubscriptionPurchase(attempt.paymentRef, { counterKey: 'friendship', planType: 'friendship' });
+      if (!current()) return pending;
+      resetProbe = response;
+      if (!response.error && (!attempt.transactionId || response.data?.transactionId === attempt.transactionId)
+        && hasVerifiedCheckoutReset(response.data, attempt.paymentRef, 'friendship')) {
+        return navigator.locks.request(accountKey, { ifAvailable: true }, lock => {
+          if (!lock || !current()) return pending;
+          // Do not clear another active ordinary/promo attempt that replaced this browser's marker.
+          const sharedRaw = window.localStorage.getItem(accountKey);
+          let shared;
+          try { shared = JSON.parse(sharedRaw || 'null'); } catch { return pending; }
+          if (shared && (shared.kind !== 'ordinary' || !(shared.paymentRef === attempt.paymentRef
+            || attempt.transactionId && shared.transactionId === attempt.transactionId))) return pending;
+          const legacyRaw = window.localStorage.getItem('padlhub_tournament_subscription_pending_refs');
+          let legacy;
+          try { legacy = JSON.parse(legacyRaw || '[]'); } catch { return pending; }
+          if (!Array.isArray(legacy)) return pending;
+          const retained = legacy.filter(row => row?.paymentRef !== attempt.paymentRef);
+          if (!current()) return pending;
+          if (sharedRaw !== null) window.localStorage.removeItem(accountKey);
+          if (legacyRaw !== null) window.localStorage.setItem('padlhub_tournament_subscription_pending_refs', JSON.stringify(retained));
+          window.localStorage.removeItem(ATTEMPT_PREFIX + key);
+          return { status: 'restart' as const, message: 'Старая неоплаченная покупка закрыта. Можно оформить подписку заново.' };
+        });
+      }
+    }
+
     if (attempt.ownerBinding) {
       if (attempt.ownerBinding !== accountKey.split(':').pop()) return pending;
     } else {
@@ -404,11 +433,11 @@ export async function resumeZeroPayment(key: string, phone: string, canProceed: 
     if (attempt.state === 'paid') return { status: 'paid' as const, message: 'Оплата подтверждена. Подписка оформлена.' };
     if (attempt.state !== 'pending') return pending;
     if (offer.target && !offer.target.directProductId && !offer.liveProductId && !offer.promo) {
-      const result = await apiConfirmTournamentSubscriptionPurchase(attempt.paymentRef, {
+      const result = resetProbe || await apiConfirmTournamentSubscriptionPurchase(attempt.paymentRef, {
         counterKey: offer.target.counterKey, planType: offer.billingOptionId === 'annual' ? null : 'friendship',
       });
       if (!current() || result.error || !result.data || result.data.paymentRef !== attempt.paymentRef
-        || result.data.counterKey !== offer.target.counterKey || result.data.failed) return pending;
+        || result.data.counterKey != null && result.data.counterKey !== offer.target.counterKey || result.data.failed) return pending;
       if (result.data.paid === true && result.data.status === 'PAID') {
         saveAttempt({ ...attempt, state: 'paid' });
         return { status: 'paid' as const, message: 'Оплата подтверждена. Подписка оформлена.' };

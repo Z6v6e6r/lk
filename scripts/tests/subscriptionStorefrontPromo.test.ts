@@ -1,5 +1,5 @@
 import { parseZeroOperationLink } from '../../src/components/subscription-storefront/zeroCheckoutResume.ts';
-import { parseZeroAttempt } from '../../src/components/subscription-storefront/zeroCheckoutCustody.ts';
+import { hasVerifiedCheckoutReset, parseZeroAttempt } from '../../src/components/subscription-storefront/zeroCheckoutCustody.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -35,6 +35,7 @@ function paymentFixture() {
     window: {
       location: { href: 'https://padlhub.ru/sub_hab?offer=friendship-promo&authMode=viva&utm_source=piter' },
       localStorage: {
+        removeItem: (key: string) => { stored.delete(key); },
         getItem: (key: string) => { if (storageFails) throw new Error('storage disabled'); return stored.get(key) ?? null; },
         setItem: (key: string, value: string) => { if (storageFails) throw new Error('storage disabled'); stored.set(key, value); },
       },
@@ -243,7 +244,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   const setItem = f.globals.window.localStorage.setItem;
   f.globals.window.localStorage.setItem = (key, value) => { if (storageFails) throw new Error('storage disabled'); setItem(key, value); };
   const adapter = loadModule<typeof import('../../src/components/subscription-storefront/zeroCheckoutPayment')>('components/subscription-storefront/zeroCheckoutPayment.ts', {
-    parseZeroAttempt, parseZeroOperationLink,
+    hasVerifiedCheckoutReset, parseZeroAttempt, parseZeroOperationLink,
     subscriptionPromoAttemptKey: async (id: string, phone: string) => 'fixture:' + (phone === fixturePhone ? 'a' : 'b').repeat(64),
     ...regularPayment, ...promo, ...f.adapter,
     withSubscriptionPromoLock: async (_id: string, _phone: string, create: () => Promise<unknown>) => create(),
@@ -905,4 +906,60 @@ test('resume rejects a held offer lock and rechecks session/custody after asynch
     assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'pending');
   });
   assert.equal(f.writes.length, 1);
+});
+
+
+test('cached real counter response without counterKey resumes exact account payment', async () => {
+  const f = zeroFixture();
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  const paymentRef = f.writes[0][0].paymentRef;
+  f.setConfirmation({ data: { ok: true, status: 'PAYMENT_PENDING', paid: false, paymentRef, transactionId: 'existing', paymentUrl: 'https://bank.example/cached', counterKey: null } });
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'redirect');
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.confirms.length, 1);
+});
+
+test('verified reset clears only exact legacy and account markers without creating a payment', async () => {
+  const f = zeroFixture();
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  const marker = 'padlhub_zero_checkout_attempt_v1:friendship', account = 'fixture:' + 'a'.repeat(64);
+  const attempt = JSON.parse(f.stored.get(marker)!); delete attempt.ownerBinding;
+  f.stored.set(marker, JSON.stringify(attempt));
+  f.stored.set(account, JSON.stringify({ kind: 'ordinary', paymentRef: attempt.paymentRef }));
+  const legacy = 'padlhub_tournament_subscription_pending_refs';
+  f.stored.set(legacy, JSON.stringify([{ paymentRef: attempt.paymentRef, counterKey: 'friendship' }, { paymentRef: 'preserve-other', counterKey: 'academy' }]));
+  const tx = '00000000-0000-4000-8000-000000000002';
+  f.setConfirmation({ data: { paymentRef: attempt.paymentRef, transactionId: tx, counterKey: 'friendship', status: 'FAILED', failed: true, paid: false, paymentUrl: null,
+    checkoutReset: { version: 1, state: 'PROVIDER_EXPIRED_UNPAID', paymentRef: attempt.paymentRef, transactionId: tx, operationId: '00000000-0000-4000-8000-000000000003', closureKind: 'PROVIDER_CARD_EXPIRED_UNPAID', terminalCardStatus: 'REJECTED', declineOutcome: 'EXPIRED', paymentIdSha256: 'a'.repeat(64), paymentUrlSha256: 'b'.repeat(64), expireAcknowledged: false, verifiedAt: '2026-11-01T00:00:00Z' } } });
+  f.stored.set(account, JSON.stringify({ kind: 'ordinary', paymentRef: 'preserve-active' }));
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'pending');
+  assert.ok(f.stored.has(marker));
+  f.stored.set(account, JSON.stringify({ kind: 'ordinary', paymentRef: attempt.paymentRef }));
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'restart');
+  assert.equal(f.stored.has(marker), false); assert.equal(f.stored.has(account), false);
+  assert.deepEqual(JSON.parse(f.stored.get(legacy)!), [{ paymentRef: 'preserve-other', counterKey: 'academy' }]);
+  assert.equal(f.writes.length, 1);
+});
+
+
+test('reset receipt cannot release a known different transaction or a locally paid attempt', async () => {
+  for (const state of ['paid', 'pending']) {
+    const f = zeroFixture(); await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+    const key = 'padlhub_zero_checkout_attempt_v1:friendship', a = JSON.parse(f.stored.get(key)!);
+    a.state = state; a.transactionId = '00000000-0000-4000-8000-000000000004'; f.stored.set(key, JSON.stringify(a));
+    const tx = '00000000-0000-4000-8000-000000000002';
+    f.setConfirmation({ data: { paymentRef: a.paymentRef, transactionId: tx, counterKey: 'friendship', status: 'FAILED', failed: true, paid: false, paymentUrl: null,
+      checkoutReset: { version: 1, state: 'PROVIDER_EXPIRED_UNPAID', closureKind: 'PROVIDER_CARD_EXPIRED_UNPAID', terminalCardStatus: 'REJECTED', declineOutcome: 'EXPIRED', paymentIdSha256: 'a'.repeat(64), paymentUrlSha256: 'b'.repeat(64), paymentRef: a.paymentRef, transactionId: tx, operationId: '00000000-0000-4000-8000-000000000003', expireAcknowledged: false, verifiedAt: '2026-11-01T00:00:00Z' } } });
+    const before = f.stored.get(key);
+    assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, state === 'paid' ? 'paid' : 'pending');
+    assert.equal(f.stored.get(key), before); assert.equal(f.writes.length, 1);
+  }
+});
+
+test('promo actor drift while waiting for lock does not dispatch a purchase', async () => {
+  const f = paymentFixture(); let active = true;
+  const acquire = f.globals.navigator.locks.request;
+  f.globals.navigator.locks.request = async (...args: Parameters<typeof acquire>) => { active = false; return acquire(...args); };
+  await assert.rejects(f.adapter.createStorefrontPromoPayment('friendship-promo', fixturePhone, undefined, 490000, () => active));
+  assert.equal(f.calls.length, 0); assert.equal(f.stored.size, 0);
 });
