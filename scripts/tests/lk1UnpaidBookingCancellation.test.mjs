@@ -72,6 +72,33 @@ function fakeProvider(seed) {
 const run = (op, store, provider, mode = 'ENFORCE_NEW') => reconcileLk1UnpaidBooking({
   op, operations: store, provider, cohortFrom: cohort, mode, now: () => instant });
 
+test('Viva offsetless cancellationDate corroborates only explicit canceled state', async () => {
+  const { op, booking } = fixture();
+  const localDate = '2099-01-01T11:59:59.123456';
+  assert.equal(classifyLk1Booking(op, { ...booking, isCancelled: true,
+    cancellationDate: localDate }).reason, 'CANCELLED');
+  for (const change of [
+    { isCancelled: false }, { isCancelled: undefined }, { cancelled: false },
+    { status: 'ACTIVE' }, { cancellationDate: '2099-02-30T11:59:59' },
+    { cancellationDate: '2099-01-01T24:00:00' },
+    { cancellationDate: '2099-01-01T11:59' },
+    { cancellationDate: '2099-01-01T11:59:59.1234567890' },
+    { cancellationDate: null, cancelledAt: localDate },
+    { cancellationDate: null, canceledAt: localDate },
+    { paid: true }, { paymentStatus: 'PAID' },
+  ]) assert.notEqual(classifyLk1Booking(op, { ...booking, isCancelled: true,
+    cancellationDate: localDate, ...change }).reason, 'CANCELLED');
+  const seed = fixture(), store = fakeStore(seed.op), provider = fakeProvider(seed);
+  const cancel = provider.cancelBooking;
+  provider.cancelBooking = async () => { const result = await cancel();
+    provider.state.booking.cancellationDate = localDate; return result; };
+  assert.deepEqual(await run(seed.op, store, provider), { state: 'CANCELLED' });
+  assert.equal(provider.calls.filter(call => call === 'cancel').length, 1);
+  assert.equal(store.row.state, 'RELEASED');
+  assert.equal(classifyLk1Transaction(op, { ...seed.transaction,
+    paymentDueDate: localDate }, instant).reason, 'DEADLINE_INVALID');
+});
+
 test('only a post-cutoff LK1 money event with no visit debit is eligible', () => {
   const { op } = fixture();
   assert.equal(eligibleLk1UnpaidOperation(op, cohort, instant).reason, 'ELIGIBLE');
@@ -180,6 +207,51 @@ test('UNPAID is not due while its 25-minute payment link may still work', () => 
     paymentDueDate: '2099-01-01T14:55:00.000000000+03:00' };
   assert.equal(classifyLk1Transaction(op, nanoZone, '2099-01-01T11:56:00.122Z').reason, 'NOT_DUE');
   assert.equal(classifyLk1Transaction(op, nanoZone, '2099-01-01T11:56:00.123Z').reason, 'DUE');
+});
+
+test('a closed rejected card requires an exact terminal outcome in its own envelope', () => {
+  const { op, transaction } = fixture();
+  for (const key of ['cardPaymentInfo', 'cardPaymentStatus']) {
+    for (const declineOutcome of ['CANCELLED', 'EXPIRED']) {
+      const changed = { ...transaction, [key]: { status: 'REJECTED', declineOutcome } };
+      assert.equal(classifyLk1Transaction(op, changed, instant).reason, 'DUE');
+      assert.equal(classifyLk1Transaction(op, { ...changed, status: 'PAID' }, instant).reason, 'PAID');
+      assert.equal(classifyLk1Transaction(op, { ...changed, paymentDate: instant }, instant).reason, 'PAYMENT_OR_REFUND_EVIDENCE');
+      assert.equal(classifyLk1Transaction(op, { ...changed,
+        [key]: { ...changed[key], paidAmountMinor: 1 } }, instant).reason, 'PAYMENT_OR_REFUND_EVIDENCE');
+      assert.equal(classifyLk1Transaction(op, { ...changed,
+        [key]: { ...changed[key], refundedAt: instant } }, instant).reason, 'PAYMENT_OR_REFUND_EVIDENCE');
+      assert.equal(classifyLk1Transaction(op, { ...changed,
+        createDate: '2099-01-01T11:40:00.000Z' }, instant).reason, 'NOT_DUE');
+    }
+    for (const declineOutcome of [undefined, '', 'UNKNOWN', 'PROCESSING', 'cancelled']) {
+      const changed = { ...transaction, declineOutcome: 'CANCELLED',
+        [key]: { status: 'REJECTED', declineOutcome } };
+      assert.equal(classifyLk1Transaction(op, changed, instant).reason, 'PAYMENT_CARD_STATE_UNSAFE');
+    }
+  }
+  for (const status of ['PAID', 'WAITING', 'PROCESSING', 'UNKNOWN']) {
+    assert.equal(classifyLk1Transaction(op, { ...transaction,
+      cardPaymentInfo: { status: 'REJECTED', declineOutcome: 'CANCELLED' },
+      cardPaymentStatus: { status } }, instant).reason, 'PAYMENT_CARD_STATE_UNSAFE');
+  }
+  assert.equal(classifyLk1Transaction(op, { ...transaction,
+    cardPaymentInfo: { status: 'REJECTED' },
+    cardPaymentStatus: { status: 'REJECTED', declineOutcome: 'CANCELLED' } }, instant).reason,
+  'PAYMENT_CARD_STATE_UNSAFE');
+});
+
+test('terminal rejected unpaid checkout supports shadow, one cancel and exact release readback', async () => {
+  const seed = fixture();
+  seed.transaction.cardPaymentInfo = { status: 'REJECTED', declineOutcome: 'CANCELLED' };
+  const store = fakeStore(seed.op), provider = fakeProvider(seed);
+  assert.deepEqual(await run(seed.op, store, provider, 'SHADOW'), { state: 'ELIGIBLE' });
+  assert.equal(store.calls.length, 0);
+  assert.equal(provider.calls.includes('cancel'), false);
+  assert.deepEqual(await run(seed.op, store, provider), { state: 'CANCELLED' });
+  assert.equal(provider.calls.filter(value => value === 'cancel').length, 1);
+  assert.equal(store.row.state, 'RELEASED');
+  assert.deepEqual(await run(store.row, store, provider), { state: 'SKIPPED', reason: 'OUT_OF_SCOPE' });
 });
 
 test('booking requires exact owner, exercise, ON_PLACE carrier and explicit cancellation proof', () => {
@@ -511,4 +583,94 @@ test('production launcher rejects a CLI mode override before reading live state'
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /LAUNCH_ARGUMENT_OVERRIDE_FORBIDDEN/);
+});
+
+test('permanent flow-read hook has minimal authority, no clock/session and immediate rotation', async t => {
+  const { createRequire } = await import('node:module');
+  const { createFlowReadTokenAuth, SERVICE_USERNAME, SERVICE_PERMISSION } =
+    createRequire(import.meta.url)('../lib/lk1FlowReadTokenAuth.cjs');
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'flow-read-auth-')));
+  fs.chmodSync(directory, 0o700);
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'service.token'), first = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(file, first + '\n', { mode: 0o600 });
+  const hook = createFlowReadTokenAuth(file);
+  const expected = { username: SERVICE_USERNAME, permissions: 'flows.read' };
+  assert.equal(SERVICE_PERMISSION, 'flows.read');
+  assert.deepEqual(await hook(first), expected);
+  const originalNow = Date.now;
+  try {
+    Date.now = () => Date.parse('2099-11-19T00:00:00Z');
+    assert.deepEqual(await hook(first), expected);
+  } finally { Date.now = originalNow; }
+  for (const input of [undefined, null, {}, '', first.slice(1), first + 'x', first.toUpperCase(),
+    crypto.randomBytes(32).toString('hex')]) assert.equal(await hook(input), null);
+  const next = crypto.randomBytes(32).toString('hex'), pending = path.join(directory, 'next');
+  fs.writeFileSync(pending, next, { mode: 0o600 }); fs.renameSync(pending, file);
+  assert.equal(await hook(first), null);
+  assert.deepEqual(await hook(next), expected);
+  fs.unlinkSync(file);
+  assert.equal(await hook(next), null);
+});
+
+test('unsafe token custody denies the service without throwing or granting editor access', async t => {
+  const { createRequire } = await import('node:module');
+  const { createFlowReadTokenAuth } = createRequire(import.meta.url)('../lib/lk1FlowReadTokenAuth.cjs');
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'flow-read-custody-')));
+  fs.chmodSync(directory, 0o700);
+  t.after(() => { fs.chmodSync(directory, 0o700); fs.rmSync(directory, { recursive: true, force: true }); });
+  const file = path.join(directory, 'token'), token = crypto.randomBytes(32).toString('hex');
+  const write = value => fs.writeFileSync(file, value, { mode: 0o600 });
+  const hook = createFlowReadTokenAuth(file);
+  assert.equal(await hook(token), null);
+  write(token); fs.chmodSync(file, 0o644); assert.equal(await hook(token), null);
+  fs.chmodSync(file, 0o600); fs.chmodSync(directory, 0o755); assert.equal(await hook(token), null);
+  fs.chmodSync(directory, 0o700);
+  const link = path.join(directory, 'hardlink'); fs.linkSync(file, link);
+  assert.equal(await hook(token), null); fs.unlinkSync(link);
+  fs.renameSync(file, link); fs.symlinkSync(link, file);
+  assert.equal(await hook(token), null); fs.unlinkSync(file); fs.unlinkSync(link);
+  for (const value of [token + '\n\n', ' ' + token, token.slice(1), 'x'.repeat(64)]) {
+    write(value); assert.equal(await hook(token), null);
+  }
+  fs.unlinkSync(file);
+  assert.equal(spawnSync('mkfifo', ['-m', '600', file]).status, 0);
+  const moduleFile = fileURLToPath(new URL('../lib/lk1FlowReadTokenAuth.cjs', import.meta.url));
+  const probe = spawnSync(process.execPath, ['-e',
+    'require(process.argv[1]).createFlowReadTokenAuth(process.argv[2])(process.argv[3]).then(value => process.exit(value === null ? 0 : 1))',
+    moduleFile, file, token], { timeout: 2000, encoding: 'utf8' });
+  assert.equal(probe.error, undefined, 'unsafe FIFO must not block the Node-RED event loop');
+  assert.equal(probe.status, 0);
+  assert.throws(() => createFlowReadTokenAuth('relative'), /SERVICE_TOKEN_PATH_INVALID/);
+});
+
+test('settings adapter preserves editor auth and rejects drift or competing auth configuration', async () => {
+  const vm = await import('node:vm');
+  const { buildFlowReadAuthSettings } = await import('../patch_lk1_flow_read_auth_settings.mjs');
+  const modulePath = '/opt/padlhub-lk1-unpaid-cancel/releases/' + 'a'.repeat(40) + '/lib/lk1FlowReadTokenAuth.cjs';
+  const source = Buffer.from('module.exports = { adminAuth: existingAuth, unrelated: sentinel };\n');
+  const expectedSha256 = crypto.createHash('sha256').update(source).digest('hex');
+  const built = buildFlowReadAuthSettings({ source, expectedSha256, modulePath });
+  assert(built.candidate.subarray(0, source.length).equals(source));
+  const users = [{ username: 'fixture-editor', permissions: '*' }], authenticate = () => 'fixture';
+  const auth = { type: 'credentials', users, authenticate, sessionExpiryTime: 123, default: { permissions: '' } };
+  const hook = async () => ({ username: 'fixture-service', permissions: 'flows.read' });
+  const runSettings = existingAuth => {
+    const context = { module: { exports: {} }, existingAuth, sentinel: {},
+      require: file => { assert.equal(file, modulePath); return { createFlowReadTokenAuth: () => hook }; } };
+    vm.runInNewContext(built.candidate.toString(), context);
+    return context;
+  };
+  const context = runSettings(auth), patched = context.module.exports.adminAuth;
+  for (const key of Object.keys(auth)) assert.equal(patched[key], auth[key]);
+  assert.equal(patched.tokens, hook); assert.equal(auth.tokens, undefined);
+  assert.equal(context.module.exports.unrelated, context.sentinel);
+  for (const competing of [{ ...auth, tokens: [] }, { ...auth, tokens: hook },
+    { ...auth, module: {} }, { ...auth, type: 'strategy' }, { ...auth, tokenHeader: 'x-token' }]) {
+    assert.throws(() => runSettings(competing), /LK1_FLOW_READ_AUTH_CONFIG_CONFLICT/);
+  }
+  assert.throws(() => buildFlowReadAuthSettings({ source, expectedSha256: 'b'.repeat(64), modulePath }), /PREIMAGE_DRIFT/);
+  assert.throws(() => buildFlowReadAuthSettings({ source, expectedSha256, modulePath: '/tmp/auth.cjs' }), /PATH_INVALID/);
+  assert.throws(() => buildFlowReadAuthSettings({ source: built.candidate,
+    expectedSha256: built.candidateSha256, modulePath }), /SOURCE_INVALID/);
 });

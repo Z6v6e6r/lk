@@ -106,9 +106,15 @@ export function classifyLk1Transaction(op, transaction, now = nowIso(), graceMs 
   if (status !== 'UNPAID') return { reason: 'TRANSACTION_NOT_UNPAID' };
   if ([transaction.paymentDate, transaction.paidAt, transaction.refundDate, transaction.refundedAt]
     .some(value => value !== undefined && value !== null && value !== '')) return { reason: 'PAYMENT_OR_REFUND_EVIDENCE' };
-  const cardStatuses = [transaction.cardPaymentInfo?.status, transaction.cardPaymentStatus?.status]
-    .filter(value => value !== undefined && value !== null && value !== '').map(value => text(value).toUpperCase());
-  if (cardStatuses.some(value => !['NEW', 'UNPAID', 'EXPIRED'].includes(value))) {
+  const unsafeCard = [transaction.cardPaymentInfo, transaction.cardPaymentStatus].some(card => {
+    if (card?.status === undefined || card.status === null || card.status === '') return false;
+    const status = text(card.status).toUpperCase();
+    // Viva closes an unpaid card attempt as REJECTED/CANCELLED or
+    // REJECTED/EXPIRED. The outcome must belong to this same envelope.
+    return !['NEW', 'UNPAID', 'EXPIRED'].includes(status)
+      && !(status === 'REJECTED' && ['CANCELLED', 'EXPIRED'].includes(card.declineOutcome));
+  });
+  if (unsafeCard) {
     return { reason: 'PAYMENT_CARD_STATE_UNSAFE' };
   }
   for (const source of [transaction, transaction.cardPaymentInfo, transaction.cardPaymentStatus]) {
@@ -162,7 +168,13 @@ export function classifyLk1Booking(op, booking) {
   const evidence = [...flags, ...statuses.map(value => ['CANCELLED', 'CANCELED'].includes(value))];
   for (const field of ['cancellationDate', 'cancelledAt', 'canceledAt']) {
     if (booking[field] !== undefined && booking[field] !== null && booking[field] !== '') {
-      if (iso(booking[field]) === null) return { reason: 'BOOKING_STATE_INVALID' };
+      // Admin Viva returns cancellationDate without a timezone. It is only
+      // corroborating metadata for an explicit canceled flag, never a deadline.
+      const localCancellationDate = field === 'cancellationDate'
+        && booking.isCancelled === true && typeof booking[field] === 'string'
+        && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?$/.test(booking[field])
+        && iso(`${booking[field]}Z`) !== null;
+      if (iso(booking[field]) === null && !localCancellationDate) return { reason: 'BOOKING_STATE_INVALID' };
       evidence.push(true);
     }
   }
