@@ -1,4 +1,6 @@
-import {isDeepStrictEqual} from 'node:util';
+import {sameRuntimeNode} from './communityRuntimeNode.mjs';
+import {createHash} from 'node:crypto';
+import observedProfileHttp from '../tests/fixtures/communityProfileHttpObservedV1.json' with {type:'json'};
 // Source-only optional Viva-profile authentication subflow. Guest reads retain
 // the legacy FRIENDS contract; typed private reads and typed writes require it.
 export const COMMUNITY_AUTH_SUBFLOW = 'community-policy-verified-actor-v1';
@@ -124,7 +126,7 @@ export function addCommunityPolicyAuth(input) {
       if (protectedAdmission && instance.wires[0][0] !== 'community-event-admission-v1-prepare') throw new Error('COMMUNITY_AUTH_ADMISSION_TARGET_DRIFT');
       const expectedPrepare = /\/add-member$/.test(node.url) ? 'Prepare community join' : /\/join-by-invite$/.test(node.url) ? 'Prepare invite join' : null;
       if (expectedPrepare && (byId.get(instance.wires[0][0])?.type !== 'function' || byId.get(instance.wires[0][0])?.name !== expectedPrepare)) throw new Error('COMMUNITY_AUTH_JOIN_TARGET_DRIFT');
-      if (budget && !isDeepStrictEqual(byId.get(budget.id),budget)) throw new Error('COMMUNITY_AUTH_ADMISSION_BUDGET_DRIFT');
+      if (budget && !sameRuntimeNode(byId.get(budget.id),budget)) throw new Error('COMMUNITY_AUTH_ADMISSION_BUDGET_DRIFT');
       if ((protectedAdmission && node.wires?.length !== 1) || node.wires?.[0]?.length !== 1 || node.wires?.[0]?.[0] !== ingressId) throw new Error('COMMUNITY_AUTH_INGRESS_DRIFT');
       continue;
     }
@@ -141,7 +143,16 @@ export function addCommunityPolicyAuth(input) {
   const hasExistingDefinitions=definitions.some(expected=>byId.has(expected.id));
   for (const expected of definitions) {
     const existing = byId.get(expected.id);
-    if (hasExistingDefinitions && (!existing || !isDeepStrictEqual(existing,expected))) throw new Error('COMMUNITY_AUTH_SUBFLOW_DRIFT');
+    if (hasExistingDefinitions && (!existing || !sameRuntimeNode(existing,expected))) {
+      // The observed predecessor omitted both pinned HTTP config fields. Admit only
+      // those actual frozen bytes (apart from validated editor positions), then
+      // restore the explicit source configuration; never normalize arbitrary drift.
+      if (observedProfileHttp.sourceFlowSha256 !== 'f3b860cadac4b0ea74acb5a112daa99adc151f03b83f5dc728634beb0567c78f' ||
+          createHash('sha256').update(JSON.stringify(observedProfileHttp.node)).digest('hex') !== '77daa395a3b6df9b26e4f87016f96c5d5c599f859277d2b7a10321e66bd5259e') throw new Error('COMMUNITY_AUTH_HTTP_FIXTURE_DRIFT');
+      if (expected.id !== id+'-http' || !sameRuntimeNode(existing,observedProfileHttp.node)) throw new Error('COMMUNITY_AUTH_SUBFLOW_DRIFT');
+      existing.requestTimeout=expected.requestTimeout;
+      existing.followRedirects=expected.followRedirects;
+    }
   }
   flow.push(...instances);
   const allNodes = new Map(flow.map(node => [node.id, node]));
