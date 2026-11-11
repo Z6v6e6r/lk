@@ -99,7 +99,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     if (option.reason === 'unknown-duration') return 'Нужно уточнить длительность события';
     if (option.mode === 'unavailable') return option.kind === 'subscription' ? 'Тариф подписки не подходит к этому событию' : 'Нет подходящего абонемента с доступными посещениями';
     if (option.kind === 'full') return isWholeCourt ? 'Оплата всего корта без применения льгот' : isPersonalGame ? 'Оплачиваете только своё участие, остальные игроки — своё' : 'Разовая запись без привилегий';
-    if (option.kind === 'residency') return option.mode === 'offer' ? `Скидка ${price.discount}% при оформлении Резидентства` : `Скидка ${price.discount}% · Резидентство уже действует`;
+    if (option.kind === 'residency') return option.mode === 'offer' ? `Скидка ${price.discount}% при оформлении Резидентства` : `Скидка ${price.discount}%`;
     if (option.kind === 'subscription' || option.kind === 'boost') {
       const prefix = option.mode === 'offer' ? `При оформлении подписки ${purchaseSubscription?.name || 'подходящего тарифа'}. ` : '';
       const source = option.kind === 'boost' ? 'Буст' : option.subscriptionPlan === 'friendship-2' ? 'Дружбу 2.0' : 'РА';
