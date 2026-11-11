@@ -1,0 +1,68 @@
+// CAPACITY_HELPERS
+// A generic CONFLICT does not prove capacity. Bind this request-local proof to
+// an explicit provider refusal before any accepted booking or money leg.
+const lk1CapacityBinding = (ctx) => [ctx.operationKey, ctx.operationId, ctx.actorClientId,
+  ctx.clientSubscriptionId, ctx.exerciseId, ctx.lk1?.fingerprint];
+const lk1CapacityUnaccepted = (ctx) => ctx.caller === "http" && ctx.action === "book"
+  && ctx.managedAction === "BOOK_TOURNAMENT" && ctx.category === "tournament"
+  && ctx.lk1?.target?.category === "TOURNAMENT" && ctx.lk1.target.eventId === ctx.exerciseId
+  && lk1CapacityBinding(ctx).every(value => typeof value === "string" && value.trim())
+  && !ctx.precreatedEntitlementReserved && !ctx.managedEntitlementOperationId && !ctx.lk1BeforeCreate
+  && ![ctx.confirmedBookingId, ctx.immediateBookingId, ctx.correlationId, ctx.acceptedAt,
+    ctx.bookingId, ctx.upstreamBookingId, ctx.lk1.createAttemptedAt, ctx.lk1.bookingAttemptedAt,
+    ctx.lk1.transactionAttemptedAt, ctx.lk1.transactionId, ctx.lk1.transactionIntent,
+    ctx.lk1.checkout, ctx.lk1.visitJob, ctx.lk1.unpaidCancellation].some(Boolean);
+const lk1CapacityProofMatches = (ctx) => lk1CapacityUnaccepted(ctx)
+  && ctx.lk1CapacityRefusal?.binding === JSON.stringify(lk1CapacityBinding(ctx))
+  && ctx.finalFailure?.statusCode === 409 && ctx.finalFailure.rawCode === "CONFLICT"
+  && ctx.finalFailure.message === "Нет свободных мест";
+
+
+// CAPACITY_QUERY
+    ...(lk1CapacityProofMatches(ctx) ? {
+      // The injected LK1 fence also sets state; preserve this stricter predicate.
+      $and: [{ state: "PENDING_CONFIRMATION" }],
+      actorClientId: ctx.actorClientId, clientSubscriptionId: ctx.clientSubscriptionId,
+      exerciseId: ctx.exerciseId, "lk1.fingerprint": ctx.lk1.fingerprint,
+      ...Object.fromEntries(["acceptedAt", "correlationId", "bookingId", "upstreamBookingId"]
+        .map(key => [key, { $in: [null, ""] }])),
+      ...Object.fromEntries(["createAttemptedAt", "bookingAttemptedAt", "transactionAttemptedAt",
+        "transactionId", "transactionIntent", "checkout", "visitJob", "unpaidCancellation"]
+        .map(key => [`lk1.${key}`, { $exists: false }])),
+    } : {}),
+
+// CAPACITY_BOOKING
+      if (!msg.error && statusCode === 409 && msg.payload?.code === "CONFLICT"
+        && rawMessage === "Нет свободных мест" && lk1CapacityUnaccepted(ctx)) {
+        ctx.lk1CapacityRefusal = { binding: JSON.stringify(lk1CapacityBinding(ctx)) };
+      }
+
+// CAPACITY_FAILURE
+  if (ctx.lk1CapacityRefusal) {
+    if (msg.error || mongoMatched(msg.payload) !== 1 || msg.payload.modifiedCount !== 1
+      || !lk1CapacityProofMatches(ctx)) {
+      return finishPending(ctx, "Отказ записи требует сверки", {
+        code: "LK1_CAPACITY_REFUSAL_RECONCILIATION_REQUIRED",
+      });
+    }
+    ctx.lk1CapacityRefusal.persisted = true;
+    return finishError(ctx, 409, "Нет свободных мест", { code: "CAPACITY_FULL" });
+  }
+
+// CAPACITY_FINALIZE
+  const capacity = ctx.lk1CapacityRefusal;
+  if (capacity?.persisted === true && ctx.step === "operation_fail"
+    && ctx.caller === "http" && ctx.action === "book" && ctx.managedAction === "BOOK_TOURNAMENT"
+    && capacity.binding === JSON.stringify([ctx.operationKey, ctx.operationId, ctx.actorClientId,
+      ctx.clientSubscriptionId, ctx.exerciseId, ctx.lk1.fingerprint])
+    && ctx.finalFailure?.statusCode === 409 && ctx.finalFailure.rawCode === "CONFLICT"
+    && ctx.finalFailure.message === "Нет свободных мест"
+    && responseStatus === 409 && payload.error === "Нет свободных мест"
+    && payload.details?.code === "CAPACITY_FULL") {
+    // Refresh the shared public cache as well as the browser's roster copy.
+    const epochKey = "lkTournamentParticipantEpochV1";
+    const epochs = global.get(epochKey) || {};
+    epochs[ctx.exerciseId] = Math.max(0, Number(epochs[ctx.exerciseId]) || 0) + 1;
+    global.set(epochKey, epochs);
+    return [null, msg];
+  }
