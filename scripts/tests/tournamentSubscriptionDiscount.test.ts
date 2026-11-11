@@ -1,4 +1,5 @@
 import { isSpanishTrainingExercise } from "../../src/utils/spanishTrainingExclusion.ts";
+import { SubscriptionRejoinTracker } from "../../src/utils/subscriptionRejoin.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
@@ -328,8 +329,10 @@ test("a structurally valid displayed quote reaches stable-operation replay after
   assert.equal(replayed, 1);
 });
 
-function bookingGateway(response: unknown, requests: { url: string; body: unknown }[], pendingFirst = false) {
+function bookingGateway(response: unknown, requests: { url: string; body: unknown }[], pendingFirst = false, releaseFirst = false) {
+  const tracker = new SubscriptionRejoinTracker(null);
   return loadFunction("apiCreateTournamentVivaBookingFromSubscription", {
+    getTournamentSubscriptionRejoinTracker: () => tracker,
     ...identityDependencies,
     resolveSubscriptionCategoryDailyLimitDateFromEvent: () => "2026-09-20",
     getServ2Origin: () => "https://fixture.invalid",
@@ -340,6 +343,12 @@ function bookingGateway(response: unknown, requests: { url: string; body: unknow
     request: async (url: string, options: { retries: number; body: string }) => {
       assert.equal(options.retries, 0);
       requests.push({ url, body: JSON.parse(options.body) });
+      if (releaseFirst && requests.length === 1) {
+        const operationId = decodeURIComponent(url.split("operationId=")[1]);
+        return { data: null, status: 409, error: { status: 409, message: "Предыдущая запись отменена",
+          raw: { details: { code: "SUBSCRIPTION_BOOKING_RELEASED", operationId,
+            nextOperationId: `${operationId}:rejoin:1` } } } };
+      }
       return pendingFirst && requests.length === 1
         ? { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 }
         : { data: response, error: null, status: 201 };
@@ -349,6 +358,16 @@ function bookingGateway(response: unknown, requests: { url: string; body: unknow
 
 const confirmation = { state: "CONFIRMED", bookingId: "fixture:booking", transactionId: "fixture:transaction",
   toPayMinor: quote.amountMinor, toPay: quote.amountMinor! / 100, paid: false, paymentUrl: "https://checkout.invalid/fixture" };
+
+test("released HTTP booking never auto-posts and only the next submission uses its proved successor", async () => {
+  const requests: { url: string; body: unknown }[] = [];
+  const book = bookingGateway(confirmation, requests, false, true);
+  assert.equal((await book(params)).status, 409);
+  assert.equal(requests.length, 1);
+  assert.equal((await book(params)).error, null);
+  assert.equal(requests.length, 2);
+  assert.equal(decodeURIComponent(requests[1].url), `${requests[0].url}:rejoin:1`);
+});
 
 test("booking sends expectedTournamentDiscount and polls exactly the same operation before returning payment URL", async () => {
   const requests: { url: string; body: unknown }[] = [];
