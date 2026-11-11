@@ -146,10 +146,37 @@ Before `ENFORCE_NEW`, compute `LK1_UNPAID_CANCEL_BINDING_SHA256` from the four
 existing Node-RED PM2 `VIVA_SERVICE_*` values with the worker's
 `lk1VivaBinding()` helper and put only the digest in the root-owned mode-0600
 activation environment file. Set `LK1_UNPAID_CANCEL_NODE_RED_ADMIN_TOKEN_FILE`
-to an existing root-owned mode-0600 file in a root-owned mode-0700 directory,
-containing a valid Admin Bearer token for
-read-only `GET /flows`. Never write or log credential values in a release
-artifact. Without that file, `ENFORCE_NEW` stops before Mongo or Viva access.
+to the root-owned mode-0600 `/etc/padlhub/lk1-unpaid-cancel-guard/service.token`
+in a root-owned mode-0700 directory. This dedicated 256-bit opaque service token
+uses Node-RED 4.0.9's supported `adminAuth.tokens` hook and exact `flows.read`
+permission. It cannot deploy flows or read unrelated Admin settings/context.
+It is independent of `.sessions.json`, editor login/logout and session expiry.
+Never write/log credential values in source or release artifacts. Without the
+protected file, `ENFORCE_NEW` stops before Mongo or Viva access.
+
+`lib/lk1FlowReadTokenAuth.cjs` is part of the verified immutable worker bundle.
+The source-driven `patch_lk1_flow_read_auth_settings.mjs` appends a guarded
+settings adapter pinned to that immutable module path; it preserves existing
+users/passwords/authenticate/default/session expiry and rejects preexisting token
+hooks/modules/custom headers. Retain the immutable release referenced by settings
+until a reviewed auth rollout removes that reference; worker release cleanup must
+not delete the active auth module. Generate the token only on the server. The hook
+reads its protected file on every request, uses full constant-time digest
+comparison and fails closed on unsafe/missing files. Atomic file rotation revokes
+the previous token on the next authentication request, without editing sessions.
+
+Settings rollout requires exact live settings/flow/PM2 preimages, backup and one
+reviewed Node-RED restart with worker stopped and no outstanding INTENT/REVIEW.
+Verify actual installed auth middleware in an isolated fixture: service flows
+read succeeds, writes and unrelated reads fail, expired editor session does not
+affect service access, existing editor access remains valid. Never probe Admin
+writes on production. Then verify live active-flow/revision equality, unauth401,
+protected file custody and the unchanged cohort/cursor on worker restart. A new
+payment observation window is unnecessary when only this authentication adapter
+changes; payment classifier/worker logic and its prior acceptance stay unchanged.
+Rollback restores exact settings/env/current and rebinds the guard; after the old
+session expires it cannot promise ENFORCE and must leave the worker stopped if
+service authentication is unavailable.
 The current
 reviewed full-flow SHA is
 `3d454ddace61985d4a1d6d92790fcfd25aa7ac8f26911c145c50bd83394e8383`.
