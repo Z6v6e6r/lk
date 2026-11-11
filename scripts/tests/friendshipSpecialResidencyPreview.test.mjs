@@ -131,7 +131,9 @@ test('two residency instances cannot retry one another or erase another benefit'
 function assertTournamentDiscount(order=[resident]) {
   const evidence=residencyFixture({clientSubscriptionId:resident,tournaments:true});
   const ctx=context(order);for(const id of order)ctx.subscriptions[id].productId=ctx.metadata[id].productId;
-  ctx.target.startsAt=evidence.startsAt;ctx.exercise.timeFrom=evidence.startsAt;
+  // Match production exercise resolution: the service day is expressed in Moscow time.
+  const localStart=new Date(Date.parse(evidence.startsAt)+180*60000).toISOString().slice(0,23)+'+03:00';
+  ctx.target.startsAt=localStart;ctx.exercise.timeFrom=localStart;
   ctx.exercise.timeTo=new Date(Date.parse(evidence.startsAt)+90*60000).toISOString();
   const request=execute(ctx);assert.equal(request.port,0,ctx.error);
   const result=execute(ctx,{...request.msg,statusCode:200,responseUrl:request.msg.url,payload:evidence});

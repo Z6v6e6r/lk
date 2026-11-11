@@ -12,6 +12,7 @@ import {
   apiFetchSubscriptions,
   apiFetchSubscriptioName,
   apiReleaseSubscriptionBookingClaim,
+  apiCancelBooking,
   apiVerifyBookingCancellation,
   getServ2Origin,
   request,
@@ -24,7 +25,6 @@ import { isTrialGroupTraining, trialGroupCheckoutOperationId, clearTrialGroupChe
 import { appendCurrentAuthModeToNavigableUrl } from "./authMode";
 import { buildProjectUrlCandidates } from "./lkApiBaseUrls";
 import {
-  buildBookingCancellationPayload,
   findBookingCancellationActionByRefundMethod,
   resolveBookingCancellationPlan,
   type BookingCancellationOptionsResponse,
@@ -2361,17 +2361,7 @@ export async function apiCancelTournamentVivaRegistration(
   }
 
   const action = explicitAction ?? plan.actions[0];
-  const cancelPayload = buildBookingCancellationPayload(action);
-  const cancelResult = await request<unknown>(
-    `/end-user/api/v1/${TENANT_KEY}/bookings/${encodeURIComponent(resolvedBookingId)}`,
-    {
-      method: "DELETE",
-      auth: true,
-      retries: 1,
-      ...(cancelPayload
-        ? { body: JSON.stringify(cancelPayload) }
-        : {}),
-    });
+  const cancelResult = await apiCancelBooking(resolvedBookingId, action);
   const accepted = !cancelResult.error;
   const verifiableConflict = cancelResult.status !== null
     && [400, 404, 409, 422].includes(cancelResult.status);

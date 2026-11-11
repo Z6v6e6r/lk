@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
+import { restorePreFreeCancellationSource, historicalCancelledSuccessorSource } from './patch_live_lk1_free_cancellation.mjs';
 
 export const CANCELLED_ALLOWANCE_SOURCE_SHA256 = '9260954f988dd396c0b22f3dbe792a2b45e5244c2e07c9485cca76b555a80fc6';
 export const CANCELLED_ALLOWANCE_TARGETS = Object.freeze({
@@ -12,7 +13,10 @@ export const CANCELLED_ALLOWANCE_TARGETS = Object.freeze({
     sha256: 'cceb3193dad3f762225966282f8dcbdbb2607c146342ca994471af7accef34cf' },
 });
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
-const read = name => fs.readFileSync(new URL(`./nodered_lk1_hub_nodes/${name}.js`, import.meta.url), 'utf8');
+const read = name => {
+  const source = fs.readFileSync(new URL(`./nodered_lk1_hub_nodes/${name}.js`, import.meta.url), 'utf8');
+  return name === 'cancelled_successor' ? historicalCancelledSuccessorSource(source) : source;
+};
 export function replaceOnce(source, before, after) {
   if (source.split(before).length !== 2) throw new Error('Cancelled allowance anchor drift');
   return source.replace(before, () => after);
@@ -70,6 +74,7 @@ export function patchCancelledAllowancePreview(source) {
 // Historical G1 recipes must keep their original whole-source pins. Undo only
 // these exact later additions before those recipes verify the original hash.
 export function restorePreCancelledAllowanceSource(source, relative) {
+  source = restorePreFreeCancellationSource(source, relative);
   const deltas = relative === 'nodered_lk1_hub_nodes/gateway.js' ? [
     read('cancelled_successor') + '\n', read('cancelled_allowance') + '\n',
     '    if (lk1CancelledZeroVisitOperation(operation)) continue;\n',

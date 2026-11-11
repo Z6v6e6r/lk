@@ -1,3 +1,5 @@
+if (ctx?.step === "lk1_free_cancel_booking_gate" && responseStatus === 409
+  && payload.details?.code === "LK1_FREE_CANCEL_RETURN_PENDING") return [null, msg];
 if (ctx?.lk1IngressReplay === true) {
   // An ingress retry ends here, including readonly CREATE. Never re-enter
   // preflight success or split's write-capable CREATE/checkout path.
