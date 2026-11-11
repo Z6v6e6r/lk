@@ -12,7 +12,7 @@ import {
   type EventRegistration,
 } from "../../utils/communityApi";
 import { EventRegistrationForm } from '../cabinet/EventRegistrationForm';
-import { EXHIBITION_COMMUNITY_ID, EXHIBITION_INVITE_HEADING, EXHIBITION_INVITE_NOTE, isExhibitionInvite, readExhibitionBrandOverride } from '../padel-jump/exhibition';
+import { EXHIBITION_COMMUNITY_ID, EXHIBITION_INVITE_HEADING, EXHIBITION_INVITE_NOTE, buildPushOptInUrl, isExhibitionInvite, readExhibitionBrandOverride } from '../padel-jump/exhibition';
 import { apiFetchProfile, type UserProfileType } from "../../utils/apiClient";
 import {
   CUSTOM_FIELD_IDS,
@@ -196,6 +196,7 @@ export default function CommunityJoinPage({
   const mounted = useRef(false);
   const activeAction = useRef(false);
   const exhibitionAutoJoin = useRef<string | null>(null);
+  const [pushOptInRequested, setPushOptInRequested] = useState(false);
   const [loadedContext, setLoadedContext] = useState<typeof context | null>(null);
   useEffect(() => {
     mounted.current = true;
@@ -203,7 +204,7 @@ export default function CommunityJoinPage({
   }, []);
 
   const requireLogin = useCallback(() => {
-    setEventNotice(null); setEventAdmissionConfirmed(false);
+    setEventNotice(null); setEventAdmissionConfirmed(false); setPushOptInRequested(false);
     setProfile(null); setCommunity(null); setState("guest");
     setLoadError(null); setActionError(null); setShowLogin(false);
     setLoadedContext(context);
@@ -244,7 +245,7 @@ export default function CommunityJoinPage({
   useEffect(() => {
     let cancelled = false;
     setState("checking"); setCommunity(null); setProfile(null);
-    setEventNotice(null); setEventAdmissionConfirmed(false);
+    setEventNotice(null); setEventAdmissionConfirmed(false); setPushOptInRequested(false);
     void reload(false, () => !cancelled);
     return () => { cancelled = true; };
   }, [reload]);
@@ -323,12 +324,12 @@ export default function CommunityJoinPage({
       if (!confirmed || (community && confirmed.id !== community.id) || !findInviteCommunity([confirmed], normalizedInviteCode, normalizedInviteLink)) throw new Error("JOIN_SCOPE_UNKNOWN");
       setCommunity(confirmed);
       setEventNotice(null);
-      if (isCommunityMember(confirmed, profile)) { setEventAdmissionConfirmed(true); setState("member"); return null; }
+      if (isCommunityMember(confirmed, profile)) { setEventAdmissionConfirmed(true); setPushOptInRequested(registration?.pushOptIn === true); setState("member"); return null; }
       if (isCommunityMember(confirmed, profile, "PENDING") || response.data?.membershipStatus === "PENDING") { setState("pending"); return null; }
       throw new Error("MEMBERSHIP_UNCONFIRMED");
     } catch {
       if (mounted.current && currentContext.current === context) {
-        setEventNotice(null); setEventAdmissionConfirmed(false);
+        setEventNotice(null); setEventAdmissionConfirmed(false); setPushOptInRequested(false);
         setState("error"); setActionError("Не удалось подтвердить вступление. Сначала проверьте статус.");
       }
       return 'Не удалось подтвердить вступление. Сначала проверьте статус.';
@@ -355,6 +356,14 @@ export default function CommunityJoinPage({
       logoUrl: override.logoUrl ?? buildCommunityLogoCandidates(community)[0] ?? null,
     };
   }, [community, normalizedInviteCode]);
+  const pushReturnUrl = useMemo(() => {
+    let target = resolveInviteCabinetUrl(cabinetUrl);
+    if (community?.id) {
+      try { target = buildCommunityCabinetUrl(target, community.id); } catch { /* keep the cabinet URL */ }
+    }
+    return target;
+  }, [cabinetUrl, community?.id]);
+  const pushOptInUrl = buildPushOptInUrl(pushReturnUrl);
   const current = loadedContext === context;
   const visibleState = !current || loading ? "checking" : state;
   const exhibition = Boolean(brand);
@@ -378,6 +387,12 @@ export default function CommunityJoinPage({
     brand={brand} preflight={exhibition && current && authenticated && visibleState === "unverified" && !eventNotice}
     onPrimary={primary} onSecondary={handleDecline}>
     {visibleState === "guest" && showLogin ? <AuthForm onLogin={onLogin} />
-      : current && eventNotice ? <EventRegistrationForm notice={eventNotice} onSubmit={handleJoin} onCancel={() => setEventNotice(null)} /> : null}
+      : current && eventNotice ? <EventRegistrationForm notice={eventNotice} onSubmit={handleJoin} onCancel={() => setEventNotice(null)} />
+      : current && exhibition && visibleState === "member" && pushOptInRequested ? <div className="ph-community-invite__push">
+          <p className="ph-community-invite__push-title">Оповестим о результатах</p>
+          <p className="ph-community-invite__push-note">Подключите уведомления — пришлём результаты выставки и приглашение на командную тренировку.</p>
+          <a className="ph-community-invite__primary" href={pushOptInUrl}>Подключить уведомления</a>
+        </div>
+      : null}
   </CommunityInviteView>;
 }

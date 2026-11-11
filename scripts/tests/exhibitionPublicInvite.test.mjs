@@ -28,7 +28,7 @@ function harness({ member = false, response, freshContext = true, initialNotice 
     normalizedInviteCode: 'synthetic-invite', normalizedInviteLink: null,
     setActionError: value => errors.push(value), setSubmitting() {},
     setState: value => states.push(value), setCommunity() {},
-    setEventNotice: value => notices.push(value), setEventAdmissionConfirmed() {},
+    setEventNotice: value => notices.push(value), setEventAdmissionConfirmed() {}, setPushOptInRequested() {},
     requireLogin: () => { logins++; },
     redirectToCabinet: (...args) => { redirects.push(args); return true; },
     buildCommunityActor: profile => ({ id: profile.id }),
@@ -118,9 +118,14 @@ test('the actual public-page composition preserves primary controls when no chil
   assert.ok(returnStart >= 0);
   const composition = transformSync('function compose() {' + source.slice(returnStart, source.lastIndexOf('\n}')) + '\n}', { loader: 'tsx', jsx: 'transform' }).code;
   for (const visibleState of ['guest', 'unverified', 'member', 'pending', 'error']) {
-    const bindings = { React, CommunityInviteView: module.exports.CommunityInviteView, visibleState, current: true, community: null, submitting: null, loading: false, alreadyMember: visibleState === 'member', actionError: null, loadError: null, primary() {}, handleDecline() {}, showLogin: false, onLogin() {}, eventNotice: null, handleJoin() {}, setEventNotice() {}, AuthForm: () => null, EventRegistrationForm: () => null, brand: undefined, exhibition: false, authenticated: false };
+    const bindings = { React, CommunityInviteView: module.exports.CommunityInviteView, visibleState, current: true, community: null, submitting: null, loading: false, alreadyMember: visibleState === 'member', actionError: null, loadError: null, primary() {}, handleDecline() {}, showLogin: false, onLogin() {}, eventNotice: null, handleJoin() {}, setEventNotice() {}, AuthForm: () => null, EventRegistrationForm: () => null, brand: undefined, exhibition: false, authenticated: false, pushOptInRequested: false, pushOptInUrl: 'https://lk2.padlhub.su/push?returnTo=synthetic' };
     const compose = new Function(...Object.keys(bindings), composition + '\nreturn compose;')(...Object.values(bindings));
     const html = renderToStaticMarkup(React.createElement(compose));
     assert.match(html, /class="ph-community-invite__primary"/, visibleState);
   }
+  const bindings = { React, CommunityInviteView: module.exports.CommunityInviteView, visibleState: 'member', current: true, community: null, submitting: null, loading: false, alreadyMember: true, actionError: null, loadError: null, primary() {}, handleDecline() {}, showLogin: false, onLogin() {}, eventNotice: null, handleJoin() {}, setEventNotice() {}, AuthForm: () => null, EventRegistrationForm: () => null, brand: { heading: 'Вступай в сообщество КорпСпорт 2026' }, exhibition: true, authenticated: true, pushOptInRequested: true, pushOptInUrl: 'https://lk2.padlhub.su/push?returnTo=community' };
+  const compose = new Function(...Object.keys(bindings), composition + '\nreturn compose;')(...Object.values(bindings));
+  const html = renderToStaticMarkup(React.createElement(compose));
+  assert.match(html, /Подключить уведомления/);
+  assert.match(html, /href="https:\/\/lk2\.padlhub\.su\/push\?returnTo=community"/);
 });

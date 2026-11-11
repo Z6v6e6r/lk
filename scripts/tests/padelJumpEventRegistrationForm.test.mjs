@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { build, transformSync } from 'esbuild';
 import { parseEventRegistrationPolicy } from '../../src/services/community-policy.ts';
-import { EXHIBITION_COMMUNITY_ID, readExhibitionBrandOverride } from '../../src/components/padel-jump/exhibition.ts';
+import { EXHIBITION_COMMUNITY_ID, buildPushOptInUrl, readExhibitionBrandOverride } from '../../src/components/padel-jump/exhibition.ts';
 
 const require=createRequire(import.meta.url), React=require('react');
 const {renderToStaticMarkup}=require('react-dom/server');
@@ -118,4 +118,11 @@ test('public guest hero accepts only a safe https or site-relative logo and a bo
   assert.deepEqual(readExhibitionBrandOverride('?brandLogo=javascript%3Aalert(1)&brandTitle='), {});
   assert.deepEqual(readExhibitionBrandOverride('?brandLogo=%2F%2Fevil.example%2Fx.png'), {});
   assert.deepEqual(readExhibitionBrandOverride('?brandTitle=' + 'x'.repeat(121)), {});
+});
+
+test('the LK2 push hand-off carries the community return URL without leaking the current query', () => {
+  const url = new URL(buildPushOptInUrl('https://padlhub.ru/lk_new?authMode=viva&openCommunity=community_1'));
+  assert.equal(url.origin + url.pathname, 'https://lk2.padlhub.su/push');
+  assert.equal(url.searchParams.get('returnTo'), 'https://padlhub.ru/lk_new?authMode=viva&openCommunity=community_1');
+  assert.equal(new URL(buildPushOptInUrl('')).searchParams.get('returnTo'), null);
 });

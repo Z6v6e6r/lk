@@ -26,3 +26,11 @@ export const isExhibitionInvite = (inviteCode?: string | null) => {
   return Boolean(normalized) && normalized === EXHIBITION_INVITE_SLUG.toLowerCase();
 };
 export const exhibitionApi = (origin = typeof window === 'undefined' ? '' : window.location.origin) => origin === 'https://padlhub.ru' ? 'https://padlhub.su/jump-exhibition-api/' : '/jump-exhibition-api/';
+
+/** Web Push can only be subscribed on the LK2 origin (service worker scope), so the page hands off. */
+export const LK2_PUSH_OPT_IN_URL = 'https://lk2.padlhub.su/push';
+export function buildPushOptInUrl(returnTo: string): string {
+  const url = new URL(LK2_PUSH_OPT_IN_URL);
+  if (returnTo) url.searchParams.set('returnTo', returnTo);
+  return url.toString();
+}
