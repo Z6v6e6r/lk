@@ -8,6 +8,17 @@ export function isSelectableMethod(option: PaymentOption) {
   return option.mode === 'book' || option.mode === 'offer';
 }
 
+// Keep the actual subscription method (and its quote) behind the personal-share
+// row. The full quarter remains only a crossed-out price reference.
+export function withPersonalSubscription(options: PaymentOption[], hasSubscription: boolean): PaymentOption[] {
+  const subscription = options.find(option => option.kind === 'subscription' && option.mode === 'book'
+    && option.amount != null && Number.isFinite(option.amount) && option.amount >= 0);
+  if (!hasSubscription || !subscription) return options;
+  const full = options.find(option => option.kind === 'full');
+  return [...(full ? [{ ...full, mode: 'reference' as const }] : []), subscription,
+    ...options.filter(option => option.kind !== 'full' && option.kind !== 'subscription')];
+}
+
 export function bookingButtonText(option: PaymentOption | undefined) {
   if (!option) return 'Стоимость уточняется';
   if (option.kind === 'pass') return option.mode === 'offer' ? `Записаться за ${formatRubles(ENERGY_PASS_PRICE)}` : 'Списать 1 тренировку и записаться';

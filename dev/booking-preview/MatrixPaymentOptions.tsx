@@ -3,7 +3,7 @@ import { Modal } from '../../src/components/UI/Modal';
 import { AuthForm } from '../../src/components/auth/AuthForm';
 import { useAuth } from './auth';
 import { buildBookingPaymentOptions, formatRubles, readMatrixSettings, SERVICES, type GamePaymentScope, type PaymentKind, type PaymentOption, type ServiceKind } from './paymentMatrix';
-import { ENERGY_PASS_PRICE, bookingButtonText, createPreviewOrder, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, type PreviewOrder } from './bookingCheckout';
+import { ENERGY_PASS_PRICE, bookingButtonText, createPreviewOrder, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, type PreviewOrder } from './bookingCheckout';
 import { eligibleSubscriptionOffers, subscriptionOfferQuote, type SubscriptionOffer } from './subscriptionOffers';
 import './matrix.css';
 
@@ -41,8 +41,9 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const subscriptionOffers = eligibleSubscriptionOffers(service, paymentContext);
   const cheapestSubscription = subscriptionOffers[0];
   const cheapestSubscriptionQuote = cheapestSubscription && subscriptionOfferQuote(cheapestSubscription, service, paymentContext, gamePaymentScope, courtAmount);
-  const options = withPassBalance(buildBookingPaymentOptions(service, profile, applicability, paymentContext, gamePaymentScope, courtAmount), passRemaining)
+  const paymentOptions = withPassBalance(buildBookingPaymentOptions(service, profile, applicability, paymentContext, gamePaymentScope, courtAmount), passRemaining)
     .flatMap(option => option.kind === 'subscription' && !profile.subscription ? cheapestSubscriptionQuote ? [cheapestSubscriptionQuote] : [] : [option]);
+  const options = isPersonalGame ? withPersonalSubscription(paymentOptions, profile.subscription) : paymentOptions;
   const available = options.filter(isSelectableMethod);
   const [selected, setSelected] = useState<PaymentKind>(available[0]?.kind || 'full');
   const [residencyOfferOpen, setResidencyOfferOpen] = useState(false);
@@ -78,6 +79,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const title = (option: PaymentOption) => {
     if (isWholeCourt && option.kind === 'full') return 'Полная оплата за 4 игроков';
     if (isPersonalGame && option.kind === 'full') return 'Моя доля · ¼ стоимости';
+    if (isPersonalGame && profile.subscription && option.kind === 'subscription' && option.mode === 'book') return 'Моя доля · по подписке';
     if (option.kind !== 'subscription') return optionNames[option.kind];
     if (option.benefit === 'free-event') return 'По подписке РА — бесплатно';
     if (option.benefit === 'discount') return `По подписке · скидка ${price.discount}%`;

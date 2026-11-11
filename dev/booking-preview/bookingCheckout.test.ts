@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookingButtonText, createPreviewOrder, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance } from './bookingCheckout.ts';
+import { bookingButtonText, createPreviewOrder, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription } from './bookingCheckout.ts';
 import { buildBookingPaymentOptions, PRIVILEGE_PROFILES, type PaymentOption } from './paymentMatrix.ts';
 
 test('selecting an unowned residency is possible and uses the event discount on the primary button', () => {
@@ -68,4 +68,38 @@ test('an exhausted owned pack offers a replacement and keeps the paid fallback s
   assert.equal(withPassBalance(options, 0).find(option => option.kind === 'full')?.mode, 'book');
   assert.equal(withPassBalance(options, 3).find(option => option.kind === 'pass')?.mode, 'book');
   assert.equal(bookingButtonText(options.find(option => option.kind === 'pass')), 'Списать 1 тренировку и записаться');
+});
+test('an owned game subscription immediately becomes my personal share at the quoted duration price', () => {
+  for (const [courtAmount, durationMinutes, amount] of [[4000, 60, 0], [6000, 90, 500], [8000, 120, 1000]]) {
+    const options = buildBookingPaymentOptions('game', PRIVILEGE_PROFILES[7], { subscription: true, pass: true },
+      { subscriptionPlan: 'daily-hour', dailyQuota: 'available', durationMinutes }, 'quarter', courtAmount);
+    const display = withPersonalSubscription(options, true);
+    const first = display.find(isSelectableMethod)!;
+    assert.equal(first.kind, 'subscription', 'An owned pass or residency must not take priority over my subscription');
+    assert.equal(first.amount, amount);
+    assert.equal(display.find(option => option.kind === 'full')?.mode, 'reference');
+    assert.equal(display.find(option => option.kind === 'full')?.amount, courtAmount / 4);
+    assert.equal(display.filter(option => option.kind === 'subscription').length, 1);
+    assert.equal(createPreviewOrder(first)?.total, amount);
+    assert.equal(createPreviewOrder(first)?.product, null, 'An existing subscription is not purchased again');
+  }
+});
+test('after using the daily allowance my personal share keeps the subscription discount', () => {
+  const options = buildBookingPaymentOptions('game', PRIVILEGE_PROFILES[7], { subscription: true, pass: true },
+    { subscriptionPlan: 'daily-hour', dailyQuota: 'used', durationMinutes: 90 }, 'quarter', 6000);
+  const choice = withPersonalSubscription(options, true).find(isSelectableMethod)!;
+  assert.equal(choice.kind, 'subscription');
+  assert.equal(choice.amount, 1050);
+});
+test('missing, inapplicable or unquoted subscriptions never replace the paid share', () => {
+  const noSubscription = buildBookingPaymentOptions('game', PRIVILEGE_PROFILES[0], { subscription: true, pass: false }, { subscriptionPlan: 'daily-hour', durationMinutes: 60 }, 'quarter', 4000);
+  assert.equal(withPersonalSubscription(noSubscription, false), noSubscription);
+  const inapplicable = buildBookingPaymentOptions('game', PRIVILEGE_PROFILES[2], { subscription: false, pass: false }, { subscriptionPlan: 'daily-hour' }, 'quarter', 4000);
+  assert.equal(withPersonalSubscription(inapplicable, true), inapplicable);
+  for (const amount of [null, NaN, Infinity, -1]) {
+    const options: PaymentOption[] = [{ kind: 'full', mode: 'book', amount: 1000 }, { kind: 'subscription', mode: 'book', amount }];
+    assert.equal(withPersonalSubscription(options, true), options);
+  }
+  const fullCourt = buildBookingPaymentOptions('game', PRIVILEGE_PROFILES[7], { subscription: true, pass: true }, {}, 'court', 4000);
+  assert.equal(withPersonalSubscription(fullCourt, true), fullCourt);
 });
