@@ -1,3 +1,4 @@
+import { hasZeroAttempt, resolveZeroOffer } from './zeroCheckoutPayment';
 import { startCheckout } from './zeroCheckoutMount';
 import { fastOfferKey } from './zeroCheckoutOffers';
 import { SubscriptionPromoCodeDialog } from './SubscriptionPromoCodeDialog';
@@ -142,13 +143,13 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     const key = fastOfferKey(selection.planId, selection.billingOptionId);
     const option = plans.find(p => p.id === selection.planId)?.billingOptions.find(b => b.id === selection.billingOptionId);
     try {
-      if (!key || !option || option.ctaDisabled || option.priceMinor === null) throw new StorefrontPaymentError('Этот вариант подписки пока недоступен для оплаты');
-      startCheckout(key, option.priceMinor, gesture);
+      if (!key || !option || option.ctaDisabled || !option.canResume && option.priceMinor === null) throw new StorefrontPaymentError('Этот вариант подписки пока недоступен для оплаты');
+      startCheckout(key, option.priceMinor ?? 0, gesture);
     } catch (failure) { setFailure(failure instanceof Error ? failure.message : 'Не удалось открыть оформление.'); }
   }
 
   const planKeys = storefrontPlanKeysForSearch(typeof window === 'undefined' ? '' : window.location.search);
-  const plans = isAtlantyVariant
+  const basePlans = isAtlantyVariant
     ? [{
       ...atlantyPlanPresentation,
       id: ATLANTY_PLAN_ID,
@@ -158,15 +159,15 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     }]
     : planKeys.flatMap(key => {
       const status = statuses?.find(item => item.counterKey === key);
-      if (!status && key !== 'friendship') return [];
+      if (!status && key !== 'friendship' && !hasZeroAttempt(key)) return [];
       const billingOptions = key === 'friendship'
         ? friendshipBillingOptions(statuses ?? [], error, twoHourProductPriceMinor).map(option => ({
           ...option,
           benefitGroups: friendshipVariantBenefits[option.id],
         }))
         : key === 'energy5'
-          ? energy5BillingOptions(status)
-          : status ? billingFromStatus(status) : [];
+          ? (status ? energy5BillingOptions(status) : [{ id: 'monthly', label: '60 дней, 5 занятий', priceMinor: null }])
+          : status ? billingFromStatus(status) : [{ id: 'monthly', label: resolveZeroOffer(key)?.period ?? '30 дней', priceMinor: null }];
       if (!billingOptions.length) return [];
       return [{
         ...summerPlanPresentation[key], id: key, billingOptions,
@@ -174,6 +175,19 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
         ctaDisabled: (key === 'friendship' ? error : !status || !canContinue(status, error)),
       }];
     });
+  const plans = basePlans.map(plan => {
+    const pending = plan.billingOptions.some(option => {
+      const key = fastOfferKey(plan.id, option.id);
+      return key && hasZeroAttempt(key);
+    });
+    if (!pending) return plan;
+    return { ...plan, ctaDisabled: false, billingOptions: plan.billingOptions.map(option => {
+      const key = fastOfferKey(plan.id, option.id);
+      const canResume = Boolean(key && hasZeroAttempt(key));
+      return { ...option, canResume, ctaDisabled: canResume ? false : plan.ctaDisabled || option.ctaDisabled,
+        ...(canResume ? { ctaLabel: 'Продолжить оплату', statusMessage: undefined } : {}) };
+    }) };
+  });
   const view = previewView ?? (isAtlantyVariant
     ? {
       id: 'lk1-subscription-atlanty', title: 'ДРУЖБА.АТЛАНТЫ',
@@ -193,7 +207,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
    */
   const statusNotice = isAtlantyVariant ? null
     : error ? null
-      : !statuses ? 'Загружаем подписки…'
+      : !statuses && !plans.some(plan => plan.billingOptions.some(option => option.canResume)) ? 'Загружаем подписки…'
         : !plans.length ? 'Сейчас нет доступных предложений.' : null;
 
   return <>
@@ -208,7 +222,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
         </div> : statusNotice}
       </div>
     </div>}
-    {(previewView || statuses || isAtlantyVariant) && <>
+    {(previewView || statuses || isAtlantyVariant || plans.some(plan => plan.billingOptions.some(option => option.canResume))) && <>
       {notice && <p className="subscription-status-message" role="status">{notice}</p>}
       {failure && <p className="subscription-status-message subscription-status-message--error" role="alert">{failure}</p>}
       <SubscriptionStorefront view={view} onBack={onBack} onChoose={handleChoose}

@@ -1,5 +1,6 @@
+import { parseZeroOperationLink } from './zeroCheckoutResume';
 import { parseZeroAttempt, type ZeroPaymentAttempt as Attempt } from './zeroCheckoutCustody';
-import { withSubscriptionPromoLock, recordOrdinarySubscriptionAttempt } from './promoCodeAttempt';
+import { withSubscriptionPromoLock, recordOrdinarySubscriptionAttempt, subscriptionPromoAttemptKey } from './promoCodeAttempt';
 import { readSubscriptionPromoTransactionPaid } from '../../utils/subscriptionPromoCode';
 import { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, request, getServ2Origin } from '../../utils/apiClient';
 import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
@@ -285,7 +286,9 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
       || expectedQuote.activationDays !== quote.activationDays)) {
       throw new StorefrontPaymentError('Условия активации изменились. Обновите данные перед оплатой.');
     }
-    const attempt: Attempt = { key, paymentRef: `zero-${window.crypto.randomUUID()}`, state: 'pending' };
+    const ownerBinding = (await subscriptionPromoAttemptKey(sharedProductId || key, phone)).split(':').pop()!;
+    if (!canProceed()) throw new StorefrontPaymentError('Оформление закрыто.');
+    const attempt: Attempt = { key, paymentRef: `zero-${window.crypto.randomUUID()}`, state: 'pending', ownerBinding };
     const returnUrl = buildZeroReturnUrl(key);
     try { saveAttempt(attempt); }
     catch { throw new StorefrontPaymentError('Разрешите сохранение данных сайта, чтобы продолжить оформление.'); }
@@ -374,4 +377,61 @@ async function confirmZeroPaymentOwned(key: string) {
   }
   // FAILED can be a locally archived, uncertain payment. Never release its guard.
   return { status: 'pending' as const, message: ZERO_PENDING_MESSAGE };
+}
+
+/** Resume only the saved account/offer attempt. Never issue a purchase POST here. */
+export async function resumeZeroPayment(key: string, phone: string, canProceed: () => boolean) {
+  const pending = { status: 'pending' as const, message: ZERO_PENDING_MESSAGE };
+  if (!navigator.locks) return pending;
+  return navigator.locks.request(ATTEMPT_PREFIX + key, { ifAvailable: true }, async lock => {
+    const offer = resolveZeroOffer(key), attempt = readAttempt(key);
+    if (!lock || !offer || !attempt || !phone.trim() || !canProceed()) return pending;
+    const raw = window.localStorage.getItem(ATTEMPT_PREFIX + key);
+    const current = () => canProceed() && window.localStorage.getItem(ATTEMPT_PREFIX + key) === raw;
+    const productId = offer.liveProductId || offer.promo?.productId || resolveStorefrontPromoTarget(offer.planId, offer.billingOptionId)?.directProductId;
+    const accountKey = await subscriptionPromoAttemptKey(productId || key, phone);
+    if (!current()) return pending;
+    if (attempt.ownerBinding) {
+      if (attempt.ownerBinding !== accountKey.split(':').pop()) return pending;
+    } else {
+      // Migrate only an existing account-scoped marker, never infer ownership from a ref.
+      if (!productId) return pending;
+      let shared;
+      try { shared = JSON.parse(window.localStorage.getItem(accountKey) || 'null'); } catch { return pending; }
+      if (shared?.kind !== 'ordinary' || !(shared.paymentRef === attempt.paymentRef
+        || attempt.transactionId && shared.transactionId === attempt.transactionId)) return pending;
+    }
+    if (attempt.state === 'paid') return { status: 'paid' as const, message: 'Оплата подтверждена. Подписка оформлена.' };
+    if (attempt.state !== 'pending') return pending;
+    if (offer.target && !offer.target.directProductId && !offer.liveProductId && !offer.promo) {
+      const result = await apiConfirmTournamentSubscriptionPurchase(attempt.paymentRef, {
+        counterKey: offer.target.counterKey, planType: offer.billingOptionId === 'annual' ? null : 'friendship',
+      });
+      if (!current() || result.error || !result.data || result.data.paymentRef !== attempt.paymentRef
+        || result.data.counterKey !== offer.target.counterKey || result.data.failed) return pending;
+      if (result.data.paid === true && result.data.status === 'PAID') {
+        saveAttempt({ ...attempt, state: 'paid' });
+        return { status: 'paid' as const, message: 'Оплата подтверждена. Подписка оформлена.' };
+      }
+      const paymentUrl = parseZeroOperationLink(result.data);
+      return paymentUrl && !result.data.paid ? { status: 'redirect' as const, paymentUrl } : pending;
+    }
+    if (!attempt.transactionId) return pending;
+    const path = `${API_BASE}/end-user/api/v2/${TENANT_KEY}`;
+    const state = await request<{ transactionStatus?: string }>(`${path}/transactions/${encodeURIComponent(attempt.transactionId)}/status`, {
+      method: 'GET', auth: true, retries: 0, cache: 'no-store',
+    });
+    if (!current() || state.error) return pending;
+    if (state.data?.transactionStatus === 'PAID') {
+      saveAttempt({ ...attempt, state: 'paid' });
+      return { status: 'paid' as const, message: 'Оплата подтверждена. Подписка оформлена.' };
+    }
+    if (!['UNPAID', 'WAITING', 'PENDING', 'CREATED'].includes(state.data?.transactionStatus || '')) return pending;
+    const operation = await request<unknown>(`${path}/operations/${encodeURIComponent(attempt.transactionId)}`, {
+      method: 'GET', auth: true, retries: 0, cache: 'no-store',
+    });
+    if (!current() || operation.error) return pending;
+    const paymentUrl = parseZeroOperationLink(operation.data);
+    return paymentUrl ? { status: 'redirect' as const, paymentUrl } : pending;
+  });
 }

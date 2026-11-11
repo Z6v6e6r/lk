@@ -165,8 +165,8 @@ test('storefront CTA creates the payment in the widget instead of navigating to 
   const paymentSource = readFileSync(new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(catalogSource, /ab_leto|autoPurchase|subscriptionCheckoutUrl/);
   assert.doesNotMatch(pageSource, /ab_leto|subscriptionCheckoutUrl/);
-  assert.match(pageSource, /startCheckout\(key, option.priceMinor, gesture\)/);
-  assert.doesNotMatch(pageSource, /Продолжить оплату|<AuthForm/);
+  assert.match(pageSource, /startCheckout\(key, option.priceMinor \?\? 0, gesture\)/);
+  assert.doesNotMatch(pageSource, /<AuthForm/);
   assert.doesNotMatch(pageSource, /StorefrontLogin/);
   assert.match(paymentSource, /apiCreateTournamentSubscriptionPurchase/);
   assert.match(paymentSource, /apiBuySubscroption/);
@@ -176,7 +176,7 @@ test('storefront CTA creates the payment in the widget instead of navigating to 
 test('annual terms stay inside the shared checkout and gate automatic submit before claiming', () => {
   const page = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url), 'utf8');
   const dialog = readFileSync(new URL('../../src/components/subscription-storefront/ZeroCheckoutDialog.tsx', import.meta.url), 'utf8');
-  assert.doesNotMatch(page, /className="subscription-consent"|Продолжить оплату/);
+  assert.doesNotMatch(page, /className="subscription-consent"/);
   assert.match(dialog, /Я ознакомился\(ась\) и согласен\(на\) с условиями годовой подписки/);
   assert.ok(dialog.indexOf("&& !terms) return;\n    fastStarted.current = true;") > 0);
 });
