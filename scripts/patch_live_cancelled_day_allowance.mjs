@@ -67,6 +67,29 @@ export function patchCancelledAllowancePreview(source) {
     + '      cancellationSnapshot: ctx.cancellationSnapshot,');
   return out;
 }
+// Historical G1 recipes must keep their original whole-source pins. Undo only
+// these exact later additions before those recipes verify the original hash.
+export function restorePreCancelledAllowanceSource(source, relative) {
+  const deltas = relative === 'nodered_lk1_hub_nodes/gateway.js' ? [
+    read('cancelled_successor') + '\n', read('cancelled_allowance') + '\n',
+    '    if (lk1CancelledZeroVisitOperation(operation)) continue;\n',
+    '  delete ctx.lk1.cancellationSnapshot;\n',
+    '    const httpPreviousId = lk1HttpRejoinPrevious(ctx.operationId);\n'
+      + '    if (httpPreviousId && lk1HttpRejoinRequest(ctx)) return lk1Find(ctx, "lk1_http_rejoin_predecessor_find", {\n'
+      + '      _id: `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, httpPreviousId])}` });\n',
+    '    if (operation.state === "RELEASED" && lk1HttpRejoinRequest(ctx)) {\n'
+      + '      if (!lk1SafeCancelledUnpaidSuccessor(operation)) return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");\n'
+      + '      const identity = lk1HttpRejoinIdentity(ctx.operationId);\n'
+      + '      return finishError(ctx, 409, "Предыдущая запись отменена. Обновите варианты и запишитесь снова.", {\n'
+      + '        code: "SUBSCRIPTION_BOOKING_RELEASED", operationId: ctx.operationId,\n'
+      + '        nextOperationId: `${identity.base}:rejoin:${identity.generation + 1}` });\n'
+      + '    }\n',
+  ] : relative === 'nodered_lk1_hub_nodes/gateway_hooks.js' ? [
+    '    ctx.lk1.cancellationSnapshot = { observedAt: ctx.bookingsObservedAt,\n'
+      + '      active: extractItems(activeBookingsPayload), history: extractItems(msg.payload) };\n',
+  ] : [];
+  return deltas.reduce((value, delta) => value.split(delta).length === 2 ? value.replace(delta, '') : value, source);
+}
 export function composeCancelledAllowanceArtifacts(liveBytes, options = {}) {
   if (hash(liveBytes) !== (options.expectedSourceSha256 ?? CANCELLED_ALLOWANCE_SOURCE_SHA256)) throw new Error('Cancelled allowance whole-flow preimage drift');
   const flow = JSON.parse(liveBytes), targets = options.targets ?? CANCELLED_ALLOWANCE_TARGETS;
