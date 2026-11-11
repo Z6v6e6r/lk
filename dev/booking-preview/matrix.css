@@ -22,6 +22,10 @@
 .matrix-option-value { text-align: right; display: grid; gap: 4px; flex-shrink: 0; max-width: 35%; }
 .matrix-option-value strong { font-size: 14px; font-weight: 700; white-space: nowrap; }
 .matrix-option-value > span { color: #7650bf; font-size: 10px; }
+.matrix-option-value > .matrix-option-base-price { display: grid; gap: 2px; color: #8e8998; text-align: inherit; }
+.matrix-option-value .matrix-option-base-price > span { font-size: 9px; margin: 0; }
+.matrix-option-value .matrix-option-base-price del { font-size: 11px; }
+.matrix-comparison .matrix-option-value .matrix-option-base-price { display: grid; gap: 2px; align-items: start; margin: 0; text-align: inherit; }
 .matrix-icon { width: 32px; height: 32px; padding: 7px; flex: 0 0 32px; border-radius: 9px; background: #f0edf7; color: #797188; }
 .matrix-icon svg { width: 100%; height: 100%; display: block; }
 .matrix-icon--residency { background: #e9deff; color: #7843e5; }

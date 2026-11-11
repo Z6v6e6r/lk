@@ -62,11 +62,10 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const price = SERVICES[service];
   const full = params.get('state') === 'full';
   const choice = available.find(option => option.kind === selected) || available[0];
-  const reference = options.find(option => option.mode === 'reference');
   const locked = disabled || full || busy;
   const displayBaseAmount = options.find(option => option.kind === 'full')?.amount ?? price.price;
   const displayResidencyAmount = options.find(option => option.kind === 'residency')?.amount ?? price.residentPrice;
-  const referenceAmount = reference?.amount ?? displayBaseAmount;
+  const referenceAmount = options.find(option => option.kind === 'full')?.amount ?? null;
   const purchaseOption = options.find(option => option.kind === purchase);
   const purchaseSubscription = subscriptionOffers.find(offer => offer.id === purchaseSubscriptionId) || cheapestSubscription;
   const subscriptionPurchaseOption = purchaseSubscription && subscriptionOfferQuote(purchaseSubscription, service, paymentContext, gamePaymentScope, courtAmount);
@@ -169,7 +168,6 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
 
   return <section className="matrix-payment" aria-label={`Способы записи: ${price.name}`} data-service={service} data-event={eventKey}>
     <header className="matrix-payment-heading"><div><h2>{registered ? 'Ваша запись' : checkout ? 'Оплата записи' : 'Выберите способ записи'}</h2><p>{price.name}{isPersonalGame ? ' · моя доля ¼' : isWholeCourt ? ' · плачу за всех' : ''}{Number.isFinite(duration) && duration > 0 ? ` · ${duration} мин` : ''}</p></div>
-      {reference && !registered && !checkout && <div className="matrix-base-price"><span>Полная цена</span><del>{formatRubles(referenceAmount)}</del></div>}
     </header>
     {registered ? <div className="matrix-success" role="status">
       <strong>Вы записаны</strong><p>{submittedOption?.kind === 'pass' ? `Энергия 5 · списана 1 тренировка · ${passBalanceText(passRemaining)}` : submittedOption ? `${title(submittedOption)}${submittedOption.amount != null ? ` · ${amount(submittedOption)}` : ''}` : 'Место за вами. Детали записи доступны в личном кабинете.'}</p>
@@ -187,9 +185,11 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
       <fieldset className="matrix-options" disabled={busy}>
         <legend className="matrix-sr-only">Способы записи</legend>
         {options.filter(option => option.mode !== 'reference' && option.mode !== 'unavailable').map(option => {
+          const showBasePrice = (option.kind === 'residency' || option.kind === 'subscription')
+            && referenceAmount != null && option.amount != null && option.amount >= 0 && option.amount < referenceAmount;
           const copy = <><span className={`matrix-icon matrix-icon--${option.kind}`}><PaymentIcon kind={option.kind} /></span>
             <span className="matrix-option-copy"><strong>{title(option)}</strong><span>{detail(option)}</span></span>
-            <span className="matrix-option-value"><strong>{amount(option)}</strong></span></>;
+            <span className="matrix-option-value">{showBasePrice && <span className="matrix-base-price matrix-option-base-price"><span>Полная цена</span><del>{formatRubles(referenceAmount!)}</del></span>}<strong>{amount(option)}</strong></span></>;
           const classes = `matrix-option matrix-option--${option.kind} ${choice?.kind === option.kind ? 'is-selected' : ''} ${option.mode === 'quote' ? 'is-quote' : ''}`;
           if (isSelectableMethod(option)) return <label className={classes} key={option.kind}>
             <input type="radio" name={`${groupId}-method`} value={option.kind} checked={choice?.kind === option.kind} disabled={locked} onChange={() => setSelected(option.kind)} />{copy}
