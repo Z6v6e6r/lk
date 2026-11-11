@@ -1,5 +1,6 @@
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isTournamentCapacityError } from "../../utils/tournamentCapacityError";
+import { isSubscriptionBookingReleased } from "../../utils/subscriptionRejoin";
 import { canPayTournamentPending, tournamentPaymentSessionIdentity, clearTournamentPendingPayments as clearStoredPendingPayment, mergeTournamentPendingPayment, storeTournamentPendingPayment } from "../../utils/tournamentPendingPayment";
 import { AvatarImage } from "../UI/AvatarImage";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1554,6 +1555,12 @@ export default function TournamentSignupPage({
       });
       if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
       if (result.error || !result.data) {
+        if (result.status === 409 && isSubscriptionBookingReleased(result.error?.raw)) {
+          setError(result.error?.message || "Предыдущая запись отменена. Выберите вариант записи снова.");
+          setCheckout(null);
+          setDiscountQuotes([]);
+          return;
+        }
         if (isTournamentCapacityError(result.error)) {
           setError("Нет свободных мест");
           setCheckout(null);
