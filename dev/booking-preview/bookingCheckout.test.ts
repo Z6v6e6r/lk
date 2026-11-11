@@ -1,7 +1,51 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookingButtonText, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription } from './bookingCheckout.ts';
+import { bookingButtonText, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutRedundantBoost } from './bookingCheckout.ts';
 import { buildBookingPaymentOptions, PRIVILEGE_PROFILES, readMatrixSettings, type PaymentOption } from './paymentMatrix.ts';
+
+test('Friendship 2.0 hides duplicate free Boost in games while retaining its extra free group/tournament option', () => {
+  const settings = readMatrixSettings(new URLSearchParams('subscription=1&residency=0&pass=0&boost=1&subscriptionPlan=friendship-2&dailyQuota=available'));
+  for (const service of ['game', 'training', 'tournament'] as const) {
+    const raw = buildBookingPaymentOptions(service, settings.profile, settings.applicability, { ...settings, durationMinutes: 90 }, service === 'game' ? 'quarter' : undefined, 4000);
+    const visible = withoutRedundantBoost(raw);
+    assert.equal(visible.some(option => option.kind === 'boost'), service !== 'game');
+    assert.equal(visible.find(option => option.kind === 'subscription')?.amount, service === 'game' ? 0 : service === 'training' ? 2750 : 4000);
+    assert.equal(defaultPaymentOption(visible)?.kind, 'residency');
+    if (service === 'game') {
+      assert.equal(visible.filter(option => option.mode === 'book' && option.amount === 0).length, 1);
+      assert.equal(createPreviewOrder(visible.find(option => option.kind === 'subscription')!)?.method, 'subscription');
+    }
+  }
+});
+
+test('duplicate Boost discounts and RA events keep the subscription method and other independent alternatives', () => {
+  for (const service of ['training', 'tournament'] as const) {
+    for (const dailyQuota of ['available', 'used'] as const) {
+      const raw = buildBookingPaymentOptions(service, PRIVILEGE_PROFILES[7], { subscription: true, pass: true },
+        { subscriptionPlan: 'ra', boost: true, dailyQuota, dailyUsage: dailyQuota === 'used' ? 'two-events' : 'none' });
+      const visible = withoutRedundantBoost(raw);
+      assert.ok(!visible.some(option => option.kind === 'boost'));
+      for (const kind of ['subscription', 'residency', 'pass']) assert.ok(visible.some(option => option.kind === kind));
+    }
+  }
+});
+
+test('Boost remains distinct when it improves the price, the subscription is unowned or its quote is unknown', () => {
+  for (const [subscriptionPlan, dailyUsage, proDirection] of [['friendship', 'none', false], ['friendship-2', 'game-hour', false], ['ra', 'none', true]] as const) {
+    const raw = buildBookingPaymentOptions(proDirection ? 'training' : 'game', PRIVILEGE_PROFILES[2], { subscription: true, pass: false },
+      { subscriptionPlan, boost: true, durationMinutes: 90, dailyUsage, dailyQuota: dailyUsage === 'none' ? 'available' : 'used', proDirection }, proDirection ? undefined : 'quarter', 6000);
+    assert.ok(withoutRedundantBoost(raw).some(option => option.kind === 'boost' && option.mode === 'book'));
+  }
+  const boost: PaymentOption = { kind: 'boost', mode: 'book', amount: 0 };
+  for (const mode of ['offer', 'quote', 'unavailable', 'reference'] as const) {
+    const options: PaymentOption[] = [{ kind: 'subscription', mode, amount: 0 }, boost];
+    assert.deepEqual(withoutRedundantBoost(options), options);
+  }
+  for (const amount of [null, NaN, Infinity, -1]) {
+    const options: PaymentOption[] = [{ kind: 'subscription', mode: 'book', amount }, { ...boost, amount }];
+    assert.deepEqual(withoutRedundantBoost(options), options);
+  }
+});
 
 test('residency is preselected for every profile and subscription plan, including purchase offers', () => {
   for (const profile of PRIVILEGE_PROFILES) for (const subscriptionPlan of ['friendship', 'friendship-2', 'ra'] as const) {

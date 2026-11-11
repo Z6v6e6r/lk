@@ -12,6 +12,16 @@ export function defaultPaymentOption(options: PaymentOption[]): PaymentOption | 
   return options.find(option => option.kind === 'residency' && isSelectableMethod(option)) || options.find(isSelectableMethod);
 }
 
+// An existing subscription should cover the event without using Boost when
+// both give the exact same known participation price. Purchase offers and
+// visit packs remain distinct methods even if their displayed prices match.
+export function withoutRedundantBoost(options: PaymentOption[]): PaymentOption[] {
+  const subscription = options.find(option => option.kind === 'subscription' && option.mode === 'book'
+    && option.amount != null && Number.isFinite(option.amount) && option.amount >= 0);
+  if (!subscription) return options;
+  return options.filter(option => !(option.kind === 'boost' && option.mode === 'book' && option.amount === subscription.amount));
+}
+
 // Keep the actual subscription method (and its quote) behind the personal-share
 // row. The full quarter remains only a crossed-out price reference.
 export function withPersonalSubscription(options: PaymentOption[], hasSubscription: boolean): PaymentOption[] {
