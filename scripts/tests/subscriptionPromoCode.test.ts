@@ -41,7 +41,7 @@ function payment(options: { fresh?: typeof price; result?: unknown; reject?: boo
     if (active.has(key)) return run(null);
     active.add(key); try { return await run({}); } finally { active.delete(key); }
   } } };
-  const attempt = load('src/components/subscription-storefront/promoCodeAttempt.ts', { parseZeroAttempt, legacyZeroOffersForProduct: (id: string) => [id === FRIENDSHIP_MONTHLY_PRODUCT_ID ? 'friendship' : 'academy'], apiConfirmTournamentSubscriptionPurchase: async () => ({ data: { paid: options.paidStatus === true, failed: false, status: options.paidStatus ? 'PAID' : 'PENDING' } }), readAuthToken: () => 'synthetic-actor', readSubscriptionPromoTransactionPaid: async () => options.paidStatus === true }, { window, navigator });
+  const attempt = load('src/components/subscription-storefront/promoCodeAttempt.ts', { checkoutSessionToken: () => 'synthetic-actor', DIRECT_RECOVERY_PRODUCT: '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e', readClosedDirectCheckout: async () => false, parseZeroAttempt, legacyZeroOffersForProduct: (id: string) => [id === FRIENDSHIP_MONTHLY_PRODUCT_ID ? 'friendship' : 'academy'], apiConfirmTournamentSubscriptionPurchase: async () => ({ data: { paid: options.paidStatus === true, failed: false, status: options.paidStatus ? 'PAID' : 'PENDING' } }), readAuthToken: () => 'synthetic-actor', readSubscriptionPromoTransactionPaid: async () => options.paidStatus === true }, { window, navigator });
   const exports = load('src/components/subscription-storefront/promoCodePayment.ts', {
     apiCreateTournamentSubscriptionPurchase: async (params: Record<string, unknown>) => {
       calls.push({ productId: String(params.productId), phone: String(params.clientPhone), options: params });

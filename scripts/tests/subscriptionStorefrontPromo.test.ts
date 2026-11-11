@@ -245,6 +245,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   f.globals.window.localStorage.setItem = (key, value) => { if (storageFails) throw new Error('storage disabled'); setItem(key, value); };
   const adapter = loadModule<typeof import('../../src/components/subscription-storefront/zeroCheckoutPayment')>('components/subscription-storefront/zeroCheckoutPayment.ts', {
     hasVerifiedCheckoutReset, parseZeroAttempt, parseZeroOperationLink,
+    DIRECT_RECOVERY_PRODUCT: '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e', readClosedDirectCheckout: async () => false,
     subscriptionPromoAttemptKey: async (id: string, phone: string) => 'fixture:' + (phone === fixturePhone ? 'a' : 'b').repeat(64),
     ...regularPayment, ...promo, ...f.adapter,
     withSubscriptionPromoLock: async (_id: string, _phone: string, create: () => Promise<unknown>) => create(),
@@ -962,4 +963,26 @@ test('promo actor drift while waiting for lock does not dispatch a purchase', as
   f.globals.navigator.locks.request = async (...args: Parameters<typeof acquire>) => { active = false; return acquire(...args); };
   await assert.rejects(f.adapter.createStorefrontPromoPayment('friendship-promo', fixturePhone, undefined, 490000, () => active));
   assert.equal(f.calls.length, 0); assert.equal(f.stored.size, 0);
+});
+
+test('known 2.0 terminal receipt clears only matching pending custody without another purchase', async () => {
+  for (const mode of ['closed', 'mismatch', 'paid', 'unknown-id', 'changed-marker']) {
+    let probes = 0;
+    const tx = '00000000-0000-4000-8000-000000000002';
+    const f = zeroFixture({ readClosedDirectCheckout: async (_p: string, _id: string, current: () => boolean) => {
+      probes++; if (mode === 'changed-marker') f.stored.set('padlhub_zero_checkout_attempt_v1:friendship-two-hours', 'replacement');
+      return current();
+    } });
+    f.setResult({ data: { paymentUrl: 'https://bank.example/old', toPay: 1980000, transactionId: tx } });
+    const quote = await f.adapter.loadZeroOfferQuote('friendship-two-hours');
+    await f.adapter.createZeroPayment('friendship-two-hours', fixturePhone, 1980000, () => true, quote);
+    const key = 'padlhub_zero_checkout_attempt_v1:friendship-two-hours', a = JSON.parse(f.stored.get(key)!);
+    if (mode === 'paid') { a.state = 'paid'; f.stored.set(key, JSON.stringify(a)); }
+    if (mode === 'unknown-id') { delete a.transactionId; f.stored.set(key, JSON.stringify(a)); }
+    if (mode === 'mismatch') f.stored.set('fixture:' + 'a'.repeat(64), JSON.stringify({ kind: 'ordinary', transactionId: 'different' }));
+    const result = await f.adapter.resumeZeroPayment('friendship-two-hours', fixturePhone, () => true);
+    assert.equal(result.status, mode === 'closed' ? 'restart' : mode === 'paid' ? 'paid' : 'pending');
+    assert.equal(f.stored.has(key), mode !== 'closed'); assert.equal(f.writes.length, 1);
+    if (['mismatch', 'paid', 'unknown-id'].includes(mode)) assert.equal(probes, 0);
+  }
 });
