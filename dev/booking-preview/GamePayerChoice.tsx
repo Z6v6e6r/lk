@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import { buildGamePaymentOptions, formatRubles, readMatrixSettings, type PaymentOption } from './paymentMatrix';
 import { gameSubscriptionComparison } from './gameSubscriptionComparison';
+import { combineSubscriptionBoost } from './bookingCheckout';
 import { recommendedSubscriptionChoice, subscriptionPurchaseChoices } from './subscriptionOffers';
 import './matrix.css';
 
@@ -16,6 +17,8 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
     ? recommendedSubscription.option
     : gameSubscriptionComparison(courtAmount, context);
   const residency = options.find(option => option.kind === 'residency');
+  const subscriptionBoost = combineSubscriptionBoost(options, settings.profile).find(option => option.withSubscription);
+  const subscriptionPrice = subscriptionBoost || subscription;
   const boost = options.find(option => option.kind === 'boost' && option.mode !== 'unavailable');
   const boostParent = settings.profile.subscription ? 'subscription' : settings.profile.residency ? 'residency' : null;
   const residencyBoost = boostParent === 'residency' ? boost : undefined;
@@ -35,10 +38,6 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
   const discount = (option: PaymentOption | undefined) => personalBase != null && option?.amount != null
     && option.amount > 0 && option.amount < personalBase;
   const boostNote = boost?.benefit === 'partial-hour' ? `${boost.freeMinutes} мин бесплатно · доплата за ${boost.paidMinutes} мин со скидкой 30%` : boost?.benefit === 'discount' ? 'Бесплатный лимит недоступен · скидка 30%' : 'Дневной лимит Буста доступен';
-  const boostDetails = boost && <span className="matrix-quarter-boost" aria-label="Буст к подписке">
-    <span><b>{boost.amount === 0 ? 'С Бустом — бесплатно' : 'С Бустом'}</b><small>{boostNote}</small></span>
-    <span className="matrix-quarter-price">{discount(boost) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(boost)}</strong></span>
-  </span>;
   return <fieldset className="matrix-game-payers">
     <legend>Кто оплачивает игру?</legend>
     <label className={`matrix-payer matrix-payer--personal ${value === 'split' ? 'is-selected' : ''}`}>
@@ -49,10 +48,9 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
             <span><b>¼ стоимости корта</b><small>Без применения льгот</small></span>
             <span className="matrix-quarter-price"><strong>{personalBase != null ? formatRubles(personalBase) : 'Цена уточняется'}</strong></span>
           </span>
-          <span className={`matrix-quarter-row matrix-quarter-row--subscription ${subscription?.mode === 'unavailable' ? 'is-unavailable' : ''}`}>
-            <span><b>По подписке</b><small>{personalBase == null ? 'Дождитесь расчёта стоимости корта' : subscriptionNote}</small></span>
-            <span className="matrix-quarter-price">{discount(subscription) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(subscription)}</strong></span>
-            {boostParent === 'subscription' && boostDetails}
+          <span className={`matrix-quarter-row matrix-quarter-row--subscription ${subscriptionPrice?.mode === 'unavailable' ? 'is-unavailable' : ''}`}>
+            <span><b>{subscriptionBoost ? `По подписке и РАбуста${subscriptionBoost.amount === 0 ? ' — бесплатно' : ''}` : 'По подписке'}</b><small>{personalBase == null ? 'Дождитесь расчёта стоимости корта' : subscriptionBoost?.kind === 'boost' ? boostNote : subscriptionNote}</small></span>
+            <span className="matrix-quarter-price">{(discount(subscriptionPrice) || (personalBase != null && subscriptionBoost?.amount === 0)) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(subscriptionPrice)}</strong></span>
           </span>
           <span className="matrix-quarter-row matrix-quarter-row--residency">
             <span><b>{residencyBoost ? `С Резидентством и РАбуста${residencyBoost.amount === 0 ? ' — бесплатно' : ''}` : 'С Резидентством'}</b><small>{residencyBoost ? boostNote : settings.profile.residency ? 'Ваша скидка 30%' : 'Скидка 30% при наличии Резидентства'}</small></span>
