@@ -1,0 +1,6 @@
+Read-only specialist review: tenant/auth/payment/Tilda integration.
+All nine tuples matched public Viva catalog. Runtime rejects wrong tenant and mixed IDs.
+Fixed T123 JSON media paths and body-selector transformation. Fonts embedded and uniquely named.
+CTA review fixed accidental proceed on failed-price retry and requires confirmation after a changed displayed price.
+Payment attempts retain ambiguous-outcome protection. No live auth, bookings or payment requests performed.
+Remaining limits: real Tilda publication, actual-domain CORS/OAuth redirects/login/payment; image and legal PDF hosting uses original public asset base by default.
