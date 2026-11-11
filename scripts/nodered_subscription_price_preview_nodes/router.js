@@ -292,8 +292,11 @@ if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
     || !canonical.bookingId(row) || (canonical.bookingClientId(row) && canonical.normalizeId(canonical.bookingClientId(row)) !== canonical.normalizeId(ctx.actorClientId)))) return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
   if (ctx.step === 'activeBookings') {
     ctx.activePayload = msg.payload;
+    ctx.activeObservedAt = new Date().toISOString();
     return http('historyBookings', `/end-user/api/v2/${ctx.tenantKey}/bookings/history?includeCanceled=true&size=1000`);
   }
+  ctx.cancellationSnapshot = { observedAt: ctx.activeObservedAt,
+    active: canonical.extractItems(ctx.activePayload), history: canonical.extractItems(msg.payload) };
   ctx.bookings = canonical.mergeBookings(ctx.activePayload, msg.payload);
   ctx.activeBookings = canonical.mergeBookings(ctx.activePayload, []).filter(row => !canonical.isInactiveBooking(row));
   delete ctx.activePayload;
@@ -741,6 +744,7 @@ while (ctx.step === 'next') {
     // gateway sets it during target resolution, the preview has to carry it explicitly.
     category: eventRoute ? eventRoute.category : 'open_game',
     lk1: { rule: configured.rule, bookings: ctx.bookings, activeBookings: ctx.activeBookings,
+      cancellationSnapshot: ctx.cancellationSnapshot,
       target: { resolutionSource: 'SERVER', eventId: ctx.exerciseId || 'preview', category: eventRoute ? eventCategory : 'GAME', currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF',
         basePriceMinor: ctx.basePriceMinor, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes,
         // The club co-pay base: the hourly court price this quote proved for the event window,

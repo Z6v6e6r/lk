@@ -336,6 +336,62 @@ const lk1ReclaimableAttempt = (operation) => {
   // Nothing was ever attempted: the document only reserved the deterministic id.
   return operation.state === "PREPARED" && !lk1ReclaimText(operation.upstreamAttemptedAt);
 };
+// A successor is selected by a later explicit click, never by a polling retry.
+const lk1HttpRejoinIdentity = id => {
+  const match = typeof id === "string" && /^(lk-subscription-[a-z0-9]+)(?::rejoin:([1-9]\d{0,3}))?$/.exec(id);
+  return match && Number(match[2] || 0) <= 1000
+    ? { base: match[1], generation: Number(match[2] || 0) } : null;
+};
+const lk1HttpRejoinPrevious = id => {
+  const value = lk1HttpRejoinIdentity(id);
+  return value?.generation > 0
+    ? (value.generation === 1 ? value.base : `${value.base}:rejoin:${value.generation - 1}`) : null;
+};
+const lk1HttpRejoinRequest = ctx => ctx.caller === "http" && ctx.action === "book";
+const lk1SafeCancelledUnpaidSuccessor = operation => {
+  const proof = operation.lk1?.cancelledAllowanceRelease;
+  const checkout = operation.lk1?.checkout;
+  const intent = operation.lk1?.transactionIntent;
+  const identity = lk1HttpRejoinIdentity(operation.operationId);
+  const previousId = lk1HttpRejoinPrevious(operation.operationId);
+  return identity && identity.generation < 1000 && operation.state === "RELEASED"
+    && ["group_training", "tournament"].includes(operation.category)
+    && (operation.releaseReason === "CANCELLED_UNPAID_BOOKING" ? !operation.lk1?.unpaidCancellation
+      : operation.releaseReason === "LK1_UNPAID_CHECKOUT_EXPIRED"
+        && operation.lk1?.unpaidCancellation?.phase === "CANCELLED"
+        && operation.lk1.unpaidCancellation.verifiedAt === operation.releasedAt)
+    && operation.lk1?.decision?.subscriptionVisitCount === 0 && !operation.lk1?.visitJob
+    && proof?.schemaVersion === 1
+    && proof.proofId === operation.operationId && proof.bookingState === "CANCELLED"
+    && proof.transactionState === "UNPAID_EXPIRED" && proof.verifiedAt === operation.releasedAt
+    && Number.isFinite(Date.parse(proof.verifiedAt))
+    && proof.bookingId === operation.bookingId && proof.transactionId === checkout?.transactionId
+    && proof.transactionId === operation.lk1.transactionId
+    && intent?.bookingId === operation.bookingId && intent.actorClientId === operation.actorClientId
+    && Number.isSafeInteger(proof.amountMinor) && proof.amountMinor > 0
+    && proof.amountMinor === checkout.toPayMinor && proof.amountMinor === intent.chargeMinor
+    && proof.amountMinor === operation.lk1.decision.benefit?.finalPriceMinor
+    && (!operation.upstreamBookingId || operation.upstreamBookingId === operation.bookingId)
+    && operation.serviceDate === operation.lk1.target?.startsAt?.slice(0, 10)
+    && (!previousId || (operation.rejoinPredecessor?.rootOperationId === identity.base
+      && operation.rejoinPredecessor?.operationId === previousId));
+};
+if (ctx.step === "lk1_http_rejoin_predecessor_find") {
+  const previousId = lk1HttpRejoinPrevious(ctx.operationId);
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1
+    || !lk1HttpRejoinRequest(ctx) || !previousId
+    || !lk1ReplayIdentityMatches(ctx, msg.payload[0], previousId)
+    || !lk1SafeCancelledUnpaidSuccessor(msg.payload[0])) {
+    return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
+  }
+  const previous = msg.payload[0];
+  ctx.lk1Rejoin = { operationId: previousId, rootOperationId: lk1HttpRejoinIdentity(ctx.operationId).base,
+    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease.proofId,
+    releasedAt: previous.releasedAt };
+  delete ctx.lk1IngressReplay;
+  ctx.step = "lk1_profile_continue";
+}
+
 if (ctx.step === "lk1_ingress_operation_find") {
   // Existing operations are only read. A new explicit successor must prove
   // its predecessor below before entering ordinary fresh validation.
@@ -344,6 +400,9 @@ if (ctx.step === "lk1_ingress_operation_find") {
   }
   const operation = msg.payload[0];
   if (!operation && msg.payload.length === 0) {
+    const httpPreviousId = lk1HttpRejoinPrevious(ctx.operationId);
+    if (httpPreviousId && lk1HttpRejoinRequest(ctx)) return lk1Find(ctx, "lk1_http_rejoin_predecessor_find", {
+      _id: `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, httpPreviousId])}` });
     const previousId = lk1RejoinPreviousId(ctx.operationId);
     if (String(ctx.operationId).includes(":rejoin:") && !previousId) {
       return finishError(ctx, 409, "Не удалось проверить предыдущую запись", { code: "SUBSCRIPTION_REJOIN_INVALID" });
@@ -363,6 +422,13 @@ if (ctx.step === "lk1_ingress_operation_find") {
       return lk1Stop(ctx, "LK1_REQUEST_IDENTITY_CHANGED");
     }
     const quote = operation.lk1;
+    if (operation.state === "RELEASED" && lk1HttpRejoinRequest(ctx)) {
+      if (!lk1SafeCancelledUnpaidSuccessor(operation)) return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
+      const identity = lk1HttpRejoinIdentity(ctx.operationId);
+      return finishError(ctx, 409, "Предыдущая запись отменена. Обновите варианты и запишитесь снова.", {
+        code: "SUBSCRIPTION_BOOKING_RELEASED", operationId: ctx.operationId,
+        nextOperationId: `${identity.base}:rejoin:${identity.generation + 1}` });
+    }
     if (operation.state === "RELEASED" && ctx.caller === "split" && ctx.managedAction === "JOIN_GAME") {
       const nextOperationId = lk1RejoinNextId(ctx.operationId);
       if (!nextOperationId || !lk1ReleasedWithoutPayment(operation)) {
@@ -861,6 +927,50 @@ if (ctx.step === "lk1_usage_operations") {
       return lk1Stop(ctx, "LK1_BOOKING_DATE_UNRESOLVED");
     }
   }
+// Executed inside the shared booking/preview usage step. A missing or stale
+// receipt preserves the reservation; absence and payment failure prove nothing.
+const lk1CancelledZeroVisitOperation = (operation) => {
+  const snapshot = ctx.lk1.cancellationSnapshot;
+  const observed = Date.parse(snapshot?.observedAt);
+  const updated = Date.parse(operation.updatedAt);
+  if (operation.state !== "CONFIRMED" || !["group_training", "tournament"].includes(operation.category)
+    || operation.lk1?.decision?.subscriptionVisitCount !== 0 || operation.lk1?.visitJob
+    || [operation.lk1?.decision?.gameMinutes, operation.lk1?.decision?.courtMinutes]
+      .some(value => value && value.freeMinutes !== 0)
+    || !Number.isFinite(observed) || !Number.isFinite(updated) || updated > observed
+    || observed > Date.now() || Date.now() - observed > 60_000
+    || !Array.isArray(snapshot.active) || !Array.isArray(snapshot.history)
+    || typeof operation.bookingId !== "string" || !normalizeId(operation.bookingId)
+    || !normalizeId(operation.exerciseId)) return false;
+  const id = normalizeId(operation.bookingId);
+  const rows = snapshot.active.concat(snapshot.history).filter(row =>
+    [row?.id, row?.bookingId, row?.clientBookingId].some(value => normalizeId(value) === id));
+  if (!rows.length) return false;
+  return rows.every(row => {
+    if (!isObj(row)) return false;
+    const ids = [row.id, row.bookingId, row.clientBookingId];
+    const owners = [row.clientId, row.actorClientId, row.profileId, row.client?.id];
+    const exercises = [row.exerciseId, row.exercise?.id, row.exercise?.exerciseId];
+    const subscriptions = [row.clientSubscriptionId, row.subscriptionId, row.clientSubId,
+      row.subscription?.id, row.clientSubscription?.id];
+    const present = values => values.filter(value => value !== undefined && value !== null && value !== "");
+    const agrees = (values, expected) => present(values).every(value =>
+      typeof value === "string" && normalizeId(value) === normalizeId(expected));
+    if (!agrees(ids, operation.bookingId) || !agrees(owners, ctx.actorClientId)
+      || !present(exercises).length || !agrees(exercises, operation.exerciseId)
+      || !agrees(subscriptions, operation.clientSubscriptionId)
+      || eventDate(row) !== operation.serviceDate) return false;
+    // Self-API receipts already bind the actor even when the provider omits it
+    // on individual rows. Every present alias still has to agree.
+    const flags = present([row.isCancelled, row.cancelled, row.canceled]);
+    const statuses = present([row.status, row.bookingStatus, row.state]);
+    return (flags.length > 0 || statuses.length > 0)
+      && flags.every(value => value === true)
+      && statuses.every(value => typeof value === "string"
+        && ["CANCELLED", "CANCELED"].includes(value.trim().toUpperCase()));
+  });
+};
+
   let used = 0;
   const coveredBookings = new Set();
   const benefitBookings = new Set();
@@ -945,6 +1055,7 @@ if (ctx.step === "lk1_usage_operations") {
       }
     }
     // AUDIT_BINDING_END
+    if (lk1CancelledZeroVisitOperation(operation)) continue;
     if (coveredId) benefitBookings.add(coveredId);
     if (operation.serviceDate !== ctx.serviceDate) continue;
     if (freeFirstCovered && operation.lk1?.target?.proTraining !== true
@@ -1009,6 +1120,7 @@ if (ctx.step === "lk1_usage_operations") {
       freeFirstEvent: freeFirstCovered
         ? { covered: true, usedEventsToday: freeFirstEventsToday, visitsLeft: freeFirstVisitsLeft }
         : { covered: false } } };
+  delete ctx.lk1.cancellationSnapshot;
   delete ctx.lk1.bookings;
   delete ctx.lk1.activeBookings;
   return emit(OUTPUT_MANAGED_POLICY);
