@@ -19,6 +19,16 @@ delete msg.responseCookies;
 delete msg.error;
 return msg;`;
 
+export const bookingTransportRecoveryNodes = tabId => [
+  { id: BOOKING_TRANSPORT_CATCH_ID, type: 'catch', z: tabId,
+    name: 'Catch subscription booking HTTP transport failures',
+    scope: [BOOKING_HTTP_ID], uncaught: false, wires: [[BOOKING_TRANSPORT_RECOVERY_ID]] },
+  { id: BOOKING_TRANSPORT_RECOVERY_ID, type: 'function', z: tabId,
+    name: 'Restore subscription booking owner after transport failure',
+    func: BOOKING_TRANSPORT_RECOVERY, outputs: 1, noerr: 0, initialize: '', finalize: '', libs: [],
+    wires: [[BOOKING_ROUTER_ID]] },
+];
+
 // Pure source delta, deliberately separate from historical whole-flow composers.
 // A reviewed fresh snapshot and its exact router hash are required from the caller.
 // Existing wrappers, authority checks, leases and worker pins are never rewritten.
@@ -49,15 +59,7 @@ export function prepareBookingTransportRecovery(source, { sourceSha256, routerSh
     && (!Array.isArray(n.scope) || n.scope.length === 0 || n.scope.includes(http.id)))) {
     throw new Error('BOOKING_TRANSPORT_CATCH_OVERLAP');
   }
-  const added = [
-    { id: BOOKING_TRANSPORT_CATCH_ID, type: 'catch', z: http.z,
-      name: 'Catch subscription booking HTTP transport failures',
-      scope: [http.id], uncaught: false, wires: [[BOOKING_TRANSPORT_RECOVERY_ID]] },
-    { id: BOOKING_TRANSPORT_RECOVERY_ID, type: 'function', z: http.z,
-      name: 'Restore subscription booking owner after transport failure',
-      func: BOOKING_TRANSPORT_RECOVERY, outputs: 1, noerr: 0, initialize: '', finalize: '', libs: [],
-      wires: [[router.id]] },
-  ];
+  const added = bookingTransportRecoveryNodes(http.z);
   const candidate = Buffer.from(JSON.stringify([...flow, ...added], null, 2) + '\n');
   return { candidate, sourceSha256, candidateSha256: sha256(candidate), routerSha256,
     addedNodeIds: added.map(n => n.id), readyForDeployment: false,

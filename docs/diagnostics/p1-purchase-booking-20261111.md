@@ -1,5 +1,12 @@
 # P1: purchase 502 and subscription booking 504, 11 November 2026
 
+Follow-up readiness work: the current installed owner's error branches and inert
+capabilities have now been checked on host without source disclosure or business
+requests. The compatible unpaid-worker generation and rollback pair are prepared
+by the new release builder. See [release preparation](booking-transport-release.md).
+The original investigation and its historical limitations below remain recorded;
+purchase502's exact financial outcome is still unknown.
+
 Investigation and source preparation only. All times below are Europe/Moscow.
 Production was not changed; no purchase, booking, confirmation or reconciliation
 operation was replayed by this investigation. No provider transaction GET was
