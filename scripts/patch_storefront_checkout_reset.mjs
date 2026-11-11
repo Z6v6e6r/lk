@@ -9,7 +9,7 @@ export const RESET_CONFIRM_PREIMAGE = 'd76cdb6391bc8ffb4514dc61c60b9360aa03da5fa
 const anchor = '// All selected confirmations pass the durable admission gate before provider I/O.';
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 export function resetReceiptBlock() {
-  const source = fs.readFileSync(new URL('./nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('./nodered_storefront_checkout_reset_nodes/receipt.js', import.meta.url), 'utf8');
   const start = source.indexOf('// BEGIN storefront verified checkout reset receipt');
   const end = source.indexOf('// END storefront verified checkout reset receipt', start);
   if (start < 0 || end < 0) throw Error('Missing reviewed reset receipt source');

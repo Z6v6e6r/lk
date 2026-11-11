@@ -14,7 +14,8 @@ test('only explicit exact verified reset receipts release a failed unpaid attemp
   for (const update of [{ version: 2 }, { declineOutcome: 'DECLINED' }, { terminalCardStatus: 'PAID' }, { closureKind: 'EXPIRE_ACK' }, { paymentUrlSha256: '' }, { expireAcknowledged: true }, { state: 'PAYMENT_LINK_EXPIRED' }, { paymentRef: 'foreign' }, { verifiedAt: '2999-01-01T00:00:00Z' }, { operationId: 'missing' }]) assert.equal(hasVerifiedCheckoutReset({ ...response, checkoutReset: { ...reset, ...update } }, ref, 'friendship'), false);
 });
 test('owning confirm emits reset proof only for the exact closed, unissued record', () => {
-  const source = fs.readFileSync(new URL('../nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js', import.meta.url), 'utf8');
+  const baseline = fs.readFileSync(new URL('../nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js', import.meta.url), 'utf8');
+  const source = patchCheckoutResetBody(baseline, createHash('sha256').update(baseline).digest('hex'));
   const run = (changes = {}) => new Function('msg', 'global', 'env', 'node', source)({ payload: [{ paymentRef: ref, transactionId: tx, counterKey: 'friendship', status: 'FAILED', checkoutReset: reset, ...changes }], _summerSubscriptionCtx: { action: 'confirm', paymentRef: ref, counterKey: 'friendship' } }, { get: () => undefined }, { get: () => undefined }, {});
   const output = run(); assert.equal(hasVerifiedCheckoutReset(output[1].payload, ref, 'friendship'), true);
   for (const changes of [{ status: 'PAID' }, { paidAt: '2026-11-01T00:00:00Z' }, { clientSubscriptionId: 'issued' }, { checkoutReset: { ...reset, transactionId: 'foreign' } }, { checkoutReset: { ...reset, expireAcknowledged: true } }]) {
