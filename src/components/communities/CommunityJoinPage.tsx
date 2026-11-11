@@ -353,7 +353,7 @@ export default function CommunityJoinPage({
     busyLabel={submitting === "join" ? alreadyMember ? "Открываем…" : "Вступаем…" : submitting === "decline" ? "Переходим…" : "Проверяем…"}
     error={current ? actionError || loadError : null} reason={actionError}
     onPrimary={primary} onSecondary={handleDecline}>
-    {visibleState === "guest" && showLogin ? <AuthForm onLogin={onLogin} /> : null}
-    {current && eventNotice && <EventRegistrationForm notice={eventNotice} onSubmit={handleJoin} onCancel={() => setEventNotice(null)} />}
+    {visibleState === "guest" && showLogin ? <AuthForm onLogin={onLogin} />
+      : current && eventNotice ? <EventRegistrationForm notice={eventNotice} onSubmit={handleJoin} onCancel={() => setEventNotice(null)} /> : null}
   </CommunityInviteView>;
 }

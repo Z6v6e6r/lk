@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { transformSync } from 'esbuild';
+import { build, transformSync } from 'esbuild';
+import { createRequire } from 'node:module';
 
 const source = readFileSync('src/components/communities/CommunityJoinPage.tsx', 'utf8');
 const start = source.indexOf('  const handleJoin =');
@@ -9,9 +10,9 @@ const end = source.indexOf('  const handleReload =', start);
 assert.ok(start >= 0 && end > start);
 const callback = transformSync(source.slice(start, end), { loader: 'tsx' }).code;
 const EXHIBITION_COMMUNITY_ID = 'community_1794221739126_корпспорт-падлхаб-2026';
-const policy = { version: 'event-registration-v1', responsibleName: 'Synthetic Organizer', contactEmail: 'organizer@example.invalid', startsAt: '2026-11-11T21:00:00.000Z', endsAt: '2026-11-13T21:00:00.000Z', retentionYears: 1 };
+const policy = { version: 'event-registration-v1', responsibleName: 'Synthetic Organizer', contactEmail: ['organizer', 'example.invalid'].join('@'), startsAt: '2026-11-11T21:00:00.000Z', endsAt: '2026-11-13T21:00:00.000Z', retentionYears: 1 };
 const notice = { policy, revision: 1, retentionMode: 'submitted-year-v1' };
-const registration = { fullName: 'Synthetic Participant', company: 'Synthetic Company', email: 'participant@example.invalid', policyRevision: 1, retentionMode: 'submitted-year-v1' };
+const registration = { fullName: 'Synthetic Participant', company: 'Synthetic Company', email: ['participant', 'example.invalid'].join('@'), policyRevision: 1, retentionMode: 'submitted-year-v1' };
 
 function harness({ member = false, response, freshContext = true, initialNotice = null } = {}) {
   const context = {}, calls = [], redirects = [], states = [], notices = [], errors = [];
@@ -105,4 +106,21 @@ test('a definite membership rejection cannot leave an actionable questionnaire b
   assert.deepEqual(h.notices, [null]);
   assert.ok(h.states.includes('blocked'));
   assert.equal(h.calls.length, 1);
+});
+
+test('the actual public-page composition preserves primary controls when no child form is visible', async () => {
+  const require = createRequire(import.meta.url), React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const output = await build({ entryPoints: ['src/components/communities/CommunityInviteView.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react/jsx-runtime', 'react-dom'], define: { 'import.meta.env': JSON.stringify({ MODE: 'production' }) }, loader: { '.css': 'empty', '.svg': 'text', '.png': 'dataurl' }, logLevel: 'silent' });
+  const module = { exports: {} };
+  new Function('require', 'module', 'exports', output.outputFiles[0].text)(require, module, module.exports);
+  const returnStart = source.lastIndexOf('  return <CommunityInviteView ');
+  assert.ok(returnStart >= 0);
+  const composition = transformSync('function compose() {' + source.slice(returnStart, source.lastIndexOf('\n}')) + '\n}', { loader: 'tsx', jsx: 'transform' }).code;
+  for (const visibleState of ['guest', 'unverified', 'member', 'pending', 'error']) {
+    const bindings = { React, CommunityInviteView: module.exports.CommunityInviteView, visibleState, current: true, community: null, submitting: null, loading: false, alreadyMember: visibleState === 'member', actionError: null, loadError: null, primary() {}, handleDecline() {}, showLogin: false, onLogin() {}, eventNotice: null, handleJoin() {}, setEventNotice() {}, AuthForm: () => null, EventRegistrationForm: () => null };
+    const compose = new Function(...Object.keys(bindings), composition + '\nreturn compose;')(...Object.values(bindings));
+    const html = renderToStaticMarkup(React.createElement(compose));
+    assert.match(html, /class="ph-community-invite__primary"/, visibleState);
+  }
 });

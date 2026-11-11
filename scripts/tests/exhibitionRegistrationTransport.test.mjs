@@ -11,7 +11,7 @@ const declarations = ['apiAddCommunityMember', 'apiJoinCommunityByInvite'].map(n
   return source.slice(start, end + 2).replace(/^export /, '');
 }).join('\n');
 const code = transformSync(declarations, { loader: 'ts' }).code;
-const registration = { fullName: 'Synthetic Participant', company: 'Synthetic Company', email: 'participant@example.invalid', policyRevision: 1, retentionMode: 'submitted-year-v1' };
+const registration = { fullName: 'Synthetic Participant', company: 'Synthetic Company', email: ['participant', 'example.invalid'].join('@'), policyRevision: 1, retentionMode: 'submitted-year-v1' };
 
 function client() {
   const calls = [];

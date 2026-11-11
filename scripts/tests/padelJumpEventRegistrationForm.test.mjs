@@ -59,6 +59,7 @@ test('direct exhibition join obtains the canonical notice before opening the que
   const member={id:'synthetic-player',name:'Verified Player'};
   const handle=sectionCallback('handleJoinOpenCommunity','handleEventRegistration',{
     EXHIBITION_COMMUNITY_ID,useCallback:fn=>fn,currentMember:member,
+    eventProfileRef:{current:'synthetic-profile'},eventRecoveryRef:{current:null},eventJoinGenerationRef:{current:0},updateEventRecovery(){},
     setEventJoin:value=>{shown=value;},setJoiningCommunityId(){},setDetailError(){},setAccessMessage(){},
     redirectToInviteCabinet:()=>false,
     apiAddCommunityMember:async(id,payload)=>{assert.equal(id,EXHIBITION_COMMUNITY_ID);assert.deepEqual(payload,{member});requests++;return{status:422,error:{message:'EVENT_REGISTRATION_REQUIRED'},data:{eventNotice:notice}};},
@@ -70,10 +71,12 @@ test('direct exhibition join obtains the canonical notice before opening the que
 });
 
 test('a changed canonical notice updates the open form without an automatic second submission',async()=>{
-  let state={community:{id:EXHIBITION_COMMUNITY_ID},notice:{policy,revision:1}},requests=0;
+  let state={community:{id:EXHIBITION_COMMUNITY_ID},notice:{policy,revision:1},profileKey:'synthetic-profile'},requests=0;
+  const eventJoinRef={current:state};
   const handle=sectionCallback('handleEventRegistration','handleInviteSubmit',{
     eventJoin:state,currentMember:{id:'synthetic-player'},
-    setEventJoin:value=>{state=typeof value==='function'?value(state):value;},
+    eventJoinRef,eventProfileRef:{current:'synthetic-profile'},eventRecoveryRef:{current:null},eventRegistrationPendingRef:{current:null},
+    setEventJoin:value=>{state=typeof value==='function'?value(state):value;eventJoinRef.current=state;},setEventRecovery(){},
     apiAddCommunityMember:async()=>{requests++;return{status:422,error:{message:'EVENT_REGISTRATION_REQUIRED'},data:{eventNotice:notice}};},
     apiJoinCommunityByInvite:async()=>{throw new Error('unexpected invite path');},communityErrorMessage:()=>'',
     applyActionResponse(){},setFocusedCommunityId(){},setSelectedCommunityId(){},setIsInviteOpen(){},setInviteValue(){},setAccessMessage(){},

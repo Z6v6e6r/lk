@@ -416,6 +416,7 @@ jobs:
           scripts/tests/errorCauseCandidateAndRoster.test.mjs
           scripts/tests/communityLegacyLogoAliases.test.mjs
           scripts/tests/exhibitionPublicInvite.test.mjs
+          scripts/tests/exhibitionCabinetRegistration.test.mjs
           scripts/tests/exhibitionRegistrationTransport.test.mjs
           scripts/tests/padelJumpEventRegistrationForm.test.mjs
           scripts/tests/authConsentAudit.test.ts
