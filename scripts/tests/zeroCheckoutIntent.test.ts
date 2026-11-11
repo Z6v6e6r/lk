@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { sessionIdentityBinding } from '../../src/utils/authSessionIdentity.ts';
-import { createFastIntent, readFastIntent, bindFastQuote, claimFastIntent, cancelFastIntent, takeFastOAuthIntent } from '../../src/components/subscription-storefront/zeroCheckoutIntent.ts';
+import { createFastIntent, readFastIntent, bindFastQuote, claimFastIntent, cancelFastIntent, takeFastOAuthIntent, armFastResume, claimFastResume } from '../../src/components/subscription-storefront/zeroCheckoutIntent.ts';
 import { bindOAuthContinuation, completeOAuthContinuation, takeOAuthContinuation, OAUTH_CONTINUATION_KEY, OAUTH_RECEIPT_KEY } from '../../src/utils/oauthContinuation.ts';
 
 function harness() {
@@ -146,4 +146,34 @@ test('all explicit offers bind non-live quotes without inventing activation days
     assert.equal(isCheckoutReturn('https://padlhub.ru/sub_hab?'+param+'=fixture'), true);
     const h = harness();try { h.w.location.href+='&'+param+'=fixture';assert.throws(()=>createFastIntent('residency',79000,h.event())); } finally {h.restore();}
   }
+});
+
+
+test('resume intent survives verified login, needs no new quote and cannot authorize create', async () => {
+  const h = harness(); try {
+    const intent = createFastIntent('residency', 79000, h.event(), true);
+    assert.equal(claimFastResume(intent.id), false);
+    assert.equal(armFastResume(intent.id), true);
+    assert.equal(claimFastIntent(intent.id, quote), false);
+    assert.throws(() => bindFastQuote(intent.id, quote));
+    const c = bindOAuthContinuation(intent.id, 'state', h.w.location.href)!;
+    assert.equal(await completeOAuthContinuation(c, 'state', h.w.location.href, 'identity-A'), true);
+    const resumed = takeFastOAuthIntent('residency')!;
+    assert.equal(resumed.resume, true);
+    assert.equal(armFastResume(resumed.id), true);
+    assert.equal(claimFastResume(resumed.id), true);
+    assert.equal(claimFastResume(resumed.id), false);
+    assert.equal(takeFastOAuthIntent('residency'), null);
+  } finally { h.restore(); }
+});
+
+
+test('resume without a fresh catalogue price can only claim the saved purchase', () => {
+  const h = harness(); try {
+    const intent = createFastIntent('residency', 0, h.event(), true);
+    assert.equal(readFastIntent(intent.id)?.priceMinor, 0);
+    assert.equal(armFastResume(intent.id), true);
+    assert.equal(claimFastIntent(intent.id, quote), false);
+    assert.equal(claimFastResume(intent.id), true);
+  } finally { h.restore(); }
 });

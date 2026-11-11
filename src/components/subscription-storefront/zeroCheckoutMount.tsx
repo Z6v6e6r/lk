@@ -36,7 +36,7 @@ export function closeCheckout(): boolean {
 }
 
 /** Opens a single checkout, never creates a payment, and never selects from arbitrary product IDs. */
-function mountCheckout(offerKey: string, fast?: FastCheckoutSession): boolean {
+function mountCheckout(offerKey: string, fast?: FastCheckoutSession, resumeExisting = false): boolean {
   if (!resolveZeroOffer(offerKey)) throw new Error('Неизвестное предложение PadlHub');
   if (checkoutRoot) { host?.querySelector<HTMLDialogElement>('dialog')?.focus(); return false; }
   if (typeof HTMLDialogElement === 'undefined' || !HTMLDialogElement.prototype.showModal) throw new Error('Для оформления нужен актуальный Safari или Chrome');
@@ -47,7 +47,7 @@ function mountCheckout(offerKey: string, fast?: FastCheckoutSession): boolean {
   host.className = 'ph-zero-checkout-host';
   document.body.appendChild(host);
   checkoutRoot = createRoot(host);
-  checkoutRoot.render(<CheckoutBoundary><CheckoutAuthProvider intentId={fast?.id} initialIdentity={fast?.initialIdentity}><ZeroCheckoutDialog fast={fast} offerKey={offerKey} onClose={closeCheckout} onBusy={setBusy} /></CheckoutAuthProvider></CheckoutBoundary>);
+  checkoutRoot.render(<CheckoutBoundary><CheckoutAuthProvider intentId={fast?.id} initialIdentity={fast?.initialIdentity}><ZeroCheckoutDialog resumeExisting={resumeExisting} fast={fast} offerKey={offerKey} onClose={closeCheckout} onBusy={setBusy} /></CheckoutAuthProvider></CheckoutBoundary>);
   return true;
 }
 
@@ -59,9 +59,8 @@ export function startCheckout(offerKey: string, expectedPrice: number, event: Ev
   if (checkoutRoot) { host?.querySelector<HTMLDialogElement>('dialog')?.focus(); return false; }
   const offer = resolveZeroOffer(offerKey);
   if (!offer || !(offer.target || offer.promo || offer.liveProductId)) throw new Error('Предложение недоступно.');
-  if (hasZeroAttempt(offerKey)) return openCheckout(offerKey);
-  const intent = createFastIntent(offerKey, expectedPrice, event);
-  try { return mountCheckout(offerKey, { id: intent.id, initialIdentity: checkoutSessionIdentity() }); }
+  const intent = createFastIntent(offerKey, expectedPrice, event, hasZeroAttempt(offerKey));
+  try { return mountCheckout(offerKey, { id: intent.id, initialIdentity: checkoutSessionIdentity(), resume: intent.resume }); }
   catch (error) { cancelFastIntent(intent.id); throw error; }
 }
 
@@ -81,8 +80,8 @@ export function resumeCheckout(expectedOfferKey?: string): boolean {
       && resolveZeroOffer(selected.key)
       && typeof selected.at === 'number' && Date.now() - selected.at >= 0 && Date.now() - selected.at < 30 * 60_000) {
       const intent = takeFastOAuthIntent(selected.key);
-      return intent && !hasZeroAttempt(selected.key)
-        ? mountCheckout(selected.key, { id: intent.id, initialIdentity: null, sessionBinding: intent.sessionBinding }) : openCheckout(selected.key);
+      return intent
+        ? mountCheckout(selected.key, { id: intent.id, initialIdentity: null, sessionBinding: intent.sessionBinding, resume: intent.resume }) : mountCheckout(selected.key, undefined, hasZeroAttempt(selected.key));
     }
   } catch { /* Invalid UI state does not start checkout. */ }
   return false;

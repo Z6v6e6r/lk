@@ -3,7 +3,7 @@ import { resolveConfiguredAuthMode } from '../../utils/authMode';
 import { readAuthToken } from '../../utils/authTokenStorage';
 import { readVivaAccessToken } from '../../utils/vivaAuthStorage';
 
-export type FastCheckoutSession = { id: string; initialIdentity: string | null; sessionBinding?: string };
+export type FastCheckoutSession = { id: string; initialIdentity: string | null; sessionBinding?: string; resume?: boolean };
 /** An unrelated legacy cookie is not evidence of a current Viva checkout session. */
 export function checkoutSessionToken(): string | null {
   return resolveConfiguredAuthMode() === 'viva' ? readVivaAccessToken() : readAuthToken();

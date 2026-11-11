@@ -225,7 +225,7 @@ function PlanCardBody(props: {
           className="subscription-card__cta"
           data-ph-buy={fastOfferKey(props.plan.id, props.selectedOption.id) ?? undefined}
           type="button"
-          disabled={props.plan.ctaDisabled === true || props.selectedOption.ctaDisabled === true || props.selectedOption.priceMinor === null}
+          disabled={props.plan.ctaDisabled === true || props.selectedOption.ctaDisabled === true || (!props.selectedOption.canResume && props.selectedOption.priceMinor === null)}
           onClick={props.onChoose}
         >
           {props.selectedOption.ctaLabel ?? props.plan.ctaLabel ?? 'Оформить подписку'}
