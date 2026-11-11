@@ -46,6 +46,7 @@ import { hasDeterministicSubscriptionDecision } from "./subscriptionDecisionCont
 import { SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS } from "./subscriptionBookingConfirmation.ts";
 import { isRequestTimeoutError, runWithAbortTimeout } from "./requestTimeout.ts";
 import { SubscriptionRejoinTracker } from "./subscriptionRejoin.ts";
+import { nativeSubscriptionCancellationVerified, pollNativeSubscriptionCancellation, nativeCancellationRequestId } from "./nativeSubscriptionCancellation";
 import { SplitPaymentAmbiguityGuard } from "./splitPaymentAmbiguityGuard.ts";
 import {
   buildPadelAvailableGamesQuery,
@@ -4852,6 +4853,8 @@ export async function apiVerifyBookingCancellation(
   } = {},
 ): Promise<ApiResult<BookingCancellationVerification>> {
   const bookingId = bookingIdRaw.trim();
+  if (nativeSubscriptionCancellationVerified(bookingId, readAuthToken())) return { data: { bookingId, state: "cancelled" as const,
+    record: { id: bookingId, isCancelled: true } }, error: null, status: 200 };
   if (!bookingId) {
     return {
       data: null,
@@ -4943,6 +4946,21 @@ export async function apiCancelBooking(
   bookingId: string,
   actionOrRefundMethod?: BookingCancellationAction | BookingCancellationRefundMethod | null,
 ) {
+  const method = typeof actionOrRefundMethod === "string" ? actionOrRefundMethod : actionOrRefundMethod?.refundMethod;
+  if (method === "SERVICE") {
+    const baseUrlCandidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
+    const operationId = nativeCancellationRequestId(bookingId);
+    if (!operationId) return { data: null, status: 503,
+      error: { status: 503, message: "Не удалось подготовить отмену. Обновите страницу." } };
+    const result = await pollNativeSubscriptionCancellation(bookingId, () => request<unknown>(
+      `/lk/subscription-bookings?operationId=${encodeURIComponent(operationId)}`, {
+        method: "POST", auth: true, retries: 0, baseUrl: baseUrlCandidates[0] || getServ2Origin(),
+        fallbackBaseUrls: baseUrlCandidates.slice(1), body: JSON.stringify({ action: "cancel-free", bookingId }),
+      }), { session: readAuthToken });
+    const state = result.data && typeof result.data === "object" ? (result.data as { state?: string }).state : null;
+    // Only an explicit, actor-bound out-of-contour reply permits the legacy DELETE.
+    if (result.error || state !== "NOT_MANAGED") return result;
+  }
   const payload = typeof actionOrRefundMethod === "string"
     ? buildBookingCancellationPayloadForRefundMethod(actionOrRefundMethod)
     : actionOrRefundMethod
@@ -4974,6 +4992,8 @@ export async function apiReleaseSubscriptionBookingClaim(
   bookingIdRaw: string,
 ): Promise<ApiResult<SubscriptionBookingReleaseResponse>> {
   const bookingId = bookingIdRaw.trim();
+  const verifiedCancellation = nativeSubscriptionCancellationVerified(bookingId, readAuthToken());
+  if (verifiedCancellation) return { data: verifiedCancellation, error: null, status: 200 };
   if (!bookingId) {
     return {
       data: null,
