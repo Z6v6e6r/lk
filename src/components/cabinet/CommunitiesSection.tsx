@@ -1,4 +1,8 @@
 import { BuySupscription } from "./BuySubscription";
+import { EventRegistrationForm } from './EventRegistrationForm';
+import { EventCommunityPanel } from './EventCommunityPanel';
+import { EXHIBITION_COMMUNITY_ID } from '../padel-jump/exhibition';
+import type { EventNotice, EventRegistration } from '../../utils/communityApi';
 import { useCommunityRatingMonth } from "./community-feed/useCommunityRatingMonth";
 import { AvatarImage } from "../UI/AvatarImage";
 import {
@@ -1647,6 +1651,39 @@ export function CommunitiesSection({
   const [rankingRefreshLoadingId, setRankingRefreshLoadingId] = useState<string | null>(null);
   const [rankingRefreshError, setRankingRefreshError] = useState<string | null>(null);
   const [joiningCommunityId, setJoiningCommunityId] = useState<string | null>(null);
+  type EventJoinForm = {community?: CommunityRecord; inviteCode?: string; inviteLink?: string; notice?: EventNotice};
+  type EventRecovery = {profileKey: string};
+  const eventProfileKey = JSON.stringify([currentMember.id ?? '', currentMember.phone ?? '']);
+  const eventProfileRef = useRef(eventProfileKey);
+  eventProfileRef.current = eventProfileKey;
+  const eventJoinGenerationRef = useRef(0);
+  const [eventJoin, updateEventJoin] = useState<(EventJoinForm & {profileKey: string}) | null>(null);
+  const eventJoinRef = useRef<typeof eventJoin>(null);
+  const eventRegistrationPendingRef = useRef<typeof eventJoin>(null);
+  const [eventRecovery, updateEventRecovery] = useState<EventRecovery | null>(null);
+  const eventRecoveryRef = useRef<EventRecovery | null>(null);
+  const setEventRecovery = useCallback((value: EventRecovery | null) => {
+    eventRecoveryRef.current = value; updateEventRecovery(value);
+  }, []);
+  const setEventJoin = useCallback((value: EventJoinForm | null) => {
+    const pending = eventRegistrationPendingRef.current;
+    if (pending?.profileKey === eventProfileRef.current) {
+      setEventRecovery(eventRecoveryRef.current?.profileKey === pending.profileKey ? eventRecoveryRef.current : {profileKey: pending.profileKey});
+      if (value) return;
+    }
+    if (value && eventRecoveryRef.current?.profileKey === eventProfileRef.current) {
+      updateEventRecovery(eventRecoveryRef.current); return;
+    }
+    eventJoinGenerationRef.current++;
+    const next = value ? {...value, profileKey: eventProfileRef.current} : null;
+    eventJoinRef.current = next; updateEventJoin(next);
+  }, [setEventRecovery]);
+  useEffect(() => {
+    setEventJoin(null); setEventRecovery(null); setJoiningCommunityId(null); setInviteSubmitting(false);
+  }, [eventProfileKey, setEventJoin, setEventRecovery]);
+  useEffect(() => () => {
+    eventJoinGenerationRef.current++; eventJoinRef.current = null; eventRecoveryRef.current = null;
+  }, []);
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityDetailTab>("RANKING");
   const [activeRankingType, setActiveRankingType] = useState<CommunityRankingTypeId>("overall");
   const rankingMonthStartTs = useCommunityRatingMonth();
@@ -3750,6 +3787,9 @@ export function CommunitiesSection({
   };
 
   const handleJoinOpenCommunity = useCallback(async (community: CommunityRecord) => {
+    const profileKey = eventProfileRef.current;
+    if (eventRecoveryRef.current?.profileKey === profileKey) { updateEventRecovery(eventRecoveryRef.current); return; }
+    const generation = ++eventJoinGenerationRef.current;
     setJoiningCommunityId(community.id);
     setDetailError(null);
     setAccessMessage(null);
@@ -3758,9 +3798,14 @@ export function CommunitiesSection({
       member: currentMember,
     });
 
+    if (eventProfileRef.current !== profileKey || eventJoinGenerationRef.current !== generation) return;
     setJoiningCommunityId(null);
 
     if (response.error) {
+      if (response.status === 422 && response.data?.eventNotice) {
+        setEventJoin({community,notice:response.data.eventNotice});
+        return;
+      }
       setAccessMessage(
         communityErrorMessage(response.error, "Не удалось вступить в сообщество"),
       );
@@ -3783,10 +3828,74 @@ export function CommunitiesSection({
     if (response.data?.message) {
       setAccessMessage(response.data.message);
     }
-  }, [currentMember, redirectToInviteCabinet]);
+  }, [currentMember, redirectToInviteCabinet, setEventJoin]);
+
+  const handleEventRegistration = async (registration: EventRegistration): Promise<string | null> => {
+    const form = eventJoin;
+    const valid = () => !!form && eventJoinRef.current === form && eventProfileRef.current === form.profileKey;
+    if (!form || !valid() || eventRecoveryRef.current?.profileKey === form.profileKey || eventRegistrationPendingRef.current?.profileKey === form.profileKey) return 'Откройте актуальную анкету заново.';
+    eventRegistrationPendingRef.current = form;
+    const reconcile = (message: string) => {
+      setEventJoin(null); setEventRecovery({profileKey: form.profileKey}); setAccessMessage(message);
+      return message;
+    };
+    try {
+      const response = form.community
+        ? await apiAddCommunityMember(form.community.id, {member: currentMember, eventRegistration: registration})
+        : await apiJoinCommunityByInvite({inviteCode: form.inviteCode, inviteLink: form.inviteLink, member: currentMember, eventRegistration: registration}, {allowFallback:false});
+      if (eventRegistrationPendingRef.current === form) eventRegistrationPendingRef.current = null;
+      if (!valid()) {
+        if (eventProfileRef.current === form.profileKey) setEventRecovery({profileKey: form.profileKey});
+        return 'Форма изменилась. Сначала проверьте статус анкеты.';
+      }
+      if (response.error) {
+        const freshNotice = response.data?.eventNotice;
+        if (response.status === 422 && freshNotice) {
+          setEventJoin({...form, notice: freshNotice});
+          return freshNotice.revision !== registration.policyRevision || freshNotice.retentionMode !== registration.retentionMode
+            ? 'Условия анкеты обновились. Проверьте срок хранения и отправьте анкету ещё раз.'
+            : 'Проверьте ФИО, компанию и электронную почту.';
+        }
+        return reconcile(response.status === 401 || response.status === 403
+          ? 'Вступление недоступно. Войдите в профиль и проверьте статус.'
+          : 'Сохранение анкеты не подтверждено. Сначала проверьте статус; повторно анкету не отправляем.');
+      }
+      if (!response.data?.community || form.community && response.data.community.id !== form.community.id) throw new Error('REGISTRATION_SCOPE_UNKNOWN');
+      applyActionResponse(response.data);
+      setFocusedCommunityId(response.data.community.id); setSelectedCommunityId(response.data.community.id);
+      setEventJoin(null); setIsInviteOpen(false); setInviteValue('');
+      setAccessMessage(response.data.message || 'Анкета сохранена.');
+      return null;
+    } catch {
+      if (eventRegistrationPendingRef.current === form) eventRegistrationPendingRef.current = null;
+      if (valid()) return reconcile('Сохранение анкеты не подтверждено. Сначала проверьте статус; повторно анкету не отправляем.');
+      if (eventProfileRef.current === form.profileKey) setEventRecovery({profileKey: form.profileKey});
+      return 'Форма изменилась. Сначала проверьте статус анкеты.';
+    } finally {
+      if (eventRegistrationPendingRef.current === form) eventRegistrationPendingRef.current = null;
+    }
+  };
+
+  const handleEventRegistrationStatus = async () => {
+    const recovery = eventRecoveryRef.current;
+    if (!recovery || recovery.profileKey !== eventProfileRef.current) return;
+    if (eventRegistrationPendingRef.current?.profileKey === recovery.profileKey) { setAccessMessage('Ожидаем ответ на отправленную анкету. После завершения запроса проверьте статус.'); return; }
+    try {
+      const response = await apiFetchCommunities({clientId: currentMember.id, phone: currentMember.phone, view: 'summary', forceFresh: true});
+      if (eventRecoveryRef.current !== recovery || eventProfileRef.current !== recovery.profileKey) return;
+      if (response.error || !response.data) { setAccessMessage('Не удалось проверить статус. Войдите в профиль и повторите проверку.'); return; }
+      setEventRecovery(null);
+      setAccessMessage('Статус сообщества обновлён. Откройте анкету заново; её сохранение подтверждает только сервер.');
+    } catch {
+      if (eventRecoveryRef.current === recovery && eventProfileRef.current === recovery.profileKey) setAccessMessage('Не удалось проверить статус. Повторите проверку позже.');
+    }
+  };
 
   const handleInviteSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    const profileKey = eventProfileRef.current;
+    if (eventRecoveryRef.current?.profileKey === profileKey) { updateEventRecovery(eventRecoveryRef.current); return; }
+    const generation = ++eventJoinGenerationRef.current;
     const inviteCode = extractInviteCode(inviteValue);
     if (!inviteCode) {
       setInviteError("Вставь ссылку-приглашение или код сообщества.");
@@ -3802,9 +3911,11 @@ export function CommunitiesSection({
       member: currentMember,
     });
 
+    if (eventProfileRef.current !== profileKey || eventJoinGenerationRef.current !== generation) return;
     setInviteSubmitting(false);
 
     if (response.error) {
+      if (response.status === 422 && response.data?.eventNotice) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink: inviteValue, notice: response.data.eventNotice}); return; }
       setInviteError(
         communityErrorMessage(response.error, "Не удалось войти по приглашению"),
       );
@@ -3837,6 +3948,9 @@ export function CommunitiesSection({
     if (initialInviteHandledRef.current === dedupeKey) return;
 
     initialInviteHandledRef.current = dedupeKey;
+    const profileKey = eventProfileRef.current;
+    if (eventRecoveryRef.current?.profileKey === profileKey) { updateEventRecovery(eventRecoveryRef.current); return; }
+    const generation = ++eventJoinGenerationRef.current;
     setIsInviteOpen(true);
     setInviteValue(inviteLink);
     setInviteError(null);
@@ -3848,9 +3962,11 @@ export function CommunitiesSection({
       inviteLink,
       member: currentMember,
     }).then((response) => {
+      if (eventProfileRef.current !== profileKey || eventJoinGenerationRef.current !== generation) return;
       setInviteSubmitting(false);
 
       if (response.error) {
+        if (response.status === 422 && response.data?.eventNotice) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink, notice: response.data.eventNotice}); return; }
         setInviteError(
           communityErrorMessage(response.error, "Не удалось войти в сообщество по ссылке"),
         );
@@ -3872,10 +3988,11 @@ export function CommunitiesSection({
       }
       setAccessMessage(response.data?.message ?? "Вступление в сообщество сохранено.");
     }).catch((error: unknown) => {
+      if (eventProfileRef.current !== profileKey || eventJoinGenerationRef.current !== generation) return;
       setInviteSubmitting(false);
       setInviteError(error instanceof Error ? error.message : "Не удалось войти в сообщество по ссылке");
     });
-  }, [currentMember, initialInviteCode, initialInviteLink, inviteSubmitting, redirectToInviteCabinet]);
+  }, [currentMember, initialInviteCode, initialInviteLink, inviteSubmitting, redirectToInviteCabinet, setEventJoin]);
 
   const updateGraphZoom = (nextZoom: number) => {
     setGraphZoomOverride(clamp(COMMUNITY_GRAPH_MIN_ZOOM, nextZoom, COMMUNITY_GRAPH_MAX_ZOOM));
@@ -5187,6 +5304,11 @@ export function CommunitiesSection({
         ))}
       </div>
 
+      <Modal isOpen={!!eventJoin && eventJoin.profileKey === eventProfileKey || !!eventRecovery && eventRecovery.profileKey === eventProfileKey} onClose={() => {setEventJoin(null); updateEventRecovery(null);}} title={eventRecovery ? 'Проверка статуса анкеты' : 'Анкета участника сообщества'}>
+        {eventJoin && eventJoin.profileKey === eventProfileKey && <EventRegistrationForm notice={eventJoin.notice} onSubmit={handleEventRegistration} onCancel={() => setEventJoin(null)} />}
+        {eventRecovery && eventRecovery.profileKey === eventProfileKey && <div className="community-event-registration"><p role="status">{accessMessage || 'Анкету повторно не отправляем. Сначала проверьте статус сообщества.'}</p><div className="form-actions"><button className="btn-primary" type="button" onClick={() => void handleEventRegistrationStatus()}>Проверить статус</button></div></div>}
+      </Modal>
+
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Создать сообщество">
         <form className="community-form" onSubmit={(event) => void handleCreateCommunity(event)}>
           <div className="community-form-intro">
@@ -5595,6 +5717,7 @@ export function CommunitiesSection({
 
             {activeCommunityTab === "FEED" && (
               <>
+                {selectedCommunity.id === EXHIBITION_COMMUNITY_ID && <EventCommunityPanel community={selectedCommunity} onRegister={() => void handleJoinOpenCommunity(selectedCommunity)} />}
                 {detailError && (
                   <div className="community-form-error">{detailError}</div>
                 )}
