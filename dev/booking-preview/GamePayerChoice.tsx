@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { buildGamePaymentOptions, formatRubles, readMatrixSettings, type PaymentOption } from './paymentMatrix';
+import { gameSubscriptionComparison } from './gameSubscriptionComparison';
 import './matrix.css';
 
 type Props = { value: 'self' | 'split'; onChange: (value: 'self' | 'split') => void; courtAmount: number | null; durationMinutes: number };
@@ -8,7 +9,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
   const name = useId();
   const settings = readMatrixSettings(new URLSearchParams(location.search));
   const options = buildGamePaymentOptions(courtAmount, 'quarter', settings.profile, settings.applicability, { ...settings, durationMinutes });
-  const subscription = options.find(option => option.kind === 'subscription');
+  const subscription = gameSubscriptionComparison(courtAmount, { ...settings, durationMinutes });
   const residency = options.find(option => option.kind === 'residency');
   const personalBase = courtAmount != null && Number.isFinite(courtAmount) && courtAmount > 0 ? Math.round(courtAmount * 100 / 4) / 100 : null;
   const price = (option: PaymentOption | undefined) => {
@@ -19,9 +20,9 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
   };
   const subscriptionNote = subscription?.reason === 'training-only' ? 'Тариф даёт бесплатную тренировку; скидка на игру — после использования дневного лимита'
     : subscription?.mode === 'unavailable' ? 'Тариф не подходит к этому событию'
-      : subscription?.benefit === 'partial-hour' ? `${subscription.freeMinutes} мин бесплатно + ${subscription.paidMinutes} мин с доплатой; сумма уточняется`
+      : subscription?.benefit === 'partial-hour' ? `${subscription.freeMinutes} мин бесплатно · оплачиваются только ${subscription.paidMinutes} мин с подходящей подпиской`
         : subscription?.benefit === 'discount' ? 'Скидка 30% · дневной лимит использован'
-          : settings.profile.subscription ? 'Дневной бесплатный лимит доступен' : 'Бесплатно при наличии подписки';
+          : 'С подходящей подпиской · дневной бесплатный лимит доступен';
   const discount = (option: PaymentOption | undefined) => personalBase != null && option?.amount != null
     && option.amount > 0 && option.amount < personalBase;
   return <fieldset className="matrix-game-payers">
