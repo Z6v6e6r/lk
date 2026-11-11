@@ -355,6 +355,7 @@
         "/lk/games/split/create",
         "/lk/games/payment/confirm",
         "/lk/games/confirm",
+        "/lk/tournaments/summer-subscription/purchase",
         "UNKNOWN"
       ]
     },

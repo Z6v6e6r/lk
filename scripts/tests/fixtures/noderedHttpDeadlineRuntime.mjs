@@ -6,13 +6,21 @@ import crypto from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {createRequire} from 'node:module';
 import {addCommunityPolicyAuth, COMMUNITY_AUTH_PREPARE, COMMUNITY_AUTH_RESPONSE} from '../../lib/communityPolicyAuth.mjs';
+import {BOOKING_HTTP_ID, BOOKING_ROUTER_ID, prepareBookingTransportRecovery, sha256} from '../../lib/subscriptionBookingTransportRecovery.mjs';
 const native=createRequire(import.meta.url);
 const source=fs.readFileSync(new URL('./node-red-4.0.9/21-httprequest.source',import.meta.url),'utf8');
 const sourceSha256=crypto.createHash('sha256').update(source).digest('hex');
 assert.equal(sourceSha256,'173baaaea541b5a8c00e2aeabfe25fbd1cf899946b53fe785c3fa54abbfacced');
-const mode=process.argv[2];assert.ok(['deadline','transport-error'].includes(mode));
-const graph=addCommunityPolicyAuth([{id:'in',type:'http in',z:'tab',method:'get',url:'/lk/communities',wires:[['target']]},{id:'target',type:'function',z:'tab',name:'Target',func:'return msg;',wires:[]}]);
-const config=graph.find(n=>n.id==='community-policy-verified-actor-v1-http');
+const mode=process.argv[2];assert.ok(['deadline','transport-error','booking-transport'].includes(mode));
+const bookingSource=Buffer.from(JSON.stringify([
+ {id:'tab',type:'tab'}, {id:'in',type:'http in',z:'tab',method:'post',url:'/lk/subscription-bookings'},
+ {id:BOOKING_HTTP_ID,type:'http request',z:'tab',method:'use',ret:'obj',senderr:true,wires:[[BOOKING_ROUTER_ID]]},
+ {id:BOOKING_ROUTER_ID,type:'function',z:'tab',func:'return msg;'},
+]));
+const graph=mode==='booking-transport'
+ ? JSON.parse(prepareBookingTransportRecovery(bookingSource,{sourceSha256:sha256(bookingSource),routerSha256:sha256('return msg;')}).candidate)
+ : addCommunityPolicyAuth([{id:'in',type:'http in',z:'tab',method:'get',url:'/lk/communities',wires:[['target']]},{id:'target',type:'function',z:'tab',name:'Target',func:'return msg;',wires:[]}]);
+const config=graph.find(n=>n.id===(mode==='booking-transport'?BOOKING_HTTP_ID:'community-policy-verified-actor-v1-http'));
 let transport='hang', Request;
 const calls=[],sends=[],errors=[];
 const forbidden=()=>{throw new Error('FIXTURE_NETWORK_OR_UNEXPECTED_PATH');};
@@ -61,7 +69,7 @@ if(mode==='deadline') {
   assert.equal(restored.requestTimeout,original.requestTimeout);
  }
  Object.assign(report,{negativeControlEffectiveTimeout:calls[0].timeout.request,preparedEffectiveTimeout:calls.at(-1).timeout.request,retryLimit:calls.at(-1).retry.limit,followRedirect:calls.at(-1).followRedirect});
-} else {
+} else if(mode==='transport-error') {
  transport='reject';
  const msg={req:{headers:{authorization:'Bearer fixture'}},statusCode:401,requestTimeout:250000,payload:{kept:true}};
  run(COMMUNITY_AUTH_PREPARE,msg);dispatch(msg);await new Promise(resolve=>setImmediate(resolve));
@@ -78,5 +86,26 @@ if(mode==='deadline') {
  assert.equal(restored.requestTimeout,250000);assert.equal(restored.statusCode,401);
  assert.deepEqual(restored.payload,{kept:true});assert.equal(Object.hasOwn(restored,'error'),false);
  Object.assign(report,{nativeErrors:errors.length,nativeErrorSends:sends.length,scopedRecovery:'UNAVAILABLE',restoredTimeout:restored.requestTimeout});
+} else {
+ transport='reject';
+ dispatch({method:'GET',url:'https://fixture.invalid/profile',requestTimeout:10000,statusCode:200,
+   payload:{id:'PRIVATE_REQUEST_NOT_A_RESPONSE'},headers:{Authorization:'PRIVATE'},
+   _subscriptionBooking:{step:'profile',caller:'http',operationId:'fixture-operation'}});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(errors.length,1);assert.equal(sends.length,0);
+ const captured=errors[0].msg;captured.error={message:'PRIVATE_TRANSPORT_SENTINEL'};
+ const catches=graph.filter(n=>n.type==='catch'&&n.scope?.includes(config.id));assert.equal(catches.length,1);
+ const recovery=graph.find(n=>n.id===catches[0].wires[0][0]);assert.deepEqual(recovery.wires,[[BOOKING_ROUTER_ID]]);
+ run(recovery.func,captured);
+ assert.equal(captured.statusCode,503);assert.equal(captured.payload,null);
+ assert.equal(Object.keys(captured.headers).length,0);assert.equal(Object.hasOwn(captured,'error'),false);
+ const owner=fs.readFileSync(new URL('../../nodered_subscription_booking_nodes/fn_subscription_booking_router.js',import.meta.url),'utf8');
+ const execute=msg=>new Function('msg','global','env',owner)(msg,{get(){}},{get(){}});
+ const before=execute(structuredClone(captured));
+ assert(before.slice(0,4).every(value=>value===null));assert.equal(before[4].statusCode,502);
+ captured._subscriptionBooking.step='booking_create';
+ const after=execute(captured);
+ assert(after.slice(0,4).every(value=>value===null));assert.equal(after[4].statusCode,202);
+ Object.assign(report,{nativeErrors:errors.length,nativeErrorSends:sends.length,prewriteStatus:before[4].statusCode,postwriteStatus:after[4].statusCode});
 }
 console.log(JSON.stringify(report));
