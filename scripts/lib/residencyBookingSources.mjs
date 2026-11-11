@@ -84,7 +84,9 @@ export function composeResidencyPreview(source) {
   if (source.includes('const residencyPreviewTarget')) throw new Error('Residency already installed');
   const [helpers,branch]=read('preview').split('// RESIDENCY_PREVIEW_BRANCH');
   source=residencyContextSource()+'\n'+source;
-  source=residencyReplace(source,"while (ctx.step === 'next') {",helpers+"\nwhile (ctx.step === 'next') {");
+  // Handle this instance's failed read before the generic transport-error guard.
+  source=residencyReplace(source,"if (msg.error) return stop('PRICE_PREVIEW_READ_FAILED');",
+    helpers+"\nif (msg.error) return stop('PRICE_PREVIEW_READ_FAILED');");
   const anchor="  if (!eventRoute && ['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field])))";
   source=residencyReplace(source,anchor,branch+'\n'+anchor);
   new Function('msg','node','global','env',source);return source;

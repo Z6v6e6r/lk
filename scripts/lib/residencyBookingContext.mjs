@@ -27,6 +27,9 @@ export function residencyTransportConfig(read, mode='booking') {
     ? {url:'https://padlhub.su/api/internal/subscriptions/residency-booking-refresh',token} : null;
 }
 
+export const RESIDENCY_TOURNAMENT_COMPATIBILITY = Object.freeze({adapterId:'LK1_RESIDENCY_BOOKING',contractVersion:2,
+  capabilityDigest:'sha256:63be8d476b73583c8b80f55cf7016abe571a2b8159dbb7e8db2f07010f614104'});
+
 // Durable operation identity survives a lost response, entitlement expiry and flag-off.
 // This is not an admission check; new provider writes still require the fresh context.
 export function residencyStoredBinding(quote, clientSubscriptionId) {
@@ -51,11 +54,14 @@ export function validateResidencyBookingContext(value, clientSubscriptionId, now
   const same = (a,b) => Array.isArray(a) && a.length === b.length && [...a].sort().every((v,i)=>v === [...b].sort()[i]);
   try {
     const c=value.context, p=c.policy, i=c.instance, e=c.evidence, compatibility=value.runtimeCompatibility;
+    const rules=p.benefitRules.filter(r=>r.enabled);
+    const tournament=rules.find(r=>r.category==='TOURNAMENT');
+    const expectedCompatibility=tournament ? RESIDENCY_TOURNAMENT_COMPATIBILITY : RESIDENCY_BOOKING_COMPATIBILITY;
     const observed=instant(value.observedAt), until=instant(value.validUntil), purchase=instant(value.purchasedAt);
     const expiry=purchase+30*86400000;
     if (!obj(value) || value.schemaVersion !== 1 || value.contextKind !== 'RESIDENCY_BOOKING_CONTEXT'
       || value.providerProductId !== RESIDENCY_PRODUCT_ID || c.schemaVersion !== 1
-      || Object.keys(RESIDENCY_BOOKING_COMPATIBILITY).some(k=>compatibility[k]!==RESIDENCY_BOOKING_COMPATIBILITY[k])
+      || Object.keys(expectedCompatibility).some(k=>compatibility[k]!==expectedCompatibility[k])
       || !Number.isFinite(now) || observed>now || until<=now || until-observed>30000 || until<=observed
       || !Number.isFinite(observed) || !Number.isFinite(until)
       || c.clientSubscriptionId !== clientSubscriptionId || !id(c.subscriptionInstanceId)
@@ -82,15 +88,17 @@ export function validateResidencyBookingContext(value, clientSubscriptionId, now
     const access=p.stationAccessRules;
     if (access.length!==1 || access[0].enabled!==true || access[0].selector.kind!=='ALL_STATIONS'
       || access[0].selector.stationIds.length || access[0].surcharge.kind!=='NONE' || access[0].surcharge.amountMinor!==0) fail();
-    const rules=p.benefitRules.filter(r=>r.enabled);
     const game=rules.find(r=>r.category==='GAME'), training=rules.find(r=>r.category==='GROUP_TRAINING');
-    if (rules.length!==2 || !game || !training || !same(game.actions,['CREATE_GAME','JOIN_GAME'])
+    if (rules.length!==(tournament?3:2) || !game || !training
+      || (tournament && (!same(tournament.actions,['BOOK_TOURNAMENT']) || tournament.percentage!==50
+        || tournament.allStations!==true || tournament.stationIds.length))
+      || !same(game.actions,['CREATE_GAME','JOIN_GAME'])
       || !same(training.actions,['BOOK_GROUP_TRAINING']) || game.percentage!==30 || training.percentage!==50
       || game.allStations!==true || training.allStations!==true || game.stationIds.length || training.stationIds.length
       || rules.some(r=>r.kind!=='PERCENT_DISCOUNT' || r.valueMinor!==null || r.partialPrice!==null
         || r.productTypeIds.length || !same(r.durationMinutes,[60,90,120]) || !r.externalEventTypeIds.length)) fail();
     if (target) {
-      const category={CREATE_GAME:'GAME',JOIN_GAME:'GAME',BOOK_GROUP_TRAINING:'GROUP_TRAINING'}[action];
+      const category={CREATE_GAME:'GAME',JOIN_GAME:'GAME',BOOK_GROUP_TRAINING:'GROUP_TRAINING',BOOK_TOURNAMENT:'TOURNAMENT'}[action];
       const starts=instant(target.startsAt), ends=starts+target.durationMinutes*60000;
       const rule=rules.find(r=>r.category===category && r.actions.includes(action));
       if (target.resolutionSource!=='SERVER' || target.category!==category || !rule
@@ -99,7 +107,7 @@ export function validateResidencyBookingContext(value, clientSubscriptionId, now
         || starts<instant(i.activeFrom) || ends>instant(i.activeTo)) fail();
     }
     return {rule:{productId:RESIDENCY_PRODUCT_ID,maxActiveBookings:Number.MAX_SAFE_INTEGER,freeGameMinutesPerDay:0,
-      gameOverageDiscountPercent:30,groupTrainingDiscountPercent:50,tournamentDiscountPercent:0},
+      gameOverageDiscountPercent:30,groupTrainingDiscountPercent:50,tournamentDiscountPercent:tournament?50:0},
       binding:{providerProductId:RESIDENCY_PRODUCT_ID,subscriptionInstanceId:c.subscriptionInstanceId,
         clientSubscriptionId,policyVersion:p.policyVersion,policyDigest:c.policyDigest,mappingId:e.mappingId,
         publicationId:e.publicationId,activeFrom:i.activeFrom,activeTo:i.activeTo},validUntil:until};

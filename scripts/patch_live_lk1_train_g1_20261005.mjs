@@ -147,13 +147,28 @@ const POST_G1_SPANISH_DELTAS = Object.freeze({
   "nodered_lk1_hub_nodes/gateway.js": { pin: LK1_TRAIN_G1_REVIEWED_GATEWAY_SHA256, delta: "  if (isSpanishTrainingExercise(exercise)) return { code: \"SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE\" };\n" },
   "nodered_lk1_hub_nodes/gateway_hooks.js": { pin: LK1_TRAIN_G1_REVIEWED_HOOKS_SHA256, delta: "// Refuse every subscription before legacy, visit-pack and managed-price paths.\nif (isSpanishTrainingExercise(exercise)) {\n  return finishError(ctx, 409, \"На индивидуальные/сплит тренировки с испанским тренером подписки не действуют. Выберите разовую оплату.\", {\n    code: \"SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE\",\n  });\n}\n" },
 });
+// Reconstruct the reviewed 2026-10-05 source after the narrowly scoped 2026-11-11
+// Friendship special-event change. The original whole-source pin is never updated.
+const POST_G1_FRIENDSHIP_DELTAS = Object.freeze([
+  ["  // «Время на друзей» session, including «Время на друзей (особый)» (2026-11-11).\n  // Other tournament directions keep their configured discount.\n",
+    "  // «Время на друзей» session. Only that direction is covered, so the direction scope\n  // below keeps a ПадлхАБ tournament of the same category on its plain discount.\n"],
+  ["  // «Время на друзей» and «Время на друзей (особый)» of the club.\n", "  // «Время на друзей» of the club.\n"],
+  ['"6b98e7e3-5bd3-4e94-9dc3-7723ea52513e": Object.freeze([5278, 5280]),',
+    '"6b98e7e3-5bd3-4e94-9dc3-7723ea52513e": Object.freeze([5278]),'],
+]);
 export function g1ReviewedSource(source, relative, pin, label) {
   if (sha256(source) === pin) return source;
   const compatibility = POST_G1_SPANISH_DELTAS[relative];
-  if (compatibility?.pin === pin && source.split(compatibility.delta).length === 2) {
-    const historical = source.replace(compatibility.delta, "");
-    if (sha256(historical) === pin) return historical;
+  let historical = source;
+  if (compatibility?.pin === pin && historical.split(compatibility.delta).length === 2) {
+    historical = historical.replace(compatibility.delta, "");
   }
+  if (relative === "nodered_lk1_hub_nodes/gateway.js" && pin === LK1_TRAIN_G1_REVIEWED_GATEWAY_SHA256) {
+    for (const [after, before] of POST_G1_FRIENDSHIP_DELTAS) {
+      if (historical.split(after).length === 2) historical = historical.replace(after, before);
+    }
+  }
+  if (sha256(historical) === pin) return historical;
   throw new Error(`Reviewed ${label} drift: ${sha256(source)} != ${pin}`);
 }
 function reviewedSource(relative, pin, label) {

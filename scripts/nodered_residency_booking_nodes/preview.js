@@ -3,15 +3,32 @@ const residencyPreviewTarget = exercise => ({resolutionSource:'SERVER',category:
   startsAt:new Date(ctx.target.startsAt).toISOString(),durationMinutes:ctx.target.durationMinutes});
 if (ctx.step==='residency_context') {
   const pending=ctx.residencyPending;
-  const config=residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),k=>typeof env!=='undefined'?env.get(k):undefined),'preview');
-  if (!config || !pending || msg.error || msg.statusCode!==200 || msg.method!=='POST'
-    || msg.url!==config.url || msg.responseUrl!==config.url) return stop('RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE');
-  try {validateResidencyBookingContext(msg.payload,pending.id,Date.now(),pending.target,pending.action);}
-  catch {return stop('RESIDENCY_BOOKING_CONTEXT_INVALID');}
-  ctx.residencyContexts=ctx.residencyContexts || {};
-  ctx.residencyContexts[pending.id]=msg.payload;
-  ctx.pending.unshift(pending.id);
+  // A failed optional benefit can only be attributed to an already owned instance.
+  if (!pending || typeof pending.id!=='string' || !Array.isArray(ctx.requestedIds) || !ctx.requestedIds.includes(pending.id)
+    || !ctx.subscriptions?.[pending.id] || typeof ctx.metadata?.[pending.id]?.productId!=='string'
+    || ctx.metadata[pending.id].productId.toLowerCase()!==RESIDENCY_PRODUCT_ID
+    || !Array.isArray(ctx.pending) || ctx.pending.includes(pending.id)) return stop('RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE');
+  let failure=null;
+  try {
+    const config=residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),k=>typeof env!=='undefined'?env.get(k):undefined),'preview');
+    if (!config || msg.error || msg.statusCode!==200 || msg.method!=='POST'
+      || msg.url!==config.url || msg.responseUrl!==config.url) failure='RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE';
+    else {
+      try {validateResidencyBookingContext(msg.payload,pending.id,Date.now(),pending.target,pending.action);}
+      catch {failure='RESIDENCY_BOOKING_CONTEXT_INVALID';}
+    }
+  } catch {failure='RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE';}
+  if (failure) {
+    delete ctx.residencyContexts?.[pending.id];
+    quote(pending.id,'UNAVAILABLE',null,0,0,failure);
+  } else {
+    ctx.residencyContexts=ctx.residencyContexts || {};
+    ctx.residencyContexts[pending.id]=msg.payload;
+    ctx.pending.unshift(pending.id);
+  }
   delete ctx.residencyPending;
+  delete msg.error;delete msg.statusCode;delete msg.responseUrl;
+  delete msg.url;delete msg.method;delete msg.headers;delete msg.payload;
   ctx.step='next';
 }
 // RESIDENCY_PREVIEW_BRANCH
@@ -33,7 +50,8 @@ if (productId.toLowerCase()===RESIDENCY_PRODUCT_ID) {
   try {proof=validateResidencyBookingContext(evidence,id,Date.now(),target,action);}
   catch {quote(id,'UNAVAILABLE',null,0,0,'RESIDENCY_BOOKING_CONTEXT_INVALID');continue;}
   if (!Number.isSafeInteger(ctx.basePriceMinor) || ctx.basePriceMinor<=0) return stop('BASE_PRICE_UNRESOLVED');
-  const percent=target.category==='GAME'?30:50;
+  const percent=target.category==='GAME'?proof.rule.gameOverageDiscountPercent
+    :target.category==='TOURNAMENT'?proof.rule.tournamentDiscountPercent:proof.rule.groupTrainingDiscountPercent;
   ctx.groupDiscountPercent=percent;
   quote(id,'AVAILABLE',ctx.basePriceMinor-Math.floor(ctx.basePriceMinor*percent/100),0,ctx.target.durationMinutes);
   ctx.quotes[ctx.quotes.length-1].expiresAt=Math.min(ctx.quotes[ctx.quotes.length-1].expiresAt,proof.validUntil);
