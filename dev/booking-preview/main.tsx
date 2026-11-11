@@ -81,7 +81,7 @@ function Preview() {
           {PRIVILEGE_PROFILES.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
         </select></label>
         <div className="preview-applicability">
-          <label><input type="checkbox" checked={subscriptionFits} onChange={event => { setSubscriptionFits(event.target.checked); updateUrl('subscriptionFits', event.target.checked ? '1' : '0'); }} />Тариф подходит к событию</label>
+          {subscriptionPlan !== 'ra' && <label><input type="checkbox" checked={subscriptionFits} onChange={event => { setSubscriptionFits(event.target.checked); updateUrl('subscriptionFits', event.target.checked ? '1' : '0'); }} />Тариф подходит к событию</label>}
           <label><input type="checkbox" checked={passFits} onChange={event => { setPassFits(event.target.checked); updateUrl('passFits', event.target.checked ? '1' : '0'); }} />Абонемент подходит</label>
           <label><input type="checkbox" checked={raFits} onChange={event => { setRaFits(event.target.checked); updateUrl('raFits', event.target.checked ? '1' : '0'); }} />РА действует на событие</label>
         </div>

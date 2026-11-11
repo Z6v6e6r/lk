@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bookingButtonText, createPreviewOrder, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription } from './bookingCheckout.ts';
-import { buildBookingPaymentOptions, PRIVILEGE_PROFILES, type PaymentOption } from './paymentMatrix.ts';
+import { buildBookingPaymentOptions, PRIVILEGE_PROFILES, readMatrixSettings, type PaymentOption } from './paymentMatrix.ts';
 
 test('selecting an unowned residency is possible and uses the event discount on the primary button', () => {
   const options = buildBookingPaymentOptions('training', PRIVILEGE_PROFILES[0], { subscription: false, pass: false });
@@ -102,4 +102,15 @@ test('missing, inapplicable or unquoted subscriptions never replace the paid sha
   }
   const fullCourt = buildBookingPaymentOptions('game', PRIVILEGE_PROFILES[7], { subscription: true, pass: true }, {}, 'court', 4000);
   assert.equal(withPersonalSubscription(fullCourt, true), fullCourt);
+});
+test('the reported RA preview URL selects a free personal share despite a stale hourly applicability flag', () => {
+  const settings = readMatrixSettings(new URLSearchParams('privileges=subscription&subscriptionFits=0&passFits=0&subscriptionPlan=ra&dailyQuota=available&groupCategory=standard&raFits=1'));
+  const context = { ...settings, durationMinutes: 60 };
+  const options = withPersonalSubscription(buildBookingPaymentOptions('game', settings.profile, settings.applicability, context, 'quarter', 4000), settings.profile.subscription);
+  const choice = options.find(isSelectableMethod)!;
+  assert.equal(choice.kind, 'subscription');
+  assert.equal(choice.amount, 0);
+  assert.equal(bookingButtonText(choice), 'Записаться бесплатно');
+  assert.equal(createPreviewOrder(choice)?.product, null);
+  assert.deepEqual(buildBookingPaymentOptions('game', settings.profile, settings.applicability, context, 'court', 4000), [{ kind: 'full', mode: 'book', amount: 4000 }]);
 });

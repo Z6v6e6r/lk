@@ -52,8 +52,9 @@ export function buildPaymentOptions(service: ServiceKind, privileges: Privileges
   const quota = context.dailyQuota || 'available';
   const duration = context.durationMinutes ?? price.durationMinutes;
   const excluded = service === 'training' && context.excludedGroups === true;
+  const subscriptionFits = plan === 'ra' ? context.raFits ?? fits.subscription : fits.subscription;
   let subscription: PaymentOption;
-  if (excluded || !fits.subscription || (plan === 'ra' && context.raFits === false)) {
+  if (excluded || !subscriptionFits) {
     subscription = { kind: 'subscription', mode: 'unavailable', amount: null, reason: excluded ? 'excluded-group' : 'not-applicable' };
   } else if (quota === 'used') {
     subscription = { kind: 'subscription', mode: privileges.subscription ? 'book' : 'offer', amount: price.residentPrice, benefit: 'discount' };

@@ -4,6 +4,27 @@ import { buildPaymentOptions, PRIVILEGE_PROFILES, SERVICES, readMatrixSettings }
 
 const freeHour = { subscriptionPlan: 'daily-hour', dailyQuota: 'available', durationMinutes: 60 } as const;
 const expectedOwned = [ ['full'], ['residency'], ['subscription'], ['subscription', 'residency'], ['pass'], ['pass', 'residency'], ['subscription', 'pass'], ['subscription', 'pass', 'residency'] ];
+test('RA uses its own applicability flag independently from the hourly tariff setting', () => {
+  for (const subscription of [false, true]) for (const raFits of [false, true]) {
+    for (const service of ['game', 'training', 'tournament'] as const) {
+      const option = buildPaymentOptions(service, PRIVILEGE_PROFILES[2], { subscription, pass: false },
+        { subscriptionPlan: 'ra', raFits, dailyQuota: 'available', durationMinutes: 60 }).find(option => option.kind === 'subscription')!;
+      assert.equal(option.mode, raFits ? 'book' : 'unavailable');
+      assert.equal(option.amount, raFits ? 0 : null);
+    }
+  }
+});
+test('RA applicability keeps exclusions and used daily quota rules intact', () => {
+  const context = { subscriptionPlan: 'ra', raFits: true } as const;
+  const excluded = buildPaymentOptions('training', PRIVILEGE_PROFILES[2], { subscription: false, pass: false }, { ...context, excludedGroups: true }).find(option => option.kind === 'subscription')!;
+  assert.equal(excluded.mode, 'unavailable');
+  assert.equal(excluded.reason, 'excluded-group');
+  const used = buildPaymentOptions('training', PRIVILEGE_PROFILES[2], { subscription: false, pass: false }, { ...context, dailyQuota: 'used' }).find(option => option.kind === 'subscription')!;
+  assert.equal(used.mode, 'book');
+  assert.equal(used.amount, 2750);
+  const hourly = buildPaymentOptions('game', PRIVILEGE_PROFILES[2], { subscription: false, pass: false }, { ...context, subscriptionPlan: 'daily-hour' }).find(option => option.kind === 'subscription')!;
+  assert.equal(hourly.mode, 'unavailable');
+});
 for (const [index, profile] of PRIVILEGE_PROFILES.entries()) {
   test(`matrix row: ${profile.name} across all services`, () => {
     for (const service of ['game', 'training', 'tournament'] as const) {
