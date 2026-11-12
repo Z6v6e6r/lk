@@ -5593,6 +5593,7 @@ export async function apiFetchTournamentParticipants(
     auth?: boolean;
     retries?: number;
     signal?: AbortSignal;
+    fresh?: boolean;
   } = {},
 ) {
   const base = getServ2Origin();
@@ -5611,6 +5612,7 @@ export async function apiFetchTournamentParticipants(
       return readTournamentParticipants({
         key: JSON.stringify([base, exerciseId, auth, session]),
         signal: options.signal,
+        fresh: options.fresh,
         isCurrentSession: () => !auth || readAuthToken() === session,
         // This leaf owns its three busy-key retries. Generic retries would multiply
         // attempts and retry unrelated rate limits; retries:0 callers still get recovery.

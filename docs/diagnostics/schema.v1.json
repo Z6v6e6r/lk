@@ -45,47 +45,35 @@
       "type": "string",
       "pattern": "^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
     },
-    "previewTargetKind": {
+    "action": {
       "enum": [
-        "NEW_GAME",
-        "EXISTING_GAME",
+        "book",
+        "release",
+        "cancel-free",
         "UNKNOWN"
       ]
     },
-    "previewTargetSource": {
+    "operationState": {
       "enum": [
-        "CLIENT_INPUT",
-        "SERVER_CONFIRMED",
-        "UNKNOWN"
-      ]
-    },
-    "previewDuration": {
-      "enum": [
-        "MINUTES_60",
-        "MINUTES_90",
-        "MINUTES_120",
-        "UNKNOWN"
-      ]
-    },
-    "previewDayRelation": {
-      "enum": [
-        "NEXT_DAY",
-        "OTHER",
-        "UNKNOWN"
-      ]
-    },
-    "previewElapsedBucket": {
-      "enum": [
-        "LT1S",
-        "LT5S",
-        "LT15S",
-        "LE28S",
-        "OVER28S",
+        "PREPARED",
+        "PENDING_CONFIRMATION",
+        "CONFIRMED",
+        "FAILED",
+        "RELEASED",
         "UNKNOWN"
       ]
     },
     "operationStage": {
       "enum": [
+        "lk1_ingress_operation_find",
+        "lk1_operation_find",
+        "lk1_daily_visit_conflict_saved",
+        "lk1_free_cancel_effect",
+        "lk1_free_cancel_booking_gate",
+        "lk1_profile_continue",
+        "lk1_policy_decision",
+        "lk1_ingress_confirmed_booking_recheck",
+        "lk1_confirmed_orphan_release",
         "groupExercise",
         "groupTariff",
         "abon",
@@ -338,6 +326,45 @@
         "vivacrm_token_refresh_owner",
         "vivacrm_token_request_body",
         "year",
+        "UNKNOWN"
+      ]
+    },
+    "previewTargetKind": {
+      "enum": [
+        "NEW_GAME",
+        "EXISTING_GAME",
+        "UNKNOWN"
+      ]
+    },
+    "previewTargetSource": {
+      "enum": [
+        "CLIENT_INPUT",
+        "SERVER_CONFIRMED",
+        "UNKNOWN"
+      ]
+    },
+    "previewDuration": {
+      "enum": [
+        "MINUTES_60",
+        "MINUTES_90",
+        "MINUTES_120",
+        "UNKNOWN"
+      ]
+    },
+    "previewDayRelation": {
+      "enum": [
+        "NEXT_DAY",
+        "OTHER",
+        "UNKNOWN"
+      ]
+    },
+    "previewElapsedBucket": {
+      "enum": [
+        "LT1S",
+        "LT5S",
+        "LT15S",
+        "LE28S",
+        "OVER28S",
         "UNKNOWN"
       ]
     },
@@ -706,7 +733,28 @@
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
-        "PRICE_PREVIEW_UNAVAILABLE"
+        "PRICE_PREVIEW_UNAVAILABLE",
+        "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED",
+        "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
+        "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PRODUCT_IDENTITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_REJOIN_INVALID",
+        "SUBSCRIPTION_BOOKING_RELEASED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_WRITE_BLOCKED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_TARGET_UNRESOLVED",
+        "LK1_DAILY_VISIT_CHANGED",
+        "LK1_FREE_CANCEL_RETURN_PENDING",
+        "LK1_FREE_CANCEL_OWNER_UNVERIFIED",
+        "LK1_FREE_CANCEL_VISIT_IN_FLIGHT",
+        "LK1_FREE_CANCEL_SERVICE_UNAVAILABLE",
+        "LK1_FREE_CANCEL_ACTIVE_BOOKING_UNVERIFIED",
+        "LK1_FREE_CANCEL_BASELINE_UNAVAILABLE",
+        "GROUP_DISCOUNT_QUOTE_CHANGED",
+        "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
+        "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
       ]
     },
     "reason": {
@@ -950,6 +998,27 @@
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
         "PRICE_PREVIEW_UNAVAILABLE",
+        "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED",
+        "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
+        "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PRODUCT_IDENTITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_REJOIN_INVALID",
+        "SUBSCRIPTION_BOOKING_RELEASED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_WRITE_BLOCKED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_TARGET_UNRESOLVED",
+        "LK1_DAILY_VISIT_CHANGED",
+        "LK1_FREE_CANCEL_RETURN_PENDING",
+        "LK1_FREE_CANCEL_OWNER_UNVERIFIED",
+        "LK1_FREE_CANCEL_VISIT_IN_FLIGHT",
+        "LK1_FREE_CANCEL_SERVICE_UNAVAILABLE",
+        "LK1_FREE_CANCEL_ACTIVE_BOOKING_UNVERIFIED",
+        "LK1_FREE_CANCEL_BASELINE_UNAVAILABLE",
+        "GROUP_DISCOUNT_QUOTE_CHANGED",
+        "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
+        "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "target_missing",
         "target_upstream_error",
         "target_identity",
@@ -1203,7 +1272,28 @@
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
-        "PRICE_PREVIEW_UNAVAILABLE"
+        "PRICE_PREVIEW_UNAVAILABLE",
+        "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED",
+        "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
+        "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PRODUCT_IDENTITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_REJOIN_INVALID",
+        "SUBSCRIPTION_BOOKING_RELEASED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_WRITE_BLOCKED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_TARGET_UNRESOLVED",
+        "LK1_DAILY_VISIT_CHANGED",
+        "LK1_FREE_CANCEL_RETURN_PENDING",
+        "LK1_FREE_CANCEL_OWNER_UNVERIFIED",
+        "LK1_FREE_CANCEL_VISIT_IN_FLIGHT",
+        "LK1_FREE_CANCEL_SERVICE_UNAVAILABLE",
+        "LK1_FREE_CANCEL_ACTIVE_BOOKING_UNVERIFIED",
+        "LK1_FREE_CANCEL_BASELINE_UNAVAILABLE",
+        "GROUP_DISCOUNT_QUOTE_CHANGED",
+        "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
+        "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
       ]
     },
     "transportCode1": {
@@ -1446,7 +1536,28 @@
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
-        "PRICE_PREVIEW_UNAVAILABLE"
+        "PRICE_PREVIEW_UNAVAILABLE",
+        "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED",
+        "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
+        "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PRODUCT_IDENTITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_REJOIN_INVALID",
+        "SUBSCRIPTION_BOOKING_RELEASED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_WRITE_BLOCKED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_TARGET_UNRESOLVED",
+        "LK1_DAILY_VISIT_CHANGED",
+        "LK1_FREE_CANCEL_RETURN_PENDING",
+        "LK1_FREE_CANCEL_OWNER_UNVERIFIED",
+        "LK1_FREE_CANCEL_VISIT_IN_FLIGHT",
+        "LK1_FREE_CANCEL_SERVICE_UNAVAILABLE",
+        "LK1_FREE_CANCEL_ACTIVE_BOOKING_UNVERIFIED",
+        "LK1_FREE_CANCEL_BASELINE_UNAVAILABLE",
+        "GROUP_DISCOUNT_QUOTE_CHANGED",
+        "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
+        "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
       ]
     },
     "transportCode2": {
@@ -1689,7 +1800,28 @@
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
-        "PRICE_PREVIEW_UNAVAILABLE"
+        "PRICE_PREVIEW_UNAVAILABLE",
+        "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED",
+        "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
+        "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PRODUCT_IDENTITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_REJOIN_INVALID",
+        "SUBSCRIPTION_BOOKING_RELEASED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_WRITE_BLOCKED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_TARGET_UNRESOLVED",
+        "LK1_DAILY_VISIT_CHANGED",
+        "LK1_FREE_CANCEL_RETURN_PENDING",
+        "LK1_FREE_CANCEL_OWNER_UNVERIFIED",
+        "LK1_FREE_CANCEL_VISIT_IN_FLIGHT",
+        "LK1_FREE_CANCEL_SERVICE_UNAVAILABLE",
+        "LK1_FREE_CANCEL_ACTIVE_BOOKING_UNVERIFIED",
+        "LK1_FREE_CANCEL_BASELINE_UNAVAILABLE",
+        "GROUP_DISCOUNT_QUOTE_CHANGED",
+        "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
+        "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
       ]
     },
     "transportCode3": {
@@ -1932,7 +2064,28 @@
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
-        "PRICE_PREVIEW_UNAVAILABLE"
+        "PRICE_PREVIEW_UNAVAILABLE",
+        "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED",
+        "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
+        "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PRODUCT_IDENTITY_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE",
+        "SUBSCRIPTION_REJOIN_INVALID",
+        "SUBSCRIPTION_BOOKING_RELEASED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_WRITE_BLOCKED",
+        "SUBSCRIPTION_CREATE_PREFLIGHT_TARGET_UNRESOLVED",
+        "LK1_DAILY_VISIT_CHANGED",
+        "LK1_FREE_CANCEL_RETURN_PENDING",
+        "LK1_FREE_CANCEL_OWNER_UNVERIFIED",
+        "LK1_FREE_CANCEL_VISIT_IN_FLIGHT",
+        "LK1_FREE_CANCEL_SERVICE_UNAVAILABLE",
+        "LK1_FREE_CANCEL_ACTIVE_BOOKING_UNVERIFIED",
+        "LK1_FREE_CANCEL_BASELINE_UNAVAILABLE",
+        "GROUP_DISCOUNT_QUOTE_CHANGED",
+        "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
+        "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
       ]
     },
     "responseKind": {
@@ -2090,6 +2243,24 @@
         "boolean",
         "UNKNOWN"
       ]
+    },
+    "operationReadValid": {
+      "type": "boolean"
+    },
+    "operationFound": {
+      "type": "boolean"
+    },
+    "sameOperationKey": {
+      "type": "boolean"
+    },
+    "sameOperationTarget": {
+      "type": "boolean"
+    },
+    "idempotencyKeyPresent": {
+      "type": "boolean"
+    },
+    "pendingExpired": {
+      "type": "boolean"
     },
     "reqPresent": {
       "type": "boolean"

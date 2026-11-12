@@ -1044,7 +1044,6 @@ export default function TournamentSignupPage({
   const deepLinkAutoOpenKeyRef = useRef<string>("");
   const requestedPricingPreviewIdsRef = useRef<Set<string>>(new Set());
   const publicRosterByExerciseIdRef = useRef<Record<string, TournamentSignupPublicRoster>>({});
-  const publicRosterRequestsRef = useRef<Map<string, Promise<TournamentSignupPublicRoster | null>>>(new Map());
   const publicRosterDetailAbortRef = useRef<AbortController | null>(null);
   const listRequestIdRef = useRef(0);
   const listForegroundRequestIdRef = useRef(0);
@@ -1189,20 +1188,12 @@ export default function TournamentSignupPage({
     const cachedRoster = publicRosterByExerciseIdRef.current[normalizedExerciseId] ?? null;
     if (cachedRoster && !options.force) return cachedRoster;
 
-    const inFlight = publicRosterRequestsRef.current.get(normalizedExerciseId);
-    if (inFlight && !options.force) return inFlight;
-    if (inFlight) {
-      // An earlier GET may predate the refusal/cache invalidation. Wait for it,
-      // then fetch again; concurrent forced callers share the newer request.
-      await inFlight.catch(() => null);
-      const newerRequest = publicRosterRequestsRef.current.get(normalizedExerciseId);
-      if (newerRequest && newerRequest !== inFlight) return newerRequest;
-    }
-
-    const requestPromise = apiFetchTournamentParticipants(normalizedExerciseId, {
+    return apiFetchTournamentParticipants(normalizedExerciseId, {
       auth: false,
       retries: 0,
       signal: options.signal,
+      // After a mutation, wait for the actual old transport before a fresh GET.
+      fresh: options.force,
     })
       .then((result) => {
         if (!result.data) return cachedRoster;
@@ -1214,14 +1205,6 @@ export default function TournamentSignupPage({
         return roster;
       });
 
-    publicRosterRequestsRef.current.set(normalizedExerciseId, requestPromise);
-    try {
-      return await requestPromise;
-    } finally {
-      if (publicRosterRequestsRef.current.get(normalizedExerciseId) === requestPromise) {
-        publicRosterRequestsRef.current.delete(normalizedExerciseId);
-      }
-    }
   }, []);
 
   const loadList = useCallback(async (options: {

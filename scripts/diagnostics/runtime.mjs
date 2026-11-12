@@ -2,10 +2,12 @@ import { createDiagnosticBudget } from "../../src/utils/diagnosticBudget.mjs";
 import { randomUUID, createHmac } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { sanitizeEvent, routeTemplate, responseKind } from "../../src/utils/errorDiagnosticsCore.mjs";
+import { createSubscriptionBookingConflictObserver } from "./subscription-booking-conflicts.mjs";
 
 // Importing this module has no timers, writes, network or registration side effects.
 export function createDiagnostics({ sink, release, key, detailLimit = 600, now = () => new Date(), monotonic = () => performance.now() } = {}) {
   const contexts = new WeakMap();
+  const bookingConflict = createSubscriptionBookingConflictObserver(() => now().getTime());
   const metrics = { observed: 0, suppressed: 0, loggerFailures: 0 };
   const budget = createDiagnosticBudget(detailLimit);
   let suppressionTimer = null;
@@ -69,8 +71,9 @@ export function createDiagnostics({ sink, release, key, detailLimit = 600, now =
       const entity = typeof msg.req?.params?.gameId === "string" ? msg.req.params.gameId : undefined;
       const operation = msg.req?.headers?.["idempotency-key"];
       const target = command?.targetExternalChatId || command?.targetExternalUserId;
+      const conflict = bookingConflict(msg, stage);
       emit(ctx, { eventKind: "stage", code: "STAGE_ENTER", entityRef: ref("entity", entity), operationRef: ref("operation", operation),
-        outboxRef: ref("outbox", command?.id), bindingRef: ref("binding", target), ...fields, stage,
+        outboxRef: ref("outbox", command?.id), bindingRef: ref("binding", target), ...fields, ...conflict, stage,
         operationStage: msg._referralSubscriptionCtx?.step ?? msg._subscriptionBooking?.step ?? msg._splitCtx?.step ?? msg._subscriptionPricePreview?.step,
         reqPresent: Boolean(msg.req), resPresent: Boolean(msg.res), refUnavailable: !Buffer.isBuffer(key) || key.length < 32 });
     } catch { metrics.loggerFailures++; }
