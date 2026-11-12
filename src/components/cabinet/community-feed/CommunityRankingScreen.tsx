@@ -22,7 +22,7 @@ interface CommunityRankingScreenProps {
   divisions?: Array<{ id: string; name: string }>;
   activeDivision?: string | null;
   onChangeDivision?: (id: string) => void;
-  community: Pick<CommunityRecord, "name" | "logo" | "memberCount">;
+  community: Pick<CommunityRecord, "id" | "name" | "logo" | "logoUrl" | "memberCount">;
   rows: CommunityRankingRowModel[];
   activeType: CommunityRankingTypeId;
   activePeriod: CommunityRatingPeriod;

@@ -16,13 +16,14 @@ import { MembersCountIcon } from "./CommunityIcons";
 import { CommunitySecondaryNav, type CommunitySecondaryNavItemId } from "./CommunitySecondaryNav";
 import { formatFeedDayLabel, formatFeedTimeLabel } from "./feedFormatters";
 import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
+import { resolveCommunityHeaderLogo } from "../../padel-jump/exhibition";
 import { CommunityBottomNav } from "./CommunityBottomNav";
 import type { CommunityBottomNavItemId } from "./feedTypes";
 
 interface CommunityChatScreenProps {
   community: Pick<
     CommunityRecord,
-    "name" | "logo" | "memberCount" | "joinRule"
+    "id" | "name" | "logo" | "logoUrl" | "memberCount" | "joinRule"
   >;
   messages: CommunityChatMessage[];
   isLoading: boolean;
@@ -325,7 +326,7 @@ function ChatHeader({
   onOpenMenu,
   onSelectSection,
 }: {
-  community: Pick<CommunityRecord, "name" | "logo" | "memberCount">;
+  community: Pick<CommunityRecord, "id" | "name" | "logo" | "logoUrl" | "memberCount">;
   unreadCount: number;
   onClose: () => void;
   onOpenMenu: () => void;
@@ -350,7 +351,7 @@ function ChatHeader({
           aria-label={`${community.name}, ${formatMemberCount(community.memberCount)}${unreadCount > 0 ? `, новых сообщений ${unreadCount}` : ""}`}
         >
           <div className="community-chat-figma-avatar">
-            <AvatarImageOrInitials src={community.logo ?? undefined} name={community.name} imageClassName="community-chat-figma-avatar-image" fallbackClassName="community-chat-figma-avatar-fallback" />
+            <AvatarImageOrInitials src={resolveCommunityHeaderLogo(community)} name={community.name} imageClassName="community-chat-figma-avatar-image" fallbackClassName="community-chat-figma-avatar-fallback" />
           </div>
 
           <div className="community-chat-figma-summary-copy">

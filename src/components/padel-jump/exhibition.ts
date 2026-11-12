@@ -71,6 +71,11 @@ export const isExhibitionInvite = (inviteCode?: string | null) => {
 export const exhibitionApi = (origin = typeof window === 'undefined' ? '' : window.location.origin) => origin === 'https://padlhub.ru' ? 'https://padlhub.su/jump-exhibition-api/' : '/jump-exhibition-api/';
 
 /** Web Push can only be subscribed on the LK2 origin (service worker scope), so the page hands off. */
+export function resolveCommunityHeaderLogo(community: { id?: string | null; logo?: string | null; logoUrl?: string | null }): string | undefined {
+  if (community.id === EXHIBITION_COMMUNITY_ID) return EXHIBITION_BRAND_LOGO_URL;
+  return community.logoUrl?.trim() || community.logo?.trim() || undefined;
+}
+
 export const EXHIBITION_CABINET_URL = 'https://padlhub.ru/lk_new?authMode=viva';
 export function exhibitionCommunityUrl(communityId?: string | null): string {
   const id = String(communityId || EXHIBITION_COMMUNITY_ID).trim();

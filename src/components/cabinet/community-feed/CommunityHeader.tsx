@@ -1,9 +1,10 @@
 import type { CommunityRecord } from "../../../utils/communityApi";
+import { resolveCommunityHeaderLogo } from "../../padel-jump/exhibition";
 import { MembersCountIcon } from "./CommunityIcons";
 import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 
 interface CommunityHeaderProps {
-  community: Pick<CommunityRecord, "name" | "logo"> & { memberCount?: number | null };
+  community: Pick<CommunityRecord, "id" | "name" | "logo" | "logoUrl"> & { memberCount?: number | null };
   onOpenMenu: () => void;
   onClose: () => void;
 }
@@ -53,6 +54,7 @@ export function CommunityHeader({ community, onOpenMenu, onClose }: CommunityHea
   const memberCountParts = typeof community.memberCount === "number"
     ? getMemberCountParts(community.memberCount)
     : null;
+  const communityLogo = resolveCommunityHeaderLogo(community);
 
   return (
     <header className="community-header">
@@ -68,7 +70,7 @@ export function CommunityHeader({ community, onOpenMenu, onClose }: CommunityHea
 
         <div className="community-header-summary">
           <div className="community-header-avatar">
-            <AvatarImageOrInitials src={community.logo ?? undefined} name={community.name} imageClassName="community-header-avatar-image" fallbackClassName="community-header-avatar-fallback" />
+            <AvatarImageOrInitials src={communityLogo} name={community.name} imageClassName="community-header-avatar-image" fallbackClassName="community-header-avatar-fallback" />
           </div>
 
           <div className="community-header-copy">
