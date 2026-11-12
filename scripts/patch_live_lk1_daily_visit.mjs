@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
+import { moveFreeCancellationStepsAfterDailyHelpers } from './patch_live_lk1_free_cancellation.mjs';
 import { verifyWorkspace } from './verify_nodered_source_origin.mjs';
 
 export const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -89,6 +90,11 @@ export function patchDailyVisitGateway(source) {
   }
 `;
   patched = patched.slice(0, at) + retry + patched.slice(at);
+  // Canonical HUB sources can already contain the cancellation dispatch.
+  // Keep it behind the guard helpers added by this composer as well.
+  if (patched.includes("if (ctx.step === 'lk1_free_cancel_booking_gate') {")) {
+    patched = moveFreeCancellationStepsAfterDailyHelpers(patched);
+  }
   return patched;
 }
 export function composeDailyVisitArtifacts(liveBytes) {
