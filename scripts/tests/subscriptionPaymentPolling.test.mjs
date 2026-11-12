@@ -243,7 +243,8 @@ test('archive successor pins match current sources without rewriting the origina
     assert.equal(target.preimageSha256, oldTargets.find(t => t.fileName === target.fileName).candidateSha256);
     let currentHash = target.candidateSha256;
     const r03 = JSON.parse(fs.readFileSync(new URL('../lk1_r03_response_generation.json', import.meta.url)));
-    for (const generation of [errors, r03, promo]) {
+    const staleRelease = JSON.parse(fs.readFileSync(new URL('../subscription_stale_release_generation.json', import.meta.url)));
+    for (const generation of [errors, r03, promo, staleRelease]) {
       const successor = generation.targets.find(t => t.fileName === target.fileName);
       if (!successor) continue;
       assert.equal(successor.preimageSha256, currentHash);

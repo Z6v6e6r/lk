@@ -1,10 +1,34 @@
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
-    if (typeof global === "undefined" || typeof global.get !== "function") return;
-    const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "preview_router", { sourceHash: "d421c9c431db409c6c4b39f5ce445f31f2e6eecdd6f6d919b9ba2f9c03e93536", ...fields });
+    const observer = typeof global !== "undefined" && typeof global.get === "function"
+      ? global.get("lkDiagnostics") : null;
+    if (typeof observer?.observe === "function") {
+      observer.observe(msg, "preview_router", { sourceHash: "d421c9c431db409c6c4b39f5ce445f31f2e6eecdd6f6d919b9ba2f9c03e93536", ...fields });
+      return;
+    }
   } catch { /* Observability cannot alter business execution. */ }
+  // Installed flows may predate the shared observer. Use a separate info event,
+  // so this does not duplicate the final node's legacy refusal warning/count.
+  try {
+    const reasons = ['target_upstream_error', 'target_missing', 'target_identity', 'target_category',
+      'target_studio', 'target_room', 'target_duration', 'target_start_invalid', 'target_cancelled',
+      'target_lifecycle', 'PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID'];
+    if (fields.code !== 'PRICE_PREVIEW_GAME_UNRESOLVED' || !reasons.includes(fields.reason)
+      || typeof node === 'undefined' || typeof node.log !== 'function') return;
+    const event = { event: 'subscription_price_preview_exercise_refused', code: fields.code,
+      step: 'exercise', reason: fields.reason };
+    if (Number.isInteger(fields.upstreamStatus) && fields.upstreamStatus >= 100 && fields.upstreamStatus <= 599) {
+      event.upstreamStatus = fields.upstreamStatus;
+    }
+    if (['object', 'array', 'text', 'number', 'boolean', 'null', 'missing', 'UNKNOWN'].includes(fields.responseKind)) {
+      event.responseKind = fields.responseKind;
+    }
+    if (['json', 'text', 'html', 'other', 'missing'].includes(fields.contentTypeClass)) {
+      event.contentTypeClass = fields.contentTypeClass;
+    }
+    node.log(JSON.stringify(event));
+  } catch { /* The optional fallback cannot change a business verdict either. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
 // Dedicated advisory graph. `canonical` consists only of source-bound helpers.
@@ -202,14 +226,37 @@ if (ctx.step === 'game') {
 }
 if (ctx.step === 'exercise') {
   const exercise = canonical.unwrapRecord(msg.payload);
-  if (!ok() || !exercise || String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId
-    || canonical.resolveCategory(exercise) !== 'open_game'
-    || String(exercise.studio?.id || exercise.studioId || '') !== ctx.target.stationId || canonical.exerciseRoomId(exercise) !== ctx.target.roomId
-    || canonical.eventDurationMinutes(exercise) !== ctx.target.durationMinutes
-    || Date.parse(canonical.eventStartsAt(exercise)) !== Date.parse(ctx.target.startsAt)
-    || exercise.isCancelled === true || exercise.isCanceled === true
-    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())
-    || !Array.isArray(exercise.availableClientSubscriptions)) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  const unresolved = reason => {
+    // Explain the first failed predicate without changing the HTTP error contract.
+    // Observe only safe enums/status; never copy the provider record or headers.
+    try {
+      const payload = msg.payload;
+      const type = typeof msg.headers?.['content-type'] === 'string'
+        ? msg.headers['content-type'].split(';', 1)[0].trim().toLowerCase() : '';
+      const status = Number(msg.statusCode);
+      lkDiagnostic({ code: 'PRICE_PREVIEW_GAME_UNRESOLVED', reason,
+        upstreamStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
+        responseKind: payload === null ? 'null' : payload === undefined ? 'missing'
+          : Array.isArray(payload) ? 'array' : typeof payload === 'string' ? 'text'
+            : ['object', 'number', 'boolean'].includes(typeof payload) ? typeof payload : 'UNKNOWN',
+        contentTypeClass: !type ? 'missing' : type === 'application/json' || type.endsWith('+json') ? 'json'
+          : type === 'text/html' ? 'html' : type.startsWith('text/') ? 'text' : 'other',
+        outcome: 'refused' });
+    } catch { /* Diagnostics cannot turn a refusal into an exception. */ }
+    return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  };
+  // Preserve the original predicates, short-circuit order and fail-closed verdict.
+  if (!ok()) return unresolved('target_upstream_error');
+  if (!exercise) return unresolved('target_missing');
+  if (String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId) return unresolved('target_identity');
+  if (canonical.resolveCategory(exercise) !== 'open_game') return unresolved('target_category');
+  if (String(exercise.studio?.id || exercise.studioId || '') !== ctx.target.stationId) return unresolved('target_studio');
+  if (canonical.exerciseRoomId(exercise) !== ctx.target.roomId) return unresolved('target_room');
+  if (canonical.eventDurationMinutes(exercise) !== ctx.target.durationMinutes) return unresolved('target_duration');
+  if (Date.parse(canonical.eventStartsAt(exercise)) !== Date.parse(ctx.target.startsAt)) return unresolved('target_start_invalid');
+  if (exercise.isCancelled === true || exercise.isCanceled === true) return unresolved('target_cancelled');
+  if (['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return unresolved('target_lifecycle');
+  if (!Array.isArray(exercise.availableClientSubscriptions)) return unresolved('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
   ctx.exercise = exercise;
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }
@@ -382,7 +429,34 @@ if (ctx.step === 'subservices') {
   if (!ok() || ctx.target.subServiceIds.some(id => !ids.has(id))) return stop('SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH');
   const localEnd = new Date(Date.parse(ctx.target.startsAt) + (ctx.target.durationMinutes + 180) * 60000).toISOString();
   // Current CREATE binds a single local date to both ends. Do not invent a cross-day tariff here.
-  if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10)) return stop('PRICE_PREVIEW_CROSS_DAY_UNRESOLVED');
+  if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10)) {
+    // Derive bounded shape only. Never attach target, dates, clock times, IDs or provider rows.
+    // Keep derivation inside the no-throw boundary as well as the optional observer call.
+    try {
+      const targetKind = ctx.target.targetKind;
+      const elapsed = typeof ctx.startedAt === 'number' ? Date.now() - ctx.startedAt : NaN;
+      const dayDelta = Date.parse(localEnd.slice(0, 10) + 'T00:00:00Z')
+        - Date.parse(ctx.target.startsAt.slice(0, 10) + 'T00:00:00Z');
+      lkDiagnostic({ code: 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED', httpStatus: 503, outcome: 'refused',
+        previewTargetKind: ['NEW_GAME', 'EXISTING_GAME'].includes(targetKind) ? targetKind : 'UNKNOWN',
+        previewTargetSource: targetKind === 'NEW_GAME' && ctx.existingGame === false ? 'CLIENT_INPUT'
+          : targetKind === 'EXISTING_GAME' && ctx.existingGame === true ? 'SERVER_CONFIRMED' : 'UNKNOWN',
+        previewDuration: [60, 90, 120].includes(ctx.target.durationMinutes)
+          ? 'MINUTES_' + ctx.target.durationMinutes : 'UNKNOWN',
+        previewDayRelation: dayDelta === 86400000 ? 'NEXT_DAY' : Number.isFinite(dayDelta) ? 'OTHER' : 'UNKNOWN',
+        previewOffsetValid: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\+03:00$/.test(ctx.target.startsAt)
+          && new Date(Date.parse(ctx.target.startsAt) + 180 * 60000).toISOString().slice(0, 19) === ctx.target.startsAt.slice(0, 19),
+        previewEndAtMidnight: localEnd.slice(11) === '00:00:00.000Z',
+        previewSelectedSubserviceCount: Math.min(ctx.target.subServiceIds.length, 20),
+        previewSubserviceSetSize: Math.min(ids.size, 21), // 21 means 21 or more, not an exact catalogue size.
+        previewSubservicesMatched: true, previewSubservices2xx: true,
+        previewElapsedBucket: !Number.isFinite(elapsed) || elapsed < 0 ? 'UNKNOWN'
+          : elapsed < 1000 ? 'LT1S' : elapsed < 5000 ? 'LT5S' : elapsed < 15000 ? 'LT15S'
+            : elapsed <= 28000 ? 'LE28S' : 'OVER28S',
+      });
+    } catch { /* Diagnostic derivation cannot change the refusal. */ }
+    return stop('PRICE_PREVIEW_CROSS_DAY_UNRESOLVED');
+  }
   // Function nodes do not expose Node.js URLSearchParams in their sandbox.
   const query = Object.entries({ studioId: ctx.target.stationId, roomId: ctx.target.roomId,
     subServiceIds: ctx.target.subServiceIds.join(','), fromTime: ctx.target.startsAt.slice(11, 19),

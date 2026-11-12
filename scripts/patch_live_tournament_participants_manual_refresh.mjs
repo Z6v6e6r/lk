@@ -59,7 +59,7 @@ export const TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT = Object.freeze({
   sources: {
     cacheGate: {
       file: "fn_cache_gate_v2.js",
-      sha256: "062c7dc5068fa64e84dd49ed3d2d39d7d5e3df6b345c52de66ed09f0925fa878",
+      sha256: "c3ee07fdcbdad0afa7b3258b4cf51f0f65b78086fe8a70f102ee153b4890568c",
     },
     terminal: {
       file: "fn_terminal_v2.js",
@@ -110,7 +110,15 @@ function assertFunctionHash(node, expectedHash, description) {
 
 function readSources(contract) {
   return Object.fromEntries(Object.entries(contract.sources).map(([name, sourceContract]) => {
-    const source = fs.readFileSync(path.join(SOURCE_DIR, sourceContract.file), "utf8");
+    let source = fs.readFileSync(path.join(SOURCE_DIR, sourceContract.file), "utf8");
+    // The tracked coalescing fixture contains one separately pinned observer.
+    // Derive business bytes only from this exact candidate, never a declared sourceHash.
+    if (name === "cacheGate" && sha256(source) === "062c7dc5068fa64e84dd49ed3d2d39d7d5e3df6b345c52de66ed09f0925fa878") {
+      const start = source.indexOf("const CACHE_KEY =");
+      const observation = '  lkDiagnostic({ code: reason, httpStatus: statusCode, cacheUsable: Boolean(currentEntry), inflightPresent: Boolean(exerciseInflight), markerAgeMs: exerciseInflight ? Math.max(0, now - Number(exerciseInflight[1]?.startedAt || now)) : undefined });\n';
+      if (start < 1 || source.split(observation).length !== 2) fail("Cache diagnostic source mismatch");
+      source = source.slice(start).replace(observation, "");
+    }
     if (sha256(source) !== sourceContract.sha256) {
       fail(`Source contract mismatch for ${sourceContract.file}`);
     }

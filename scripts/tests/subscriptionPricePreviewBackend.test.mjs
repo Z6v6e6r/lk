@@ -90,6 +90,127 @@ test('preview source never calls CREATE or a product cache miss resolver',()=>{
   assert.doesNotMatch(router,/\/split\/create|\/seliger|insertOne|updateOne|global\.set/);
 });
 
+function exerciseDiagnostic(payload, overrides = {}, observer, logger) {
+  const booking = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
+  const roots = ['unwrapRecord', 'resolveCategory', 'eventStartsAt', 'eventDurationMinutes', 'exerciseRoomId'];
+  const helpers = extractSubscriptionPricePreviewSource({ source: booking, roots }).source;
+  const canonical = new Function(`${helpers}; return {${roots.join(',')}};`)();
+  const ctx = { step: 'exercise', startedAt: Date.now(), tenantKey: 'fixture', exerciseId,
+    auth: 'fixture-sensitive', target: { startsAt: target.startsAt, durationMinutes: 90, stationId: studio, roomId: room } };
+  const events = [];
+  const diagnostics = observer === undefined ? createDiagnostics({ sink: event => events.push(event) }) : observer;
+  const globals = { get: () => diagnostics };
+  const msg = { payload, statusCode: 200, _msgid: 'fixture-sensitive', _subscriptionPricePreview: ctx,
+    headers: { 'content-type': 'application/json; fixture-sensitive' }, ...overrides };
+  const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
+  const outputs = new Function('msg', 'canonical', 'global', 'node', source('router'))(msg, canonical, globals, logger);
+  if (outputs[4]) new Function('msg', 'global', source('final'))(msg, globals);
+  return { msg, outputs, events, ctx };
+}
+const previewExercise = () => ({ id: exerciseId, studioId: studio, roomId: room,
+  timeFrom: target.startsAt, timeTo: '2099-09-21T08:30:00+03:00', typeId: 1613, directionId: 4588,
+  availableClientSubscriptions: [], privateProviderField: 'fixture-sensitive' });
+
+test('exercise diagnostics identify the first failed guard without changing the 503 contract', () => {
+  for (const [payload, overrides, reason] of [
+    [previewExercise(), { statusCode: 503 }, 'target_upstream_error'],
+    [null, {}, 'target_missing'], ['<html>fixture-sensitive</html>', {}, 'target_missing'],
+    [42, {}, 'target_missing'], [[], {}, 'target_missing'],
+    [{ ...previewExercise(), id: uuid(99) }, {}, 'target_identity'],
+    [{ ...previewExercise(), typeId: 839, directionId: 2617 }, {}, 'target_category'],
+    [{ ...previewExercise(), studioId: uuid(99) }, {}, 'target_studio'],
+    [{ ...previewExercise(), roomId: uuid(99) }, {}, 'target_room'],
+    [{ ...previewExercise(), durationMinutes: 60 }, {}, 'target_duration'],
+    [{ ...previewExercise(), timeFrom: '2099-09-21T06:00:00+03:00', durationMinutes: 90 }, {}, 'target_start_invalid'],
+    [{ ...previewExercise(), isCancelled: true }, {}, 'target_cancelled'],
+    [{ ...previewExercise(), isCanceled: true }, {}, 'target_cancelled'],
+    [{ ...previewExercise(), status: 'finished' }, {}, 'target_lifecycle'],
+    [{ ...previewExercise(), availableClientSubscriptions: null }, {}, 'PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID'],
+    [{ ...previewExercise(), id: uuid(99), isCancelled: true }, { statusCode: 502 }, 'target_upstream_error'],
+    [{ ...previewExercise(), id: uuid(99), isCancelled: true }, {}, 'target_identity'],
+  ]) {
+    const { msg, events } = exerciseDiagnostic(payload, overrides);
+    assert.equal(msg.statusCode, 503);
+    assert.deepEqual(msg.payload, { error: { code: 'PRICE_PREVIEW_GAME_UNRESOLVED' } });
+    const event = events.find(e => e.stage === 'preview_router' && e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED');
+    assert.ok(event);
+    assert.equal(event.reason, reason);
+    assert.equal(event.upstreamStatus, overrides.statusCode ?? 200);
+    assert.equal(event.operationStage, 'exercise');
+    assert.equal(event.contentTypeClass, 'json');
+    assert(!JSON.stringify(events).includes('fixture-sensitive'));
+    assert(!JSON.stringify(events).includes(exerciseId));
+    assert(!JSON.stringify(events).includes(studio));
+    assert(!JSON.stringify(events).includes(room));
+  }
+});
+test('exercise diagnostic metadata is enum-only and invalid statuses remain unknown', () => {
+  for (const [payload, responseKind, contentType, contentTypeClass] of [
+    [null, 'null', undefined, 'missing'], [undefined, 'missing', '', 'missing'],
+    ['fixture-sensitive', 'text', 'Text/HTML; private=fixture-sensitive', 'html'],
+    [true, 'boolean', 'text/plain', 'text'], [7, 'number', 'application/problem+json', 'json'],
+    [[], 'array', 'fixture-sensitive', 'other'],
+  ]) {
+    const { events } = exerciseDiagnostic(payload, { statusCode: 'fixture-sensitive', headers: { 'content-type': contentType } });
+    const event = events.find(e => e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED');
+    assert.equal(event.upstreamStatus, undefined);
+    assert.equal(event.responseKind, responseKind);
+    assert.equal(event.contentTypeClass, contentTypeClass);
+    assert(!JSON.stringify(events).includes('fixture-sensitive'));
+  }
+});
+test('exercise diagnostics keep valid empty subscription arrays and wrapped records usable', () => {
+  for (const payload of [previewExercise(), { data: previewExercise() }]) {
+    const { msg, ctx, outputs, events } = exerciseDiagnostic(payload);
+    assert.equal(outputs[0], msg);
+    assert.equal(ctx.step, 'subscriptions');
+    assert.equal(msg.method, 'GET');
+    assert(!events.some(e => e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED'));
+  }
+});
+test('missing or throwing observers cannot change exercise guard verdicts', () => {
+  for (const observer of [null, { observe() { throw Error('sink'); } }]) {
+    const failed = exerciseDiagnostic({ ...previewExercise(), roomId: uuid(99) }, {}, observer);
+    assert.equal(failed.msg.statusCode, 503);
+    assert.deepEqual(failed.msg.payload, { error: { code: 'PRICE_PREVIEW_GAME_UNRESOLVED' } });
+    assert.equal(exerciseDiagnostic(previewExercise(), {}, observer).ctx.step, 'subscriptions');
+  }
+  const headers = { get 'content-type'() { throw Error('header'); } };
+  assert.equal(exerciseDiagnostic(null, { headers }).msg.statusCode, 503);
+});
+test('installed flows without the shared observer emit one safe info diagnostic and keep the legacy warning separate', () => {
+  for (const observer of [null, { observe() { throw Error('sink'); } }]) {
+    const info = [];
+    const logger = { log: text => info.push(JSON.parse(text)), warn() { assert.fail('No second refusal warning'); } };
+    const { msg } = exerciseDiagnostic({ ...previewExercise(), roomId: uuid(99) }, {}, observer, logger);
+    assert.equal(msg.statusCode, 503);
+    assert.deepEqual(msg.payload, { error: { code: 'PRICE_PREVIEW_GAME_UNRESOLVED' } });
+    assert.deepEqual(info, [{ event: 'subscription_price_preview_exercise_refused',
+      code: 'PRICE_PREVIEW_GAME_UNRESOLVED', step: 'exercise', reason: 'target_room',
+      upstreamStatus: 200, responseKind: 'object', contentTypeClass: 'json' }]);
+    assert(!JSON.stringify(info).includes('fixture-sensitive'));
+    assert(!JSON.stringify(info).includes(exerciseId));
+    assert(!JSON.stringify(info).includes(room));
+    exerciseDiagnostic(previewExercise(), {}, observer, logger);
+    assert.equal(info.length, 1);
+  }
+  const info = [];
+  exerciseDiagnostic(null, {}, undefined, { log: value => info.push(value) });
+  assert.deepEqual(info, [], 'A configured observer needs no duplicate info event');
+  const failed = exerciseDiagnostic(null, {}, null, { log() { throw Error('log'); } });
+  assert.equal(failed.msg.statusCode, 503);
+});
+test('exercise diagnostics do not mask explicit read errors or the overall timeout', () => {
+  const failed = exerciseDiagnostic(previewExercise(), { error: { code: 'ETIMEDOUT' } });
+  assert.equal(failed.msg.payload.error.code, 'PRICE_PREVIEW_READ_FAILED');
+  const timeout = exerciseDiagnostic(previewExercise(), {
+    _subscriptionPricePreview: { step: 'exercise', startedAt: Date.now() - 29000 },
+  });
+  assert.equal(timeout.msg.payload.error.code, 'PRICE_PREVIEW_TIMEOUT');
+  assert(!failed.events.some(e => e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED'));
+  assert(!timeout.events.some(e => e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED'));
+});
+
 // Run the actual router and final with the booking graph's list helpers, without
 // a private production flow or any provider/database access.
 function tariffDiagnostic(payload, overrides = {}) {
@@ -418,4 +539,206 @@ liveTest('join 60 and 120 minute calculations retain canonical minute allocation
       mutateHttp(msg,url){if(url.pathname.includes('/exercises/'))msg.payload.timeTo=`2099-09-21T${end}:00+03:00`;}}).response;
     assert.equal(result.statusCode,200);assert.deepEqual([result.payload.quotes[0].amountMinor,result.payload.quotes[0].freeMinutes,result.payload.quotes[0].paidMinutes],[amount,free,paid]);
   }
+});
+
+// Guard-local fixtures execute source bodies with the real pricing list extractor.
+// No private flow, provider/DB calls, HTTP server or installed observer is required.
+const crossDaySource = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
+const crossDayNow = Date.parse('2099-09-20T09:00:00Z');
+const crossDayClock = class extends Date {
+  constructor(...args) { super(...(args.length ? args : [crossDayNow])); }
+  static now() { return crossDayNow; }
+};
+const crossDayContext = vm.createContext({ Date: crossDayClock });
+const crossDayEntry = vm.compileFunction(crossDaySource('entry'), ['msg', 'global'], { parsingContext: crossDayContext });
+const crossDayRouter = vm.compileFunction(crossDaySource('router'), ['msg', 'canonical', 'pricing', 'global'], { parsingContext: crossDayContext });
+const crossDayFinal = vm.compileFunction(crossDaySource('final'), ['msg', 'global'], { parsingContext: crossDayContext });
+const crossDayHelpers = extractSubscriptionPricePreviewSource({
+  source: fs.readFileSync(new URL('../nodered_games_nodes/fn_split_router.js', import.meta.url), 'utf8'),
+  roots: ['extractList'],
+}).source;
+const crossDayPricing = new Function(`${crossDayHelpers}; return {extractList};`)();
+function crossDayFixture(options = {}) {
+  const events = [];
+  const observer = createDiagnostics({ sink: event => { events.push(event); if (options.throwSink) throw Error('synthetic sink failure'); } });
+  const globals = { get() {
+    if (options.observer === 'getterThrows') throw Error('synthetic getter failure');
+    if (options.observer === 'absent') return undefined;
+    if (options.observer === 'throws') return { observe() { throw Error('synthetic observer failure'); } };
+    return observer;
+  } };
+  const chosen = { ...target, startsAt: '2099-09-21T23:00:00+03:00', ...options.target };
+  const selected = options.existing ? { targetKind: 'EXISTING_GAME', gameId,
+    startsAt: chosen.startsAt, durationMinutes: chosen.durationMinutes } : chosen;
+  const msg = { _msgid: 'synthetic-message-correlation', req: { path: '/lk/subscriptions/game-price-preview', method: 'POST',
+    headers: { authorization: 'Bearer synthetic-auth-only' } }, payload: { target: selected, subscriptionIds: [sub] } };
+  crossDayEntry(msg, globals);
+  const ctx = msg._subscriptionPricePreview;
+  if (ctx.done) return { msg, ctx, events };
+  // The fixture begins at the response to subservices. For EXISTING_GAME the
+  // preceding game/exercise checks are mocked as confirmed, not performed here.
+  if (options.existing) Object.assign(ctx.target, { subServiceIds: chosen.subServiceIds });
+  ctx.step = 'subservices';
+  if (Object.hasOwn(options, 'elapsed')) ctx.startedAt = crossDayNow - options.elapsed;
+  options.mutateContext?.(ctx);
+  msg.payload = options.payload ?? chosen.subServiceIds.map(id => ({ id }));
+  msg.statusCode = options.upstreamStatus ?? 200;
+  if (options.transportError) msg.error = { message: 'synthetic transport failure' };
+  const ports = crossDayRouter(msg, {}, crossDayPricing, globals);
+  const output = ports.findIndex(Boolean);
+  if (output === 4) crossDayFinal(msg, globals);
+  observer.dispose();
+  return { msg, ctx, events, output };
+}
+const crossDayEvent = events => events.find(event => event.code === 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED' && event.stage === 'preview_router');
+const crossDayFields = event => Object.fromEntries(Object.entries(event).filter(([key]) => key.startsWith('preview')));
+
+test('cross-day diagnostic distinguishes midnight from overrun for all accepted durations without changing the refusal', () => {
+  for (const minutes of [60, 90, 120]) for (const delta of [-1, 0, 1]) {
+    const start = new Date(Date.parse('2099-09-22T00:00:00Z') - minutes * 60000 + delta);
+    const startsAt = start.toISOString().slice(0, 23) + '+03:00';
+    const { msg, events, output } = crossDayFixture({ target: { startsAt, durationMinutes: minutes } });
+    const event = crossDayEvent(events);
+    if (delta === -1) {
+      assert.equal(output, 0); assert.equal(msg.method, 'GET'); assert.match(msg.url, /\/price\?/);
+      assert.equal(event, undefined);
+    } else {
+      assert.equal(output, 4); assert.equal(msg.statusCode, 503);
+      assert.deepEqual(structuredClone(msg.payload), { error: { code: 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED' } });
+      assert.equal(msg.url, undefined); assert.equal(msg._subscriptionPricePreview, undefined);
+      assert.equal(event.operationStage, 'subservices'); assert.equal(event.previewDayRelation, 'NEXT_DAY');
+      assert.equal(event.previewEndAtMidnight, delta === 0); assert.equal(event.previewDuration, `MINUTES_${minutes}`);
+      assert.equal(event.previewOffsetValid, true); assert.equal(event.previewSubservicesMatched, true);
+      assert.equal(event.previewSubservices2xx, true); assert.equal(event.previewSelectedSubserviceCount, 1);
+      assert.equal(event.previewSubserviceSetSize, 1);
+      const final = events.find(event => event.code === 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED' && event.stage === 'preview_final');
+      assert.equal(event.requestId, final.requestId, 'Reuse the server observer correlation, not the message/business ID');
+    }
+  }
+  for (const startsAt of ['2099-09-21T02:30:00+03:00', '2099-09-22T00:30:00+03:00']) {
+    const result = crossDayFixture({ target: { startsAt, durationMinutes: 60 } });
+    assert.equal(result.output, 0); assert.equal(crossDayEvent(result.events), undefined);
+  }
+  for (const startsAt of ['2099-09-30T23:00:00+03:00', '2099-12-31T23:00:00+03:00']) {
+    const result = crossDayFixture({ target: { startsAt } });
+    assert.equal(crossDayEvent(result.events).previewDayRelation, 'NEXT_DAY');
+  }
+});
+
+test('cross-day diagnostics describe target provenance and bounded elapsed/cardinality only', () => {
+  for (const existing of [false, true]) {
+    const event = crossDayEvent(crossDayFixture({ existing }).events);
+    assert.equal(event.previewTargetKind, existing ? 'EXISTING_GAME' : 'NEW_GAME');
+    assert.equal(event.previewTargetSource, existing ? 'SERVER_CONFIRMED' : 'CLIENT_INPUT');
+  }
+  for (const [elapsed, expected] of [[0, 'LT1S'], [999, 'LT1S'], [1000, 'LT5S'], [4999, 'LT5S'],
+    [5000, 'LT15S'], [14999, 'LT15S'], [15000, 'LE28S'], [28000, 'LE28S'], [-1, 'UNKNOWN'], [NaN, 'UNKNOWN']]) {
+    assert.equal(crossDayEvent(crossDayFixture({ elapsed }).events).previewElapsedBucket, expected);
+  }
+  const ids = Array.from({ length: 20 }, (_, index) => uuid(index + 100));
+  const result = crossDayFixture({ target: { subServiceIds: ids }, payload: [...ids, ...Array.from({ length: 80 }, (_, index) => uuid(index + 200))].map(id => ({ id })) });
+  const event = crossDayEvent(result.events);
+  assert.equal(event.previewSelectedSubserviceCount, 20); assert.equal(event.previewSubserviceSetSize, 21);
+  const unknown = crossDayFixture({ mutateContext(ctx) { ctx.target.targetKind = 'synthetic-untrusted'; } });
+  assert.equal(crossDayEvent(unknown.events).previewTargetKind, 'UNKNOWN');
+  assert.equal(crossDayEvent(unknown.events).previewTargetSource, 'UNKNOWN');
+});
+
+test('other refusal guards and invalid entry data never emit cross-day diagnostics', () => {
+  for (const [options, code] of [
+    [{ payload: [] }, 'SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH'],
+    [{ payload: { unexpected: true } }, 'SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH'],
+    [{ payload: [{ id: uuid(99) }] }, 'SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH'],
+    [{ upstreamStatus: 401 }, 'SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH'],
+    [{ upstreamStatus: 503 }, 'SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH'],
+    [{ transportError: true }, 'PRICE_PREVIEW_READ_FAILED'],
+    [{ elapsed: 28001 }, 'PRICE_PREVIEW_TIMEOUT'],
+  ]) {
+    const result = crossDayFixture(options);
+    assert.equal(result.msg.statusCode, 503); assert.equal(result.msg.payload.error.code, code);
+    assert.equal(crossDayEvent(result.events), undefined);
+  }
+  for (const patch of [{ startsAt: '2099-09-21T23:00:00Z' }, { startsAt: '2099-09-21T23:00:00+02:00' },
+    { startsAt: '2099-09-31T23:00:00+03:00' }, { startsAt: undefined },
+    { durationMinutes: '90' }, { durationMinutes: undefined }, { durationMinutes: NaN },
+    { durationMinutes: 180 }, { subServiceIds: [service, service] }]) {
+    const result = crossDayFixture({ target: patch });
+    assert.equal(result.ctx.statusCode, 400); assert.equal(result.ctx.error, 'PRICE_PREVIEW_REQUEST_INVALID');
+    assert.equal(crossDayEvent(result.events), undefined);
+  }
+});
+
+test('absent, failing and malformed observers or diagnostic derivation cannot change the 503 response', () => {
+  const baseline = crossDayFixture().msg;
+  for (const observer of ['absent', 'getterThrows', 'throws']) {
+    assert.deepEqual(structuredClone(crossDayFixture({ observer }).msg), structuredClone(baseline));
+  }
+  assert.deepEqual(structuredClone(crossDayFixture({ throwSink: true }).msg), structuredClone(baseline));
+  const broken = crossDayFixture({ mutateContext(ctx) {
+    Object.defineProperty(ctx.target, 'targetKind', { get() { throw Error('synthetic derivation failure'); } });
+  } });
+  assert.deepEqual(structuredClone(broken.msg), structuredClone(baseline));
+  assert.equal(crossDayEvent(broken.events), undefined);
+});
+
+test('cross-day events never include dates, clock times, identifiers, auth, query or provider strings', () => {
+  const privateText = [['synthetic-private-person', 'example.invalid'].join('@'),
+    ['Bearer', 'synthetic-private-token'].join(' '), ['+7', '999', '000', '00', '00'].join(''), '?private=query'].join(' ');
+  const result = crossDayFixture({ payload: { content: [{ subServices: [{ id: service, name: privateText, raw: { body: privateText } }] }] } });
+  const event = crossDayEvent(result.events);
+  assert.equal(event.previewSubserviceSetSize, 1);
+  const serialized = JSON.stringify(result.events);
+  for (const value of [privateText, target.startsAt, '2099-09-21', '23:00:00', service, sub, studio,
+    room, master, 'synthetic-message-correlation', 'synthetic-auth-only']) assert(!serialized.includes(value));
+  assert.deepEqual(Object.keys(crossDayFields(event)).sort(), [
+    'previewTargetKind', 'previewTargetSource', 'previewDuration', 'previewDayRelation', 'previewOffsetValid',
+    'previewEndAtMidnight', 'previewSelectedSubserviceCount', 'previewSubserviceSetSize',
+    'previewSubservicesMatched', 'previewSubservices2xx', 'previewElapsedBucket',
+  ].sort());
+});
+
+test('scoped deployment observer filters before budget and cannot inherit raw message context', async () => {
+  const { createPreviewCrossDayObserver } = await import('../diagnostics/preview-cross-day-observer.mjs');
+  const events = [];
+  const observer = createPreviewCrossDayObserver({ sourceHash: 'a'.repeat(64), release: 'b'.repeat(40), detailLimit: 1, sink: e => events.push(e) });
+  const msg = { _subscriptionPricePreview: { step: 'subservices' },
+    get payload() { throw Error('must not read payload'); }, get req() { throw Error('must not read headers'); },
+    get _lkDiagnosticContext() { throw Error('must not inherit correlation'); } };
+  for (let i = 0; i < 1000; i++) observer.observe(msg, 'preview_router', { code: 'STAGE_ENTER' });
+  assert.equal(observer.snapshot().observed, 0);
+  observer.observe(msg, 'preview_router', { code: 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED', previewDuration: 'MINUTES_90',
+    serverRequestId: uuid(99), body: 'synthetic-private', previewEndAtMidnight: false });
+  assert.equal(events.length, 1); assert.equal(events[0].previewDuration, 'MINUTES_90');
+  assert.equal(events[0].serverRequestId, undefined); assert.equal(events[0].entityRef, undefined);
+  assert(!JSON.stringify(events).includes('synthetic-private')); assert(!JSON.stringify(events).includes(uuid(99)));
+  observer.dispose();
+});
+
+test('flow-contained observer initializes once per VM, survives failures and is fully disposed', async () => {
+  const { previewCrossDayLifecycle, composePreviewCrossDayRelease } = await import('../prepare_preview_cross_day_release.mjs');
+  const crypto = await import('node:crypto'); const perf = await import('node:perf_hooks');
+  const lifecycle = previewCrossDayLifecycle('b'.repeat(40));
+  const logs = []; const sandbox = vm.createContext({ preview350Crypto: crypto, preview350Performance: perf,
+    node: { warn: line => logs.push(line) }, Buffer, setTimeout, clearTimeout });
+  const initialize = new vm.Script(lifecycle.initialize), finalize = new vm.Script(lifecycle.finalize);
+  initialize.runInContext(sandbox);
+  const first = sandbox.__lkPreview350Observer;
+  assert.equal(first.owner, 'preview-cross-day-v1');
+  assert.equal(sandbox.require, undefined); assert.equal(sandbox.process, undefined);
+  const marker = JSON.parse(logs[0].slice(logs[0].indexOf('{')));
+  assert.deepEqual(marker, lifecycle.marker);
+  const fields = { code: 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED', previewDuration: 'MINUTES_90', previewEndAtMidnight: true };
+  first.observe({ _subscriptionPricePreview: { step: 'subservices' } }, 'preview_router', fields);
+  assert.equal(JSON.parse(logs[1].slice(logs[1].indexOf('{'))).previewEndAtMidnight, true);
+  initialize.runInContext(sandbox);
+  assert.notEqual(sandbox.__lkPreview350Observer, first);
+  finalize.runInContext(sandbox); assert.equal(sandbox.__lkPreview350Observer, undefined);
+  finalize.runInContext(sandbox);
+  const foreign = { owner: 'foreign' }; sandbox.__lkPreview350Observer = foreign;
+  initialize.runInContext(sandbox); assert.equal(sandbox.__lkPreview350Observer, foreign);
+  finalize.runInContext(sandbox); assert.equal(sandbox.__lkPreview350Observer, foreign);
+  delete sandbox.__lkPreview350Observer; sandbox.preview350Crypto = {};
+  initialize.runInContext(sandbox); assert.equal(sandbox.__lkPreview350Observer, undefined);
+  assert.equal(JSON.parse(logs.at(-1).slice(logs.at(-1).indexOf('{'))).event, 'preview_cross_day_observer_unavailable');
+  assert.throws(() => composePreviewCrossDayRelease(Buffer.from('[]'), 'b'.repeat(40)), /FLOW_DRIFT/);
 });
