@@ -34,6 +34,7 @@ export function packetContents({ settings, flow, metadata, release, artifacts, g
   const c = validateContract({ formatVersion: 1, kind: "subscription409-runtime", target: "lk-primary-147", generation, release,
     settingsSha256: sha(settings), candidateSha256: sha(after), flowSha256: sha(flow), bundleSha256,
     installerSha256: sha(artifacts.installer), machineSha256: metadata.machineSha256,
+    settingsMode: metadata.settingsMode,
     process: metadata.process, hooks: metadata.hooks, preservedFiles: metadata.preservedFiles,
     createdAtMs: metadata.collectedAtMs, coordinatedRestartApproved: metadata.coordinatedRestartApproved === true });
   return { "settings.before.js": settings, "settings.after.js": after, "observer.cjs": artifacts.bundle,

@@ -24,7 +24,8 @@ operator; files must be regular0600 single-link files:
 - `settings.js`: exact current settings bytes, kept private because they may contain credentials.
 - `flows.json`: exact source used only to pin unchanged flow and reachable hook hashes.
 - `metadata.json`: `sourceKind=live-147`, `sourceHost=lk-primary-147`,
-  `settingsSha256`, `flowSha256`, `machineSha256` (hash of raw `/etc/machine-id`),
+  `settingsSha256`, `settingsMode` (numeric mode:384/416/420 for0600/0640/0644),
+  `flowSha256`, `machineSha256` (hash of raw `/etc/machine-id`),
   `process` (`pid`, `restartCount`, `status=online`), `hooks` (`router`, `finalize`
   function hashes), `preservedFiles` (exact paths/hashes of existing auth helpers),
   `collectedAtMs` and `coordinatedRestartApproved=true`.
@@ -42,8 +43,11 @@ settings. The packet contains `observer.cjs`, `installer.cjs`, exact before/afte
 settings, canonical `contract.json` and source/dependency/lock/bundler provenance.
 The settings delta is generated again and compared by the installer; it preserves
 every original byte and adds only the integrity-checked registration suffix.
-No flow body is replaced. Baseline settings/flow must already be protected0600
-files; the installer refuses incompatible permissions instead of changing them.
+No flow body is replaced. Original settings mode0600/0640/0644 is pinned and
+preserved on atomic publication and rollback, with strict owner/group/type/link
+checks. There is no preparatory chmod of production. Flow and all private
+backups, leases, receipts and artifacts remain protected0600. Unsupported modes
+or mode drift are refused instead of silently changing permissions.
 
 The contract pins target, machine, source SHA, process identity, source/candidate
 settings, unchanged flow, enabled reachable hooks, preserved auth helpers, both

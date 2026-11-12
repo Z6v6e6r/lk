@@ -36,6 +36,7 @@ export function validateContract(c) {
     || ![c.settingsSha256, c.candidateSha256, c.bundleSha256, c.installerSha256, c.flowSha256, c.machineSha256,
       c.hooks?.router, c.hooks?.finalize].every(digest)
     || !validProcess(c.process) || !Number.isSafeInteger(c.createdAtMs)
+    || ![0o600, 0o640, 0o644].includes(c.settingsMode)
     || c.coordinatedRestartApproved !== true || !Array.isArray(c.preservedFiles)
     || c.preservedFiles.some(f => !digest(f.sha256) || !/^\/opt\/[A-Za-z0-9_./-]+$/.test(f.path) || f.path.includes("/../"))) {
     throw Error("CONTRACT_INVALID");

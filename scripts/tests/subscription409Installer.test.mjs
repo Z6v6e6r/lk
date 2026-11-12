@@ -15,7 +15,7 @@ import { createProcessAdapter } from "../diagnostics/subscription409-process.mjs
 import { assertKernelFlock } from "../diagnostics/subscription409-lock.mjs";
 
 const uid = process.getuid(), gid = process.getgid(), generation = "a".repeat(32), release = "b".repeat(40);
-function fixture(t) {
+function fixture(t, { settingsMode = 0o600 } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "subscription409-test-")));
   fs.chmodSync(root, 0o700); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const releases = path.join(root, "releases"), settings = path.join(root, "settings.js"), flowPath = path.join(root, "flows.json");
@@ -27,13 +27,14 @@ function fixture(t) {
     { id: "router", z: "tab", type: "function", func: router, wires: [["finalize"]] },
     { id: "finalize", z: "tab", type: "function", func: finalize, wires: [] }]));
   for (const [file, bytes] of [[settings, before], [flowPath, flow]]) fs.writeFileSync(file, bytes, { mode: 0o600 });
+  fs.chmodSync(settings, settingsMode);
   const bundle = Buffer.from("exports.registerSettings = function(){};\n"), bundleSha256 = sha(bundle);
   const after = settingsCandidate(before, { generation, bundleSha256, release, root, releases });
   const c = { formatVersion: 1, kind: "subscription409-runtime", target: "lk-primary-147", generation, release,
     settingsSha256: sha(before), candidateSha256: sha(after), flowSha256: sha(flow), bundleSha256,
     installerSha256: "c".repeat(64), machineSha256: "d".repeat(64), createdAtMs: 1_000_000,
     process: { pid: 100, restartCount: 4, status: "online" }, hooks: { router: sha(router), finalize: sha(finalize) },
-    preservedFiles: [], coordinatedRestartApproved: true };
+    preservedFiles: [], coordinatedRestartApproved: true, settingsMode };
   const tx = path.join(root, ".subscription409-transactions", generation), lease = path.join(root, LEASE_NAME);
   const state = { time: c.createdAtMs, process: { ...c.process }, restarts: 0, lock: true, fail: null,
     restartFail: null, registrationFail: false, registrationDelayMs: 0, registrationWrong: false, points: [] };
@@ -72,6 +73,24 @@ test("apply, guarded soak, finish and idempotent finish never alter flow or cred
   assert.equal(fs.existsSync(f.lease), false); assert.deepEqual(f.runtime().finish(f.c), done);
   assert.deepEqual(f.runtime().apply(f.c, f.packet), done); assert.equal(f.state.restarts, 1);
   assert(fs.readFileSync(f.flowPath).equals(initial)); assert(fs.readFileSync(f.settings).subarray(0, f.before.length).equals(f.before));
+});
+
+for (const settingsMode of [0o640, 0o644]) test(`apply and rollback preserve original settings mode ${settingsMode.toString(8)}`, t => {
+  const f = fixture(t, { settingsMode });
+  f.runtime().apply(f.c, f.packet); assert.equal(fs.statSync(f.settings).mode & 0o777, settingsMode);
+  for (const file of ["settings.before.js", "settings.after.js", "contract.json", "ready.json"])
+    assert.equal(fs.statSync(path.join(f.tx, file)).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(f.releases, f.c.bundleSha256, "observer.cjs")).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(f.lease).mode & 0o777, 0o600);
+  assert.equal(f.runtime().rollback(f.c).state, "ROLLED_BACK");
+  const st = fs.statSync(f.settings); assert.equal(st.mode & 0o777, settingsMode); assert.equal(st.uid, uid); assert.equal(st.gid, gid);
+});
+
+test("settings mode drift and permissive contract modes are refused without chmod", t => {
+  const f = fixture(t, { settingsMode: 0o644 }); fs.chmodSync(f.settings, 0o600);
+  assert.throws(() => f.runtime().apply(f.c, f.packet), /Protected file mode/);
+  assert.equal(fs.statSync(f.settings).mode & 0o777, 0o600); assert.equal(f.state.restarts, 0);
+  assert.throws(() => f.runtime().apply({ ...f.c, settingsMode: 0o666 }, f.packet), /CONTRACT_INVALID/);
 });
 
 for (const point of ["backups-and-intent-durable", "lease-published", "artifact-published", "settings-published",
@@ -332,7 +351,7 @@ test("build produces a standalone CJS packet; bootstrap registration is attested
   const f = fixture(t), artifacts = await buildRuntimeArtifacts();
   const data = packetContents({ settings: f.before, flow: fs.readFileSync(f.flowPath), metadata: { sourceKind: "live-147", sourceHost: "lk-primary-147",
     settingsSha256: f.c.settingsSha256, flowSha256: f.c.flowSha256, machineSha256: f.c.machineSha256, hooks: f.c.hooks,
-    process: f.c.process, preservedFiles: [], collectedAtMs: f.c.createdAtMs, coordinatedRestartApproved: true }, release, artifacts, generation, root: f.root, releases: f.releases });
+    process: f.c.process, settingsMode: f.c.settingsMode, preservedFiles: [], collectedAtMs: f.c.createdAtMs, coordinatedRestartApproved: true }, release, artifacts, generation, root: f.root, releases: f.releases });
   const c = JSON.parse(data["contract.json"]), dir = path.join(f.releases, c.bundleSha256); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const artifact = path.join(dir, "observer.cjs"); fs.writeFileSync(artifact, data["observer.cjs"], { mode: 0o600 });
   fs.mkdirSync(f.tx, { recursive: true, mode: 0o700 });

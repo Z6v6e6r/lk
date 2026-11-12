@@ -38,6 +38,9 @@ export function createSubscription409Installer({ root = ROOT, releases = RELEASE
   };
   const read = file => { assertProtectedFile(file, fileOptions); return fs.readFileSync(file); };
   const hash = file => sha(read(file));
+  const settingsHash = c => {
+    assertProtectedFile(settings, { ...fileOptions, mode: c.settingsMode }); return sha(fs.readFileSync(settings));
+  };
   const ownedFile = (file, expected) => {
     const s = fs.lstatSync(file);
     check(s.isFile() && !s.isSymbolicLink() && [1, 2].includes(s.nlink) && s.uid === uid
@@ -79,7 +82,7 @@ export function createSubscription409Installer({ root = ROOT, releases = RELEASE
       assertProtectedFileModes(f.path, { uid, gid, modes: [0o600, 0o644] });
       check(sha(fs.readFileSync(f.path)) === f.sha256, "PRESERVED_SOURCE_DRIFT");
     }
-    check(allowedSettings.includes(hash(settings)), "SETTINGS_DRIFT");
+    check(allowedSettings.includes(settingsHash(c)), "SETTINGS_DRIFT");
   };
   const inspect = () => { const p = pm2.inspect(); check(validProcess(p), "PROCESS_NOT_ONLINE"); return p; };
   const sameProcess = p => check(processEqual(inspect(), p), "PROCESS_DRIFT");
@@ -180,7 +183,7 @@ export function createSubscription409Installer({ root = ROOT, releases = RELEASE
       else exclusive(p.artifact, bundle);
       onTransition("artifact-published");
       sources(c, [c.settingsSha256]); sameProcess(c.process); assertLock();
-      atomicWrite(settings, afterSettings, { uid, gid }); onTransition("settings-published");
+      atomicWrite(settings, afterSettings, { uid, gid, mode: c.settingsMode }); onTransition("settings-published");
       sources(c, [c.candidateSha256]); sameProcess(c.process);
       l = phase(c, l, "RESTART_INTENT"); onTransition("restart-intent-durable");
       pm2.restart(c.process.restartCount); onTransition("restart-returned-before-receipt");
@@ -247,7 +250,7 @@ export function createSubscription409Installer({ root = ROOT, releases = RELEASE
         check(restartQuiesced && validRecoveryProcess(recoveryProcess) && processEqual(active, recoveryProcess), "EXPLICIT_RESTART_RECOVERY_REQUIRED");
         // Reconcile a returned baseline restart without issuing a second one.
         if (l.phase === "ROLLBACK_RESTART_INTENT") {
-          check(hash(settings) === c.settingsSha256, "ROLLBACK_RESTART_OUTCOME_UNKNOWN");
+          check(settingsHash(c) === c.settingsSha256, "ROLLBACK_RESTART_OUTCOME_UNKNOWN");
           if (validProcess(active) && active.restartCount === l.beforeRollback.restartCount + 1 && active.pid !== l.beforeRollback.pid) {
             l = phase(c, l, "ROLLBACK_VERIFIED", { process: active });
             return release(c, l, "ROLLED_BACK", active);
@@ -265,7 +268,7 @@ export function createSubscription409Installer({ root = ROOT, releases = RELEASE
       }
       const needsRestart = !processEqual(active, c.process);
       l = phase(c, l, "ROLLBACK_INTENT", { beforeRollback: active, needsRestart }); onTransition("rollback-intent-durable");
-      if (hash(settings) === c.candidateSha256) atomicWrite(settings, read(p.backup), { uid, gid });
+      if (settingsHash(c) === c.candidateSha256) atomicWrite(settings, read(p.backup), { uid, gid, mode: c.settingsMode });
       onTransition("baseline-settings-restored"); sources(c, [c.settingsSha256]); sameRecoveryProcess(active);
       if (needsRestart) {
         l = phase(c, l, "ROLLBACK_RESTART_INTENT"); onTransition("rollback-restart-intent-durable");
