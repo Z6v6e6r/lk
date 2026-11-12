@@ -49,9 +49,17 @@ test('reviewed resolutions are exactly the five pinned hunks', () => {
     assert.match(rule.live, /^[a-f0-9]{64}$/); assert.match(rule.main, /^[a-f0-9]{64}$/);
   }
 });
-test('pinned canonical sources and installed base blobs are the reviewed ones', () => {
+test('historical canonical pins stay frozen while the reviewed pagination successor remains unbound', () => {
   for (const [, , files] of LIVE_REBASE_UNITS) for (const [file, blob, sha] of files) {
-    assert.equal(hash(fs.readFileSync(new URL('../nodered_subscription_booking_nodes/' + file, import.meta.url), 'utf8')), sha, file);
+    const current = hash(fs.readFileSync(new URL('../nodered_subscription_booking_nodes/' + file, import.meta.url), 'utf8'));
+    if (file === 'fn_subscription_booking_router.js') {
+      // Do not advance the historical live-rebase recipe to a new business generation.
+      assert.equal(sha, '24b8ca287b73752cc39d20413bdd40fc7f65cfb72f54d261e32dbb571eaab443');
+      const frozen = execFileSync('git', ['cat-file', 'blob', 'f098cb80a13cc3dc8b27e926c87b3ed1e363cc38'], { encoding: 'utf8' });
+      assert.equal(hash(frozen), sha);
+      assert.equal(current, '77478072eff6729a5a3227b1a807197e11019b122144fc03d4bfe4f5bdaf8056');
+      assert.notEqual(current, sha, 'Historical composer must reject the unbound successor');
+    } else assert.equal(current, sha, file);
     assert.equal(execFileSync('git', ['cat-file', '-t', blob], { encoding: 'utf8' }).trim(), 'blob', file);
   }
 });
