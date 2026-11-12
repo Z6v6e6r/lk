@@ -51,4 +51,3 @@ export async function fixture(t) {
   return { op, options, root, stage, graph, live, lease, expectedPlanSha256, reserve, begin, candidate, readback, applyFixture,
     now: () => now, advance: ms => { now += ms; }, driftTarget: () => { target = 'd'.repeat(64); } };
 }
-
