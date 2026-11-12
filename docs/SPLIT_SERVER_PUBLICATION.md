@@ -17,6 +17,8 @@ join-price label, format and display location labels are preserved. Other create
 the existing path. The backend additionally requires legacy LK1 CREATE (not JOIN,
 training, advisory preflight or the private quarter-create owner), a verified actor,
 zero final charge and one subscription visit. A paid fallback does not opt in.
+The persisted organizer identity is server-derived; this initial worker uses the
+neutral display name `Организатор` and does not copy browser-supplied photo/rating.
 
 Community membership/publication and additional players are deliberately not granted
 by the worker. They require their existing owner/permission paths. The first cohort
@@ -62,7 +64,8 @@ A successful booking response can contain `serverPublication`:
 
 `candidateGameId` is a locator, **not proof of publication**. `gameId` is populated only
 for a durable PUBLISHED receipt. The browser observes the candidate with bounded GET
-polling and checks the exercise link; it never falls back to another game POST or
+polling and checks the owner, exact booking/exercise, paid state and publication marker;
+it never falls back to another game POST or
 booking/payment confirmation. A pending read moves to details with a pending message,
 not another create action. Old servers without the descriptor retain compatibility.
 
@@ -84,6 +87,8 @@ pull, write, import, restart or deploy anything. Before an eventual apply, use a
 private external verified live workspace and the existing exact graph contract/release
 gates; do not run the broad quarantined rebuild or overwrite live bodies from stale
 generic sources. Current live and main generations differ.
+Disabling new opt-ins keeps the normalized incoming intent available for read-only
+resume of an already stored publication; it does not retrofit an old no-intent row.
 
 ## Worker and activation prerequisites
 

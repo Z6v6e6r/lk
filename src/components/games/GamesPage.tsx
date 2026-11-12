@@ -10863,7 +10863,7 @@ export default function GamesPage({
       // The first server publication cohort is one organizer, without community
       // fan-out or prefilled rosters. Other creates retain their existing path.
       publicationIntent: resolvedPaymentMode === "subscription"
-        && participants.every(player => player.source === "ORGANIZER") && waitlistPlayers.length === 0
+        && participants.length <= 1 && participants.every(player => player.source === "ORGANIZER") && waitlistPlayers.length === 0
         && !(getCurrentCommunityAutopublishSelectionState().selectedCommunityIds.length > 0)
         && Object.keys(publicCreatePreciseRatingMetadata).length === 0
         ? { version: 1, settings: { isPrivate, ratingGame: effectiveRatingGame,
@@ -11115,7 +11115,7 @@ export default function GamesPage({
 
     if (!paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0) {
       const directCreateResult = paymentResult.data.serverPublication
-        ? await apiWaitForPublishedSplitGame(paymentResult.data)
+        ? await apiWaitForPublishedSplitGame(paymentResult.data, { actorClientId: clientId })
         : await apiCreatePadelGameRecord({
         ...payload,
         status: "PAID",

@@ -19,7 +19,7 @@ function splitPublicationIntent(value) {
 }
 function splitPublicationSnapshot(ctx, split) {
   if (ctx?.caller !== 'split' || ctx.managedAction !== 'CREATE_GAME' || ctx.lk1BeforeCreate !== true
-    || split?.action !== 'create' || !split.publicationIntent || !ctx.lk1
+    || split?.action !== 'create' || split.publicationEnabled !== true || !split.publicationIntent || !ctx.lk1
     || ctx.lk1.decision?.benefit?.finalPriceMinor !== 0 || ctx.lk1.decision?.subscriptionVisitCount !== 1) return null;
   const intent = splitPublicationIntent(split.publicationIntent);
   if (!intent || !ctx.actorClientId || !ctx.actorPhone || !ctx.tenantKey || !ctx.operationId) return null;
@@ -28,7 +28,7 @@ function splitPublicationSnapshot(ctx, split) {
     operationId: ctx.operationId, createPayloadJson: JSON.stringify(ctx.lk1CreatePayload) };
 }
 function splitPublicationSame(stored, requested) {
-  if (!stored && !requested) return true;
+  if (!stored) return !requested || split?.publicationEnabled !== true;
   return !!stored && !!requested && stored.version === 1 && requested.version === 1
     && ['intentJson', 'actorClientId', 'actorPhone', 'tenantKey', 'operationId', 'createPayloadJson']
       .every(k => stored[k] === requested[k]);

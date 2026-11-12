@@ -15,10 +15,11 @@ export function composeSplitPublicationSources(input) {
   out.prepare = '// SPLIT_PUBLICATION_V1\n' + contract + '\n' + once(out.prepare, 'msg._splitCtx = {',
     `if (${enabled} && body.publicationIntent !== undefined && !splitPublicationIntent(body.publicationIntent)) {\n`
     + '  return fail(400, "Некорректные настройки публикации", { code: "GAME_PUBLICATION_INTENT_INVALID" });\n}\nmsg._splitCtx = {');
-  out.prepare = once(out.prepare, '  action: "create",\n', `  action: "create",\n  publicationIntent: ${enabled} ? splitPublicationIntent(body.publicationIntent) : null,\n`);
-  out.gateway = '// SPLIT_PUBLICATION_V1\n' + contract + '\n' + once(out.gateway, '      ctx.lk1 = quote;\n',
-    '      ctx.lk1 = quote;\n      const publication = !msg._gameCreateOwner ? splitPublicationSnapshot(ctx, msg._splitCtx) : null;\n'
-    + '      if (publication) ctx.lk1.publication = publication;\n');
+  out.prepare = once(out.prepare, '  action: "create",\n', `  action: "create",\n  publicationEnabled: ${enabled},\n  publicationIntent: splitPublicationIntent(body.publicationIntent),\n`);
+  out.gateway = '// SPLIT_PUBLICATION_V1\n' + contract + '\n' + once(out.gateway, '  ctx.lk1.decision = JSON.parse(JSON.stringify(decision));\n',
+    '  ctx.lk1.decision = JSON.parse(JSON.stringify(decision));\n'
+    + '  const publication = !msg._gameCreateOwner ? splitPublicationSnapshot(ctx, msg._splitCtx) : null;\n'
+    + '  if (publication) ctx.lk1.publication = publication;\n');
   out.gateway = once(out.gateway, '    const quote = operation.lk1;\n',
     '    const quote = operation.lk1;\n    if (!splitPublicationReplayMatches(quote?.publication, ctx, msg._splitCtx)) return lk1Stop(ctx, "GAME_PUBLICATION_INTENT_CHANGED");\n');
   out.gateway = once(out.gateway, '    const actualTarget = ctx.lk1.target;\n',

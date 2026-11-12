@@ -9231,14 +9231,21 @@ export async function apiCreatePadelSplitGamePayment(
 /** Read-only observation: never publish, confirm payment or replay split/create. */
 export async function apiWaitForPublishedSplitGame(
   result: PadelSplitPaymentResult,
-  options: { attempts?: number; wait?: (ms: number) => Promise<void> } = {},
+  options: { actorClientId?: string | null; attempts?: number; wait?: (ms: number) => Promise<void> } = {},
 ): Promise<ApiResult<PadelGameRecord>> {
   const publication = result.serverPublication;
   if (!publication) return { data: null, status: null, error: { status: null, message: "Нет подтверждения серверной публикации" } };
   const wait = options.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   for (let attempt = 0; attempt < Math.min(15, options.attempts ?? 8); attempt++) {
     const read = await apiFetchPadelGameRecord(publication.candidateGameId);
-    if (read.data?.id === publication.candidateGameId && read.data.booking?.exerciseId === result.exerciseId) return read;
+    const game = read.data;
+    const marker = isRecord(game?.metadata?.serverPublication) ? game.metadata.serverPublication : null;
+    if (game?.id === publication.candidateGameId && game.booking?.exerciseId === result.exerciseId
+      && !!result.bookingId && game.booking.bookingIds?.length === 1 && game.booking.bookingIds[0] === result.bookingId
+      && game.status === "PAID" && game.payment?.paid === true
+      && !!options.actorClientId && game.organizer?.id === options.actorClientId
+      && game.payment.paymentRef === result.operationId && marker?.version === 1
+      && typeof marker.bindingDigest === "string" && /^[a-f0-9]{64}$/.test(marker.bindingDigest)) return read;
     if (read.status === 401 || read.status === 403) break;
     if (attempt + 1 < (options.attempts ?? 8)) await wait(1000);
   }

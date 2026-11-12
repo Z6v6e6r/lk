@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { isDeepStrictEqual } from 'node:util';
 
 const source = fs.readFileSync(new URL('../nodered_game_publication_nodes/contract.js', import.meta.url), 'utf8');
 export const normalizePublicationIntent = new Function(source + '\nreturn splitPublicationIntent;')();
@@ -78,6 +79,18 @@ function matchesGame(game, plan) {
     && game.booking?.bookingIds?.length === 1 && game.booking.bookingIds[0] === plan.binding.bookingId
     && JSON.stringify(game.metadata?.serverPublication) === JSON.stringify(plan.marker);
 }
+function matchesInitialProjection(game, expected) {
+  const project = record => {
+    const snapshot = structuredClone(record.resultRosterSnapshot);
+    if (snapshot) { delete snapshot.capturedAt; delete snapshot.capturedAtTs; }
+    return { status: record.status, organizer: record.organizer, booking: record.booking, payment: record.payment,
+      settings: record.settings, invite: record.invite, participants: record.participants, waitlist: record.waitlist,
+      participantPhones: record.participantPhones, waitlistPhones: record.waitlistPhones,
+      invitedPhones: record.invitedPhones, allRelatedPhones: record.allRelatedPhones,
+      metadata: record.metadata, resultRosterSnapshot: snapshot };
+  };
+  return isDeepStrictEqual(project(game), project(expected));
+}
 
 export async function publishConfirmedOperation({ operations, games, operation, apply = false, session }) {
   const plan = publicationPlan(operation);
@@ -89,15 +102,21 @@ export async function publishConfirmedOperation({ operations, games, operation, 
   const opts = session ? { session } : {};
   const current = await operations.findOne(key, opts);
   if (!current || JSON.stringify(publicationPlan(current)?.binding) !== JSON.stringify(plan.binding)) stop('PUBLICATION_OPERATION_CHANGED');
+  if (current.lk1.publication.state === 'PUBLISHED') {
+    const existing = await games.findOne({ tenantKey: operation.tenantKey, id: plan.gameId }, opts);
+    if (!matchesGame(existing, plan) || current.lk1.publication.gameId !== plan.gameId) stop('PUBLICATION_RECEIPT_CONFLICT');
+    return { state: 'PUBLISHED', gameId: plan.gameId }; // Preserve receipt and legitimate later edits.
+  }
+  const expected = renderPublication(plan);
   const linked = await games.find({ tenantKey: operation.tenantKey, $or: [
     { id: plan.gameId }, { dedupeKey: 'viva:' + operation.exerciseId },
     { 'booking.exerciseId': operation.exerciseId }, { 'booking.bookingIds': operation.bookingId },
   ] }, opts).limit(3).toArray();
-  if (linked.length > 1 || (linked.length === 1 && !matchesGame(linked[0], plan))) stop('PUBLICATION_EXISTING_GAME_CONFLICT');
+  if (linked.length > 1 || (linked.length === 1 && (!matchesGame(linked[0], plan)
+    || !matchesInitialProjection(linked[0], expected)))) stop('PUBLICATION_EXISTING_GAME_CONFLICT');
   if (!linked.length) {
-    const record = renderPublication(plan);
     try { await games.updateOne({ tenantKey: operation.tenantKey, id: plan.gameId },
-      { $setOnInsert: record }, { upsert: true, ...opts, ...(!session ? { writeConcern: { w: 'majority', j: true } } : {}) }); }
+      { $setOnInsert: expected }, { upsert: true, ...opts, ...(!session ? { writeConcern: { w: 'majority', j: true } } : {}) }); }
     catch (error) {
       // Both duplicate-key races and lost acknowledgements require exact readback.
       // Never repeat the provider write or overwrite the existing game.
@@ -105,7 +124,7 @@ export async function publishConfirmedOperation({ operations, games, operation, 
     }
   }
   const game = await games.findOne({ tenantKey: operation.tenantKey, id: plan.gameId }, opts);
-  if (!matchesGame(game, plan)) stop('PUBLICATION_READBACK_FAILED');
+  if (!matchesGame(game, plan) || !matchesInitialProjection(game, expected)) stop('PUBLICATION_READBACK_FAILED');
   const ack = await operations.updateOne(key, { $set: { 'lk1.publication.state': 'PUBLISHED',
     'lk1.publication.gameId': plan.gameId, 'lk1.publication.publishedAt': new Date().toISOString() } },
   { ...opts, ...(!session ? { writeConcern: { w: 'majority', j: true } } : {}) });

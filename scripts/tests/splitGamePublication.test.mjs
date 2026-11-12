@@ -86,6 +86,24 @@ test('an existing conflicting game is never overwritten', async () => {
   await assert.rejects(publishConfirmedOperation(h), /PUBLICATION_EXISTING_GAME_CONFLICT/);
   assert.equal(h.games.rows[0].organizer.id, 'someone-else'); assert.equal(h.operations.updates, 0);
 });
+test('a copied marker cannot attest changed privacy, payment, metadata or roster authority', async () => {
+  for (const mutate of [g => g.settings.isPrivate = false, g => g.payment.paid = false,
+    g => g.status = 'CANCELLED', g => g.metadata.gameTitle = 'changed',
+    g => g.resultRosterSnapshot.allowedClientIds.push('someone-else'),
+    g => g.participants.push({ id: 'someone-else', status: 'CONFIRMED' })]) {
+    const h = harness(), game = renderPublication(publicationPlan(h.operation)); mutate(game); h.games.rows.push(game);
+    await assert.rejects(publishConfirmedOperation(h), /PUBLICATION_EXISTING_GAME_CONFLICT/);
+    assert.equal(h.operations.rows[0].lk1.publication.state, 'PENDING');
+  }
+});
+test('published receipt remains unchanged across legitimate later game edits', async () => {
+  const h = harness(); await publishConfirmedOperation(h);
+  const receipt = structuredClone(h.operations.rows[0].lk1.publication);
+  h.games.rows[0].settings.isPrivate = false;
+  await publishConfirmedOperation({ ...h, operation: h.operations.rows[0] });
+  assert.deepEqual(h.operations.rows[0].lk1.publication, receipt);
+  assert.equal(h.games.rows[0].settings.isPrivate, false);
+});
 test('failed readback and changed durable operation never claim PUBLISHED', async () => {
   const h = harness(); h.games.findOne = async () => null;
   await assert.rejects(publishConfirmedOperation(h), /PUBLICATION_READBACK_FAILED/);
@@ -99,12 +117,14 @@ test('Node-RED snapshot binds only verified create context and replay must prese
   const o = operation(), ctx = { caller: 'split', managedAction: 'CREATE_GAME', lk1BeforeCreate: true,
     actorClientId: o.actorClientId, actorPhone: '79990000000', tenantKey: o.tenantKey, operationId: o.operationId,
     lk1CreatePayload: o.lk1.createPayload, lk1: o.lk1 };
-  const split = { action: 'create', publicationIntent: intent() };
+  const split = { action: 'create', publicationEnabled: true, publicationIntent: intent() };
   const stored = functions.splitPublicationSnapshot(ctx, split); assert.ok(stored);
   assert.equal(functions.splitPublicationReplayMatches(stored, ctx, split), true);
   assert.equal(functions.splitPublicationReplayMatches(stored, ctx, { ...split, publicationIntent: { ...intent(), gameTitle: 'other' } }), false);
   for (const caller of ['http', 'split_create_readonly_preflight', 'training']) assert.equal(functions.splitPublicationSnapshot({ ...ctx, caller }, split), null);
   assert.equal(functions.splitPublicationSnapshot({ ...ctx, managedAction: 'JOIN_GAME' }, split), null);
+  assert.equal(functions.splitPublicationSnapshot(ctx, { ...split, publicationEnabled: false }), null);
+  assert.equal(functions.splitPublicationReplayMatches(stored, ctx, { ...split, publicationEnabled: false }), true);
 });
 test('source-driven adapter preserves Node-RED wiring and rejects missing/changed generation', () => {
   const read = file => fs.readFileSync(new URL('../' + file, import.meta.url), 'utf8');
@@ -117,9 +137,30 @@ test('source-driven adapter preserves Node-RED wiring and rejects missing/change
     finalize: read('nodered_lk1_hub_nodes/finalize.js'), router: read('nodered_games_nodes/fn_split_router.js') };
   const composed = composeSplitPublicationSources(sources);
   for (const s of Object.values(composed)) new Function('msg', 'node', 'global', 'env', s);
-  assert.ok(composed.gateway.indexOf('ctx.lk1.publication = publication') < composed.gateway.indexOf('"lk1.createAttemptedAt": { $exists: false }'));
+  assert.ok(composed.gateway.indexOf('ctx.lk1.publication = publication') > composed.gateway.indexOf('ctx.lk1.decision = JSON.parse(JSON.stringify(decision));'));
+  assert.ok(composed.gateway.indexOf('ctx.lk1.publication = publication') < composed.gateway.indexOf('ctx.step = "operation_insert"'));
   assert.ok(composed.gateway.includes('GAME_PUBLICATION_INTENT_CHANGED'));
   assert.throws(() => composeSplitPublicationSources(composed), /generation/);
   assert.throws(() => composeSplitPublicationSources({ ...sources, prepare: '' }), /drift/);
   assert.throws(() => buildSplitPublicationCandidate([], {}), /preimage/);
+  // Execute the real decision/insert step, starting before any decision is attached
+  // to ctx.lk1. Capturing at quote creation would silently miss this publication.
+  const begin = composed.gateway.indexOf('if (ctx.step === "lk1_policy_decision") {');
+  const end = composed.gateway.indexOf('\nconst paymentRoute =', begin);
+  const step = composed.gateway.slice(begin, end);
+  const o = operation();
+  const ctx = { step: 'lk1_policy_decision', caller: 'split', managedAction: 'CREATE_GAME', lk1BeforeCreate: true,
+    operationKey: o._id, operationId: o.operationId, tenantKey: o.tenantKey, actorClientId: o.actorClientId,
+    actorPhone: '79990000000', clientSubscriptionId: o.clientSubscriptionId, exerciseId: 'preflight:fixture',
+    category: 'open_game', serviceDate: '2030-11-12', lk1CreatePayload: o.lk1.createPayload,
+    lk1: { target: o.lk1.target, createPayload: o.lk1.createPayload } };
+  const msg = { req: { destroyed: true }, _splitCtx: { action: 'create', publicationEnabled: true, publicationIntent: intent() },
+    _managedSubscriptionPolicyDecision: { eligible: true, benefit: { finalPriceMinor: 0 }, subscriptionVisitCount: 1 } };
+  const execute = new Function('msg', 'ctx', 'isObj', 'emit', 'OUTPUT_MONGO_INSERT', 'PREPARED_LEASE_MS', 'lk1Stop',
+    contract + '\n' + step);
+  execute(msg, ctx, value => !!value && typeof value === 'object', () => msg, 2, 60000, () => { throw new Error('unexpected refusal'); });
+  assert.equal(msg.payload[0].state, 'PREPARED');
+  assert.equal(msg.payload[0].lk1.publication.state, 'PENDING');
+  assert.equal(msg.payload[0].lk1.publication.actorClientId, o.actorClientId);
+  assert.equal(msg.payload[0].lk1.publication.intent.settings.isPrivate, true);
 });

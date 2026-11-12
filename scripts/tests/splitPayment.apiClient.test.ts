@@ -10,23 +10,42 @@ const source = fs.readFileSync("src/utils/apiClient.ts", "utf8");
 test("server publication polling uses reads only and never falls back to another booking", async () => {
   const expression = stripTypeScriptTypes(extractFunctionBlock("export async function apiWaitForPublishedSplitGame").replace("export ", ""));
   let reads = 0;
-  const poll = new Function("apiFetchPadelGameRecord", `return (${expression});`)(async () => {
+  const poll = new Function("apiFetchPadelGameRecord", "isRecord", `return (${expression});`)(async () => {
     reads++;
     return reads === 1 ? { data: null, error: { status: 404 }, status: 404 }
-      : { data: { id: "gsp_fixture", booking: { exerciseId: "fixture-exercise" } }, error: null, status: 200 };
-  });
-  const result = await poll({ exerciseId: "fixture-exercise", serverPublication: { candidateGameId: "gsp_fixture" } }, { wait: async () => {}, attempts: 3 });
+      : { data: { id: "gsp_fixture", status: "PAID", organizer: { id: "fixture-actor" }, payment: { paid: true, paymentRef: "fixture-op" },
+          metadata: { serverPublication: { version: 1, bindingDigest: "a".repeat(64) } },
+          booking: { exerciseId: "fixture-exercise", bookingIds: ["fixture-booking"] } }, error: null, status: 200 };
+  }, (v: unknown) => !!v && typeof v === "object");
+  const result = await poll({ exerciseId: "fixture-exercise", bookingId: "fixture-booking", operationId: "fixture-op",
+    serverPublication: { candidateGameId: "gsp_fixture" } }, { actorClientId: "fixture-actor", wait: async () => {}, attempts: 3 });
   assert.equal(reads, 2); assert.equal(result.data.id, "gsp_fixture");
   assert.doesNotMatch(expression, /apiCreate|apiConfirm|\brequest\(/);
 });
 
 test("publication read timeout and mismatched exercise preserve pending instead of republishing", async () => {
   const expression = stripTypeScriptTypes(extractFunctionBlock("export async function apiWaitForPublishedSplitGame").replace("export ", ""));
-  const poll = new Function("apiFetchPadelGameRecord", `return (${expression});`)(async () => ({
+  const poll = new Function("apiFetchPadelGameRecord", "isRecord", `return (${expression});`)(async () => ({
     data: { id: "gsp_fixture", booking: { exerciseId: "other" } }, status: 200, error: null,
-  }));
+  }), (v: unknown) => !!v && typeof v === "object");
   const result = await poll({ exerciseId: "fixture-exercise", serverPublication: { candidateGameId: "gsp_fixture" } }, { wait: async () => {}, attempts: 2 });
   assert.equal(result.status, 202); assert.equal(result.data, null);
+});
+
+test("publication candidate with wrong booking, unpaid/cancelled state or owner is never accepted", async () => {
+  const expression = stripTypeScriptTypes(extractFunctionBlock("export async function apiWaitForPublishedSplitGame").replace("export ", ""));
+  for (const change of ["booking", "unpaid", "cancelled", "owner", "marker"]) {
+    const game = { id: "gsp_fixture", status: change === "cancelled" ? "CANCELLED" : "PAID",
+      organizer: { id: change === "owner" ? "other" : "fixture-actor" },
+      payment: { paid: change !== "unpaid", paymentRef: "fixture-op" },
+      metadata: { serverPublication: change === "marker" ? null : { version: 1, bindingDigest: "a".repeat(64) } },
+      booking: { exerciseId: "fixture-exercise", bookingIds: [change === "booking" ? "other" : "fixture-booking"] } };
+    const poll = new Function("apiFetchPadelGameRecord", "isRecord", `return (${expression});`)(async () => ({ data: game, status: 200, error: null }),
+      (v: unknown) => !!v && typeof v === "object");
+    const result = await poll({ exerciseId: "fixture-exercise", bookingId: "fixture-booking", operationId: "fixture-op",
+      serverPublication: { candidateGameId: "gsp_fixture" } }, { actorClientId: "fixture-actor", attempts: 1 });
+    assert.equal(result.data, null, change); assert.equal(result.status, 202);
+  }
 });
 
 function extractFunctionBlock(marker: string) {
