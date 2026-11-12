@@ -50,6 +50,15 @@ test('holds source/target drift, ambiguous IDs, collisions, missing/duplicate bi
   assert.throws(() => compose(flow, { ...bindings, extra: bindings.http }), /BINDING_SET/);
   assert.throws(() => compose(flow, { ...bindings, debug: bindings.http }), /BINDING_INVALID/);
 });
+test('rendered observer binds exact synthetic node/source fingerprints and stage', () => {
+  const binding = { identityHash: '1'.repeat(64), nodeSha256: '2'.repeat(64) };
+  const events = [];
+  const source = renderStartupHttpObserver('transport_error', binding);
+  const sandbox = vm.createContext({ msg: {}, Buffer, Date, context: { get() {}, set() {} }, node: { warn: s => events.push(JSON.parse(s)) } });
+  assert.equal(new vm.Script(`(function(){${source}})()`).runInContext(sandbox), null);
+  assert.equal(events[0].nodeIdentityHash, binding.identityHash); assert.equal(events[0].sourceFingerprint, binding.nodeSha256);
+  assert.equal(events[0].stage, 'transport_error');
+});
 const canary = 'SYNTHETIC_PRIVATE_CANARY';
 for (const [name, payload, contentType, status, kind, outcome] of [
   ['object JSON', { access_token: canary }, 'application/json', 200, 'object', 'object_payload'],

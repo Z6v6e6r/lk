@@ -15,8 +15,11 @@ const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value
 
 export function renderStartupHttpObserver(stage, binding = approved.http) {
   if (!['response', 'transport_error'].includes(stage) || !digest(binding.identityHash) || !digest(binding.nodeSha256)) fail('HTTP_OBSERVER_BINDING_INVALID');
-  return template.replace('const observationStage = "response";', `const observationStage = ${JSON.stringify(stage)};`)
-    .replace(approved.http.identityHash, binding.identityHash).replace(approved.http.nodeSha256, binding.nodeSha256);
+  const markers = ['const observationStage = "response";', `const nodeIdentityHash = "${approved.http.identityHash}";`, `const sourceFingerprint = "${approved.http.nodeSha256}";`];
+  if (markers.some(marker => template.split(marker).length !== 2)) fail('HTTP_OBSERVER_TEMPLATE_DRIFT');
+  return template.replace(markers[0], `const observationStage = ${JSON.stringify(stage)};`)
+    .replace(markers[1], `const nodeIdentityHash = ${JSON.stringify(binding.identityHash)};`)
+    .replace(markers[2], `const sourceFingerprint = ${JSON.stringify(binding.nodeSha256)};`);
 }
 
 // Offline composition only. The scoped catch is refused if this tab already has any catch.
