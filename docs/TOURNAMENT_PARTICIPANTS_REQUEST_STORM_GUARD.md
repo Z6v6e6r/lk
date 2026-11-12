@@ -48,6 +48,50 @@ array for backward compatibility.
 The public response strips phone numbers. Cache state is exposed in
 `X-LK-Participants-Cache` for the targeted nginx access log.
 
+### Bounded recovery of simultaneous cold reads
+
+An ordinary GET rejected specifically by the same-exercise owner adds
+`code: "PARTICIPANTS_BUSY_KEY"` to the existing JSON error. This additive marker
+works on cross-origin Tilda pages without exposing response headers. Global,
+edge, circuit and manual-refresh responses do not receive this marker. The
+30-second lease, remaining `retryAfterMs` / `Retry-After`, stale fallback and
+Viva admission rules are unchanged.
+
+Sanitized frontend reads share one in-flight request and retry sequence per API
+module instance, origin, exercise and full auth session. Each subscriber can
+cancel independently; the last cancellation aborts transport and retry sleep.
+Settled results are removed immediately. Raw `sanitize: false` reads used for
+booking mutation verification keep their independent fresh-read path and retry
+policy. Separate tabs or independently loaded IIFE bundles still rely on the
+server's shared single-flight guard.
+
+Only the explicit busy-key JSON marker permits three fast retries, after
+750/1500/3000 ms plus 0–250 ms jitter each (at most four HTTP attempts and six
+seconds of retry delays). These probes re-enter the existing cache gate and do
+not bypass the owner or call Viva while it is busy. They intentionally occur
+before the conservative remaining-lease `Retry-After`; this is a bounded cache
+probe policy, not a shortened owner lease. After exhaustion the last error,
+including its remaining-lease hint, reaches the existing UI slow retry. A session
+change stops further attempts and suppresses late results. Generic automatic
+retries are disabled for sanitized reads, including callers with `retries: 0`;
+the dedicated bounded busy recovery applies to those callers too. Unknown/edge/
+global 429, idle, auth, network and provider failures are not retried here.
+
+Owner: LK frontend/participants flow. Audience: simultaneous roster readers.
+Acceptance: two callers share `429 -> cache hit` and receive sanitized success
+without a second Viva owner. Stop signal: additional provider owners, requests
+after close, or retry counts above four. Stop method: withhold frontend activation
+or revert this focused source change through the normal approved release path.
+
+This change needs both the additive backend marker and the frontend version for
+full cross-origin recovery. Frontend against an older backend still deduplicates
+but returns an unmarked 429 without fast probes. No deployment is implied by the
+Draft PR. Before any later backend activation, take a fresh live preimage and
+prepare a guarded one-function change preserving diagnostics and unrelated flow
+changes. The historical manual-refresh builder below remains pinned to its older
+whole-flow preimage; never use it to overwrite a current live flow. No generated
+flow or import artifact is included in this source change.
+
 At the final response boundary, the terminal removes `Connection`,
 `Content-Length`, and `Transfer-Encoding` case-insensitively. GET, manual
 refresh, fallback, and early validation responses keep their status, payload,
