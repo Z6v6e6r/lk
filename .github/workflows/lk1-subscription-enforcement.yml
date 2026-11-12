@@ -403,6 +403,12 @@ jobs:
         id: check_9
         run: >-
           node --experimental-strip-types --test
+          scripts/tests/tournamentParticipantRead.test.ts
+          scripts/tests/tournamentParticipantRead.apiClient.test.mjs
+          scripts/tests/tournamentParticipantsContainmentV2.test.ts
+          scripts/tests/tournamentParticipantsManualRefreshBackend.test.ts
+          scripts/tests/tournamentParticipantsManualRefreshPatch.test.mjs
+          scripts/tests/tournamentParticipantRefresh.test.ts
           scripts/tests/messageDelivery.test.ts
           scripts/tests/subscriptionBookingGateway.nodered.test.ts
           scripts/tests/bookingConversionEvidence.test.ts
@@ -494,6 +500,7 @@ jobs:
           scripts/tests/cancelledDayAllowance.test.mjs
           scripts/tests/lk1FreeCancellation.test.mjs
           scripts/tests/lk1FreeCancellationRuntime.test.mjs
+          scripts/tests/friendship2TdzRecovery.test.mjs
           scripts/tests/lk1FreeGateOrder.test.mjs
           scripts/tests/proTrainingExclusion.test.ts
           scripts/tests/proTrainingExclusion.nodered.test.mjs

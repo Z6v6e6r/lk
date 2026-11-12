@@ -1,11 +1,112 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import ts from "typescript";
+import { hasActiveGameLeaveMembership } from "../../src/components/games/gameLeaveMembership.ts";
 
 const gamesPageSource = fs.readFileSync("src/components/games/GamesPage.tsx", "utf8");
 const gamesEntrySource = fs.readFileSync("src/games.tsx", "utf8");
 const selfLeavePreviewSource = fs.readFileSync("dev/self-leave-preview.html", "utf8");
 const apiClientSource = fs.readFileSync("src/utils/apiClient.ts", "utf8");
+
+const pageAst = ts.createSourceFile("GamesPage.tsx", gamesPageSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+
+function loadCallback(name: string, scope: Record<string, unknown>) {
+  let expression: ts.Expression | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(pageAst) === name
+      && node.initializer && ts.isCallExpression(node.initializer)) {
+      expression = node.initializer.arguments[0];
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(pageAst);
+  assert.ok(expression, `missing callback ${name}`);
+  const compiled = ts.transpileModule(`return (${expression.getText(pageAst)});`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText;
+  return new Function(...Object.keys(scope), compiled)(...Object.values(scope));
+}
+
+async function organizerRemovalScenario(state: string, fresh: Record<string, unknown> | null, refreshError = false) {
+  const player = { id: "fixture-player", name: "Fixture" };
+  const calls = { exerciseReads: [] as string[], refreshes: 0, patches: 0, records: [] as unknown[], errors: [] as unknown[], updating: [] as boolean[] };
+  const cancel = loadCallback("cancelVivaBookingsForPlayerFromDetails", {
+    gameRecordId: "fixture-game", activeGameRecord: { id: "fixture-game", updatedAt: "old-version" },
+    detailsSplitPaymentMetadata: {},
+    normalizeBookingId: (value: unknown) => typeof value === "string" ? value.trim() || null : null,
+    extractSplitPaymentBookingTargetsForPlayer: () => [{ bookingId: "fixture-booking", clientId: player.id }],
+    resolveGameVivaExerciseId: () => "fixture-exercise",
+    apiFetchTournamentParticipants: async (exercise: string) => {
+      calls.exerciseReads.push(exercise);
+      return { data: calls.exerciseReads.length === 1 ? [{ id: player.id }] : [], error: null };
+    },
+    extractExerciseBookingRows: (rows: unknown) => rows,
+    vivaBookingMatchesPlayer: (row: { id: string }) => row.id === player.id,
+    extractVivaBookingId: () => "fixture-booking", extractVivaBookingClientId: () => player.id,
+    normalizePhoneForGame: () => null,
+    apiCancelPadelSplitParticipantBookings: async () => ({ data: { ok: true, state, message: "server pending" }, error: null }),
+    isRecordObject: (value: unknown) => Boolean(value) && typeof value === "object",
+  });
+  const remove = loadCallback("handleRemoveParticipantFromDetails", {
+    gameRecordId: "fixture-game", canManagePlayersInDetails: true, updatingGameRoster: false,
+    isDetailsOrganizerPlayer: () => false, detailsParticipants: [player],
+    cancelVivaBookingsForPlayerFromDetails: cancel,
+    setGameRosterError: (error: unknown) => calls.errors.push(error),
+    setUpdatingGameRoster: (value: boolean) => calls.updating.push(value),
+    apiFetchPadelGameRecord: async () => {
+      calls.refreshes++;
+      return { data: fresh, error: refreshError ? { message: "refresh unavailable" } : null };
+    },
+    upsertGameRecordInStores: (record: unknown, options: unknown) => calls.records.push({ record, options }),
+    hasActiveGameLeaveMembership,
+    patchGameRoster: async () => { calls.patches++; throw new Error("stale roster PATCH must not run"); },
+  });
+  await remove(player, 0);
+  return calls;
+}
+
+for (const state of ["DONE", "RETURN_PENDING"]) {
+  test(`organizer ${state} keeps exercise readback and refreshes canonical roster without a stale PATCH`, async () => {
+    const fresh = { id: "fixture-game", updatedAt: "server-new-version", participants: [{ id: "fixture-other" }], metadata: { splitPayment: { payments: [{ clientId: "fixture-player", status: "LEFT" }] } } };
+    const calls = await organizerRemovalScenario(state, fresh);
+    assert.deepEqual(calls.exerciseReads, ["fixture-exercise", "fixture-exercise"]);
+    assert.equal(calls.refreshes, 1);
+    assert.equal(calls.patches, 0);
+    assert.deepEqual(calls.records, [{ record: fresh, options: { communityMode: "if_exists", recordMode: "replace" } }]);
+    assert.equal(calls.errors.at(-1), null);
+    assert.deepEqual(calls.updating, [true, false]);
+  });
+}
+
+for (const state of ["IN_PROGRESS", "RETRY_REQUIRED", "VIVA_UNVERIFIED", "CONFLICT", "UNKNOWN"]) {
+  test(`organizer ${state} cannot clear the local roster or issue another write`, async () => {
+    const calls = await organizerRemovalScenario(state, null);
+    assert.equal(calls.exerciseReads.length, 1, "pending is handled before success readback");
+    assert.equal(calls.refreshes, 0);
+    assert.equal(calls.patches, 0);
+    assert.deepEqual(calls.records, []);
+    assert.equal(calls.errors.at(-1), "server pending");
+  });
+}
+
+test("organizer preserves concurrent rejoin and reports unresolved membership without retrying removal", async () => {
+  const fresh = { id: "fixture-game", updatedAt: "rejoin-version", participants: [{ id: "fixture-player" }] };
+  const calls = await organizerRemovalScenario("DONE", fresh);
+  assert.equal(calls.patches, 0);
+  assert.equal(calls.records.length, 1, "new canonical membership remains visible");
+  assert.match(String(calls.errors.at(-1)), /записался снова/);
+});
+
+test("organizer completed cancellation does not manufacture success when canonical refresh fails or mismatches", async () => {
+  for (const [fresh, error] of [[null, false], [{ id: "another-game" }, false], [{ id: "fixture-game" }, true]] as const) {
+    const calls = await organizerRemovalScenario("DONE", fresh, error);
+    assert.equal(calls.patches, 0);
+    assert.deepEqual(calls.records, []);
+    assert.ok(calls.errors.at(-1));
+    assert.deepEqual(calls.updating, [true, false]);
+  }
+});
 
 test("cabinet organizer remove still uses backend split leave helper", () => {
   const helperStart = gamesPageSource.indexOf("const cancelVivaBookingsForPlayerFromDetails = useCallback");
