@@ -329,6 +329,45 @@
         "UNKNOWN"
       ]
     },
+    "previewTargetKind": {
+      "enum": [
+        "NEW_GAME",
+        "EXISTING_GAME",
+        "UNKNOWN"
+      ]
+    },
+    "previewTargetSource": {
+      "enum": [
+        "CLIENT_INPUT",
+        "SERVER_CONFIRMED",
+        "UNKNOWN"
+      ]
+    },
+    "previewDuration": {
+      "enum": [
+        "MINUTES_60",
+        "MINUTES_90",
+        "MINUTES_120",
+        "UNKNOWN"
+      ]
+    },
+    "previewDayRelation": {
+      "enum": [
+        "NEXT_DAY",
+        "OTHER",
+        "UNKNOWN"
+      ]
+    },
+    "previewElapsedBucket": {
+      "enum": [
+        "LT1S",
+        "LT5S",
+        "LT15S",
+        "LE28S",
+        "OVER28S",
+        "UNKNOWN"
+      ]
+    },
     "suppressedEventKind": {
       "enum": [
         "stage",
@@ -2409,6 +2448,18 @@
     "scriptLoadObserved": {
       "type": "boolean"
     },
+    "previewOffsetValid": {
+      "type": "boolean"
+    },
+    "previewEndAtMidnight": {
+      "type": "boolean"
+    },
+    "previewSubservicesMatched": {
+      "type": "boolean"
+    },
+    "previewSubservices2xx": {
+      "type": "boolean"
+    },
     "httpStatus": {
       "type": "integer",
       "minimum": 100,
@@ -2483,6 +2534,16 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
+    },
+    "previewSelectedSubserviceCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 20
+    },
+    "previewSubserviceSetSize": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 21
     },
     "serverTimeUtc": {
       "type": "string",
