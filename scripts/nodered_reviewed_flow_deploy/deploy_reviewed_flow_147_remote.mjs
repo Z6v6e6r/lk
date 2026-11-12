@@ -221,7 +221,7 @@ export function createReviewedFlowRuntime({
     let admission;
     try { admission = JSON.parse(fs.readFileSync(deploymentLeasePath, "utf8")); }
     catch { throw new Error("Reviewed-flow deployment lease is invalid"); }
-    if (admission?.formatVersion === 4) throw new Error("Settings/runtime deployment lease requires its owning installer");
+    if (admission?.formatVersion === 4) throw new Error("Reviewed-flow deployment lease contract mismatch: foreign v4 requires its owning operation");
     recoverAtomicExclusivePublication(deploymentLeasePath, protectedFileOptions);
     assertProtectedFile(deploymentLeasePath, protectedFileOptions);
     let lease;

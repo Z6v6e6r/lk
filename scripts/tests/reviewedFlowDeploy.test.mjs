@@ -1660,7 +1660,7 @@ for (const alias of [false, true]) test(`v4 runtime lease and publication alias 
     expectedFlowBackupSha256: "a".repeat(64), expectedContractBackupSha256: "a".repeat(64) };
   for (const name of ["preflight", "apply", "rollback", "reconcileCurrent", "finalizeLegacyCandidate",
     "reserveEditorModified", "confirmEditorModified", "finishEditorModified", "abortEditorModified"]) {
-    assert.throws(() => prepared.runtime[name](common), /Settings\/runtime deployment lease/, name);
+    assert.throws(() => prepared.runtime[name](common), /deployment lease contract mismatch.*owning operation/, name);
     assert(fs.readFileSync(prepared.deploymentLeasePath).equals(raw));
     assert.equal(fs.statSync(prepared.deploymentLeasePath).nlink, before.nlink);
     if (alias) assert(fs.readFileSync(temporary).equals(raw));
