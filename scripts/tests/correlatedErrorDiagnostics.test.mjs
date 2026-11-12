@@ -308,11 +308,58 @@ test('media, app cache, onboarding JSON, no-res and nested transport fixtures ne
   assert(events.some(e => e.transportCode3 === 'ENOTFOUND' && e.outcome === 'outcome_unknown'));
   const onboarding = 'scripts/nodered_onboarding_nodes/fn_onboarding_level_capture_viva_result.js';
   const input = { payload: 'private', statusCode: 204, headers: { 'content-type': 'text/plain' } };
-  assert.deepEqual(run(onboarding, input, observer), run(onboarding, input, undefined, true));
+  assert.deepEqual(run(onboarding, input, observer), run(onboarding, input, undefined));
+  assert.equal(run(onboarding, input, observer).msg.payload.ok, false);
   assert(events.some(e => e.contentTypeClass === 'text' && e.parseOk === false));
   observer.observe({}, 'participants_cache', { markerAgeMs: 12, inflightPresent: true, cacheUsable: false, code: 'in_progress', httpStatus: 429 });
   observer.observe({}, 'response_attempted'); assert(events.some(e => e.resPresent === false && e.reqPresent === false));
   assert(!JSON.stringify(events).includes('private'));
+});
+test('Viva PUT accepts decoded JSON acknowledgements and correct no-content 204', () => {
+  const path = 'scripts/nodered_onboarding_nodes/fn_onboarding_level_capture_viva_result.js';
+  for (const [statusCode, payload] of [[200, {}], [201, []], [202, { result: true }],
+    [204, null], [204, undefined], [204, ''], [204, {}]]) {
+    const input = { statusCode, payload, _vivaFieldUpdate: { fieldId: 'fixture-field', requestedValue: ['fixture-value'] } };
+    const { msg } = run(path, input);
+    assert.equal(msg.payload.ok, true);
+    assert.equal(msg.payload.error, null);
+    assert.equal(msg.payload.fieldId, 'fixture-field');
+    assert.deepEqual(msg.payload.requestedValue, ['fixture-value']);
+    assert.equal(msg._vivaFieldUpdate, undefined);
+  }
+});
+test('Viva PUT cannot confirm string, scalar or binary 2xx and preserves errors', () => {
+  const path = 'scripts/nodered_onboarding_nodes/fn_onboarding_level_capture_viva_result.js';
+  for (const statusCode of [200, 201, 202, 206]) for (const payload of [
+    '<html>fixture-sensitive</html>', '{broken', '{}', 'null', 'true', '', null, undefined, 1, true,
+    new Uint8Array([1, 2]),
+  ]) {
+    const { msg } = run(path, { payload, statusCode });
+    assert.equal(msg.payload.ok, false);
+    assert.equal(msg.payload.error, 'Viva PUT response acknowledgement is invalid');
+    const aggregate = run('scripts/nodered_onboarding_nodes/fn_onboarding_level_build_response.js', { payload: [msg.payload] }).result[2];
+    assert.equal(aggregate.statusCode, 502);
+    assert.equal(aggregate.payload.projectionStatus, 'FAILED');
+  }
+  for (const input of [{ statusCode: 200, payload: { error: 'fixture-error' } },
+    { statusCode: 200, payload: { message: 'fixture-error' } },
+    { statusCode: 200, payload: {}, error: { code: 'ETIMEDOUT' } },
+    { statusCode: 503, payload: {} }, { statusCode: 204, payload: 'unexpected body' }]) {
+    assert.equal(run(path, input).msg.payload.ok, false);
+  }
+  const failure = run(path, { statusCode: 503, payload: '<html>fixture-sensitive</html>' }).msg.payload;
+  assert.equal(failure.error, 'Viva PUT failed with HTTP 503');
+});
+test('Viva PUT rejection is observer-independent and diagnostics contain no response values', () => {
+  const path = 'scripts/nodered_onboarding_nodes/fn_onboarding_level_capture_viva_result.js';
+  const events = [], observer = createDiagnostics({ sink: e => events.push(e) });
+  const input = { statusCode: 200, payload: '<html>fixture-sensitive</html>',
+    headers: { 'content-type': 'text/html; fixture-sensitive', authorization: 'fixture-sensitive' } };
+  const result = run(path, input, observer);
+  assert.deepEqual(result, run(path, input));
+  assert.deepEqual(result, run(path, input, { observe() { throw Error('sink'); }, upstream() { throw Error('sink'); } }));
+  assert.equal(result.msg.payload.ok, false);
+  assert(!JSON.stringify(events).includes('fixture-sensitive'));
 });
 test('membership audit timestamps/admission flags stay separate from HTTP/client counts', async () => {
   const { buildMembershipDiagnosticLogFormat, parseMembershipDiagnostic } = await import('../diagnostics/membership-audit.mjs');

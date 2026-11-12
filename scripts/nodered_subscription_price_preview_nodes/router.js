@@ -202,14 +202,37 @@ if (ctx.step === 'game') {
 }
 if (ctx.step === 'exercise') {
   const exercise = canonical.unwrapRecord(msg.payload);
-  if (!ok() || !exercise || String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId
-    || canonical.resolveCategory(exercise) !== 'open_game'
-    || String(exercise.studio?.id || exercise.studioId || '') !== ctx.target.stationId || canonical.exerciseRoomId(exercise) !== ctx.target.roomId
-    || canonical.eventDurationMinutes(exercise) !== ctx.target.durationMinutes
-    || Date.parse(canonical.eventStartsAt(exercise)) !== Date.parse(ctx.target.startsAt)
-    || exercise.isCancelled === true || exercise.isCanceled === true
-    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())
-    || !Array.isArray(exercise.availableClientSubscriptions)) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  const unresolved = reason => {
+    // Explain the first failed predicate without changing the HTTP error contract.
+    // Observe only safe enums/status; never copy the provider record or headers.
+    try {
+      const payload = msg.payload;
+      const type = typeof msg.headers?.['content-type'] === 'string'
+        ? msg.headers['content-type'].split(';', 1)[0].trim().toLowerCase() : '';
+      const status = Number(msg.statusCode);
+      lkDiagnostic({ code: 'PRICE_PREVIEW_GAME_UNRESOLVED', reason,
+        upstreamStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
+        responseKind: payload === null ? 'null' : payload === undefined ? 'missing'
+          : Array.isArray(payload) ? 'array' : typeof payload === 'string' ? 'text'
+            : ['object', 'number', 'boolean'].includes(typeof payload) ? typeof payload : 'UNKNOWN',
+        contentTypeClass: !type ? 'missing' : type === 'application/json' || type.endsWith('+json') ? 'json'
+          : type === 'text/html' ? 'html' : type.startsWith('text/') ? 'text' : 'other',
+        outcome: 'refused' });
+    } catch { /* Diagnostics cannot turn a refusal into an exception. */ }
+    return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  };
+  // Preserve the original predicates, short-circuit order and fail-closed verdict.
+  if (!ok()) return unresolved('target_upstream_error');
+  if (!exercise) return unresolved('target_missing');
+  if (String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId) return unresolved('target_identity');
+  if (canonical.resolveCategory(exercise) !== 'open_game') return unresolved('target_category');
+  if (String(exercise.studio?.id || exercise.studioId || '') !== ctx.target.stationId) return unresolved('target_studio');
+  if (canonical.exerciseRoomId(exercise) !== ctx.target.roomId) return unresolved('target_room');
+  if (canonical.eventDurationMinutes(exercise) !== ctx.target.durationMinutes) return unresolved('target_duration');
+  if (Date.parse(canonical.eventStartsAt(exercise)) !== Date.parse(ctx.target.startsAt)) return unresolved('target_start_invalid');
+  if (exercise.isCancelled === true || exercise.isCanceled === true) return unresolved('target_cancelled');
+  if (['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return unresolved('target_lifecycle');
+  if (!Array.isArray(exercise.availableClientSubscriptions)) return unresolved('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
   ctx.exercise = exercise;
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }
