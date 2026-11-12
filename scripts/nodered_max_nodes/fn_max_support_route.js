@@ -257,6 +257,16 @@ if (update.command === "/start") {
   ));
 }
 
+let generationHeader = {};
+try {
+  const generation = env.get("SUPPORT_MAX_GENERATION");
+  const after = env.get("SUPPORT_MAX_GENERATION_AFTER");
+  if (generation != null || after != null) {
+    const token = env.get("SUPPORT_MAX_GENERATION_TOKEN");
+    if (!token) return null;
+    generationHeader = { "x-max-generation-token": token };
+  }
+} catch { return null; }
 const integrationToken = getIntegrationToken();
 const supportEventMsg = Object.assign({}, msg, {
   method: "POST",
@@ -264,11 +274,12 @@ const supportEventMsg = Object.assign({}, msg, {
   headers: Object.assign(
     { "Content-Type": "application/json", Accept: "application/json" },
     integrationToken ? { "x-integration-token": integrationToken } : {},
+    generationHeader,
   ),
   payload: event,
 });
 
-const debugMsg = Object.assign({}, msg, {
+const debugMsg = Object.keys(generationHeader).length ? { payload: { code: "MAX_GENERATION_ROUTED" } } : Object.assign({}, msg, {
   payload: {
     maxUpdate: update,
     client,

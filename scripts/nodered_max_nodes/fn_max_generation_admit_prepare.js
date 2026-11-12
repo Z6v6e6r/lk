@@ -2,7 +2,8 @@
 const update = msg.maxUpdate;
 const generation = env.get('SUPPORT_MAX_GENERATION');
 const after = env.get('SUPPORT_MAX_GENERATION_AFTER');
-const token = env.get('SUPPORT_INTEGRATION_TOKEN');
+const token = env.get('SUPPORT_MAX_GENERATION_TOKEN');
+const sharedToken = env.get('SUPPORT_INTEGRATION_TOKEN');
 const connector = env.get('MAX_CONNECTOR');
 if (!['MAX_BOT', 'MAX_ACADEMY_BOT'].includes(connector) || !token || !update
   || update.providerTimestampVerified !== true || update.generation !== generation
@@ -14,7 +15,8 @@ if (!['MAX_BOT', 'MAX_ACADEMY_BOT'].includes(connector) || !token || !update
 const base = String(env.get('SUPPORT_API_BASE_URL') || 'http://127.0.0.1:3000/api').replace(/\/$/, '');
 msg.method = 'POST';
 msg.url = `${base}/support/max/ingress/admit`;
-msg.headers = { 'Content-Type': 'application/json', Accept: 'application/json', 'x-integration-token': token };
+msg.headers = { 'Content-Type': 'application/json', Accept: 'application/json', 'x-max-generation-token': token,
+  ...(sharedToken ? { 'x-integration-token': sharedToken } : {}) };
 msg.payload = { connector, id: update.messageId, at: new Date(update.timestamp).toISOString() };
 msg.requestTimeout = 5000;
 return msg;

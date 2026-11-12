@@ -55,6 +55,16 @@ const integrationToken = (() => {
   }
 })();
 
+let generationHeader = {};
+try {
+  const generation = env.get("SUPPORT_MAX_GENERATION");
+  const after = env.get("SUPPORT_MAX_GENERATION_AFTER");
+  if (generation != null || after != null) {
+    const token = env.get("SUPPORT_MAX_GENERATION_TOKEN");
+    if (!token) return null;
+    generationHeader = { "x-max-generation-token": token };
+  }
+} catch { return null; }
 const baseUrl = apiBase || "http://127.0.0.1:3000/api";
 const queryParts = [];
 const addQuery = (key, value) => {
@@ -79,5 +89,6 @@ msg.url = `${baseUrl}/support/clients/resolve${queryParts.length ? `?${queryPart
 msg.headers = Object.assign(
   { Accept: "application/json" },
   integrationToken ? { "x-integration-token": integrationToken } : {},
+  generationHeader,
 );
 return msg;

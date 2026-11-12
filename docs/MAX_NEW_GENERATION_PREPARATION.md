@@ -2,7 +2,7 @@
 
 This change prepares source functions and mocked acceptance. It does not build an import, mutate a queue, deploy, restart, query provider updates, acknowledge a callback or enable any paused node.
 
-The paired backend change is `ph-admin`'s `docs/MAX_NEW_GENERATION_ISOLATION.md`. Both sides use the public epoch settings `SUPPORT_MAX_GENERATION` and `SUPPORT_MAX_GENERATION_AFTER`; authentication continues through the existing configured `SUPPORT_INTEGRATION_TOKEN`. Every bot flow also needs an exact `MAX_CONNECTOR` of `MAX_BOT` or `MAX_ACADEMY_BOT`. This is not a mode switch to receipt-v1 and does not replace the legacy sender with the incompatible receipt-v1 adapter.
+The paired backend change is `ph-admin`'s `docs/MAX_NEW_GENERATION_ISOLATION.md`. Both sides use the public epoch settings `SUPPORT_MAX_GENERATION` and `SUPPORT_MAX_GENERATION_AFTER`; new-only MAX calls require a dedicated `SUPPORT_MAX_GENERATION_TOKEN` sent as `x-max-generation-token`. Existing shared integration authentication is unchanged; configuring a global token is not part of this change. Every bot flow also needs an exact `MAX_CONNECTOR` of `MAX_BOT` or `MAX_ACADEMY_BOT`. This is not a mode switch to receipt-v1. The separate `fn_max_generation_outbox_{pull,dispatch,ack,fail}_prepare.js` templates omit receiptProtocol and use the existing legacy SDK sender; it must not be wired to the incompatible receipt-v1 adapter.
 
 ## Mandatory graph, before side effects
 
@@ -17,6 +17,8 @@ For each actual polling receiver, webhook and link-in source:
 The SDK polling marker is RAM-only and starts undefined after restart. Do not execute GET /updates as an innocuous watermark probe. This feature discards old/ambiguous updates from automatic business processing; it does not establish delivery or a lossless provider cursor. Handler/admission failures remain held for explicit reconciliation, with no automatic replay. Direct service replies must never run on an unreserved event.
 
 ## Old queue isolation and release order
+
+Until the native sender default target is independently attested, user-only outbox targets and unsupported attachments are held; the new-only source never treats a user ID as a chat ID. Explicit chat targets use the existing SDK sender and its installed no-send-retry guard. Send errors use the dedicated fail formatter with `requeue:false`; provider error/body/cause is not forwarded.
 
 The backend's new generation claim fence excludes old Map rows and Mongo residuals in every namespace; row status reset and `fail(false)` cannot provide that guarantee. All queued commands present before the new cutover are old, including commands accumulated during the existing pause. The earlier13:14 pause verification timestamp is not the new epoch.
 
