@@ -74,6 +74,30 @@ or retries, request envelope preservation, redaction, malformed/no-context error
 valid CUP/Viva identities and unchanged invalid-token/spoof rejection behavior.
 The CI authenticated-route step includes the transport suite.
 
+The isolated runtime suite uses the real Node-RED 4.0.9 HTTP Request, Function,
+Catch and HTTP Response nodes. It runs the same guarded fixture and committed
+function bodies; only the dependency destination and result terminal are local
+fixtures. A socket guard permits only the two ephemeral loopback fixture ports,
+inherited HTTP proxies are removed in the test process, and no DB nodes exist.
+The original graph leaves a real refused request unanswered. The corrected graph
+closes refusal on all nine routes, reset on both profile sources and actual
+10-second timeouts. Both slow stubs attempt a late response after 12 seconds;
+terminal-input/HTTP-finish counters are checked again to exclude a second 503 or
+entry into result processing. Valid, invalid-token, malformed-profile and foreign
+actor controls exercise the real normal mapper too.
+
+```sh
+NODERED_RUNTIME_ROOT=/absolute/isolated-node-red-4.0.9 \
+  node --test scripts/tests/resultAuthTransportRuntime.test.mjs
+```
+
+CI runs this suite beside the existing pinned 4.0.9 lifecycle check without adding
+a project dependency. Optional `RESULT_AUTH_RUNTIME_EVIDENCE` must name a new
+local file; only counters, timing and source hashes are written, after all 24
+subtests and runtime cleanup succeed. No raw URLs, request bodies or credentials
+are exported. This covers isolated core runtime behavior; it does not exercise
+external TLS/provider services or production integration.
+
 This change does not establish that the single historical result 504 came from
 either recorded ECONNREFUSED. Request-level historical correlation remains unknown.
 It also does not remove the independent ph-admin backend stop/start availability gap.
