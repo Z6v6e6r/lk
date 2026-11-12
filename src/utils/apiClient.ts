@@ -21,7 +21,8 @@ import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscr
 import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
 import { UUID } from "./errorDiagnosticsCore.mjs";
-import { abortCause, diagnosticId, routeTemplate } from "./errorDiagnostics";
+import { gamePatchDiagnosticUrl } from "./gamePatchDiagnostics.mjs";
+import { abortCause, callerBuild, diagnosticId, routeTemplate } from "./errorDiagnostics";
 import type {
   BookingCancellationAction,
   BookingCancellationOptionsResponse,
@@ -2303,7 +2304,8 @@ function scoreMasterService(service: MasterServiceOption, studioId: string): num
   return hasStudio + nameBoost + service.roomsCount;
 }
 
-async function resolveMasterServiceIdByStudio(studioId: string): Promise<string | null> {
+async function resolveMasterServiceIdByStudio(studioId: string, signal?: AbortSignal): Promise<string | null> {
+  signal?.throwIfAborted();
   if (!studioId) return null;
   const cached = masterServiceByStudioCache.get(studioId);
   if (cached) return cached;
@@ -2327,7 +2329,9 @@ async function resolveMasterServiceIdByStudio(studioId: string): Promise<string 
       method: "GET",
       auth: true,
       retries: 1,
+      signal,
     });
+    signal?.throwIfAborted();
     if (result.error) continue;
 
     const services = extractMasterServiceItems(result.data)
@@ -2352,7 +2356,8 @@ async function resolveMasterServiceIdByStudio(studioId: string): Promise<string 
   return null;
 }
 
-async function bootstrapMasterService(masterServiceId: string, studioId?: string | null) {
+async function bootstrapMasterService(masterServiceId: string, studioId?: string | null, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   if (!masterServiceId) return;
 
   const cacheKey = `${masterServiceId}:${studioId ?? ""}`;
@@ -2362,43 +2367,55 @@ async function bootstrapMasterService(masterServiceId: string, studioId?: string
   const baseSubServicesUrl = `${base}/subServices?`;
   const studiosUrl = `${base}/studios?`;
 
+  signal?.throwIfAborted();
   await request<unknown>(`${base}/meta`, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
 
+  signal?.throwIfAborted();
   await request<unknown>(baseSubServicesUrl, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
 
+  signal?.throwIfAborted();
   const studiosResult = await request<unknown>(studiosUrl, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
+  signal?.throwIfAborted();
   const timeZone =
     extractMasterServiceTimeZone(studiosResult.data, studioId) ??
     masterServiceTimeZoneCache.get(masterServiceId) ??
     "Europe/Moscow";
   masterServiceTimeZoneCache.set(masterServiceId, timeZone);
 
+  signal?.throwIfAborted();
   await request<unknown>(`${API_BASE}/api/v1/time?timeZone=${encodeURIComponent(timeZone)}`, {
     method: "GET",
     retries: 1,
+    signal,
   });
 
   if (studioId) {
+    signal?.throwIfAborted();
     const studioSubServicesResult = await request<unknown>(
       `${base}/subServices?studioId=${encodeURIComponent(studioId)}&showAll=true`,
       {
         method: "GET",
         auth: true,
         retries: 1,
+        signal,
       },
     );
+    signal?.throwIfAborted();
     const studioGameModes = extractStudioGameModes(studioSubServicesResult.data, studioId);
     masterServiceStudioGameModesCache.set(cacheKey, studioGameModes);
 
@@ -2421,6 +2438,7 @@ async function bootstrapMasterService(masterServiceId: string, studioId?: string
     }
   }
 
+  signal?.throwIfAborted();
   masterServiceBootstrapCache.add(cacheKey);
 }
 
@@ -4297,7 +4315,16 @@ export async function request<T>(
   url: string,
   options: RequestOptions = {},
 ): Promise<ApiResult<T>> {
-  try { options = { ...options, diagnosticContext: { logicalOperation: diagnosticId(), attempt: 0 } }; } catch { /* no crypto */ }
+  let diagnosticContext: RequestOptions["diagnosticContext"];
+  try {
+    const supplied = options.diagnosticContext;
+    const valid = supplied && typeof supplied.logicalOperation === "string" && UUID.test(supplied.logicalOperation) && Number.isSafeInteger(supplied.attempt)
+      && supplied.attempt >= 0 && supplied.attempt < 10000;
+    diagnosticContext = valid
+      ? { logicalOperation: supplied.logicalOperation, attempt: supplied.attempt }
+      : { logicalOperation: diagnosticId(), attempt: 0 };
+  } catch { /* Missing crypto or malformed diagnostic claims cannot stop the request. */ }
+  options = { ...options, diagnosticContext };
   const cacheConfig = resolveRequestCacheConfig(url, options);
 
   if (cacheConfig) {
@@ -4673,11 +4700,13 @@ async function withRetry<T>(
   }
 }
 
-export async function apiFetchProfile() {
+export async function apiFetchProfile(signal?: AbortSignal) {
+  signal?.throwIfAborted();
   return request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
 }
 
@@ -7913,6 +7942,7 @@ async function writePadelGameRecord(
   requestOptions: {
     retries?: number;
     keepalive?: boolean;
+    diagnosticContext?: RequestOptions["diagnosticContext"];
   } = {},
 ): Promise<ApiResult<PadelGameRecord>> {
   const baseUrl = getServ2Origin() || "";
@@ -7932,6 +7962,7 @@ async function writePadelGameRecord(
       baseUrl,
       retries,
       keepalive,
+      diagnosticContext: requestOptions.diagnosticContext,
       body: JSON.stringify(payload),
     });
 
@@ -8418,13 +8449,20 @@ export async function apiUpdatePadelGameRecord(
     };
   }
 
+  let url = `/lk/games/${encodeURIComponent(normalizedGameId)}`;
+  let diagnosticContext: RequestOptions["diagnosticContext"];
+  try {
+    diagnosticContext = { logicalOperation: diagnosticId(), attempt: 0 };
+    url = gamePatchDiagnosticUrl(url, { callerBuild: callerBuild(), logicalOperation: diagnosticContext.logicalOperation });
+  } catch { /* No diagnostic failure may prevent a mutation. */ }
+
   const writeResult = await writePadelGameRecord(
-    [{ url: `/lk/games/${encodeURIComponent(normalizedGameId)}`, method: "PATCH" }],
+    [{ url, method: "PATCH" }],
     payload as unknown as Record<string, unknown>,
     normalizedGameId,
     payload.invite?.inviteUrl?.trim() || null,
     // Replaying a mutation cannot resolve a stale version or an ambiguous network outcome.
-    { retries: 0 },
+    { retries: 0, diagnosticContext },
   );
   if (writeResult.status === 409 && writeResult.error) {
     let conflictRecord: PadelGameRecord | null = null;
@@ -10202,6 +10240,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
 export async function apiFetchMasterServiceTimeslots(
   date: string,
   options: {
+    signal?: AbortSignal;
     studioId?: string | null;
     masterServiceId?: string | null;
     preferredSubServiceId?: string | null;
@@ -10209,11 +10248,13 @@ export async function apiFetchMasterServiceTimeslots(
     preferredRoomIds?: string[];
   } = {},
 ) {
+  const signal = options.signal;
+  signal?.throwIfAborted();
   const explicitMasterServiceId = options.masterServiceId?.trim() || null;
   const studioId = options.studioId?.trim() || null;
   const resolvedByStudio =
     ENABLE_MASTER_SERVICE_AUTO_DISCOVERY && !explicitMasterServiceId && studioId
-      ? await resolveMasterServiceIdByStudio(studioId)
+      ? await resolveMasterServiceIdByStudio(studioId, signal)
       : null;
   const fallbackMasterServiceId = studioId ? null : DEFAULT_GAMES_MASTER_SERVICE_ID;
   const masterServiceId =
@@ -10221,6 +10262,7 @@ export async function apiFetchMasterServiceTimeslots(
     resolvedByStudio ??
     fallbackMasterServiceId;
 
+  signal?.throwIfAborted();
   if (!masterServiceId) {
     return {
       data: [] as GameTimeSlot[],
@@ -10234,7 +10276,8 @@ export async function apiFetchMasterServiceTimeslots(
     };
   }
 
-  await bootstrapMasterService(masterServiceId, studioId);
+  await bootstrapMasterService(masterServiceId, studioId, signal);
+  signal?.throwIfAborted();
 
   const cacheKey = `${masterServiceId}:${studioId ?? ""}`;
   const explicitPreferredIds = uniqueIds(options.preferredSubServiceIds ?? []).filter((value) =>
@@ -10277,10 +10320,12 @@ export async function apiFetchMasterServiceTimeslots(
       method: "POST",
       auth: true,
       retries: 1,
+      signal,
       body: JSON.stringify(requestPayload),
     },
   );
 
+  signal?.throwIfAborted();
   if (result.error) {
     return {
       data: [] as GameTimeSlot[],

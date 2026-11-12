@@ -2,6 +2,8 @@ import { createDiagnosticBudget } from "../../src/utils/diagnosticBudget.mjs";
 import { randomUUID, createHmac, createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { sanitizeEvent, routeTemplate, responseKind } from "../../src/utils/errorDiagnosticsCore.mjs";
+import { gamePatchRoute } from "../../src/utils/gamePatchDiagnostics.mjs";
+import { gamePatchConflictFacts } from "./game-patch-conflict.mjs";
 import { createSubscriptionBookingConflictObserver } from "./subscription-booking-conflicts.mjs";
 import { previewEmptyTariffFacts } from "./preview-empty-tariffs.mjs";
 
@@ -79,10 +81,17 @@ export function createDiagnostics({ sink, release, key, detailLimit = 600, now =
       const operation = msg.req?.headers?.["idempotency-key"];
       const target = command?.targetExternalChatId || command?.targetExternalUserId;
       const conflict = bookingConflict(msg, stage, fields);
+      const patch = gamePatchConflictFacts(msg, stage, fields);
+      if (patch) {
+        // Retain only validated scalar claims/phase for the terminal request event.
+        for (const name of ['callerBuild', 'logicalOperation', 'patchConflictStage']) {
+          if (Object.hasOwn(patch, name)) ctx[name] = patch[name];
+        }
+      }
       const tariff = ctx.routeTemplate === '/lk/subscriptions/game-price-preview' && ctx.method === 'POST'
         ? previewEmptyTariffFacts(msg, stage, fields) : {};
       emit(ctx, { eventKind: "stage", code: "STAGE_ENTER", entityRef: ref("entity", entity), operationRef: ref("operation", operation),
-        outboxRef: ref("outbox", command?.id), bindingRef: ref("binding", target), ...fields, ...conflict, ...tariff, stage,
+        outboxRef: ref("outbox", command?.id), bindingRef: ref("binding", target), ...fields, ...conflict, ...tariff, ...patch, stage,
         correlationHash: ctx.correlationHash,
         operationStage: conflict?.operationStage ?? msg._referralSubscriptionCtx?.step ?? msg._subscriptionBooking?.step ?? msg._splitCtx?.step ?? msg._subscriptionPricePreview?.step,
         reqPresent: Boolean(msg.req), resPresent: Boolean(msg.res), refUnavailable: !Buffer.isBuffer(key) || key.length < 32 });
@@ -124,7 +133,10 @@ export function createDiagnostics({ sink, release, key, detailLimit = 600, now =
   }
   function middleware(req, res, next) {
     try {
-      if (routeTemplate(req.path) === "UNKNOWN") { /* unmatched requests have no diagnostics */ } else {
+      if (routeTemplate(req.path) === "UNKNOWN" || gamePatchRoute(req.path) === '/lk/games/records/:gameId') {
+        // Keep the legacy alias's response/CORS behavior; its existing node hooks
+        // can emit stage events without installing response middleware.
+      } else {
       const msg = { req, res };
       const ctx = context(msg);
       // Response-only correlation: no new request headers/preflight requirements or provider forwarding.

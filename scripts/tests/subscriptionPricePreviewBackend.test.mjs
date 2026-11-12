@@ -9,6 +9,237 @@ import { sanitizeEvent } from '../../src/utils/errorDiagnosticsCore.mjs';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
 import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, composeSubscriptionPreviewServerTimeArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
+import { composePreviewBookingsRelease, ORIGINAL_BOOKINGS_GUARD } from '../prepare_preview_bookings_release.mjs';
+
+const bookingsRouterSource = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js', import.meta.url), 'utf8');
+const bookingsStart = "if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {";
+const bookingsEnd = "  if (ctx.step === 'activeBookings') {";
+const originalBookingsGuard = `${bookingsStart}
+  if (!ok() || !canonical.hasCompleteBookingList(msg.payload) || rows().some(row => !canonical.isObj(row)
+    || !canonical.bookingId(row) || (canonical.bookingClientId(row) && canonical.normalizeId(canonical.bookingClientId(row)) !== canonical.normalizeId(ctx.actorClientId)))) return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+`;
+const bookingsBaselineSource = bookingsRouterSource.slice(0, bookingsRouterSource.indexOf(bookingsStart))
+  + originalBookingsGuard + bookingsRouterSource.slice(bookingsRouterSource.indexOf(bookingsEnd));
+const bookingsHelperRoots = ['isObj', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId',
+  'normalizeId', 'mergeBookings', 'isInactiveBooking'];
+const bookingsHelpers = extractSubscriptionPricePreviewSource({
+  source: fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8'),
+  roots: bookingsHelperRoots,
+}).source;
+const bookingsCanonical = new Function(`${bookingsHelpers}; return {${bookingsHelperRoots.join(',')}};`)();
+const executeBookings = new Function('msg', 'canonical', 'global', 'node', bookingsRouterSource);
+const executeBookingsBaseline = new Function('msg', 'canonical', 'global', 'node', bookingsBaselineSource);
+const finalizeBookings = new Function('msg', 'global', fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/final.js', import.meta.url), 'utf8'));
+function bookingsDiagnostic(payload, { step = 'activeBookings', baseline = false, statusCode = 200, error, elapsed = 0,
+  observer, observerMode = 'shared', loggerThrows = false, canonical = bookingsCanonical } = {}) {
+  const events = [], info = [];
+  const diagnostics = observerMode === 'shared' ? createDiagnostics({ sink: event => events.push(event) })
+    : observerMode === 'throws' ? { observe() { throw Error('fixture-sensitive'); } } : observer;
+  const globals = { get: () => diagnostics, set() { assert.fail('Diagnostics must not write globals'); } };
+  const ctx = { step, startedAt: Date.now() - elapsed, actorClientId: 'fixture-owner', tenantKey: 'fixture',
+    auth: 'fixture-sensitive', activePayload: [], ruleProductIds: [] };
+  const msg = { payload, statusCode, error, _subscriptionPricePreview: ctx,
+    req: { path: PATH, method: 'POST' }, headers: { authorization: 'fixture-sensitive' } };
+  const output = (baseline ? executeBookingsBaseline : executeBookings)(msg, canonical, globals, {
+    log(text) { if (loggerThrows) throw Error('fixture-sensitive'); info.push(JSON.parse(text)); },
+    send() { assert.fail('No new request may be sent'); },
+  });
+  const port = output.findIndex(Boolean);
+  assert([0, 2, 4].includes(port));
+  if (port === 4) finalizeBookings(msg, globals);
+  return { msg, ctx, port, events, info };
+}
+const incompleteBookingsEvent = result => [...result.events, ...result.info].filter(e => e.firstFailure);
+const ownedBooking = extra => ({ id: 'fixture-booking', clientId: 'fixture-owner', ...extra });
+
+test('booking diagnostics identify the first failed predicate in both stages without changing the 503 response', () => {
+  const cases = [
+    [[], 502, 'upstream_status'], [[null], 401, 'upstream_status'],
+    [null, 200, 'list_incomplete_or_unrecognized'], ['fixture-sensitive', 200, 'list_incomplete_or_unrecognized'],
+    [{}, 200, 'list_incomplete_or_unrecognized'],
+    [{ content: [null], totalElements: 2 }, 200, 'list_incomplete_or_unrecognized'],
+    [{ items: [], totalCount: 1 }, 200, 'list_incomplete_or_unrecognized'],
+    [{ content: [], last: false }, 200, 'list_incomplete_or_unrecognized'],
+    [{ records: [], hasNext: true }, 200, 'list_incomplete_or_unrecognized'],
+    [{ bookings: [], number: 0, totalPages: 2 }, 200, 'list_incomplete_or_unrecognized'],
+    [{ data: { content: [], totalElements: 1 } }, 200, 'list_incomplete_or_unrecognized'],
+    [[null], 200, 'row_not_object'], [[[]], 200, 'row_not_object'],
+    [['fixture-sensitive'], 200, 'row_not_object'],
+    [[{ clientId: 'fixture-other' }], 200, 'row_id_missing'],
+    [[ownedBooking({ id: ' ' })], 200, 'row_id_missing'],
+    [[ownedBooking({ clientId: 'fixture-other' })], 200, 'row_owner_mismatch'],
+    [[ownedBooking(), ownedBooking({ clientId: 'fixture-other' }), null], 200, 'row_owner_mismatch'],
+  ];
+  for (const step of ['activeBookings', 'historyBookings']) for (const observerMode of ['shared', 'missing', 'throws']) {
+    for (const [payload, statusCode, firstFailure] of cases) {
+      const result = bookingsDiagnostic(payload, { step, statusCode, observerMode });
+      assert.equal(result.port, 4);
+      assert.equal(result.msg.statusCode, 503);
+      assert.deepEqual(result.msg.payload, { error: { code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE' } });
+      const [event] = incompleteBookingsEvent(result);
+      assert.equal(incompleteBookingsEvent(result).length, 1);
+      assert.equal(event.stage, 'preview_router');
+      assert.equal(event.operationStage, step);
+      assert.equal(event.firstFailure, firstFailure);
+      assert.equal(event.upstreamStatus, statusCode);
+      if (observerMode === 'shared') { assert.equal(event.eventKind, 'audit'); assert.deepEqual(result.info, []); }
+      else {
+        assert.deepEqual(event, { event: 'subscription_price_preview_bookings_refused',
+          code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE', stage: 'preview_router', operationStage: step, firstFailure, upstreamStatus: statusCode });
+      }
+      const serialized = JSON.stringify([...result.events, ...result.info]);
+      for (const secret of ['fixture-sensitive', 'fixture-owner', 'fixture-other', 'fixture-booking']) assert(!serialized.includes(secret));
+    }
+  }
+});
+
+test('booking guard outcomes, helper calls and successful read transitions equal the original predicates', () => {
+  const cases = [[], [ownedBooking()], [{ id: 'fixture-booking' }],
+    [ownedBooking({ clientId: ' FIXTURE-OWNER ' })], [{ bookingId: 'fixture-booking', client: { id: 'fixture-owner' } }],
+    { data: { content: [ownedBooking()], totalElements: 1, last: true } },
+    { content: [], totalElements: 0 }, { payload: { items: [] } }, { result: { records: [] } },
+    new Array(1000).fill(ownedBooking()), null, [null], [{ clientId: 'fixture-other' }],
+    [ownedBooking({ clientId: 'fixture-other' })], { content: [], hasNext: true }];
+  for (const step of ['activeBookings', 'historyBookings']) for (const statusCode of [200, 204, 299, 300, 401, 503]) {
+    for (const payload of cases) {
+      const execute = baseline => {
+        const calls = [];
+        const canonical = Object.fromEntries(Object.entries(bookingsCanonical).map(([key, fn]) => [key, (...args) => {
+          calls.push(key); return fn(...args);
+        }]));
+        const result = bookingsDiagnostic(payload, { step, statusCode, baseline, canonical });
+        // Observed time is unrelated to guard parity, and naturally differs between executions.
+        delete result.ctx.activeObservedAt;
+        return { port: result.port, ctx: { ...result.ctx, startedAt: 0 }, payload: result.msg.payload,
+          status: result.msg.statusCode, method: result.msg.method, url: result.msg.url, calls };
+      };
+      assert.deepEqual(execute(false), execute(true));
+    }
+  }
+  for (const step of ['activeBookings', 'historyBookings']) {
+    const result = bookingsDiagnostic([], { step });
+    assert.equal(result.port, step === 'activeBookings' ? 0 : 2);
+    assert.equal(result.ctx.step, step === 'activeBookings' ? 'historyBookings' : 'operations');
+    assert.deepEqual(incompleteBookingsEvent(result), []);
+  }
+});
+
+test('booking diagnostics keep transport/timeout guards ahead of list inspection and tolerate failed sinks', () => {
+  const payload = new Proxy({}, { get() { assert.fail('Body must not be inspected after an earlier guard'); } });
+  for (const step of ['activeBookings', 'historyBookings']) {
+    for (const observerMode of ['missing', 'throws']) {
+      const status = bookingsDiagnostic(payload, { step, statusCode: 503, observerMode, loggerThrows: true });
+      assert.equal(status.msg.payload.error.code, 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+      for (const [options, code] of [[{ error: {} }, 'PRICE_PREVIEW_READ_FAILED'], [{ elapsed: 30000 }, 'PRICE_PREVIEW_TIMEOUT']]) {
+        const result = bookingsDiagnostic(payload, { step, observerMode, ...options });
+        assert.equal(result.msg.payload.error.code, code);
+        assert.deepEqual(incompleteBookingsEvent(result), []);
+      }
+    }
+  }
+});
+
+test('booking diagnostic status is bounded, missing stays unknown and no accessor/coercion is repeated', () => {
+  for (const observerMode of ['shared', 'missing']) for (const [statusCode, expected] of [
+    [100, 100], [599, 599], ['401', 401], [null, undefined], [0, undefined],
+    [99, undefined], [600, undefined], [200.5, undefined], [Infinity, undefined], ['fixture-sensitive', undefined],
+  ]) {
+    const event = incompleteBookingsEvent(bookingsDiagnostic(null, { statusCode, observerMode }))[0];
+    assert.equal(event.upstreamStatus, expected);
+  }
+  let conversions = 0;
+  const statusCode = { valueOf() { conversions++; return 503; } };
+  assert.equal(incompleteBookingsEvent(bookingsDiagnostic([], { statusCode }))[0].upstreamStatus, undefined);
+  assert.equal(conversions, 2, 'Only the original ok() may coerce status');
+  // Exercise the actual router directly to preserve the accessor descriptor.
+  let reads = 0;
+  const info = [];
+  const msg = { payload: [], _subscriptionPricePreview: { step: 'activeBookings', startedAt: Date.now() },
+    get statusCode() { reads++; return 503; } };
+  executeBookings(msg, bookingsCanonical, { get: () => null }, { log: text => info.push(JSON.parse(text)) });
+  assert.equal(reads, 2);
+  assert.equal(info[0].upstreamStatus, undefined);
+  const absentInfo = [];
+  const absent = { payload: [], _subscriptionPricePreview: { step: 'historyBookings', startedAt: Date.now() } };
+  const missingGlobals = { get: () => null };
+  const output = executeBookings(absent, bookingsCanonical, missingGlobals, { log: text => absentInfo.push(JSON.parse(text)) });
+  assert.equal(output[4], absent);
+  assert.equal(absentInfo[0].firstFailure, 'upstream_status');
+  assert.equal(absentInfo[0].operationStage, 'historyBookings');
+  assert(!Object.hasOwn(absentInfo[0], 'upstreamStatus'));
+  finalizeBookings(absent, missingGlobals);
+  assert.equal(absent.statusCode, 503);
+  assert.deepEqual(absent.payload, { error: { code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE' } });
+});
+
+test('firstFailure and booking stages remain finite enums through sanitizer and generated schema', () => {
+  const base = { schemaVersion: 1, diagnosticEventId: uuid(81), requestId: uuid(82), eventKind: 'audit',
+    source: 'node_red', stage: 'preview_router', code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE' };
+  for (const value of ['fixture-sensitive', 123, {}, [], null, 'row_owner_mismatch\r\nfixture-sensitive']) {
+    const safe = sanitizeEvent({ ...base, firstFailure: value, operationStage: value,
+      upstreamStatus: value, payload: value, url: value, clientId: value, bookingId: value });
+    assert.equal(safe.firstFailure, 'UNKNOWN');
+    assert.equal(safe.operationStage, 'UNKNOWN');
+    assert.equal(safe.upstreamStatus, typeof value === 'number' ? value : undefined);
+    for (const key of ['payload', 'url', 'clientId', 'bookingId']) assert(!Object.hasOwn(safe, key));
+    assert(!JSON.stringify(safe).includes('fixture-sensitive'));
+  }
+  for (const operationStage of ['activeBookings', 'historyBookings']) {
+    const safe = sanitizeEvent({ ...base, operationStage, firstFailure: 'row_owner_mismatch', upstreamStatus: 200 });
+    assert.equal(safe.operationStage, operationStage);
+    assert.equal(safe.firstFailure, 'row_owner_mismatch');
+  }
+  assert.equal(sanitizeEvent({ ...base, get firstFailure() { throw Error('fixture-sensitive'); } }), null);
+});
+
+test('bookings activation changes only func and bypasses a silently filtering scoped observer', () => {
+  const original = [
+    { id: 'fixture-tab', type: 'tab' },
+    { id: 'lk_subscription_price_preview_20260908_router', type: 'function', z: 'fixture-tab',
+      func: bookingsBaselineSource, initialize: '/* existing diagnostic initialization */',
+      finalize: '/* existing diagnostic disposal */', libs: [{ var: 'existing', module: 'crypto' }], outputs: 6,
+      wires: Array.from({ length: 6 }, () => []) },
+    { id: 'fixture-unrelated', type: 'function', z: 'fixture-tab', func: 'return msg;', wires: [[]] },
+  ];
+  const liveBytes = Buffer.from(JSON.stringify(original));
+  const sha = value => createHash('sha256').update(value).digest('hex');
+  const options = { release: 'a'.repeat(40), expectedSourceSha256: sha(liveBytes), expectedRouterSha256: sha(bookingsBaselineSource) };
+  const packet = composePreviewBookingsRelease(liveBytes, options);
+  const candidate = JSON.parse(packet.candidateBytes);
+  assert.deepEqual(candidate.map(n => n.id), original.map(n => n.id));
+  const changed = candidate[1];
+  assert.deepEqual({ ...changed, func: original[1].func }, original[1]);
+  assert.deepEqual(candidate[0], original[0]); assert.deepEqual(candidate[2], original[2]);
+  assert.equal(packet.report.changedNodeCount, 1);
+  assert.deepEqual(packet.report.changedFields, ['func']);
+  assert.equal(packet.report.originalRecoveredExactly, true);
+  const execute = new Function('msg', 'canonical', 'global', 'node', changed.func);
+  for (const step of ['activeBookings', 'historyBookings']) {
+    const info = [];
+    const msg = { payload: [ownedBooking({ clientId: 'fixture-other' })], statusCode: 200,
+      _subscriptionPricePreview: { step, startedAt: Date.now(), actorClientId: 'fixture-owner' } };
+    const output = execute(msg, bookingsCanonical, { get: () => ({ observe() {} }) }, { log: text => info.push(JSON.parse(text)) });
+    assert.equal(output[4], msg);
+    assert.equal(msg._subscriptionPricePreview.error, 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+    assert.deepEqual(info, [{ event: 'subscription_price_preview_bookings_refused',
+      code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE', stage: 'preview_router', operationStage: step,
+      firstFailure: 'row_owner_mismatch', upstreamStatus: 200 }]);
+  }
+  assert.throws(() => composePreviewBookingsRelease(liveBytes, {}), /EXACT_IDENTITY/);
+  assert.throws(() => composePreviewBookingsRelease(liveBytes, { ...options, expectedSourceSha256: 'b'.repeat(64) }), /FLOW_DRIFT/);
+  assert.throws(() => composePreviewBookingsRelease(liveBytes, { ...options, expectedRouterSha256: 'b'.repeat(64) }), /ROUTER_DRIFT/);
+  for (const mutate of [
+    flow => { flow[1].d = true; },
+    flow => { flow[0].disabled = true; },
+    flow => { flow[1].func = flow[1].func.replace(ORIGINAL_BOOKINGS_GUARD, ORIGINAL_BOOKINGS_GUARD.replace('!ok()', 'false')); },
+    flow => { flow[1].func += '\nconst lkBookingsDiagnostic = () => {};'; },
+  ]) {
+    const modified = structuredClone(original); mutate(modified);
+    const bytes = Buffer.from(JSON.stringify(modified));
+    assert.throws(() => composePreviewBookingsRelease(bytes, { ...options,
+      expectedSourceSha256: sha(bytes), expectedRouterSha256: sha(modified[1].func) }), /ROUTER_DRIFT|GUARD_DRIFT/);
+  }
+});
 
 const fixturePath = process.env.LK_PRICE_PREVIEW_FLOW_FIXTURE;
 const legacyOriginal = fixturePath ? JSON.parse(fs.readFileSync(fixturePath)) : null;
@@ -113,6 +344,128 @@ function exerciseDiagnostic(payload, overrides = {}, observer, logger) {
 const previewExercise = () => ({ id: exerciseId, studioId: studio, roomId: room,
   timeFrom: target.startsAt, timeTo: '2099-09-21T08:30:00+03:00', typeId: 1613, directionId: 4588,
   availableClientSubscriptions: [], privateProviderField: 'fixture-sensitive' });
+
+// Fixed-clock local groupExercise reads only; no provider/database graph runs.
+const futureClock = Date.parse('2099-09-21T04:00:00Z');
+function targetTimeDiagnostic(changes = {}, options = {}) {
+  class Clock extends Date { static now() { return options.now ?? futureClock; } }
+  const booking = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
+  const roots = ['isObj', 'unwrapRecord', 'resolveCategory', 'eventStartsAt', 'eventDurationMinutes', 'exerciseRoomId', 'managedExternalEventTypeId'];
+  const helpers = extractSubscriptionPricePreviewSource({ source: booking, roots }).source;
+  const canonical = new Function(`${helpers}; return {${roots.join(',')}};`)();
+  Object.assign(canonical, { identityMoneyOwned() {}, isSpanishTrainingExercise: () => false, isProTrainingExercise: () => false });
+  const payload = { id: exerciseId, studioId: studio, roomId: room, typeId: 605, directionId: 1,
+    timeFrom: new Date(futureClock - 1).toISOString(), durationMinutes: 60, ...changes };
+  const info = [], observed = [];
+  const observer = options.observer === 'shared' ? createDiagnostics({ sink: e => observed.push(e) }) : options.observer;
+  const globals = { get: () => observer };
+  const msg = { payload: options.payload === undefined ? payload : options.payload, statusCode: options.status ?? 200,
+    _msgid: 'fixture-sensitive', _subscriptionPricePreview: { step: 'groupExercise', tenantKey: 'fixture',
+      eventCategory: options.category ?? 'GROUP_TRAINING', exerciseId, target: {},
+      startedAt: options.entered ?? futureClock - 100, ...options.context } };
+  const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
+  const args = ['msg', 'canonical', 'global', 'node', 'Date'];
+  const router = options.foreignRealm ? vm.compileFunction(source('router'), args, { parsingContext: vm.createContext({}) })
+    : new Function(...args, source('router'));
+  const outputs = router(msg, canonical, globals,
+    { log: options.log ?? (text => info.push(JSON.parse(text))) }, Clock);
+  const ctx = msg._subscriptionPricePreview;
+  if (outputs[4]) new Function('msg', 'global', 'Date', source('final'))(msg, globals, Clock);
+  return { msg, ctx, outputs, info, observed };
+}
+const timeEvent = result => result.info.find(event => event.event === 'subscription_price_preview_target_not_future');
+test('target_not_future distinguishes an already started event from crossing during this request', () => {
+  for (const observer of [undefined, { observe() {} }, { observe() { throw Error('fixture-sensitive'); } }, 'shared']) {
+    for (const [delta, enteredDelta, relation] of [
+      [-101, -100, 'PAST_AT_ENTRY'], [-100, -100, 'NOW_AT_ENTRY'], [-1, -100, 'CROSSED_DURING_REQUEST'], [0, -100, 'CROSSED_DURING_REQUEST'],
+    ]) {
+      const result = targetTimeDiagnostic({ timeFrom: new Date(futureClock + delta).toISOString() }, { observer, entered: futureClock + enteredDelta });
+      assert.equal(result.msg.statusCode, 503);
+      assert.deepEqual(result.msg.payload, { error: { code: 'GROUP_DISCOUNT_TARGET_UNRESOLVED', details: { reason: 'target_not_future', upstreamStatus: 200 } } });
+      assert.equal(result.outputs[0], null);
+      assert.equal(result.info.length, 1, 'One info event, even with a code-filtered observer');
+      const event = timeEvent(result);
+      assert.deepEqual(event, { event: 'subscription_price_preview_target_not_future', schemaVersion: 1, code: 'TARGET_NOT_FUTURE',
+        step: 'groupExercise', reason: 'target_not_future', startRelation: relation, startAlias: 'TIME_FROM', startFormat: 'ISO_OFFSET',
+        elapsedBucket: 'LT1S', factsFailed: false, explicitOffsetValid: true, aliasConflict: false });
+    }
+  }
+});
+test('target_not_future preserves future and other refusal paths without extra diagnostics', () => {
+  const future = targetTimeDiagnostic({ timeFrom: new Date(futureClock + 1).toISOString() });
+  assert.equal(future.ctx.step, 'subscriptions'); assert.equal(future.info.length, 0);
+  for (const [changes, options, code, reason] of [
+    [{}, { status: 502 }, 'GROUP_DISCOUNT_TARGET_UNRESOLVED', 'target_upstream_error'],
+    [{ id: uuid(99) }, {}, 'GROUP_DISCOUNT_TARGET_UNRESOLVED', 'target_identity'],
+    [{ typeId: 1613 }, {}, 'GROUP_DISCOUNT_TARGET_UNRESOLVED', 'target_category'],
+    [{ timeFrom: 'fixture-sensitive' }, {}, 'GROUP_DISCOUNT_TARGET_UNRESOLVED', 'target_start_invalid'],
+    [{}, { entered: futureClock - 28001 }, 'PRICE_PREVIEW_TIMEOUT', undefined],
+  ]) {
+    const result = targetTimeDiagnostic(changes, options); assert.equal(result.info.length, 0);
+    assert.equal(result.msg.payload.error.code, code); assert.equal(result.msg.payload.error.details?.reason, reason);
+  }
+  const cancelledPast = targetTimeDiagnostic({ isCancelled: true, roomId: null, durationMinutes: 0 });
+  assert.equal(cancelledPast.msg.payload.error.details.reason, 'target_not_future', 'Original predicate order');
+  const tournament = targetTimeDiagnostic({ typeId: 839 }, { category: 'TOURNAMENT' });
+  assert.equal(tournament.msg.payload.error.code, 'TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED');
+});
+test('target_not_future exposes only coarse delay and unknown clock metadata', () => {
+  for (const [age, bucket] of [[0, 'LT1S'], [999, 'LT1S'], [1000, 'LT5S'], [4999, 'LT5S'],
+    [5000, 'LT15S'], [14999, 'LT15S'], [15000, 'LE28S'], [28000, 'LE28S']]) {
+    assert.equal(timeEvent(targetTimeDiagnostic({}, { entered: futureClock - age })).elapsedBucket, bucket);
+  }
+  for (const entered of [NaN, 'fixture-sensitive', futureClock + 1]) {
+    const event = timeEvent(targetTimeDiagnostic({}, { entered }));
+    assert.equal(event.startRelation, 'UNKNOWN'); assert.equal(event.elapsedBucket, 'UNKNOWN');
+  }
+});
+test('target_not_future identifies time aliases and suspicious shapes without reinterpreting the target', () => {
+  for (const [changes, alias, format, valid, conflict] of [
+    [{ timeFrom: '2099-09-21T06:59:59+03:00' }, 'TIME_FROM', 'ISO_OFFSET', true, false],
+    [{ timeFrom: '2099-09-20T23:59:59-0400' }, 'TIME_FROM', 'ISO_OFFSET', true, false],
+    [{ timeFrom: '2099-09-20T01:00:00' }, 'TIME_FROM', 'ISO_OFFSETLESS', false, false],
+    [{ timeFrom: '2099-09-20' }, 'TIME_FROM', 'DATE_ONLY', false, false],
+    [{ timeFrom: '2099-02-30T06:59:59+03:00' }, 'TIME_FROM', 'ISO_OFFSET', false, false],
+    [{ startsAt: new Date(futureClock + 1000).toISOString() }, 'TIME_FROM', 'ISO_OFFSET', true, true],
+    [{ timeFrom: 'fixture-sensitive', startsAt: new Date(futureClock - 1).toISOString() }, 'STARTS_AT', 'ISO_OFFSET', true, false],
+    [{ timeFrom: undefined, startAt: new Date(futureClock - 1).toISOString() }, 'START_AT', 'ISO_OFFSET', true, false],
+    [{ timeFrom: undefined, fromTime: new Date(futureClock - 1).toISOString() }, 'FROM_TIME', 'ISO_OFFSET', true, false],
+  ]) {
+    const result = targetTimeDiagnostic(changes), event = timeEvent(result);
+    assert.equal(event.startAlias, alias); assert.equal(event.startFormat, format);
+    assert.equal(event.explicitOffsetValid, valid); assert.equal(event.aliasConflict, conflict); assert.equal(event.factsFailed, false);
+    assert.equal(result.msg.payload.error.details.reason, 'target_not_future');
+    const serialized = JSON.stringify(result.info);
+    for (const value of [exerciseId, room, studio, 'fixture-sensitive', changes.timeFrom, changes.startsAt]) {
+      if (typeof value === 'string' && value) assert(!serialized.includes(value));
+    }
+    assert(!/https?:|Bearer|requestId|correlationId|exerciseId|startsAt|\d{4}-\d{2}-\d{2}|[a-f0-9]{8}-[a-f0-9-]{27}/i.test(serialized));
+  }
+});
+test('target_not_future diagnostic failures and unsafe aliases cannot change the refusal', () => {
+  for (const fromTime of [Symbol('fixture-sensitive'), 1n, 'fixture-sensitive'.repeat(30),
+    { toString() { assert.fail('Diagnostic must not coerce objects'); } }]) {
+    const result = targetTimeDiagnostic({ fromTime });
+    assert.equal(timeEvent(result).factsFailed, true); assert.equal(timeEvent(result).startAlias, 'UNKNOWN');
+    assert.equal(result.msg.statusCode, 503);
+  }
+  assert.equal(targetTimeDiagnostic({}, { log() { throw Error('fixture-sensitive'); } }).msg.statusCode, 503);
+  // Owning parser reads its aliases once; the diagnostic must not read a getter again.
+  const source = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js', import.meta.url), 'utf8');
+  const begin = source.indexOf('    // A dedicated info event');
+  const end = source.indexOf('    lkDiagnostic({ code: "TARGET_NOT_FUTURE"', begin);
+  let reads = 0; const logs = [];
+  const exercise = { timeFrom: new Date(futureClock - 1).toISOString(), get fromTime() { reads++; throw Error('fixture-sensitive'); } };
+  new Function('exercise', 'ctx', 'start', 'node', source.slice(begin, end))(exercise, { startedAt: futureClock - 100 }, futureClock - 1, { log: s => logs.push(JSON.parse(s)) });
+  assert.equal(reads, 0); assert.equal(logs[0].factsFailed, true);
+});
+test('target_not_future accepts plain provider and context objects from outside the function VM', () => {
+  const result = targetTimeDiagnostic({}, { foreignRealm: true });
+  assert.equal(result.msg.statusCode, 503);
+  assert.equal(timeEvent(result).factsFailed, false);
+  assert.equal(timeEvent(result).startRelation, 'CROSSED_DURING_REQUEST');
+  assert.equal(timeEvent(result).startAlias, 'TIME_FROM');
+});
 
 test('exercise diagnostics identify the first failed guard without changing the 503 contract', () => {
   for (const [payload, overrides, reason] of [
