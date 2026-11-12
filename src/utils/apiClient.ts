@@ -1,3 +1,4 @@
+import { moscowBookingEndIso } from "./bookingEndTime";
 import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
@@ -9881,7 +9882,7 @@ export async function apiFetchMasterServicePromoDiscounts(params: MasterServiceP
   }
 
   const fromDateTimeLocal = `${fromDate}T${fromTime}:00`;
-  const toDateTimeLocal = `${fromDate}T${toTime}:00`;
+  const toDateTimeLocal = moscowBookingEndIso(fromDate, fromTime, toTime).slice(0, -6);
   const discountsUrl =
     `${API_BASE}/end-user/api/v1/${TENANT_KEY}/promo/discounts`
     + `?productIds=${encodeURIComponent(subServiceIds.join(","))}`
@@ -10011,9 +10012,9 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
   }
 
   const fromDateTimeWithOffset = `${fromDate}T${fromTime}:00+03:00`;
-  const toDateTimeWithOffset = `${fromDate}T${toTime}:00+03:00`;
+  const toDateTimeWithOffset = moscowBookingEndIso(fromDate, fromTime, toTime);
   const fromDateTimeLocal = `${fromDate}T${fromTime}:00`;
-  const toDateTimeLocal = `${fromDate}T${toTime}:00`;
+  const toDateTimeLocal = moscowBookingEndIso(fromDate, fromTime, toTime).slice(0, -6);
   const clientId = params.clientId?.trim() || null;
   let promoDiscountAmount: number | null = null;
   if (clientId) {
