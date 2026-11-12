@@ -3,6 +3,9 @@ import fs from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
+import { randomUUID } from "node:crypto";
+import { UUID } from "../../src/utils/errorDiagnosticsCore.mjs";
+import { gamePatchDiagnosticUrl } from "../../src/utils/gamePatchDiagnostics.mjs";
 
 const parse = (file) => ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, file.endsWith("tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 const apiSource = parse("src/utils/apiClient.ts");
@@ -22,16 +25,17 @@ const payload = () => ({ expectedUpdatedAt: stale.updatedAt, participants: [{ id
 
 // Run actual request/retry/write/read/hydrate code; only transport, normalization,
 // auth, cache and diagnostics boundaries are fixtures. No real network is available.
-function client({ patchStatus = 409, readStatus = 200, readBody = fresh, throwRead = false, throwPatch = false } = {}) {
-  const calls = [], delays = [];
+function client({ patchStatus = 409, readStatus = 200, readBody = fresh, throwRead = false, throwPatch = false, diagnosticUnavailable = false } = {}) {
+  const calls = [], delays = [], diagnostics = [];
   const context = vm.createContext({
     Headers, Response, FormData, URL, performance,
     API_BASE: "https://fixture.invalid", SERV2: "https://fixture.invalid", SERV2_FALLBACK: "https://fixture.invalid",
     getServ2Origin: () => "https://fixture.invalid", resolveLkApiBaseUrlCandidates: () => ["https://fixture.invalid"],
     readAuthToken: () => "fixture-session", requestChangesSubscriptions: () => false, invalidateSubscriptionSnapshot: () => {},
     isLkIdleRequestPausedError: () => false, resolveRequestCacheConfig: () => null,
-    diagnosticId: () => "fixture-operation", abortCause: () => null, UUID: /^fixture-request$/,
-    trackClientError: () => {}, isRecord: (value) => value !== null && typeof value === "object" && !Array.isArray(value),
+    diagnosticId: () => { if (diagnosticUnavailable) throw Error("fixture crypto unavailable"); return randomUUID(); },
+    callerBuild: () => "b".repeat(40), gamePatchDiagnosticUrl, abortCause: () => null, UUID,
+    trackClientError: (_source, _error, context) => diagnostics.push(context), isRecord: (value) => value !== null && typeof value === "object" && !Array.isArray(value),
     pickString: (record, keys) => keys.map((key) => record[key]).find((value) => typeof value === "string" && value) ?? null,
     isGameExerciseIdMissingGuard: () => false, normalizePadelGameRecord: (value) => value?.id ? value : null,
     mergePadelGameRecord: (before, after) => ({ ...before, ...after }),
@@ -46,8 +50,8 @@ function client({ patchStatus = 409, readStatus = 200, readBody = fresh, throwRe
       return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
     },
   });
-  vm.runInContext(actualApi, context);
-  return { update: context.update, calls, delays };
+  vm.runInContext('"use strict";\n' + actualApi, context);
+  return { update: context.update, request: vm.runInContext("request", context), calls, delays, diagnostics };
 }
 
 function matches(source, predicate) {
@@ -231,3 +235,51 @@ for (const navigate of [false, true]) {
     assert.deepEqual(community, [fresh, another]);
   });
 }
+
+
+test("two concurrent logical PATCH calls have distinct UUIDs, stable in wire and error telemetry, without new headers or body fields", async () => {
+  const api = client();
+  await Promise.all([api.update(stale.id, payload()), api.update(stale.id, payload())]);
+  const writes = api.calls.filter(call => call.options.method === 'PATCH');
+  const ids = writes.map(call => new URL(call.url).searchParams.get('__lk_diag_op'));
+  assert.equal(new Set(ids).size, 2);
+  for (const [index, call] of writes.entries()) {
+    assert.equal(new URL(call.url).searchParams.get('__lk_diag_build'), 'b'.repeat(40));
+    assert.equal(api.diagnostics.filter(event => event.logicalOperation === ids[index]).length, 1);
+    assert.equal(api.diagnostics.find(event => event.logicalOperation === ids[index]).attempt, 1);
+    assert.deepEqual(JSON.parse(call.options.body), payload());
+    assert.deepEqual([...call.options.headers.keys()].sort(), ['authorization', 'content-type']);
+    assert.equal(call.options.diagnosticContext, undefined, 'diagnostic context is not a FetchInit/provider field');
+  }
+  assert(api.calls.filter(call => call.options.method === 'GET').every(call => !new URL(call.url).searchParams.has('__lk_diag_op')));
+});
+
+test("unavailable diagnostic randomness preserves one PATCH, original409 and canonical refresh", async () => {
+  const api = client({ diagnosticUnavailable: true });
+  const result = await api.update(stale.id, payload());
+  assert.deepEqual(api.calls.map(call => call.options.method), ['PATCH', 'GET']);
+  assert.equal(api.calls[0].url, 'https://fixture.invalid/lk/games/fixture-game');
+  assert.equal(result.status, 409); assert.equal(result.data, null);
+  assert.deepEqual(clone(result.conflictRecord), fresh);
+});
+
+for (const context of [
+  Object.freeze({ logicalOperation: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', attempt: 0 }),
+  { get logicalOperation() { throw Error('fixture malformed diagnostics'); }, attempt: 0 },
+]) {
+  test("optional frozen/throwing diagnostic context cannot prevent fetch or change its result under strict mode", async () => {
+    const api = client({ patchStatus: 200 });
+    const result = await api.request('/lk/games/fixture-game', { method: 'PATCH', body: '{}', retries: 0, diagnosticContext: context });
+    assert.equal(api.calls.length, 1); assert.equal(result.status, 200); assert.equal(result.error, null);
+    if (Object.isFrozen(context)) assert.equal(context.attempt, 0);
+  });
+}
+
+test("provided logical operation survives two physical attempts with increasing attempt numbers", async () => {
+  const api = client({ patchStatus: 503 });
+  const logicalOperation = randomUUID();
+  const result = await api.request('/lk/games/fixture-game', { method: 'PATCH', body: '{}', retries: 1,
+    diagnosticContext: Object.freeze({ logicalOperation, attempt: 0 }) });
+  assert.equal(result.status, 503); assert.equal(api.calls.length, 2);
+  assert.deepEqual(api.diagnostics.map(event => [event.logicalOperation, event.attempt]), [[logicalOperation, 1], [logicalOperation, 2]]);
+});
