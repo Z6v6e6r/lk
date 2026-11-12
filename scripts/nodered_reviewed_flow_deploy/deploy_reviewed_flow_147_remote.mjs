@@ -241,6 +241,12 @@ export function createReviewedFlowRuntime({
       throw new Error("Reviewed-flow deployment lease contract mismatch");
     }
     if (lease.formatVersion === 1) lease = { ...lease, phase: LEGACY_DEPLOYMENT_LEASE_PHASE };
+    if (lease.kind === "legacy-startup-retirement" || lease.contractKind === "legacy-startup-retirement") {
+      if (lease.formatVersion !== 2 || lease.phase !== "applying") {
+        throw new Error("Retirement custody requires owner reconciliation; lease cannot expire or transfer");
+      }
+      return lease;
+    }
     if (!includeExpired && lease.expiresAtMs <= now() && lease.phase === "soaking") {
       unlinkDeploymentLease();
       return null;
@@ -534,8 +540,11 @@ export function createReviewedFlowRuntime({
   const rollback = (options) => {
     assertRoot();
     assertNoEditorLease();
-    const { deploymentId, flowBackup, contractBackup } = resolveBackupArtifacts(options, "Rollback");
+    const { deploymentId, flowBackup, contractBackup, artifactStamp } = resolveBackupArtifacts(options, "Rollback");
     const activeLease = readDeploymentLease({ includeExpired: true });
+    if (activeLease?.kind === "legacy-startup-retirement" || activeLease?.contractKind === "legacy-startup-retirement") {
+      throw new Error("Retirement source restore and generic rollback are forbidden");
+    }
     if (activeLease && activeLease.deploymentId !== deploymentId) {
       throw new Error(
         `Reviewed-flow deployment lease belongs to ${activeLease.deploymentId} until ${new Date(activeLease.expiresAtMs).toISOString()}`,
@@ -545,6 +554,13 @@ export function createReviewedFlowRuntime({
     assertProtectedFile(flowBackup, protectedFileOptions);
     assertProtectedFile(contractBackup, protectedFileOptions);
     const contract = JSON.parse(fs.readFileSync(contractBackup, "utf8"));
+    if (contract.contractKind === "legacy-startup-retirement" || contract.rollbackPolicy === "forbid-source-restore") {
+      throw new Error("Retirement source restore and generic rollback are forbidden");
+    }
+    if (!((contract.formatVersion === 1 && contract.contractKind === undefined)
+      || (contract.formatVersion === 2 && contract.contractKind === "exact-graph"))) {
+      throw new Error("Unknown rollback contract cannot restore source");
+    }
     if (contract.deploymentId !== deploymentId) throw new Error("Rollback deployment ID mismatch");
     if (
       activeLease
@@ -571,6 +587,18 @@ export function createReviewedFlowRuntime({
       throw new Error("Reviewed source is active under a soaking lease; rollback state is ambiguous");
     }
     if (sha256(backupBytes) !== contract.sourceSha256) throw new Error("Rollback flow digest mismatch");
+    // Rebuild the ordinary contract from both protected backups. Relabelling a
+    // removal contract must never turn it into a source-restoring operation.
+    const reviewedCandidateBackup = path.join(backupDirectory, `candidate-${deploymentId}-${artifactStamp}.flow.json`);
+    if (fs.existsSync(reviewedCandidateBackup)) {
+      assertProtectedFile(reviewedCandidateBackup, protectedFileOptions);
+      validateReviewedFlowContract({ liveBytes: backupBytes, candidateBytes: fs.readFileSync(reviewedCandidateBackup), contract });
+    } else if (isCandidateActive) {
+      validateReviewedFlowContract({ liveBytes: backupBytes, candidateBytes: activeBytes, contract });
+    }
+    // Historical source-on-disk resumes have no candidate artifact. Preserve that
+    // old matching-lease path; it cannot publish a source file and unknown/retirement
+    // contracts were already rejected above.
     if (isSourceActive && activeLease?.phase === "applying") {
       const processInfo = pm2.assertOnline();
       const deploymentLeaseReleased = releaseDeploymentLease(activeLease);

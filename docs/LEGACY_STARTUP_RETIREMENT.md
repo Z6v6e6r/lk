@@ -52,8 +52,9 @@ Keep its original bytes and reviewed source/candidate hashes in the private pack
 
 The existing `exact-graph` deploy contract deliberately rejects node removals. This
 retirement receipt does **not** relax it and must not be passed to that installer as
-an approved deploy contract. Selecting/reviewing an appropriate removal-capable apply
-and recovery path is a separate release prerequisite. No deploy adapter is included.
+an approved deploy contract. The separate format-v3 retirement contract and guarded
+runner are documented in [the apply/recovery runbook](LEGACY_STARTUP_RETIREMENT_APPLY.md).
+Their inclusion prepares a release mechanism; it does not authorize activation.
 
 Expected result after an authorized activation: the retired constructors/triggers
 are absent, while retained graph/config values match the reviewed candidate.
