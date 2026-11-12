@@ -12859,6 +12859,18 @@ export default function GamesPage({
       };
     }
 
+    if (typeof cancelPayload?.state === "string"
+      && cancelPayload.state !== "DONE" && cancelPayload.state !== "RETURN_PENDING") {
+      return {
+        ok: false,
+        bookingIds: resolvedBookingIds,
+        summary: cancelPayload,
+        error: typeof cancelPayload.message === "string"
+          ? cancelPayload.message
+          : "Удаление игрока ещё не подтверждено. Обновите игру позже.",
+      };
+    }
+
     if (!exerciseId) {
       return {
         ok: false,
@@ -13836,7 +13848,7 @@ export default function GamesPage({
   ]);
 
   const handleRemoveParticipantFromDetails = useCallback(async (player: PadelGamePlayer, index: number) => {
-    if (!canManagePlayersInDetails || updatingGameRoster) return;
+    if (!gameRecordId || !canManagePlayersInDetails || updatingGameRoster) return;
     if (isDetailsOrganizerPlayer(player)) {
       setGameRosterError("Организатора нельзя удалить из игры");
       return;
@@ -13847,6 +13859,24 @@ export default function GamesPage({
     const vivaCancellation = await cancelVivaBookingsForPlayerFromDetails(player, "REMOVED_BY_ORGANIZER");
     if (!vivaCancellation.ok) {
       setGameRosterError(vivaCancellation.error || "Не удалось удалить игрока из групповой записи Viva");
+      return;
+    }
+
+    if (vivaCancellation.summary?.state === "DONE" || vivaCancellation.summary?.state === "RETURN_PENDING") {
+      // Durable leave already wrote the roster. A second PATCH would use the old
+      // version and could overwrite a concurrent rejoin if retried with fresh data.
+      setUpdatingGameRoster(true);
+      const refreshed = await apiFetchPadelGameRecord(gameRecordId).catch(() => null);
+      setUpdatingGameRoster(false);
+      const record = refreshed?.data?.id === gameRecordId ? refreshed.data : null;
+      if (refreshed?.error || !record) {
+        setGameRosterError(refreshed?.error?.message || "Не удалось обновить состав после удаления. Обновите игру.");
+        return;
+      }
+      upsertGameRecordInStores(record, { communityMode: "if_exists", recordMode: "replace" });
+      setGameRosterError(hasActiveGameLeaveMembership(record, { id: player.id, phone: player.phone })
+        ? "Игрок всё ещё состоит в игре или записался снова. Обновите состав перед новым действием."
+        : null);
       return;
     }
 
@@ -13896,6 +13926,8 @@ export default function GamesPage({
     buildDetailsRosterMetadata,
     cancelVivaBookingsForPlayerFromDetails,
     patchGameRoster,
+    gameRecordId,
+    upsertGameRecordInStores,
   ]);
 
   const handleReturnOrganizerToMatchFromDetails = useCallback(async () => {
