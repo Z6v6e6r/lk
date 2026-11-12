@@ -153,7 +153,7 @@ Real asymmetric networks and the exhibition TV still need separate acceptance.
 ## TV stage and offline fallback
 
 `LiveScreen` enables the 16:9 TV stage with `?tv=1` or automatically on a landscape
-(≥1.55, ≥900px) exhibition wall; `?tv=0` disables it. `spectator-tv.css` lays out a
+(≥1.55, ≥900px) exhibition wall; `?tv=0` disables it (four players hide the sidebar). `spectator-tv.css` lays out a
 fixed 1920×1080 stage in `--u` units (identical on 960×540 boxes and 4K panels):
 up to four large fields with name/balls/time/lives, a top-10 sidebar, and when nobody
 plays a full-screen rating (podium + places 4–13, pages rotate every 15s, CTA band).

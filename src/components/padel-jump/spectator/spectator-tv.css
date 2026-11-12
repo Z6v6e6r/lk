@@ -30,7 +30,11 @@
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-layout=empty] .ph-section-heading{display:none}
 
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-content{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) var(--ph-side);gap:calc(36 * var(--u));padding:0 calc(48 * var(--u)) calc(36 * var(--u));align-items:stretch}
-.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-fields="3"],.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-fields="4"]{--ph-side:calc(450 * var(--u))}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-fields="3"]{--ph-side:calc(450 * var(--u))}
+/* Four players: the games are the picture; the rating returns when a field frees up. */
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-fields="4"]{--ph-side:calc(-36 * var(--u))}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-fields="4"] .ph-content{grid-template-columns:minmax(0,1fr)}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-fields="4"] .ph-standings,.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-fields="4"] .ph-player-demo{display:none}
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-content[data-layout=empty]{grid-template-columns:minmax(0,1fr);padding-top:calc(36 * var(--u))}
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-content[data-layout=empty] .ph-standings,.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-content[data-layout=empty] .ph-empty-state{display:none}
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-empty-state{display:none}
