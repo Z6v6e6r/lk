@@ -608,6 +608,7 @@ jobs:
           scripts/tests/function98NativeOperation.test.mjs
           scripts/tests/function98BrowserGuard.test.mjs
           scripts/tests/preview363NativeOperation.test.mjs
+          scripts/tests/preview363ObservedRecovery.test.mjs
           scripts/tests/preview363BrowserGuard.test.mjs
           scripts/tests/preview363Observer.test.mjs
           scripts/tests/vivaSessionCompatibility.test.mjs

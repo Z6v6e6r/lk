@@ -20,6 +20,8 @@ export async function buildPreview363Assets(output, release) {
     'scripts/nodered_reviewed_flow_deploy/preview363_body_preserver.mjs',
     'scripts/nodered_reviewed_flow_deploy/preview363_browser_guard.mjs',
     'scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs',
+    'scripts/nodered_reviewed_flow_deploy/preview363_observed_recovery.mjs',
+    'scripts/nodered_reviewed_flow_deploy/preview363_recovery_observe.py',
     'scripts/lib/preview363_activation.mjs', 'scripts/lib/preview363_body_patch.mjs',
   ];
   const manifest = { sourceCommit: release, files: {} };
@@ -37,6 +39,8 @@ export async function buildPreview363Assets(output, release) {
   write('editor-readback.js', `window.__preview363Readback = ${buildPreview363EditorReadback(buildPreview363Artifact(release, bundle))};\nconsole.log('PREVIEW363_READBACK_READY');\n`);
   const module = await import(pathToFileURL(path.join(output, 'scripts/nodered_reviewed_flow_deploy/preview363_native_operation.mjs')));
   manifest.codeSha256 = module.preview363OperationCodeHash();
+  const recovery = await import(pathToFileURL(path.join(output, 'scripts/nodered_reviewed_flow_deploy/preview363_observed_recovery.mjs')));
+  manifest.recoveryCodeSha256 = recovery.recoveryCodeHash();
   manifest.bundleSha256 = sha256(bundle); manifest.browserGuardSha256 = sha256(guard);
   manifest.sourceOrCandidateIncluded = false;
   fs.writeFileSync(path.join(output, 'public-assets.json'), JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx', mode: 0o600 });

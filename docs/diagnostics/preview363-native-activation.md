@@ -158,3 +158,47 @@ response/guard drift or new error growth. Preserve receipts and exact backups;
 do not widen scope, query provider/DB, restart, normalize foreign deltas or invent
 a price. Activation status must distinguish candidate, native ACK, runtime ready,
 soak complete and natural empty-tariff audit observed (which may remain absent).
+
+## Separate completion protocol for slow full native readback
+
+If the actual POST is already HTTP200/READY but its complete11MB native GET
+exceeds the original30s request-age policy, do not retime evidence, replay
+Deploy, alter the old stage, or call the old protocol successful. The separate
+`preview363_observed_recovery.mjs` has only `adopt` and `finish`; it performs no
+HTTP request, live-flow write, restart, rollback or takeover. Business guards
+and the original seven-file code identity remain unchanged.
+
+Build/review/push the new helper and obtain successful exact-head CI first.
+Create a new root-owned0700 `.padlhub-preview363-recovery-<UTC>-<digits>` stage
+containing public assets and an immutable0600 `recovery-manifest.json`. Pin
+old stage/plan/attempt/seven-file code/source/candidate, exact current POST disk,
+runtime identity/settings, candidate graph/order, original editor serialization,
+actual ACK revision/time, old release/bundle and the new nine-file recovery code
+identity. The old stage is read-only. Do not copy production bodies locally.
+
+The full authenticated native response must retain its actual request-start
+and completed-body timestamps: request age at most120s, completion age at most30s,
+request after the actual ACK. Partial, cached-only, disk-substituted or unknown
+revision evidence is refused. The existing authenticated AJAX client can use a
+120s timeout for this read-only GET, compute all hashes only after full JSON
+shape validation, and emit the same seven safe fields. It must also require a
+clean editor with unchanged revision before/after, never expose body/auth, and
+never replace or rearm the consumed deploy guard.
+
+Invoke `node NEW_STAGE/scripts/nodered_reviewed_flow_deploy/preview363_observed_recovery.mjs ACTION NEW_STAGE`
+with JSON stdin `{expectedManifestSha256, native}`; `adopt` additionally requires
+`confirmation: "ADOPT_COMPLETE_PREVIEW363_POST_RECOVERY_NO_REPLAY_147"`.
+The shared flock protects both actions. Current disk graph/order/bytes, target
+identity and strict owning-node READY/log coverage are checked independently
+before publication. Loss of evidence retains custody. Only the exact owned v5
+lease can enter `recovery-soaking`, with separate new-code/manifest/receipt
+bindings; no legacy ACK is fabricated. A durable adoption receipt starts a new
+900s interval. Crash retry preserves that interval rather than resetting it.
+
+After the entire interval, start a new full native GET (`requestedAt` must be
+at or after the soak deadline). `finish` requires the same revision, disk,
+identity and healthy log coverage, durably writes its receipt, then releases
+only its own matching recovery lease. Foreign/unknown phases and all drift
+remain sticky. The longer acquisition window increases the interval in which
+an uncoordinated admin writer could act; it does not provide linearizability.
+Keep the agreed deployment queue and exclusive custody throughout.
