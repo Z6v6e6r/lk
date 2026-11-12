@@ -1541,3 +1541,16 @@ test('validation diagnostic enums are rejected outside the exact server refusal 
   const old={...base};delete old.firstFailedValidationPredicate;delete old.validationFieldShape;
   assert.deepEqual(sanitizeEvent(old),old);
 });
+
+test('server names a proven date mismatch separately and keeps missing expiry generic', () => {
+  for (const expirationDate of ['2099-11-15', undefined]) {
+    const ctx = { step: 'next', startedAt: Date.now(), target: { startsAt: '2099-11-16T09:00:00+03:00', durationMinutes: 60 },
+      pending: ['fixture-sub'], quotes: [], subscriptions: { 'fixture-sub': { status: 'ACTIVE', expirationDate, visitsLeft: 26 } },
+      metadata: { 'fixture-sub': { productId: 'fixture-product' } }, catalog: { 'fixture-product': 'Fixture' } };
+    const mocked = { isObj: bookingsCanonical.isObj, lk1LifecycleInstant: value => value ? Date.parse(value + 'T23:59:59.999+03:00') : null,
+      preflightAvailability: { resolveSplitSubscriptionLifecycle: () => 'UNAVAILABLE' } };
+    executeBookings({ _subscriptionPricePreview: ctx }, mocked, { get: () => null }, { log() {} });
+    assert.equal(ctx.quotes[0].status, 'UNAVAILABLE'); assert.equal(ctx.quotes[0].amountMinor, null);
+    assert.equal(ctx.quotes[0].reasonCode, expirationDate ? 'SUBSCRIPTION_DATE_NOT_COVERED' : 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE');
+  }
+});

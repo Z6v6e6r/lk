@@ -943,6 +943,12 @@ while (ctx.step === 'next') {
     timeFrom: ctx.target.startsAt, timeTo: new Date(Date.parse(ctx.target.startsAt) + ctx.target.durationMinutes * 60000).toISOString(),
     directionId: 4588, typeId: 1613, availableClientSubscriptions: [live] };
   if (!eventRoute && ['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field]))) return stop('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
+  // A proven date mismatch is different from unconfirmed subscription terms.
+  const validityEnd = !eventRoute && live.status === 'ACTIVE' && typeof canonical.lk1LifecycleInstant === 'function'
+    ? canonical.lk1LifecycleInstant(live.expirationDate, true) : null;
+  if (!eventRoute && live.status === 'ACTIVE' && validityEnd !== null && validityEnd < Date.parse(ctx.target.startsAt)) {
+    quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_DATE_NOT_COVERED'); continue;
+  }
   if (!eventRoute && (canonical.preflightAvailability.resolveSplitSubscriptionLifecycle(live, ctx.target.startsAt.slice(0, 10)) === 'UNAVAILABLE'
     || live.holdUntil || live.frozenUntil || live.isFrozen === true || live.visitsLeft === 0)) {
     quote(id, live.visitsLeft === 0 ? 'LIMIT_USED' : 'UNAVAILABLE', null, 0, 0, live.visitsLeft === 0 ? 'SUBSCRIPTION_VISITS_EXHAUSTED' : 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;

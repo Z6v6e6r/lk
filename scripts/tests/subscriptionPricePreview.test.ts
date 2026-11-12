@@ -131,3 +131,19 @@ test("existing game quote identity excludes client prices and invalidates on tar
   }
   assert.equal(createJoinSubscriptionPriceTarget({...input,gameId:null}),null);
 });
+
+test("server-proven date mismatch is explicit, while technical errors stay unconfirmed", () => {
+  const expired = quote("subscription-a", {status: "UNAVAILABLE", amountMinor: null, reasonCode: "SUBSCRIPTION_DATE_NOT_COVERED"});
+  assert.equal(preview([expired]).label, "Действие абонемента не распространяется на дату игры");
+  assert.equal(preview([expired]).state, "unavailable");
+  assert.equal(preview([expired], {loading: true}).label, "Проверяем подписки…");
+  assert.equal(preview([expired], {now: now + 30001}).label, "Условия подписки не подтверждены");
+  assert.equal(preview(null).label, "Условия подписки не подтверждены");
+  const input = {selectionKey: key, durationMinutes: 90, subscriptionIds: ["subscription-a", "subscription-b"],
+    loading: false, now, quotes: [expired, quote("subscription-b", {status: "UNAVAILABLE", amountMinor: null, reasonCode: "OTHER"})]};
+  const byId = subscriptionPricePreviewsById(input);
+  assert.equal(byId["subscription-a"].label, "Действие абонемента не распространяется на дату игры");
+  assert.equal(byId["subscription-b"].label, "Подписка недоступна для этого времени");
+  input.quotes[1].selectionKey = "stale";
+  assert.equal(subscriptionPricePreviewsById(input)["subscription-a"].label, "Условия подписки не подтверждены");
+});
