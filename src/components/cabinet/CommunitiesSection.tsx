@@ -5721,7 +5721,7 @@ export function CommunitiesSection({
 
             {activeCommunityTab === "FEED" && (
               <>
-                {selectedCommunity.id === EXHIBITION_COMMUNITY_ID && <EventCommunityPanel community={selectedCommunity} onRegister={() => void handleJoinOpenCommunity(selectedCommunity)} />}
+                {selectedCommunity.id === EXHIBITION_COMMUNITY_ID && <EventCommunityPanel community={selectedCommunity} isMember={isCommunityMember(selectedCommunity, profileId, profilePhone)} onRegister={() => void handleJoinOpenCommunity(selectedCommunity)} />}
                 {detailError && (
                   <div className="community-form-error">{detailError}</div>
                 )}

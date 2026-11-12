@@ -3,8 +3,8 @@ import type { CommunityRecord } from '../../utils/communityApi';
 import { EXHIBITION_COMMUNITY_ID, EXHIBITION_GAME_URL, EXHIBITION_LIVE_URL } from '../padel-jump/exhibition';
 
 /** Only the isolated exhibition; no generic game engine enters the cabinet bundle. */
-export function EventCommunityPanel({ community, onRegister }: { community: CommunityRecord; onRegister: () => void }) {
-  if (community.id !== EXHIBITION_COMMUNITY_ID) return null;
+export function EventCommunityPanel({ community, isMember = false, onRegister }: { community: CommunityRecord; isMember?: boolean; onRegister: () => void }) {
+  if (community.id !== EXHIBITION_COMMUNITY_ID || isMember) return null;
   return <section className="community-ranking-box community-event-panel" aria-label="Игры и рейтинг мероприятия">
     <h2>ПадлхАБ Jump — 5 жизней</h2>
     <p>Вступить в сообщество можно в любое время. ФИО, компания и email из обязательной анкеты не публикуются в рейтинге.</p>
