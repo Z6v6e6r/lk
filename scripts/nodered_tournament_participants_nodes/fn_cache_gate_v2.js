@@ -3,7 +3,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "participants_cache", { sourceHash: "9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785", ...fields });
+    observer?.observe(msg, "participants_cache", { sourceHash: "f0c8047536198ba74b7718296ad5498365a20dbc1852233de4114b3aaf057200", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -190,7 +190,12 @@ const reject = (statusCode, cacheState, reason, retryAfterMs, errorMessage = "Pa
   };
   msg.payload = isManualRefresh && Array.isArray(currentEntry?.payload)
     ? currentEntry.payload.slice(0, responseSize)
-    : { error: errorMessage, retryAfterMs: boundedRetryAfterMs };
+    : {
+      error: errorMessage,
+      retryAfterMs: boundedRetryAfterMs,
+      // Cross-origin Tilda cannot rely on access to the cache response header.
+      ...(!isManualRefresh && cacheState === "busy-key" ? { code: "PARTICIPANTS_BUSY_KEY" } : {}),
+    };
   msg.participantCacheBypassWrite = true;
   if (isManualRefresh) {
     msg.participantManualRefreshReason = reason;
