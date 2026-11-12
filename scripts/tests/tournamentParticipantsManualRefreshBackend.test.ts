@@ -317,6 +317,7 @@ test("GET keeps a live owner for 30 seconds and exposes the exact remaining leas
   assert.deepEqual(busy[1].payload, {
     error: "Participants refresh is busy",
     retryAfterMs: 15_000,
+    code: "PARTICIPANTS_BUSY_KEY",
   });
   assert.equal(
     (context.values.get(CACHE_KEY) as any).inflight[cacheKey(LEASE_EXERCISE_ID, 100)].ownerId,
@@ -431,6 +432,7 @@ test("bounded cache buckets promote small to large and keep cadence per exercise
   assert.deepEqual(concurrentLarge[1].payload, {
     error: "Participants refresh is busy",
     retryAfterMs: 29_500,
+    code: "PARTICIPANTS_BUSY_KEY",
   });
 
   promotionOwner.statusCode = 200;

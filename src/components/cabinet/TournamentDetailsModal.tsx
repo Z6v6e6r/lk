@@ -847,9 +847,10 @@ export function TournamentDetailsModal({
     }
 
     let alive = true;
+    const participantsController = new AbortController();
     setParticipantsLoading(true);
     setParticipantsError(null);
-    void apiFetchTournamentParticipants(exerciseId)
+    void apiFetchTournamentParticipants(exerciseId, { signal: participantsController.signal })
       .then(async (result) => {
         if (!alive) return;
         if (result.error) {
@@ -903,6 +904,7 @@ export function TournamentDetailsModal({
 
     return () => {
       alive = false;
+      participantsController.abort();
     };
   }, [booking?.exercise?.id, isOpen]);
 
