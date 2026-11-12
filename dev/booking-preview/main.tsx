@@ -6,6 +6,7 @@ import { PREVIEW_RESIDENCY_PRICE } from './bookingCheckout';
 import { DAILY_USAGE, SUBSCRIPTION_PLANS, type DailyUsage } from './privilegeRules';
 import { readPreviewStage, type PreviewStage } from './previewStage';
 import { settingsSummary } from './settingsSummary';
+import officialLogo from '../../src/assets/logo hab black.svg';
 
 const screens = [
   ['game-booking', 'Игра', 'Выбор станции, корта и времени'],
@@ -79,7 +80,12 @@ function Preview() {
 
   return <div className="preview-shell">
     <aside className="preview-sidebar">
-      <a className="preview-brand" href={import.meta.env.BASE_URL}>padlhub<span>стенд интерфейсов</span></a>
+      <a className="preview-brand" href={import.meta.env.BASE_URL}>
+        <svg className="preview-brand-logo" viewBox="230 196 870 334" width="870" height="334" role="img" aria-label="ПадлхАБ">
+          <image href={officialLogo} width="1330" height="726" aria-hidden="true" />
+        </svg>
+        <span>стенд интерфейсов</span>
+      </a>
       <h1>Интерфейсы записи</h1>
       <p>Текущие компоненты ЛК<br />на тестовых данных</p>
       <nav aria-label="Сценарии">

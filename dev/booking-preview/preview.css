@@ -6,8 +6,9 @@ button { cursor: pointer; }
 button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid #6f9c69; outline-offset: 3px; }
 .preview-shell { display: grid; grid-template-columns: 258px minmax(0, 1fr); min-height: 100vh; }
 .preview-sidebar { padding: 28px 18px; background: #f9faf7; border-right: 1px solid #dce2dc; }
-.preview-brand { display: block; color: #214d37; font-size: 28px; font-weight: 800; letter-spacing: -1.4px; text-decoration: none; }
-.preview-brand span { display: block; font-size: 11px; font-weight: 500; letter-spacing: 0; color: #738073; }
+.preview-brand { display: block; text-decoration: none; }
+.preview-brand-logo { display: block; width: 180px; max-width: 100%; height: auto; }
+.preview-brand span { display: block; margin-top: 6px; font-size: 11px; font-weight: 500; color: #738073; }
 .preview-sidebar h1 { font-size: 20px; margin: 30px 8px 8px; font-weight: 650; letter-spacing: -.5px; }
 .preview-sidebar > p { color: #778078; font-size: 12px; margin: 0 8px 26px; }
 .preview-sidebar h2 { margin: 24px 10px 8px; font-size: 12px; color: #748077; font-weight: 500; }
@@ -55,7 +56,7 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .preview-stage iframe { display: block; width: 100%; height: calc(100vh - 145px); min-height: 680px; background: white; border: 1px solid #dce2dc; border-radius: 12px; box-shadow: 0 4px 18px #263e2710; }
 .preview-stage--mobile iframe { width: 390px; flex: 0 0 390px; height: 844px; min-height: 0; border-radius: 24px; }
 @media (max-width: 1050px) { .preview-toolbar { flex-wrap: wrap; } .preview-shell { grid-template-columns: 220px minmax(0,1fr); } }
-@media (max-width: 700px) { .preview-shell { display: block; } .preview-sidebar { padding: 16px; border-right: 0; } .preview-brand { font-size: 22px; } .preview-sidebar h1 { margin-top: 16px; } .preview-sidebar > p, .preview-sidebar small { display: none; } .preview-sidebar nav { display: flex; gap: 6px; overflow-x: auto; margin-top: 16px; } .preview-sidebar nav h2, .preview-sidebar nav button span { display: none; } .preview-sidebar nav button { white-space: nowrap; padding: 9px 12px; } .preview-toolbar { padding: 16px; } .preview-stage { padding: 12px; overflow-x: auto; justify-content: safe center; } }
+@media (max-width: 700px) { .preview-shell { display: block; } .preview-sidebar { padding: 16px; border-right: 0; } .preview-brand-logo { width: 150px; } .preview-sidebar h1 { margin-top: 16px; } .preview-sidebar > p, .preview-sidebar small { display: none; } .preview-sidebar nav { display: flex; gap: 6px; overflow-x: auto; margin-top: 16px; } .preview-sidebar nav h2, .preview-sidebar nav button span { display: none; } .preview-sidebar nav button { white-space: nowrap; padding: 9px 12px; } .preview-toolbar { padding: 16px; } .preview-stage { padding: 12px; overflow-x: auto; justify-content: safe center; } }
 .preview-privileges { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 24px; padding: 16px 24px; border-bottom: 1px solid #e4dcef; background: #faf8fe; color: #625674; font-size: 12px; }
 .preview-privileges > label { display: grid; gap: 6px; font-size: 11px; }
 .preview-privileges select { max-width: 100%; min-width: 255px; padding: 8px 10px; border: 1px solid #d9cee9; border-radius: 7px; background: white; color: #51415f; font-size: 12px; }
