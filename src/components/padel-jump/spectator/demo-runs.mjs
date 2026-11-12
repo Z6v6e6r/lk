@@ -97,7 +97,7 @@ export function createDemoRun({ runId, name, station = 0, section = 0, sections 
   };
 }
 
-const NAMES = ['Алексей', 'Мария', 'Тимур', 'Ольга', 'Дмитрий', 'Екатерина', 'Илья', 'Софья'];
+const NAMES = ['Алексей', 'Мария', 'Тимур', 'Ольга', 'Дмитрий', 'Екатерина', 'Илья', 'Софья', 'Никита', 'Алина', 'Егор', 'Вера', 'Марк', 'Ксения', 'Глеб', 'Ирина'];
 
 /** Five fixed scenarios for the offline videos, plus an endless in-page loop. */
 export const DEMO_SCENARIOS = Object.freeze({
@@ -105,6 +105,9 @@ export const DEMO_SCENARIOS = Object.freeze({
   2: { title: 'Двое на экране', runs: [{ station: 2, section: 0, sections: 3, misses: 1 }, { station: 4, section: 0, sections: 2, misses: 2, startAt: 2 }] },
   3: { title: 'Трое, с потерей жизней', runs: [{ station: 0, section: 1, sections: 2 }, { station: 3, section: 0, sections: 2, misses: 5, startAt: 3 }, { station: 6, section: 0, sections: 2, misses: 2, startAt: 6 }] },
   4: { title: 'Четыре игрока', runs: [{ station: 5, section: 0, sections: 2, misses: 1 }, { station: 6, section: 0, sections: 2 }, { station: 7, section: 0, sections: 2, misses: 3, startAt: 1 }, { station: 8, section: 0, sections: 2, startAt: 4 }] },
+  6: { title: 'Семь игроков', runs: [0, 2, 3, 4, 6, 7, 8].map((station, i) => ({ station, section: 0, sections: 3, misses: i % 3, startAt: i * 0.7 })) },
+  // Demo only: the live Jump server admits at most 12 players on one wall.
+  7: { title: 'Шестнадцать игроков', runs: Array.from({ length: 16 }, (_, i) => ({ station: [0, 2, 3, 4, 6, 7, 8, 9, 10, 5][i % 10], section: i % 3, sections: 2, misses: i % 4 === 3 ? 2 : i % 2, startAt: i * 0.4 })) },
   5: { title: 'Рейтинг и новый игрок', runs: [{ station: 0, section: 0, sections: 2, startAt: 14 }, { station: 2, section: 1, sections: 2, misses: 2, startAt: 24 }] },
 });
 
@@ -123,7 +126,7 @@ export function createDemoShow(scenario = 'loop', { seed = 7 } = {}) {
   const plan = loop ? { runs: [{ station: 0, section: 0, sections: 3, misses: 2 }, { station: 2, section: 0, sections: 3, misses: 1, startAt: 5 }] } : DEMO_SCENARIOS[scenario];
   if (!plan) throw new RangeError('Unknown demo scenario');
   let made = 0;
-  const make = (spec, startAt) => createDemoRun({ runId: `demo-run-${scenario}-${made}`, name: NAMES[(made + Number(seed)) % NAMES.length], seed: seed * 97 + made++, ...spec, startAt });
+  const make = (spec, startAt) => createDemoRun({ runId: `demo-run-${scenario}-${made}`, name: NAMES[(made + (plan.runs.length > 8 ? 0 : Number(seed))) % NAMES.length], seed: seed * 97 + made++, ...spec, startAt });
   let runs = plan.runs.map(spec => make(spec, spec.startAt ?? 0));
   return {
     title: plan.title,

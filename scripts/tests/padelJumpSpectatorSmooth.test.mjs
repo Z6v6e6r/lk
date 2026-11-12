@@ -98,8 +98,9 @@ test('the running clock ticks locally, stays monotonic and never runs far ahead 
   assert.equal(finished.confirmed.elapsedMs, 10400, 'the final time is always the confirmed one');
 });
 
-test('five offline demo scenarios exist, run on the real engine and are always labelled demo', () => {
-  assert.deepEqual(Object.keys(DEMO_SCENARIOS), ['1', '2', '3', '4', '5']);
+test('seven offline demo scenarios exist (up to 16 players), run on the real engine and are always labelled demo', () => {
+  assert.deepEqual(Object.keys(DEMO_SCENARIOS), ['1', '2', '3', '4', '5', '6', '7']);
+  assert.equal(DEMO_SCENARIOS[6].runs.length, 7); assert.equal(DEMO_SCENARIOS[7].runs.length, 16);
   for (const scenario of [...Object.keys(DEMO_SCENARIOS), 'loop']) {
     const show = createDemoShow(scenario);
     const seen = new Set();
