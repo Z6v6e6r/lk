@@ -19,6 +19,9 @@ import { invalidateSubscriptionSnapshot, readSubscriptionSnapshot, requestChange
 import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscriptionSnapshotData";
 import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
+import { UUID } from "./errorDiagnosticsCore.mjs";
+import { gamePatchDiagnosticUrl } from "./gamePatchDiagnostics.mjs";
+import { abortCause, callerBuild, diagnosticId, routeTemplate } from "./errorDiagnostics";
 import type {
   BookingCancellationAction,
   BookingCancellationOptionsResponse,
@@ -406,19 +409,6 @@ function toBoolean(value: unknown): boolean | null {
   return null;
 }
 
-function summarizeApiErrorPayload(payload: unknown): string | null {
-  if (payload === null || payload === undefined) return null;
-  if (typeof payload === "string") {
-    const text = payload.trim();
-    return text.length > 400 ? `${text.slice(0, 400)}...` : text;
-  }
-  try {
-    const serialized = JSON.stringify(payload);
-    return serialized.length > 400 ? `${serialized.slice(0, 400)}...` : serialized;
-  } catch {
-    return null;
-  }
-}
 
 function pickNumeric(source: Record<string, unknown>, keys: string[]): number | null {
   for (const key of keys) {
@@ -4087,6 +4077,7 @@ export interface ApiResult<T> {
 }
 
 export interface RequestOptions extends RequestInit {
+  diagnosticContext?: { logicalOperation: string; attempt: number };
   auth?: boolean;
   retries?: number;
   baseUrl?: string;
@@ -4171,6 +4162,7 @@ async function rawRequest<T>(
 ): Promise<ApiResult<T>> {
   const {
     auth = false,
+    diagnosticContext,
     baseUrl = API_BASE,
     retries: _retries,
     cacheTtlMs: _cacheTtlMs,
@@ -4209,6 +4201,16 @@ async function rawRequest<T>(
   const changesSubscriptions = requestChangesSubscriptions(fullUrl, fetchOptions.method, fetchOptions.body);
   if (changesSubscriptions) invalidateSubscriptionSnapshot();
   let response: Response;
+  // Correlation is diagnostic only; never sent as auth/idempotency or forwarded to a provider.
+  const requestStarted = performance.now();
+  let diagnosticRequestId: string | undefined;
+  try { diagnosticRequestId = diagnosticId(); } catch { /* unavailable crypto -> UNKNOWN */ }
+  const diagnosticAttempt = diagnosticContext ? ++diagnosticContext.attempt : 1;
+  let diagnosticRoute = "UNKNOWN";
+  try { diagnosticRoute = routeTemplate(new URL(fullUrl, window.location.href).pathname); } catch { /* unknown */ }
+  const requestDiagnostic = () => ({ requestId: diagnosticRequestId, logicalOperation: diagnosticContext?.logicalOperation,
+    attempt: diagnosticAttempt, routeTemplate: diagnosticRoute, method: fetchOptions.method ?? "GET",
+    durationMs: performance.now() - requestStarted, abortCause: abortCause(fetchOptions.signal), stage: "api_request" });
 
   try {
     response = await fetch(fullUrl, { ...fetchOptions, headers });
@@ -4220,8 +4222,7 @@ async function rawRequest<T>(
         "api.request_network_error",
         err,
         {
-          url: fullUrl,
-          method: fetchOptions.method ?? "GET",
+          ...requestDiagnostic(),
         },
         { handled: true, severity: "error" },
       );
@@ -4266,10 +4267,10 @@ async function rawRequest<T>(
       "api.request_http_error",
       new Error(message),
       {
-        url: fullUrl,
-        method: fetchOptions.method ?? "GET",
-        status,
-        response: summarizeApiErrorPayload(payload),
+        ...requestDiagnostic(),
+        httpStatus: status,
+        serverRequestId: response.headers.get("X-LK-Request-ID"),
+        serverLinked: UUID.test(response.headers.get("X-LK-Request-ID") ?? "") && /(?:^|,)\s*no-store(?:,|$)/i.test(response.headers.get("Cache-Control") ?? ""),
       },
       { handled: true, severity: status >= 500 ? "error" : "warning" },
     );
@@ -4292,6 +4293,16 @@ export async function request<T>(
   url: string,
   options: RequestOptions = {},
 ): Promise<ApiResult<T>> {
+  let diagnosticContext: RequestOptions["diagnosticContext"];
+  try {
+    const supplied = options.diagnosticContext;
+    const valid = supplied && typeof supplied.logicalOperation === "string" && UUID.test(supplied.logicalOperation) && Number.isSafeInteger(supplied.attempt)
+      && supplied.attempt >= 0 && supplied.attempt < 10000;
+    diagnosticContext = valid
+      ? { logicalOperation: supplied.logicalOperation, attempt: supplied.attempt }
+      : { logicalOperation: diagnosticId(), attempt: 0 };
+  } catch { /* Missing crypto or malformed diagnostic claims cannot stop the request. */ }
+  options = { ...options, diagnosticContext };
   const cacheConfig = resolveRequestCacheConfig(url, options);
 
   if (cacheConfig) {
@@ -7907,6 +7918,7 @@ async function writePadelGameRecord(
   requestOptions: {
     retries?: number;
     keepalive?: boolean;
+    diagnosticContext?: RequestOptions["diagnosticContext"];
   } = {},
 ): Promise<ApiResult<PadelGameRecord>> {
   const baseUrl = getServ2Origin() || "";
@@ -7926,6 +7938,7 @@ async function writePadelGameRecord(
       baseUrl,
       retries,
       keepalive,
+      diagnosticContext: requestOptions.diagnosticContext,
       body: JSON.stringify(payload),
     });
 
@@ -8412,13 +8425,20 @@ export async function apiUpdatePadelGameRecord(
     };
   }
 
+  let url = `/lk/games/${encodeURIComponent(normalizedGameId)}`;
+  let diagnosticContext: RequestOptions["diagnosticContext"];
+  try {
+    diagnosticContext = { logicalOperation: diagnosticId(), attempt: 0 };
+    url = gamePatchDiagnosticUrl(url, { callerBuild: callerBuild(), logicalOperation: diagnosticContext.logicalOperation });
+  } catch { /* No diagnostic failure may prevent a mutation. */ }
+
   const writeResult = await writePadelGameRecord(
-    [{ url: `/lk/games/${encodeURIComponent(normalizedGameId)}`, method: "PATCH" }],
+    [{ url, method: "PATCH" }],
     payload as unknown as Record<string, unknown>,
     normalizedGameId,
     payload.invite?.inviteUrl?.trim() || null,
     // Replaying a mutation cannot resolve a stale version or an ambiguous network outcome.
-    { retries: 0 },
+    { retries: 0, diagnosticContext },
   );
   if (writeResult.status === 409 && writeResult.error) {
     let conflictRecord: PadelGameRecord | null = null;
