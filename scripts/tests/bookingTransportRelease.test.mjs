@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { TRANSPORT_CASES, proveOwnerTransportContract } from '../lib/bookingTransportLiveContract.mjs';
+import { TRANSPORT_CASES, NATIVE_CANCEL_TRANSPORT_CASES, proveOwnerTransportContract,
+  proveNativeCancellationTransportContract, BOOKING_HTTP_CONSUMER_SHA256 } from '../lib/bookingTransportLiveContract.mjs';
 import { UNPAID_SOURCE_FILES } from '../lib/unpaidWorkerSourceFiles.mjs';
 import { deriveWorkerGeneration, materializeFromProof, validateLiveProof, WORKER_GUARD } from '../lib/bookingTransportRelease.mjs';
 import { BOOKING_HTTP_ID, BOOKING_ROUTER_ID, prepareBookingTransportRecovery, sha256 } from '../lib/subscriptionBookingTransportRecovery.mjs';
@@ -29,12 +30,16 @@ function seed() {
     .replace(/(export const LK1_UNPAID_GATEWAY_SHA256 = ')[a-f0-9]{64}/, '$1' + routerSha256));
   const baseManifest = { schema: 1, sourceCommit: '1'.repeat(40), files: Object.fromEntries(Object.entries(files).map(([n, b]) => [n, sha256(b)])) };
   const proof = { schema: 1, observedUtc: new Date().toISOString(), sourceSha256, routerSha256, candidateSha256: prepared.candidateSha256,
+    httpConsumerSha256: BOOKING_HTTP_CONSUMER_SHA256, transportGap: 'SENDERR_TRUE_WITHOUT_HTTP_CATCH',
     sourceNodeCount: flow.length, candidateNodeCount: flow.length + 2,
     exactGraphContract: buildExactGraphContract({ liveBytes: source, candidateBytes: prepared.candidate,
       deploymentId: 'lk1-booking-transport-v1', allowedChanges: [], allowedAdditionIds: prepared.addedNodeIds }),
     additions: JSON.parse(prepared.candidate).slice(-2), unchangedExistingNodes: true,
     ownerCases: TRANSPORT_CASES.map(([step, caller, status]) => ({ step, caller, status, branchReached: true,
       httpDispatches: 0, persistenceDispatches: 0, asynchronousSends: 0 })),
+    nativeCancellationCases: NATIVE_CANCEL_TRANSPORT_CASES.map(([nativeStage, durablyAccepted, status]) => ({
+      step: 'lk1_free_cancel_effect', caller: 'http', status, branchReached: true,
+      httpDispatches: 0, persistenceDispatches: 0, asynchronousSends: 0, nativeStage, durablyAccepted, protocolStatePreserved: true })),
     probes: [{ version: '1', status: 200, supported: true, policy: 'ATOMIC_MANAGED_V1' },
       { version: '2', status: 200, supported: true, policy: 'MANAGED_JOIN_V2' },
       { version: '3', status: 404, supported: false, code: 'BOOKED_OPERATION_OWNER_PROBE_NOT_FOUND' },
@@ -67,11 +72,23 @@ test('live readiness rejects missing authority, stale receipts, writes, worker d
   for (const mutate of [
     p => { p.observedUtc = new Date(Date.now() - 1801000).toISOString(); },
     p => { p.processStable = false; }, p => { p.activeFlowMatchesDisk = false; },
+    p => { p.httpConsumerSha256 = 'f'.repeat(64); }, p => { p.transportGap = 'FIXED'; },
     p => { p.businessRequests = 1; }, p => { p.ownerCases[1].httpDispatches = 1; },
+    p => { p.nativeCancellationCases = []; }, p => { p.nativeCancellationCases[1].durablyAccepted = false; },
     p => { p.probes[0].status = 404; }, p => { p.worker.otherWorkerPresent = true; },
     p => { p.exactGraphContract.allowedChanges.push({ id: 'foreign' }); },
     p => { p.additions[1].func = 'fetch("https://fixture.invalid")'; },
   ]) { const { proof } = seed(); mutate(proof); assert.throws(() => validateLiveProof(proof)); }
+});
+test('native cancellation transport errors retain durable intent and never dispatch SERVICE or release', () => {
+  const protocol = fs.readFileSync('scripts/lib/lk1FreeCancellation.mjs', 'utf8').replace(/^export /gm, '');
+  const adapter = fs.readFileSync('scripts/nodered_lk1_hub_nodes/free_cancel.js', 'utf8');
+  const body = publicOwner.replace('if (ctx.step === "profile") {', protocol + '\n' + adapter + '\nif (ctx.step === "profile") {');
+  const result = proveNativeCancellationTransportContract(body);
+  assert.deepEqual(result.map(r => [r.nativeStage, r.status]), NATIVE_CANCEL_TRANSPORT_CASES.map(([s, , status]) => [s, status]));
+  assert(result.every(r => r.protocolStatePreserved && r.httpDispatches === 0 && r.persistenceDispatches === 0));
+  const unsafe = body.replace('if (ctx.step === \'lk1_free_cancel_effect\') {', 'if (ctx.step === \'lk1_free_cancel_effect\') { node.send(msg);');
+  assert.throws(() => proveNativeCancellationTransportContract(unsafe), /CONTRACT_FAILED/);
 });
 test('new worker changes only the copied flow pin; old pins, unit, auth module, runner and lockfile stay exact', () => {
   const { proof, files } = seed(), before = Buffer.from(files[WORKER_GUARD]);

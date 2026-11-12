@@ -7,6 +7,16 @@ by the new release builder. See [release preparation](booking-transport-release.
 The original investigation and its historical limitations below remain recorded;
 purchase502's exact financial outcome is still unknown.
 
+On12November the23:37drift stop was investigated and the packet was refreshed:
+PR344 corrected cancelled unpaid allowances; PR345 added native free-visit
+cancellation. Current flow120065b3… and13-file workerd0e7f3d8… supersede the
+earlier11-file baseline. The missing HTTP Catch remains present as a defect.
+The refreshed release preserves both cancellation changes, exercises nine actual
+owner error cases with synthetic inputs, and rolls back only to that current
+native-capable pair. The historical observations below do not describe today's
+deployment baseline. Production and business operations remain unchanged by this
+refresh task.
+
 Investigation and source preparation only. All times below are Europe/Moscow.
 Production was not changed; no purchase, booking, confirmation or reconciliation
 operation was replayed by this investigation. No provider transaction GET was

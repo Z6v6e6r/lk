@@ -6,7 +6,22 @@ owner, one compatible unpaid-worker generation, and the purchase diagnostics
 allowlist already in PR342. Product rules, prices, deadlines and provider actions
 are unchanged. Readiness covers this exact flow/worker pair.
 
-## Current live evidence, 11 November 2026
+## Refresh for the current runtime, 12 November 2026
+
+The previous packet is superseded. PR344 (`4f0a48fc`, implementation `3c642922`)
+added proof-based exclusion/release of cancelled unpaid reservations and explicit
+successor selection. PR345 (`d554917e`, implementation `d95406db`, worker release
+`d0e7f3d8`) added native free-visit cancellation and background recovery. Those are
+business changes, not only pin updates. The task branch integrates current main
+without rewriting its history or reverting either release.
+
+The transport fix is still required: the installed HTTP consumer matches the
+official4.0.9 fixture, senderr=true, and no Catch covers the booking HTTP node.
+The two proposed nodes are still absent. The current private proof records
+`SENDERR_TRUE_WITHOUT_HTTP_CATCH`; an implementation hash or custody change blocks
+preparation rather than silently assuming the old behavior.
+
+## Current live evidence
 
 - Loaded Admin flow equals disk; Node-RED identity and on-disk bytes remained
   stable across the inspection. Only existing authenticated Admin GETs and inert
@@ -20,21 +35,28 @@ are unchanged. Readiness covers this exact flow/worker pair.
   Coverage markers confirm the intended branches were reached. No HTTP, Mongo or
   asynchronous node.send dispatch occurred. The VM had no credentials, live
   context, transport, process, timers or database capability.
-- Source flow9260954f988dd396c0b22f3dbe792a2b45e5244c2e07c9485cca76b555a80fc6
-  becomes candidate ba1c08d140e80ff1069240bd9a7e625333629371e0d8cd13e9f4b96739d8578e.
+- Four additional cases cover the installed native cancellation adapter before
+  acceptance and after dispatch uncertainty, cancelled-booking readback and visit
+  return readback. They return503 before acceptance or202 pending after durable
+  acceptance, with unchanged protocol state and no HTTP/Mongo/node.send dispatch,
+  SERVICE retry, release or legacy fallback.
+- Source flow120065b362f1b5dd4c9a69e9e50d4c3aacc2ce8939a27320a43de48c0ff3d399
+  becomes candidate81026a59d077aa820687b61b0c5f4cb1d5a963ca466bfa4ac215f348a7a25947.
   All4985 existing nodes are preserved; the exact-graph contract allows only the
   two new Catch/recovery nodes. Booking gateway hash remains
-  bca5774dc55b6a0d4eb271496a0c14b8b5aea2c80d7c1f94a67eb3771f3bbd89.
+  3dfbf374f318891e19bb1302482a8053fd6423eb0acf2a8d455601771529753a.
 - Affected independent worker: active lk1-unpaid-cancel.service. Its MainPID,
   process start identity, executable/argv/CWD, loaded fragment, absence of
   drop-ins, effective configuration and current release were verified before and
   after inspection. A pending daemon reload is rejected. No separate subscription
   visit service/PM2 process was found in the inspected inventory.
-- Installed base worker1983e7e20064bf7ec209b887ad77abd55270d237 has manifest
-  0479e17c69b49136848692403cb37bc88e58d22787e1c614a93ac24e4a01c965.
-  All11 files match the repository sources. The new generation changes only the
+- Installed base workerd0e7f3d8525a7821a8e10f17bccaa14ef333ce67 has manifest
+  63c0f6ed1b0d10a5670fdea69cd91de2d63f35d38c16ae39d76ec2557590eb03.
+  All13 files match the repository sources, including the two native cancellation
+  libraries. The new generation changes only the
   copied guard's whole-flow pin. Runner, payment/cancellation logic, gateway pin,
-  unit, auth module, package/lockfile, mode, cohort and cursors are preserved.
+  unit, auth module, package/lockfile, mode, cohort and cursors are preserved,
+  including the FREE scan phase and freeCancelAfterId.
 - Node-RED settings retain the auth module under release
   267a042d3f86d61602c6ba64528e972c9becb708. That immutable directory must remain.
 
@@ -86,7 +108,11 @@ steps, stop signals and rollback pair. None of these live steps ran during prep.
 1. Re-run read-only preflight and packet verification immediately before apply.
    Compare all flow, worker, unit, environment and retained-auth-module bindings.
    If any differ, stop and prepare a newly reviewed packet; never relax pins.
-2. Acquire the existing reviewed-flow lease and stop the unpaid worker. Wait for
+2. Audit safe counts of unpaid INTENT/REVIEW and native QUEUED/CANCEL_INTENT/
+   RETURN_PENDING immediately before cutover. A preparation snapshot is not a
+   later drain receipt. Stop if unresolved provider work prevents a safe drain;
+   do not clear jobs or trigger a provider operation to unblock the rollout.
+   Acquire the existing reviewed-flow lease and stop the unpaid worker. Wait for
    confirmed exit/drain; preserve its exact current release, unit, environment,
    cursor and operation journal. Process exit alone does not make an ambiguous
    in-flight INTENT safe to repeat.
@@ -99,7 +125,8 @@ steps, stop signals and rollback pair. None of these live steps ran during prep.
    ```
 
    This command only creates local preparation files. Use the existing guarded
-   exact-graph deploy helper for the separately approved import/restart, lease,
+   exact-graph deploy helper with `--failure-recovery retain-candidate` for the
+   separately approved import/restart, lease,
    foreign-change checks and post-readback. Do not bypass it with a manual import.
 4. Verify loaded candidate flow, unchanged gateway and the same inert capability
    contract. Install the new worker in a new immutable release; verify the
@@ -112,10 +139,14 @@ steps, stop signals and rollback pair. None of these live steps ran during prep.
    operations. Any flow/gateway/service-binding drift stops before business work;
    exit78 disables automatic restart, while PM2 restart exits75.
 
-Rollback restores the exact old flow bytes and original worker/unit/environment
-pair. The packet includes the original worker manifest; use the guarded original
+Rollback restores the exact CURRENT baseline flow120065b3… and13-file worker
+d0e7f3d8…/unit/environment pair. Both sides retain the same native cancellation
+protocol; the only transport difference is the two-node addition. The old
+11-file1983e7e2… or c1ca5635… generation is not a rollback target for this packet.
+The packet includes the current baseline worker manifest; use the guarded original
 flow backup, never reverse-serialize JSON and assume the old hash. Retain durable
-cursors, locks, INTENT/REVIEW and SENT/UNKNOWN states. Review ambiguous in-flight
+cursors, locks, INTENT/REVIEW, QUEUED/CANCEL_INTENT/RETURN_PENDING and SENT/UNKNOWN
+states. Review ambiguous in-flight
 operations before resuming; do not delete state or resend provider operations.
 
 Stop on failed GET/VM/identity/manifest/graph checks, source drift, missing backup,

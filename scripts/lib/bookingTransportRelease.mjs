@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { TRANSPORT_CASES } from './bookingTransportLiveContract.mjs';
+import { TRANSPORT_CASES, NATIVE_CANCEL_TRANSPORT_CASES, BOOKING_HTTP_CONSUMER_SHA256 } from './bookingTransportLiveContract.mjs';
 import { UNPAID_SOURCE_FILES } from './unpaidWorkerSourceFiles.mjs';
 import { BOOKING_TRANSPORT_CATCH_ID, BOOKING_TRANSPORT_RECOVERY_ID, prepareBookingTransportRecovery,
   bookingTransportRecoveryNodes, sha256 } from './subscriptionBookingTransportRecovery.mjs';
@@ -19,6 +19,7 @@ export function validateLiveProof(proof, now = Date.now()) {
     || ![proof.sourceSha256, proof.candidateSha256, proof.routerSha256, proof.worker?.baseManifestSha256,
       proof.worker?.unitSha256, proof.worker?.environmentSha256].every(hash)
     || proof.sourceSha256 === proof.candidateSha256
+    || proof.httpConsumerSha256 !== BOOKING_HTTP_CONSUMER_SHA256 || proof.transportGap !== 'SENDERR_TRUE_WITHOUT_HTTP_CATCH'
     || proof.activeFlowMatchesDisk !== true || proof.processStable !== true || proof.bindingMatchesWorker !== true
     || proof.unchangedExistingNodes !== true || proof.productionWrites !== 0 || proof.businessRequests !== 0
     || proof.privateSourceExported !== false || proof.worker.serviceActive !== true || proof.worker.otherWorkerPresent !== false) {
@@ -37,6 +38,12 @@ export function validateLiveProof(proof, now = Date.now()) {
   const expectedCases = TRANSPORT_CASES.map(([step, caller, status]) => ({ step, caller, status,
     branchReached: true, httpDispatches: 0, persistenceDispatches: 0, asynchronousSends: 0 }));
   if (!isDeepStrictEqual(proof.ownerCases, expectedCases)) throw new Error('OWNER_PROOF_INCOMPLETE');
+  const expectedNative = NATIVE_CANCEL_TRANSPORT_CASES.map(([nativeStage, durablyAccepted, status]) => ({
+    step: 'lk1_free_cancel_effect', caller: 'http', status, branchReached: true,
+    httpDispatches: 0, persistenceDispatches: 0, asynchronousSends: 0,
+    nativeStage, durablyAccepted, protocolStatePreserved: true,
+  }));
+  if (!isDeepStrictEqual(proof.nativeCancellationCases, expectedNative)) throw new Error('NATIVE_CANCEL_PROOF_INCOMPLETE');
   for (const [version, policy] of [['1', 'ATOMIC_MANAGED_V1'], ['2', 'MANAGED_JOIN_V2']]) {
     const actual = proof.probes?.filter(p => p.version === version);
     if (actual?.length !== 1 || !isDeepStrictEqual(actual[0], { version, status: 200, supported: true, policy })) throw new Error('CAPABILITY_PROOF_INCOMPLETE');

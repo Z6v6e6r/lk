@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
-import { inspectBookingSource } from './lib/bookingTransportLiveContract.mjs';
+import { inspectBookingSource, BOOKING_HTTP_CONSUMER_SHA256 } from './lib/bookingTransportLiveContract.mjs';
 import { sha256 } from './lib/subscriptionBookingTransportRecovery.mjs';
 import { UNPAID_SOURCE_FILES } from './lib/unpaidWorkerSourceFiles.mjs';
 import { lk1VivaBinding } from './lib/lk1LiveGatewayGuard.mjs';
@@ -53,6 +53,9 @@ try {
   const beforeProcesses = processes(), nodeRed = beforeProcesses.filter(p => p.name === 'node-red');
   if (nodeRed.length !== 1 || nodeRed[0].pm2_env.status !== 'online') throw new Error('NODE_RED_NOT_STABLE');
   const disk = fs.readFileSync(flowPath), originalFlow = JSON.parse(disk);
+  const nodeRedRoot = path.dirname(fs.realpathSync(nodeRed[0].pm2_env.pm_exec_path));
+  const httpConsumerSha256 = sha256(fs.readFileSync(path.join(nodeRedRoot, 'node_modules/@node-red/nodes/core/network/21-httprequest.js')));
+  if (httpConsumerSha256 !== BOOKING_HTTP_CONSUMER_SHA256) throw new Error('HTTP_CONSUMER_DRIFT');
   if (fs.statSync(flowPath).mtimeMs > nodeRed[0].pm2_env.pm_uptime) throw new Error('DISK_NOT_LOADED');
   const envBytes = privateFile(envPath, false), config = Object.fromEntries(envBytes.split('\n')
     .filter(l => /^[A-Z][A-Z0-9_]*=/.test(l)).map(l => { const at = l.indexOf('='); return [l.slice(0, at), l.slice(at + 1).replace(/^["']|["']$/g, '')]; }));
@@ -103,6 +106,7 @@ try {
   const retainedAuthModuleRefs = [...new Set(settings.match(/\/opt\/padlhub-lk1-unpaid-cancel\/releases\/[a-zA-Z0-9._-]+\/lib\/lk1FlowReadTokenAuth\.cjs/g) || [])]
     .map(modulePath => ({ modulePath, sha256: sha256(fs.readFileSync(modulePath)) }));
   console.log(JSON.stringify({ schema: 1, observedUtc: new Date().toISOString(), ...proof,
+    httpConsumerSha256, transportGap: 'SENDERR_TRUE_WITHOUT_HTTP_CATCH',
     activeFlowMatchesDisk: true, processStable: true, bindingMatchesWorker: true, probes,
     worker: { releasePath, baseManifest, baseManifestSha256: sha256(manifestBytes), serviceActive: true,
       unitSha256: sha256(unit), environmentSha256: sha256(Buffer.from(envBytes)), otherWorkerPresent: false,
