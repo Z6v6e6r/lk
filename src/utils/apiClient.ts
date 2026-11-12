@@ -3895,6 +3895,16 @@ export interface ReferralSubscriptionConfirmResult {
 }
 
 export interface PadelSplitPaymentParams {
+  publicationIntent?: {
+    version: 1;
+    settings: { isPrivate: boolean; ratingGame: boolean; minRating: string | null; maxRating: string | null };
+    gameTitle: string | null;
+    participantComment: string | null;
+    joinPrice: string | null;
+    studioName: string | null;
+    roomName: string | null;
+    gameFormat: "singles" | "doubles";
+  } | null;
   date: string;
   fromTime: string;
   toTime: string;
@@ -3938,6 +3948,7 @@ export interface PadelSplitPaymentModeOption {
 }
 
 export interface PadelSplitPaymentResult {
+  serverPublication?: { version: 1; state: "PENDING" | "PUBLISHED"; operationId: string; candidateGameId: string; gameId: string | null } | null;
   paymentRef: string | null;
   operationId?: string | null;
   gameId?: string | null;
@@ -8750,6 +8761,15 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
   if (!isRecord(payload)) return null;
 
   const data = isRecord(payload.data) ? payload.data : payload;
+  const publication = data.serverPublication;
+  const serverPublication = isRecord(publication) && publication.version === 1
+    && (publication.state === "PENDING" || publication.state === "PUBLISHED")
+    && typeof publication.operationId === "string" && publication.operationId === data.operationId
+    && typeof publication.candidateGameId === "string" && /^gsp_[A-Za-z0-9_-]+$/.test(publication.candidateGameId)
+    && (publication.state === "PENDING" ? publication.gameId === null : publication.gameId === publication.candidateGameId)
+    ? { version: 1 as const, state: publication.state as "PENDING" | "PUBLISHED", operationId: publication.operationId,
+        candidateGameId: publication.candidateGameId, gameId: publication.gameId as string | null } : null;
+  if (publication != null && !serverPublication) return null;
   const toPayMinor = pickNumeric(data, ["toPayMinor", "amountMinor"]);
   const toPayRaw = pickNumeric(data, ["toPay", "amount"]) ?? 0;
   const toPay = toPayMinor != null
@@ -8769,6 +8789,7 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
     : [];
 
   return {
+    serverPublication,
     paymentRef: pickString(data, ["paymentRef", "ref"]) ?? null,
     operationId: pickString(data, ["operationId"]) ?? null,
     gameId: pickString(data, ["gameId"]) ?? null,
@@ -8823,6 +8844,7 @@ function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<
   const normalizedSubscriptionId = params.subscriptionId?.trim() || null;
 
   return {
+    ...(params.publicationIntent ? { publicationIntent: params.publicationIntent } : {}),
     date: params.date,
     fromTime: params.fromTime,
     toTime: params.toTime,
@@ -9221,6 +9243,31 @@ export async function apiCreatePadelSplitGamePayment(
     error: null,
     status: response.status,
   };
+}
+
+/** Read-only observation: never publish, confirm payment or replay split/create. */
+export async function apiWaitForPublishedSplitGame(
+  result: PadelSplitPaymentResult,
+  options: { actorClientId?: string | null; attempts?: number; wait?: (ms: number) => Promise<void> } = {},
+): Promise<ApiResult<PadelGameRecord>> {
+  const publication = result.serverPublication;
+  if (!publication) return { data: null, status: null, error: { status: null, message: "Нет подтверждения серверной публикации" } };
+  const wait = options.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  for (let attempt = 0; attempt < Math.min(15, options.attempts ?? 8); attempt++) {
+    const read = await apiFetchPadelGameRecord(publication.candidateGameId);
+    const game = read.data;
+    const marker = isRecord(game?.metadata?.serverPublication) ? game.metadata.serverPublication : null;
+    if (game?.id === publication.candidateGameId && game.booking?.exerciseId === result.exerciseId
+      && !!result.bookingId && game.booking.bookingIds?.length === 1 && game.booking.bookingIds[0] === result.bookingId
+      && game.status === "PAID" && game.payment?.paid === true
+      && !!options.actorClientId && game.organizer?.id === options.actorClientId
+      && game.metadata?.paymentRef === result.operationId && marker?.version === 1
+      && typeof marker.bindingDigest === "string" && /^[a-p]{64}$/.test(marker.bindingDigest)) return read;
+    if (read.status === 401 || read.status === 403) break;
+    if (attempt + 1 < (options.attempts ?? 8)) await wait(1000);
+  }
+  return { data: null, status: 202, error: { status: 202,
+    message: "Бронь подтверждена, игра ещё публикуется. Откройте её позже — повторно создавать бронь не нужно." } };
 }
 
 export async function apiCreatePadelSplitParticipantPayment(
