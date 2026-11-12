@@ -97,3 +97,15 @@ test("adapter isolates origins, public/authenticated reads and full sessions", a
   assert.equal((await b).data, ok.data);
   assert.equal((await otherOrigin).data, ok.data);
 });
+
+test("adapter fresh option waits for an old ordinary transport before returning a new snapshot", async () => {
+  const completions = [];
+  const api = createApi(() => new Promise((resolve) => completions.push(resolve)),
+    () => "https://fixture.invalid", () => "fixture-session", createTournamentParticipantReader, data => data);
+  const old = api("exercise", { auth: false });
+  const fresh = api("exercise", { auth: false, fresh: true });
+  assert.equal(completions.length, 1);
+  completions[0]({ ...ok, data: ["old"] });await old;await setImmediate();
+  assert.equal(completions.length, 2);
+  completions[1](ok);assert.equal((await fresh).data, ok.data);
+});
