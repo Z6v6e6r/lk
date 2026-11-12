@@ -72,12 +72,12 @@ export function CommunityJumpRankingScreen({ community, profileKey, currentUserA
     <section className="community-jump-box" aria-label="Рейтинг ПадлхАБ Jump" aria-busy={loading}>
       <div className="community-jump-title"><h3>ПадлхАБ Jump</h3><p>Больше звёзд — выше место.</p></div>
       <details className="community-jump-rules"><summary>Как считается рейтинг</summary><p>Сначала сравниваем количество звёзд. При равенстве выше игрок с меньшим временем.</p></details>
+      <a className="community-jump-play" href={jumpGameUrl(community.id)} target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="m8 4 12 8-12 8Z" /></svg>Играть</a>
       {!canHideSearch && <label className="community-jump-search"><span className="community-visually-hidden">Поиск игрока</span><input type="search" placeholder="Поиск игрока" aria-label="Поиск игрока" value={search} onChange={event => setSearch(event.target.value)} /></label>}
       {error && <p role="alert" className="community-jump-error">{error}{data ? ' Показаны последние полученные данные.' : ''}</p>}
       {loading && <p role="status" className="community-jump-note">{data ? 'Обновляем результат…' : 'Загружаем рейтинг Jump…'}</p>}
       {data && data.total > 0 && <div className="community-jump-columns" aria-hidden="true"><span>Игроки</span><span>Звёзды · время</span></div>}
       {data && <CommunityJumpRankingResults data={data} currentUserAvatar={currentUserAvatar} search={search} />}
-      <a className="community-jump-play" href={jumpGameUrl(community.id)} target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="m8 4 12 8-12 8Z" /></svg>Играть</a>
       <button type="button" className="community-jump-refresh" disabled={loading} onClick={() => refreshRef.current()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1" /></svg>Обновить рейтинг</button>
     </section>
     <CommunityBottomNav activeItem="ranking" chatBadgeCount={chatBadgeCount} onSelect={onSelectBottomNav} actionSlot={navActionSlot} />

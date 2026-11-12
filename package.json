@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test:exhibition-client": "node --experimental-strip-types --test scripts/tests/exhibitionPublicInvite.test.mjs scripts/tests/exhibitionCabinetRegistration.test.mjs scripts/tests/exhibitionRegistrationTransport.test.mjs scripts/tests/padelJumpEventRegistrationForm.test.mjs scripts/tests/eventCommunityPanel.test.mjs",
+    "test:exhibition-client": "node --experimental-strip-types --test scripts/tests/exhibitionPublicInvite.test.mjs scripts/tests/exhibitionCabinetRegistration.test.mjs scripts/tests/exhibitionRegistrationTransport.test.mjs scripts/tests/padelJumpEventRegistrationForm.test.mjs scripts/tests/eventCommunityPanel.test.mjs scripts/tests/jumpRankingLayout.test.mjs",
     "test:community-types": "node --experimental-strip-types --test scripts/tests/communityTypes.test.ts",
     "dev": "vite",
     "build": "npm run build:prod && npm run build:dev:bundles",
