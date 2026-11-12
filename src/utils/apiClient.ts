@@ -9356,7 +9356,7 @@ export async function apiCancelPadelSplitParticipantBookings(
       body: JSON.stringify({
         bookingIds,
         ...(bookingItems.length > 0 ? { bookingItems } : {}),
-        exerciseId: payload.exerciseId ?? null,
+        // Split leave resolves the exercise from the stored game, not the caller.
         clientId: payload.clientId ?? payload.playerId ?? bookingItems.find((item) => item.clientId)?.clientId ?? null,
         playerId: payload.playerId ?? null,
         playerPhone: payload.playerPhone ?? null,
