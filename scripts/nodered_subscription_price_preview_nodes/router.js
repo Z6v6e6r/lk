@@ -429,7 +429,34 @@ if (ctx.step === 'subservices') {
   if (!ok() || ctx.target.subServiceIds.some(id => !ids.has(id))) return stop('SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH');
   const localEnd = new Date(Date.parse(ctx.target.startsAt) + (ctx.target.durationMinutes + 180) * 60000).toISOString();
   // Current CREATE binds a single local date to both ends. Do not invent a cross-day tariff here.
-  if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10)) return stop('PRICE_PREVIEW_CROSS_DAY_UNRESOLVED');
+  if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10)) {
+    // Derive bounded shape only. Never attach target, dates, clock times, IDs or provider rows.
+    // Keep derivation inside the no-throw boundary as well as the optional observer call.
+    try {
+      const targetKind = ctx.target.targetKind;
+      const elapsed = typeof ctx.startedAt === 'number' ? Date.now() - ctx.startedAt : NaN;
+      const dayDelta = Date.parse(localEnd.slice(0, 10) + 'T00:00:00Z')
+        - Date.parse(ctx.target.startsAt.slice(0, 10) + 'T00:00:00Z');
+      lkDiagnostic({ code: 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED', httpStatus: 503, outcome: 'refused',
+        previewTargetKind: ['NEW_GAME', 'EXISTING_GAME'].includes(targetKind) ? targetKind : 'UNKNOWN',
+        previewTargetSource: targetKind === 'NEW_GAME' && ctx.existingGame === false ? 'CLIENT_INPUT'
+          : targetKind === 'EXISTING_GAME' && ctx.existingGame === true ? 'SERVER_CONFIRMED' : 'UNKNOWN',
+        previewDuration: [60, 90, 120].includes(ctx.target.durationMinutes)
+          ? 'MINUTES_' + ctx.target.durationMinutes : 'UNKNOWN',
+        previewDayRelation: dayDelta === 86400000 ? 'NEXT_DAY' : Number.isFinite(dayDelta) ? 'OTHER' : 'UNKNOWN',
+        previewOffsetValid: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\+03:00$/.test(ctx.target.startsAt)
+          && new Date(Date.parse(ctx.target.startsAt) + 180 * 60000).toISOString().slice(0, 19) === ctx.target.startsAt.slice(0, 19),
+        previewEndAtMidnight: localEnd.slice(11) === '00:00:00.000Z',
+        previewSelectedSubserviceCount: Math.min(ctx.target.subServiceIds.length, 20),
+        previewSubserviceSetSize: Math.min(ids.size, 21), // 21 means 21 or more, not an exact catalogue size.
+        previewSubservicesMatched: true, previewSubservices2xx: true,
+        previewElapsedBucket: !Number.isFinite(elapsed) || elapsed < 0 ? 'UNKNOWN'
+          : elapsed < 1000 ? 'LT1S' : elapsed < 5000 ? 'LT5S' : elapsed < 15000 ? 'LT15S'
+            : elapsed <= 28000 ? 'LE28S' : 'OVER28S',
+      });
+    } catch { /* Diagnostic derivation cannot change the refusal. */ }
+    return stop('PRICE_PREVIEW_CROSS_DAY_UNRESOLVED');
+  }
   // Function nodes do not expose Node.js URLSearchParams in their sandbox.
   const query = Object.entries({ studioId: ctx.target.stationId, roomId: ctx.target.roomId,
     subServiceIds: ctx.target.subServiceIds.join(','), fromTime: ctx.target.startsAt.slice(11, 19),
