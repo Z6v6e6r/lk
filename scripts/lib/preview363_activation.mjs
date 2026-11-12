@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { applyPreview363Body, PREVIEW363_TARGET, PREVIEW363_HOOK, PREVIEW363_FUNCTION_SHA } from './preview363_body_patch.mjs';
 export const sha256 = value => createHash('sha256').update(value).digest('hex');
-const INITIALIZE = '41e10f67f5f966e3a28e29cc15f8b5e60af2ec9063d435faf9bfa425be67a89a';
+const INITIALIZE = '26d102bb3511fdb0186359b8ef873d7a26c836b3aaabb632e79be63254e8e54b';
 const FINALIZE = '8ed42bff21b56b50ee1926385981d76c626f6d5402a99e592660e00ad5d38df1';
 export function buildPreview363Artifact(sourceCommit, bundle = fs.readFileSync(new URL('../diagnostics/preview-empty-tariff-observer.bundle.cjs', import.meta.url), 'utf8')) {
   if (!/^[a-f0-9]{40}$/.test(sourceCommit || '') || typeof bundle !== 'string' || !bundle.trim()) throw Error('PREVIEW363_RELEASE');
