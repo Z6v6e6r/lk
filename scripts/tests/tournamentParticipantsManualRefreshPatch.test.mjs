@@ -245,7 +245,7 @@ test("default builder contract pins business sources separately from the exact c
     const registered = sha256(current) === sourceContract.sha256 ? current : business;
     assert.equal(sha256(registered), sourceContract.sha256, sourceContract.file);
   }
-  assert.ok([LEGACY_CACHE_GATE_BUSINESS_SHA256, ...CACHE_GATE_DIAGNOSTIC_BINDINGS.keys()]
+  assert.ok([LEGACY_CACHE_GATE_BUSINESS_SHA256, ...CACHE_GATE_DIAGNOSTIC_BINDINGS.keys(), ...CACHE_GATE_DIAGNOSTIC_BINDINGS.values()]
     .includes(TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate.sha256));
 });
 
@@ -270,17 +270,20 @@ test("participant refresh builder accepts the pinned business source and rejects
 });
 
 
-test('current explicitly reviewed cache contract accepts only its exact registered candidate', () => {
+test('current reviewed cache contract accepts its exact business bytes and rejects observer or arbitrary drift', () => {
   const current = fs.readFileSync(path.join(REAL_SOURCE_DIR, 'fn_cache_gate_v2.js'), 'utf8');
   const { flow, contract, sources } = fixture();
   const registered = TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate;
-  assert.equal(sha256(current), registered.sha256);
+  const business = cacheGateBusinessSource(current);
+  assert.equal(sha256(business), registered.sha256);
   contract.sources.cacheGate = { ...registered };
   const result = buildTournamentParticipantRefreshCandidate(structuredClone(flow), contract.wholeFlowSha256, contract,
-    { ...sources, cacheGate: current });
-  assert.equal(result.candidate.find(node => node.id === contract.ids.cacheGate).func, current);
-  assert.throws(() => buildTournamentParticipantRefreshCandidate(flow, contract.wholeFlowSha256, contract,
-    { ...sources, cacheGate: current + '\n// drift' }), /Approved source missing or drifted: cacheGate/);
+    { ...sources, cacheGate: business });
+  assert.equal(result.candidate.find(node => node.id === contract.ids.cacheGate).func, business);
+  for (const cacheGate of [current, business + '\n// drift']) {
+    assert.throws(() => buildTournamentParticipantRefreshCandidate(flow, contract.wholeFlowSha256, contract,
+      { ...sources, cacheGate }), /Approved source missing or drifted: cacheGate/);
+  }
 });
 
 
@@ -296,4 +299,16 @@ test('registered marker successor changes only the reviewed busy-key response in
   assert.equal(legacy.split(before).length, 2);
   const current = fs.readFileSync(path.join(REAL_SOURCE_DIR, 'fn_cache_gate_v2.js'), 'utf8');
   assert.equal(cacheGateBusinessSource(current), legacy.replace(before, after));
+});
+
+test("default disk source loader derives only the pinned coalescing business bytes", () => {
+  const { flow, contract } = fixture();
+  contract.sources = TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources;
+  const before = structuredClone(flow);
+  // No providedSources override: exercise the same disk-loading path as the CLI publisher.
+  const result = buildTournamentParticipantRefreshCandidate(structuredClone(flow), contract.wholeFlowSha256, contract);
+  const cache = result.candidate.find(node => node.id === contract.ids.cacheGate).func;
+  assert.equal(sha256(cache), "c3ee07fdcbdad0afa7b3258b4cf51f0f65b78086fe8a70f102ee153b4890568c");
+  assert.equal(cache.includes("lkDiagnostic("), false);
+  assert.deepEqual(flow, before);
 });
