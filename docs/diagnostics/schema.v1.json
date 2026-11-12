@@ -368,6 +368,15 @@
         "UNKNOWN"
       ]
     },
+    "tariffListShape": {
+      "enum": [
+        "ROOT_ARRAY",
+        "DIRECT_ARRAY",
+        "NESTED_ARRAY",
+        "NO_RECOGNIZED_ARRAY",
+        "UNKNOWN"
+      ]
+    },
     "suppressedEventKind": {
       "enum": [
         "stage",
@@ -754,7 +763,8 @@
         "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
-        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "PREVIEW_EMPTY_TARIFF_OBSERVED"
       ]
     },
     "reason": {
@@ -1019,6 +1029,7 @@
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
         "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "PREVIEW_EMPTY_TARIFF_OBSERVED",
         "target_missing",
         "target_upstream_error",
         "target_identity",
@@ -1293,7 +1304,8 @@
         "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
-        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "PREVIEW_EMPTY_TARIFF_OBSERVED"
       ]
     },
     "transportCode1": {
@@ -1557,7 +1569,8 @@
         "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
-        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "PREVIEW_EMPTY_TARIFF_OBSERVED"
       ]
     },
     "transportCode2": {
@@ -1821,7 +1834,8 @@
         "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
-        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "PREVIEW_EMPTY_TARIFF_OBSERVED"
       ]
     },
     "transportCode3": {
@@ -2085,7 +2099,8 @@
         "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
-        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+        "PREVIEW_EMPTY_TARIFF_OBSERVED"
       ]
     },
     "responseKind": {
@@ -2460,6 +2475,60 @@
     "previewSubservices2xx": {
       "type": "boolean"
     },
+    "tariffCompleteListGuardPassed": {
+      "type": "boolean"
+    },
+    "tariffExtractedEmpty": {
+      "type": "boolean"
+    },
+    "tariffTransportErrorPresent": {
+      "type": "boolean"
+    },
+    "tariffBindingContextPresent": {
+      "type": "boolean"
+    },
+    "tariffMethodMatch": {
+      "type": "boolean"
+    },
+    "tariffRequestScopeMatch": {
+      "type": "boolean"
+    },
+    "tariffResponseUrlPresent": {
+      "type": "boolean"
+    },
+    "tariffResponseScopeMatch": {
+      "type": "boolean"
+    },
+    "tariffTenantScopeMatch": {
+      "type": "boolean"
+    },
+    "tariffExerciseScopeMatch": {
+      "type": "boolean"
+    },
+    "tariffEventIdentityMatch": {
+      "type": "boolean"
+    },
+    "tariffEventCategoryMatch": {
+      "type": "boolean"
+    },
+    "tariffEventStartMatch": {
+      "type": "boolean"
+    },
+    "tariffShapeScanTruncated": {
+      "type": "boolean"
+    },
+    "tariffShapeScanFailed": {
+      "type": "boolean"
+    },
+    "tariffShadowedNonemptyArray": {
+      "type": "boolean"
+    },
+    "tariffAlternateArrayPresent": {
+      "type": "boolean"
+    },
+    "tariffAlternateNonemptyArray": {
+      "type": "boolean"
+    },
     "httpStatus": {
       "type": "integer",
       "minimum": 100,
@@ -2545,6 +2614,11 @@
       "minimum": 0,
       "maximum": 21
     },
+    "tariffRecognizedArrayCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000
+    },
     "serverTimeUtc": {
       "type": "string",
       "format": "date-time",
@@ -2603,6 +2677,10 @@
     "outboxRef": {
       "type": "string",
       "pattern": "^h1:[0-9a-f]{32}$"
+    },
+    "correlationHash": {
+      "type": "string",
+      "pattern": "^c1:[0-9a-f]{64}$"
     }
   }
 }

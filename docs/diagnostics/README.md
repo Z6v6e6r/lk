@@ -245,6 +245,13 @@ scripts/tests/correlatedErrorDiagnostics.test.mjs`. Local fixtures mock the
 subservices response and prior existing-game confirmation; they make no external
 requests and are not production acceptance.
 
+### Empty tariff response investigation
+
+See [Empty event tariff diagnostics](preview-empty-tariffs.md) for the optional
+`PREVIEW_EMPTY_TARIFF_OBSERVED` audit, server-owned correlation hash, response
+shape/binding/shadowing fields, safety limits and separate activation requirement.
+The price refusal remains fail-closed and no provider or database read is added.
+
 ### Scoped activation on the installed November 12 generation
 
 The live generation has no shared `lkDiagnostics` observer. Its safe activation
