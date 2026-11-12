@@ -380,6 +380,29 @@
         "UNKNOWN"
       ]
     },
+    "previewCanonicalDuration": {
+      "enum": [
+        "NULL",
+        "DIFFERENT",
+        "UNKNOWN"
+      ]
+    },
+    "previewExplicitDuration": {
+      "enum": [
+        "ABSENT",
+        "VALID",
+        "INVALID",
+        "UNKNOWN"
+      ]
+    },
+    "previewEndpointDuration": {
+      "enum": [
+        "NULL",
+        "MATCH_TARGET",
+        "DIFFERENT",
+        "UNKNOWN"
+      ]
+    },
     "previewDayRelation": {
       "enum": [
         "NEXT_DAY",
@@ -2631,6 +2654,18 @@
       "type": "boolean"
     },
     "previewSubservices2xx": {
+      "type": "boolean"
+    },
+    "previewExplicitMatchesEndpoints": {
+      "type": "boolean"
+    },
+    "previewEndpointOffsetPairValid": {
+      "type": "boolean"
+    },
+    "previewEndpointStartMatch": {
+      "type": "boolean"
+    },
+    "previewDurationFactsFailed": {
       "type": "boolean"
     },
     "tariffCompleteListGuardPassed": {
