@@ -90,6 +90,127 @@ test('preview source never calls CREATE or a product cache miss resolver',()=>{
   assert.doesNotMatch(router,/\/split\/create|\/seliger|insertOne|updateOne|global\.set/);
 });
 
+function exerciseDiagnostic(payload, overrides = {}, observer, logger) {
+  const booking = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
+  const roots = ['unwrapRecord', 'resolveCategory', 'eventStartsAt', 'eventDurationMinutes', 'exerciseRoomId'];
+  const helpers = extractSubscriptionPricePreviewSource({ source: booking, roots }).source;
+  const canonical = new Function(`${helpers}; return {${roots.join(',')}};`)();
+  const ctx = { step: 'exercise', startedAt: Date.now(), tenantKey: 'fixture', exerciseId,
+    auth: 'fixture-sensitive', target: { startsAt: target.startsAt, durationMinutes: 90, stationId: studio, roomId: room } };
+  const events = [];
+  const diagnostics = observer === undefined ? createDiagnostics({ sink: event => events.push(event) }) : observer;
+  const globals = { get: () => diagnostics };
+  const msg = { payload, statusCode: 200, _msgid: 'fixture-sensitive', _subscriptionPricePreview: ctx,
+    headers: { 'content-type': 'application/json; fixture-sensitive' }, ...overrides };
+  const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
+  const outputs = new Function('msg', 'canonical', 'global', 'node', source('router'))(msg, canonical, globals, logger);
+  if (outputs[4]) new Function('msg', 'global', source('final'))(msg, globals);
+  return { msg, outputs, events, ctx };
+}
+const previewExercise = () => ({ id: exerciseId, studioId: studio, roomId: room,
+  timeFrom: target.startsAt, timeTo: '2099-09-21T08:30:00+03:00', typeId: 1613, directionId: 4588,
+  availableClientSubscriptions: [], privateProviderField: 'fixture-sensitive' });
+
+test('exercise diagnostics identify the first failed guard without changing the 503 contract', () => {
+  for (const [payload, overrides, reason] of [
+    [previewExercise(), { statusCode: 503 }, 'target_upstream_error'],
+    [null, {}, 'target_missing'], ['<html>fixture-sensitive</html>', {}, 'target_missing'],
+    [42, {}, 'target_missing'], [[], {}, 'target_missing'],
+    [{ ...previewExercise(), id: uuid(99) }, {}, 'target_identity'],
+    [{ ...previewExercise(), typeId: 839, directionId: 2617 }, {}, 'target_category'],
+    [{ ...previewExercise(), studioId: uuid(99) }, {}, 'target_studio'],
+    [{ ...previewExercise(), roomId: uuid(99) }, {}, 'target_room'],
+    [{ ...previewExercise(), durationMinutes: 60 }, {}, 'target_duration'],
+    [{ ...previewExercise(), timeFrom: '2099-09-21T06:00:00+03:00', durationMinutes: 90 }, {}, 'target_start_invalid'],
+    [{ ...previewExercise(), isCancelled: true }, {}, 'target_cancelled'],
+    [{ ...previewExercise(), isCanceled: true }, {}, 'target_cancelled'],
+    [{ ...previewExercise(), status: 'finished' }, {}, 'target_lifecycle'],
+    [{ ...previewExercise(), availableClientSubscriptions: null }, {}, 'PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID'],
+    [{ ...previewExercise(), id: uuid(99), isCancelled: true }, { statusCode: 502 }, 'target_upstream_error'],
+    [{ ...previewExercise(), id: uuid(99), isCancelled: true }, {}, 'target_identity'],
+  ]) {
+    const { msg, events } = exerciseDiagnostic(payload, overrides);
+    assert.equal(msg.statusCode, 503);
+    assert.deepEqual(msg.payload, { error: { code: 'PRICE_PREVIEW_GAME_UNRESOLVED' } });
+    const event = events.find(e => e.stage === 'preview_router' && e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED');
+    assert.ok(event);
+    assert.equal(event.reason, reason);
+    assert.equal(event.upstreamStatus, overrides.statusCode ?? 200);
+    assert.equal(event.operationStage, 'exercise');
+    assert.equal(event.contentTypeClass, 'json');
+    assert(!JSON.stringify(events).includes('fixture-sensitive'));
+    assert(!JSON.stringify(events).includes(exerciseId));
+    assert(!JSON.stringify(events).includes(studio));
+    assert(!JSON.stringify(events).includes(room));
+  }
+});
+test('exercise diagnostic metadata is enum-only and invalid statuses remain unknown', () => {
+  for (const [payload, responseKind, contentType, contentTypeClass] of [
+    [null, 'null', undefined, 'missing'], [undefined, 'missing', '', 'missing'],
+    ['fixture-sensitive', 'text', 'Text/HTML; private=fixture-sensitive', 'html'],
+    [true, 'boolean', 'text/plain', 'text'], [7, 'number', 'application/problem+json', 'json'],
+    [[], 'array', 'fixture-sensitive', 'other'],
+  ]) {
+    const { events } = exerciseDiagnostic(payload, { statusCode: 'fixture-sensitive', headers: { 'content-type': contentType } });
+    const event = events.find(e => e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED');
+    assert.equal(event.upstreamStatus, undefined);
+    assert.equal(event.responseKind, responseKind);
+    assert.equal(event.contentTypeClass, contentTypeClass);
+    assert(!JSON.stringify(events).includes('fixture-sensitive'));
+  }
+});
+test('exercise diagnostics keep valid empty subscription arrays and wrapped records usable', () => {
+  for (const payload of [previewExercise(), { data: previewExercise() }]) {
+    const { msg, ctx, outputs, events } = exerciseDiagnostic(payload);
+    assert.equal(outputs[0], msg);
+    assert.equal(ctx.step, 'subscriptions');
+    assert.equal(msg.method, 'GET');
+    assert(!events.some(e => e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED'));
+  }
+});
+test('missing or throwing observers cannot change exercise guard verdicts', () => {
+  for (const observer of [null, { observe() { throw Error('sink'); } }]) {
+    const failed = exerciseDiagnostic({ ...previewExercise(), roomId: uuid(99) }, {}, observer);
+    assert.equal(failed.msg.statusCode, 503);
+    assert.deepEqual(failed.msg.payload, { error: { code: 'PRICE_PREVIEW_GAME_UNRESOLVED' } });
+    assert.equal(exerciseDiagnostic(previewExercise(), {}, observer).ctx.step, 'subscriptions');
+  }
+  const headers = { get 'content-type'() { throw Error('header'); } };
+  assert.equal(exerciseDiagnostic(null, { headers }).msg.statusCode, 503);
+});
+test('installed flows without the shared observer emit one safe info diagnostic and keep the legacy warning separate', () => {
+  for (const observer of [null, { observe() { throw Error('sink'); } }]) {
+    const info = [];
+    const logger = { log: text => info.push(JSON.parse(text)), warn() { assert.fail('No second refusal warning'); } };
+    const { msg } = exerciseDiagnostic({ ...previewExercise(), roomId: uuid(99) }, {}, observer, logger);
+    assert.equal(msg.statusCode, 503);
+    assert.deepEqual(msg.payload, { error: { code: 'PRICE_PREVIEW_GAME_UNRESOLVED' } });
+    assert.deepEqual(info, [{ event: 'subscription_price_preview_exercise_refused',
+      code: 'PRICE_PREVIEW_GAME_UNRESOLVED', step: 'exercise', reason: 'target_room',
+      upstreamStatus: 200, responseKind: 'object', contentTypeClass: 'json' }]);
+    assert(!JSON.stringify(info).includes('fixture-sensitive'));
+    assert(!JSON.stringify(info).includes(exerciseId));
+    assert(!JSON.stringify(info).includes(room));
+    exerciseDiagnostic(previewExercise(), {}, observer, logger);
+    assert.equal(info.length, 1);
+  }
+  const info = [];
+  exerciseDiagnostic(null, {}, undefined, { log: value => info.push(value) });
+  assert.deepEqual(info, [], 'A configured observer needs no duplicate info event');
+  const failed = exerciseDiagnostic(null, {}, null, { log() { throw Error('log'); } });
+  assert.equal(failed.msg.statusCode, 503);
+});
+test('exercise diagnostics do not mask explicit read errors or the overall timeout', () => {
+  const failed = exerciseDiagnostic(previewExercise(), { error: { code: 'ETIMEDOUT' } });
+  assert.equal(failed.msg.payload.error.code, 'PRICE_PREVIEW_READ_FAILED');
+  const timeout = exerciseDiagnostic(previewExercise(), {
+    _subscriptionPricePreview: { step: 'exercise', startedAt: Date.now() - 29000 },
+  });
+  assert.equal(timeout.msg.payload.error.code, 'PRICE_PREVIEW_TIMEOUT');
+  assert(!failed.events.some(e => e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED'));
+  assert(!timeout.events.some(e => e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED'));
+});
+
 // Run the actual router and final with the booking graph's list helpers, without
 // a private production flow or any provider/database access.
 function tariffDiagnostic(payload, overrides = {}) {
