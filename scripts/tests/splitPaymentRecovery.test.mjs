@@ -24,6 +24,12 @@ const QUARTER_OWNER_CANDIDATES = {
   },
 };
 
+// Closing-midnight generation: retain historical and quarter-owner pins above.
+const MIDNIGHT_BOUNDARY_CANDIDATES = {
+  create: { source: '26bb3a02b9e1e3cc5df91a5da78c49a3e7d678d1669d239598229c2c6518e340' },
+  router: { source: 'ed6466d8bd997ad5f1f0db1de581316236f133aa2ce1bb97003c54d618293c7e', business: 'ff078b8842c0b6f9c318769c9a5e54607517a1fba607f833719f7ad035afd2be' },
+};
+
 class FixedDate extends Date {
   constructor(...args) { super(...(args.length ? args : ['2026-07-27T12:20:00.000Z'])); }
   static now() { return Date.parse('2026-07-27T12:20:00.000Z'); }
@@ -55,8 +61,8 @@ test('split-payment business preimages and observer candidates remain separately
   for (const [key, [, livePreimage, candidate]] of Object.entries(SOURCES)) {
     assert.notEqual(candidate, livePreimage, key);
     const current = source(key);
-    const currentBusiness = QUARTER_OWNER_CANDIDATES[key]?.business || candidate;
-    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), QUARTER_OWNER_CANDIDATES[key]?.source || DIAGNOSTIC_CANDIDATES[key] || candidate, key);
+    const currentBusiness = MIDNIGHT_BOUNDARY_CANDIDATES[key]?.business || QUARTER_OWNER_CANDIDATES[key]?.business || candidate;
+    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), MIDNIGHT_BOUNDARY_CANDIDATES[key]?.source || QUARTER_OWNER_CANDIDATES[key]?.source || DIAGNOSTIC_CANDIDATES[key] || candidate, key);
     if (DIAGNOSTIC_CANDIDATES[key]) {
       assert.ok(current.includes(`sourceHash: "${currentBusiness}"`), key);
       const marker = key === 'join' ? 'const TOKEN_URL_DEFAULT' : 'const ADMIN_API';

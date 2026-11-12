@@ -598,8 +598,13 @@ if (ctx.step === 'subservices') {
     .map(row => String(row?.id || row?.uuid || row?.subServiceId || row?.serviceId || row?.productId || '')));
   if (!ok() || ctx.target.subServiceIds.some(id => !ids.has(id))) return stop('SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH');
   const localEnd = new Date(Date.parse(ctx.target.startsAt) + (ctx.target.durationMinutes + 180) * 60000).toISOString();
-  // Current CREATE binds a single local date to both ends. Do not invent a cross-day tariff here.
-  if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10)) {
+  // Clubs close at 00:00. /price keeps the start-day tariff and its 00:00 end clock;
+  // CREATE represents that closing boundary as next-day midnight in its ISO endpoint.
+  // Any overrun beyond closing remains unsupported and fails before the price request.
+  const nextDay = new Date(Date.parse(ctx.target.startsAt.slice(0, 10) + 'T00:00:00Z') + 86400000)
+    .toISOString().slice(0, 10);
+  const endsAtClosing = localEnd.slice(0, 10) === nextDay && localEnd.slice(11) === '00:00:00.000Z';
+  if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10) && !endsAtClosing) {
     // Derive bounded shape only. Never attach target, dates, clock times, IDs or provider rows.
     // Keep derivation inside the no-throw boundary as well as the optional observer call.
     try {

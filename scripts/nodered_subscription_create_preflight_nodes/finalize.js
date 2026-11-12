@@ -10,7 +10,7 @@ if (ctx?.caller === "split_create_readonly_preflight") {
     && ctx.clientSubscriptionId === split.clientSubscriptionId
     && target?.roomId === split.roomId && target?.studioId === split.studioId
     && target?.timeFrom === `${split.date}T${split.fromTime}+03:00`
-    && target?.timeTo === `${split.date}T${split.toTime}+03:00`;
+    && target?.timeTo === `${splitCreateEndDate(split)}T${split.toTime}+03:00`;
   if (Number(msg.statusCode) === 200 && payload.state === "CREATE_PREFLIGHT_PASSED" && bound) {
     split.subscriptionCreatePreflightDone = true;
     split.step = "subscription_create_preflight_complete";

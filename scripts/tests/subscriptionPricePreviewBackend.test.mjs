@@ -1202,13 +1202,13 @@ function crossDayFixture(options = {}) {
 const crossDayEvent = events => events.find(event => event.code === 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED' && event.stage === 'preview_router');
 const crossDayFields = event => Object.fromEntries(Object.entries(event).filter(([key]) => key.startsWith('preview')));
 
-test('cross-day diagnostic distinguishes midnight from overrun for all accepted durations without changing the refusal', () => {
+test('closing midnight is inclusive for all accepted durations; any overrun still refuses', () => {
   for (const minutes of [60, 90, 120]) for (const delta of [-1, 0, 1]) {
     const start = new Date(Date.parse('2099-09-22T00:00:00Z') - minutes * 60000 + delta);
     const startsAt = start.toISOString().slice(0, 23) + '+03:00';
     const { msg, events, output } = crossDayFixture({ target: { startsAt, durationMinutes: minutes } });
     const event = crossDayEvent(events);
-    if (delta === -1) {
+    if (delta <= 0) {
       assert.equal(output, 0); assert.equal(msg.method, 'GET'); assert.match(msg.url, /\/price\?/);
       assert.equal(event, undefined);
     } else {
@@ -1216,7 +1216,7 @@ test('cross-day diagnostic distinguishes midnight from overrun for all accepted 
       assert.deepEqual(structuredClone(msg.payload), { error: { code: 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED' } });
       assert.equal(msg.url, undefined); assert.equal(msg._subscriptionPricePreview, undefined);
       assert.equal(event.operationStage, 'subservices'); assert.equal(event.previewDayRelation, 'NEXT_DAY');
-      assert.equal(event.previewEndAtMidnight, delta === 0); assert.equal(event.previewDuration, `MINUTES_${minutes}`);
+      assert.equal(event.previewEndAtMidnight, false); assert.equal(event.previewDuration, `MINUTES_${minutes}`);
       assert.equal(event.previewOffsetValid, true); assert.equal(event.previewSubservicesMatched, true);
       assert.equal(event.previewSubservices2xx, true); assert.equal(event.previewSelectedSubserviceCount, 1);
       assert.equal(event.previewSubserviceSetSize, 1);
@@ -1231,6 +1231,27 @@ test('cross-day diagnostic distinguishes midnight from overrun for all accepted 
   for (const startsAt of ['2099-09-30T23:00:00+03:00', '2099-12-31T23:00:00+03:00']) {
     const result = crossDayFixture({ target: { startsAt } });
     assert.equal(crossDayEvent(result.events).previewDayRelation, 'NEXT_DAY');
+  }
+});
+
+test('closing midnight keeps start-day price contract across calendar boundaries and target kinds', () => {
+  for (const [date, endDate] of [['2099-09-21', '2099-09-22'], ['2099-09-30', '2099-10-01'],
+    ['2099-12-31', '2100-01-01'], ['2104-02-28', '2104-02-29'], ['2104-02-29', '2104-03-01']]) {
+    for (const [time, durationMinutes] of [['23:00', 60], ['22:30', 90], ['22:00', 120]]) {
+      for (const existing of [false, true]) {
+        const result = crossDayFixture({ existing, target: { startsAt: `${date}T${time}:00+03:00`, durationMinutes } });
+        assert.equal(result.output, 0);
+        assert.equal(result.msg.method, 'GET');
+        const url = new URL(result.msg.url);
+        assert.equal(url.searchParams.get('fromDate'), date);
+        assert.equal(url.searchParams.get('fromTime'), time + ':00');
+        assert.equal(url.searchParams.get('toTime'), '00:00:00');
+        assert.equal(url.searchParams.has('toDate'), false);
+        assert.equal(result.ctx.target.startsAt.slice(0, 10), date);
+        assert.equal(crossDayEvent(result.events), undefined);
+        assert.equal(new Date(Date.parse(result.ctx.target.startsAt) + (durationMinutes + 180) * 60000).toISOString().slice(0, 10), endDate);
+      }
+    }
   }
 });
 

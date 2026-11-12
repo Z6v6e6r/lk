@@ -21,6 +21,15 @@ const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
 const MIN_BOOKING_LEAD_MINUTES = 30;
 const TOKEN_REQUEST_TIMEOUT_MS = 10000;
 
+// Exact closing midnight belongs to the next calendar day; serviceDate stays the start day.
+const splitCreateEndDate = (ctx) => {
+  if (!/^00:00(?::00)?$/.test(String(ctx.toTime || ""))
+    || !/^(?:[01]\d|2[0-3]):[0-5]\d(?::00)?$/.test(String(ctx.fromTime || ""))
+    || /^00:00(?::00)?$/.test(ctx.fromTime)) return ctx.date;
+  const day = Date.parse(`${ctx.date}T00:00:00Z`);
+  return Number.isFinite(day) ? new Date(day + 86400000).toISOString().slice(0, 10) : ctx.date;
+};
+
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
@@ -237,7 +246,7 @@ if (!date || !fromTime || !toTime || !roomId || !clientPhone) {
   return fail(400, "date, fromTime, toTime, roomId and clientPhone are required");
 }
 
-const startAtIso = `${date}T${fromTime}:00+03:00`;
+const startAtIso = `${date}T${fromTime}${fromTime.length === 5 ? ":00" : ""}+03:00`;
 const startAtTs = Date.parse(startAtIso);
 if (!Number.isFinite(startAtTs)) {
   return fail(400, "Некорректные дата или время начала", {
@@ -319,8 +328,8 @@ msg._splitCtx = {
   date,
   fromTime,
   toTime,
-  timeFrom: `${date}T${fromTime}:00+03:00`,
-  timeTo: `${date}T${toTime}:00+03:00`,
+  timeFrom: `${date}T${fromTime}${fromTime.length === 5 ? ":00" : ""}+03:00`,
+  timeTo: `${splitCreateEndDate({ date, fromTime, toTime })}T${toTime}${toTime.length === 5 ? ":00" : ""}+03:00`,
   studioId: toStr(body.studioId),
   roomId,
   masterServiceId: toStr(body.masterServiceId),

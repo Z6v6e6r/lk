@@ -3,7 +3,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (msg._gameCreateOwner || msg._quarterCreateCapability) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "5a19cefec651409341e5fa70a299ba411668338e02fff600c579e57683873a0a", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "ff078b8842c0b6f9c318769c9a5e54607517a1fba607f833719f7ad035afd2be", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -38,6 +38,15 @@ const MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = Object.freeze({
 });
 
 const isOk = (status) => Number(status) >= 200 && Number(status) < 300;
+
+// Exact closing midnight belongs to the next calendar day; serviceDate stays the start day.
+const splitCreateEndDate = (ctx) => {
+  if (!/^00:00(?::00)?$/.test(String(ctx.toTime || ""))
+    || !/^(?:[01]\d|2[0-3]):[0-5]\d(?::00)?$/.test(String(ctx.fromTime || ""))
+    || /^00:00(?::00)?$/.test(ctx.fromTime)) return ctx.date;
+  const day = Date.parse(`${ctx.date}T00:00:00Z`);
+  return Number.isFinite(day) ? new Date(day + 86400000).toISOString().slice(0, 10) : ctx.date;
+};
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -297,8 +306,8 @@ const buildSubscriptionDailyLimitFailure = (value) => {
 
 const extractConflictExerciseId = (value, ctx) => {
   const conflicts = Array.isArray(value?.conflicts) ? value.conflicts : [];
-  const targetStart = `${ctx.date}T${ctx.fromTime}:00+03:00`;
-  const targetEnd = `${ctx.date}T${ctx.toTime}:00+03:00`;
+  const targetStart = `${ctx.date}T${ctx.fromTime}${ctx.fromTime.length === 5 ? ":00" : ""}+03:00`;
+  const targetEnd = `${splitCreateEndDate(ctx)}T${ctx.toTime}${ctx.toTime.length === 5 ? ":00" : ""}+03:00`;
 
   const matchingConflict = conflicts.find((item) => {
     if (!item || typeof item !== "object") return false;
@@ -712,7 +721,7 @@ const splitCreateDurationMinutes = (ctx) => {
   const explicit = Math.floor(toNumber(ctx.durationMinutes) ?? 0);
   if (explicit > 0) return explicit;
   const parseMinutes = (value) => {
-    const matched = String(value || "").match(/^(\d{2}):(\d{2})(?::\d{2})?$/);
+    const matched = String(value || "").match(/^(\d{2}):(\d{2})(?::00)?$/);
     if (!matched) return null;
     const hours = Number(matched[1]);
     const minutes = Number(matched[2]);
@@ -720,7 +729,8 @@ const splitCreateDurationMinutes = (ctx) => {
   };
   const from = parseMinutes(ctx.fromTime);
   const to = parseMinutes(ctx.toTime);
-  return from !== null && to !== null && to > from ? to - from : null;
+  if (from === null || to === null) return null;
+  return to > from ? to - from : to === 0 && from > 0 ? 1440 - from : null;
 };
 
 const startManagedCreateAuthoritativePreflight = (ctx) => {
@@ -1216,7 +1226,7 @@ const continueSplitAfterVerifiedPrice = (ctx) => {
       directionId: toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID,
       typeId: toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID,
       timeFrom: `${ctx.date}T${ctx.fromTime}+03:00`,
-      timeTo: `${ctx.date}T${ctx.toTime}+03:00`,
+      timeTo: `${splitCreateEndDate(ctx)}T${ctx.toTime}+03:00`,
       maxClientsCount: ctx.maxClientsCount,
       roomId: ctx.verifiedRoomId,
       trainers: [],
