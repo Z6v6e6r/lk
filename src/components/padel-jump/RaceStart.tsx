@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import logo from '../../assets/logo-hab-compact.svg';
 import { LIVE_LIVES } from './live-contract';
+import { exhibitionCommunityUrl, isExhibitionRoute, PADEL_GAME_HUB_URL } from './exhibition';
 import { racePageUrl } from './race-navigation';
 import './jump-start.css';
 
@@ -16,11 +17,14 @@ type Props = {
 
 export function RaceStart({ profile, checking, pending, onBegin, onRetryProfile, onChangeProfile, onCheckAdmission }: Props) {
   const titleId = useId(), noteId = useId(), rankedNoteId = useId();
+  const exhibition = isExhibitionRoute();
   const initials = profile?.name.trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]).join('').toUpperCase() || '…';
   return <>
     <header className="jump-header">
       <div className="jump-brand"><img src={logo} alt="ПадлхАБ" /><span className="jump-game">Jump</span></div>
-      <a className="jump-link" href={racePageUrl('live')}>Общий экран ↗</a>
+      {exhibition
+        ? <a className="jump-link" href={exhibitionCommunityUrl(profile?.communityId)}>Вернуться в сообщество</a>
+        : <a className="jump-link" href={racePageUrl('live')}>Общий экран ↗</a>}
     </header>
     <section className="jump-body pj-race-profile" aria-labelledby={titleId}>
       <h1 className="jump-title" id={titleId}>Собери больше звёзд</h1>
@@ -36,6 +40,7 @@ export function RaceStart({ profile, checking, pending, onBegin, onRetryProfile,
       <p className="jump-note" id={rankedNoteId}>Твоё имя, игра и результат будут видны на общем экране.</p>
       <a className="jump-button jump-button--secondary" href={racePageUrl('practice')} aria-describedby={noteId}>Играть без рейтинга</a>
       <p className="jump-note" id={noteId}>Личный прогресс сохраняется отдельно.</p>
+      {exhibition && <a className="jump-button jump-button--secondary jump-second-game" href={PADEL_GAME_HUB_URL}>Узнай про Падел в игровой форме</a>}
       <details className="jump-rules"><summary>Как играть и попасть в рейтинг</summary><p><strong>Цель.</strong> Управляй мячом и собирай звёзды. На каждую попытку даётся {LIVE_LIVES} жизней.</p><p><strong>Рейтинг.</strong> Чем больше звёзд, тем выше место. При равном числе звёзд выше игрок, который потратил меньше времени. Результат связан с твоим профилем сообщества.</p></details>
     </section>
   </>;

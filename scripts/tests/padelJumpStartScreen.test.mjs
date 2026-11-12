@@ -33,6 +33,8 @@ test('start screen keeps real profile, accessible lives, both destinations and p
   for (const [, id] of html.matchAll(/aria-describedby="([^"]+)"/g)) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="jump-rules">/);
   assert.match(html, /При равном числе звёзд/);
+  assert.ok(!html.includes('Узнай про Падел в игровой форме'), 'the second game belongs to the exhibition start only');
+  assert.ok(!html.includes('https://padlhub.su/padel/'));
 });
 
 test('pending and unconfirmed profiles cannot start ranked play or show demo identity', async () => {
@@ -76,5 +78,26 @@ test('direct cabinet module installs all screen CSS inside its owned mount gener
   } finally {
     if (previousDocument === undefined) delete globalThis.document;
     else globalThis.document = previousDocument;
+  }
+});
+
+test('exhibition start screen returns to the community instead of the public wall', async () => {
+  const render = await startScreen();
+  const previousWindow = globalThis.window;
+  const communityId = 'community_1794221739126_корпспорт-падлхаб-2026';
+  const destination = 'href="https://padlhub.ru/lk_new?authMode=viva&amp;openCommunity=' + encodeURIComponent(communityId) + '"';
+  globalThis.window = { location: { search: '?padelJumpRace=1&jumpExhibition=1', pathname: '/lk_new' } };
+  try {
+    const html = render({ profile: { name: 'Мария Тестовая', communityId } });
+    assert.match(html, /Вернуться в сообщество/);
+    assert.doesNotMatch(html, /Общий экран/);
+    assert.ok(html.includes(destination), 'the header must link to the cabinet community entry');
+    assert.match(html, /Узнай про Падел в игровой форме/);
+    assert.ok(html.includes('href="https://padlhub.su/padel/"'), 'the second exhibition game must be linked below the practice button');
+    assert.equal((html.match(/Узнай про Падел в игровой форме/g) || []).length, 1);
+    const fallback = render({ profile: null });
+    assert.ok(fallback.includes(destination), 'an unconfirmed profile must not drop the community destination');
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
   }
 });
