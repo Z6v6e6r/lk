@@ -1,5 +1,8 @@
 # LK1 correlated error diagnostics v1
 
+The first failed preview input guard and bounded field shape are documented in
+[Preview request validation diagnostics](preview-request-validation.md).
+
 SOURCE implementation only. No business fix, production acceptance, merge, publication, deploy,
 import, restart, migration, index, ACL, routing, secret provisioning, provider request or message send
 is part of this change. LK base: `91b016eb84be8269abc2b21d05a791dbfb87f4c3`.

@@ -378,6 +378,48 @@
         "UNKNOWN"
       ]
     },
+    "firstFailedValidationPredicate": {
+      "enum": [
+        "BODY_EXTRA_KEYS",
+        "TARGET_SHAPE",
+        "TARGET_EXTRA_KEYS",
+        "TARGET_KIND",
+        "EVENT_ID_SHAPE",
+        "GAME_ID_SHAPE",
+        "SLOT_ID_SHAPE",
+        "STATION_ID_SHAPE",
+        "ROOM_ID_SHAPE",
+        "MASTER_ID_SHAPE",
+        "SERVICES_SHAPE",
+        "SERVICES_COUNT",
+        "SERVICES_DUPLICATE",
+        "SERVICE_ID_SHAPE",
+        "SHARE_ENUM",
+        "START_FORMAT",
+        "START_PARSE",
+        "START_NOT_FUTURE",
+        "START_CALENDAR",
+        "DURATION_ENUM",
+        "SUBSCRIPTIONS_SHAPE",
+        "SUBSCRIPTIONS_COUNT",
+        "SUBSCRIPTIONS_DUPLICATE",
+        "SUBSCRIPTION_ID_SHAPE",
+        "UNKNOWN"
+      ]
+    },
+    "validationFieldShape": {
+      "enum": [
+        "MISSING",
+        "NULL",
+        "STRING",
+        "NUMBER",
+        "ARRAY",
+        "OBJECT",
+        "BOOLEAN",
+        "OTHER",
+        "UNKNOWN"
+      ]
+    },
     "previewTargetKind": {
       "enum": [
         "NEW_GAME",
@@ -837,6 +879,7 @@
         "product_trial_amount",
         "amount_ceiling",
         "target_not_future",
+        "PRICE_PREVIEW_REQUEST_INVALID",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
         "PRICE_PREVIEW_UNAVAILABLE",
@@ -1123,6 +1166,7 @@
         "product_trial_amount",
         "amount_ceiling",
         "target_not_future",
+        "PRICE_PREVIEW_REQUEST_INVALID",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
         "PRICE_PREVIEW_UNAVAILABLE",
@@ -1420,6 +1464,7 @@
         "product_trial_amount",
         "amount_ceiling",
         "target_not_future",
+        "PRICE_PREVIEW_REQUEST_INVALID",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
         "PRICE_PREVIEW_UNAVAILABLE",
@@ -1706,6 +1751,7 @@
         "product_trial_amount",
         "amount_ceiling",
         "target_not_future",
+        "PRICE_PREVIEW_REQUEST_INVALID",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
         "PRICE_PREVIEW_UNAVAILABLE",
@@ -1992,6 +2038,7 @@
         "product_trial_amount",
         "amount_ceiling",
         "target_not_future",
+        "PRICE_PREVIEW_REQUEST_INVALID",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
         "PRICE_PREVIEW_UNAVAILABLE",
@@ -2278,6 +2325,7 @@
         "product_trial_amount",
         "amount_ceiling",
         "target_not_future",
+        "PRICE_PREVIEW_REQUEST_INVALID",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
         "PRICE_PREVIEW_UNAVAILABLE",
