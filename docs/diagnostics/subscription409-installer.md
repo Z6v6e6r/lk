@@ -102,9 +102,26 @@ Before the single PM2 call, restart intent is durable. Timeout/error/process
 ambiguity retains the lease; `apply` will not repeat the restart. A successful
 restart must advance the count exactly once and change PID. The registration
 receipt binds generation/bundle/PID and is created by the settings factory only.
+PM2 `online` alone does not prove registration: the installer waits up to30seconds
+on a monotonic clock for that same PID/count and exact receipt, without another
+restart. Every poll bounds PM2 inspection by the remaining wait budget. Timeout,
+wrong receipt or process drift preserves `RESTART_INTENT` and the lease.
 It proves factory configuration, not direct introspection of the Node-RED global
 context or successful delivery of a business response. Synthetic self-tests use
 an in-memory sink, never fake409 events in production logs.
+
+If a correct receipt arrives late, the approved operator can forward-resume
+without another restart:
+
+```sh
+PADLHUB_SUBSCRIPTION409_INSTALL=CONFIRM_147 node /private/packet/installer.cjs resume /private/packet <contract-sha256>
+```
+
+`resume` rechecks pinned sources/process/receipt and starts a fresh15minute soak;
+it never calls PM2 restart. If the original restart return was not durable (a
+timeout/crash), it additionally requires the same explicit quiesced recovery
+PID/count/status assertion used below. Forward resume never accepts an offline
+process or resumes a pending rollback.
 
 `SOAKING` retains the lease for15minutes. Check exact settings/artifact/flow/helper
 hashes, process identity, safe startup/exception aggregates, resource and log

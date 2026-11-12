@@ -36,18 +36,27 @@ function fixture(t) {
     preservedFiles: [], coordinatedRestartApproved: true };
   const tx = path.join(root, ".subscription409-transactions", generation), lease = path.join(root, LEASE_NAME);
   const state = { time: c.createdAtMs, process: { ...c.process }, restarts: 0, lock: true, fail: null,
-    restartFail: null, registrationFail: false, points: [] };
+    restartFail: null, registrationFail: false, registrationDelayMs: 0, registrationWrong: false, points: [] };
+  const saveReady = () => {
+    if (sha(fs.readFileSync(settings)) === c.candidateSha256 && !state.registrationFail) fs.writeFileSync(path.join(tx, "ready.json"),
+      JSON.stringify({ kind: "SUBSCRIPTION409_SETTINGS_REGISTERED", generation: state.registrationWrong ? "f".repeat(32) : generation,
+        bundleSha256, pid: state.process.pid, registered: true, ...state.receiptOverrides }), { mode: 0o600 });
+  };
   const pm2 = { inspect: () => ({ ...state.process }), restart(expected) {
     assert.equal(state.process.restartCount, expected); state.restarts++;
     if (state.restartFail === "before") throw Error("SYNTHETIC_RESTART_UNKNOWN");
     state.process = { pid: Math.max(100, state.process.pid) + 1, restartCount: expected + 1, status: "online" };
+    state.restartedAt = state.time;
     if (state.restartFail === "offline") { state.process = { ...state.process, pid: 0, status: "errored" }; throw Error("SYNTHETIC_RESTART_UNKNOWN"); }
-    if (sha(fs.readFileSync(settings)) === c.candidateSha256 && !state.registrationFail) fs.writeFileSync(path.join(tx, "ready.json"),
-      JSON.stringify({ kind: "SUBSCRIPTION409_SETTINGS_REGISTERED", generation, bundleSha256, pid: state.process.pid, registered: true }), { mode: 0o600 });
+    if (!state.registrationDelayMs) saveReady();
     if (state.restartFail === "after") throw Error("SYNTHETIC_RESTART_UNKNOWN");
     return state.process;
   } };
   const options = { root, releases, uid, gid, machineSha256: c.machineSha256, pm2, now: () => state.time,
+    monotonic: () => state.time, registrationTimeoutMs: 1000, pollMs: 100, wait(ms) {
+      state.time += ms; state.onWait?.();
+      if (state.registrationDelayMs && state.time - state.restartedAt >= state.registrationDelayMs) saveReady();
+    },
     assertLock() { if (!state.lock) throw Error("NO_KERNEL_LOCK"); }, onTransition(point) {
       state.points.push(point); if (point === state.fail) { state.fail = null; throw Error("SYNTHETIC_CRASH"); }
     } };
@@ -125,9 +134,69 @@ test("failed baseline startup stays blocked and its explicit retry survives anot
 
 test("registration failure and artifact corruption never become successful activation", t => {
   const f = fixture(t); f.state.registrationFail = true;
-  assert.throws(() => f.runtime().apply(f.c, f.packet), /ENOENT|REGISTRATION_NOT_PROVEN/);
+  assert.throws(() => f.runtime().apply(f.c, f.packet), /REGISTRATION_TIMEOUT/);
   assert.equal(JSON.parse(fs.readFileSync(f.lease)).phase, "RESTART_INTENT");
   assert.equal(f.runtime().rollback(f.c, { restartQuiesced: true, recoveryProcess: f.state.process }).state, "ROLLED_BACK");
+});
+
+test("delayed registration reaches SOAKING after one restart while preserving the same PID/count", t => {
+  const f = fixture(t); f.state.registrationDelayMs = 300;
+  assert.equal(f.runtime().apply(f.c, f.packet).state, "SOAKING");
+  assert.equal(f.state.restarts, 1); assert.equal(f.state.time, f.c.createdAtMs + 300);
+});
+
+test("registration timeout retains the lease and late registration forward-resumes without restart", t => {
+  const f = fixture(t); f.state.registrationDelayMs = 1500;
+  assert.throws(() => f.runtime().apply(f.c, f.packet), /REGISTRATION_TIMEOUT/);
+  assert.equal(f.state.restarts, 1); assert(fs.existsSync(f.lease));
+  assert.throws(() => f.runtime().apply(f.c, f.packet), /LEASE_PRESENT/);
+  assert.equal(f.runtime().resume(f.c).state, "SOAKING"); assert.equal(f.state.restarts, 1);
+  const until = JSON.parse(fs.readFileSync(f.lease)).soakUntilMs;
+  assert.equal(f.runtime().resume(f.c).soakUntilMs, until); assert.equal(f.state.restarts, 1);
+});
+
+test("wrong registration and process drift retain custody and never trigger a retry", t => {
+  const wrong = fixture(t); wrong.state.registrationWrong = true;
+  assert.throws(() => wrong.runtime().apply(wrong.c, wrong.packet), /REGISTRATION_NOT_PROVEN/);
+  assert(fs.existsSync(wrong.lease)); assert.equal(wrong.state.restarts, 1);
+  const drift = fixture(t); drift.state.registrationDelayMs = 300; drift.state.onWait = () => { drift.state.process.pid++; };
+  assert.throws(() => drift.runtime().apply(drift.c, drift.packet), /PROCESS_DRIFT/);
+  assert(fs.existsSync(drift.lease)); assert.equal(drift.state.restarts, 1);
+  assert.throws(() => drift.runtime().resume(drift.c), /PROCESS_DRIFT/);
+});
+
+for (const receiptOverrides of [{ pid: 999 }, { bundleSha256: "f".repeat(64) }, { registered: false }]) {
+  test(`registration identity mismatch ${Object.keys(receiptOverrides)[0]} preserves the lease`, t => {
+    const f = fixture(t); f.state.receiptOverrides = receiptOverrides;
+    assert.throws(() => f.runtime().apply(f.c, f.packet), /REGISTRATION_NOT_PROVEN/);
+    assert(fs.existsSync(f.lease)); assert.equal(f.state.restarts, 1);
+  });
+}
+
+test("artifact corruption fails finish but does not prevent safe settings rollback", t => {
+  const f = fixture(t); f.runtime().apply(f.c, f.packet); f.state.time += 900_001;
+  fs.writeFileSync(path.join(f.releases, f.c.bundleSha256, "observer.cjs"), "corrupt");
+  assert.throws(() => f.runtime().finish(f.c), /ARTIFACT_DRIFT/); assert(fs.existsSync(f.lease));
+  assert.equal(f.runtime().rollback(f.c).state, "ROLLED_BACK"); assert.equal(f.state.restarts, 2);
+});
+
+test("forward resume of a restart-return crash requires a settled explicit new-process identity", t => {
+  const f = fixture(t); f.state.fail = "restart-returned-before-receipt";
+  assert.throws(() => f.runtime().apply(f.c, f.packet), /SYNTHETIC_CRASH/);
+  assert.throws(() => f.runtime().resume(f.c), /EXPLICIT_RESTART_RECOVERY_REQUIRED/);
+  assert.equal(f.runtime().resume(f.c, { restartQuiesced: true, recoveryProcess: f.state.process }).state, "SOAKING");
+  assert.equal(f.state.restarts, 1);
+});
+
+test("a poll returning past deadline does not count as bounded registration success", t => {
+  const f = fixture(t), inspect = f.options.pm2.inspect; let callsAfterRestart = 0;
+  f.options.pm2.inspect = (...args) => {
+    if (f.state.restarts && ++callsAfterRestart === 2) f.state.time += 1001;
+    return inspect(...args);
+  };
+  assert.throws(() => f.runtime().apply(f.c, f.packet), /REGISTRATION_TIMEOUT/);
+  assert(fs.existsSync(f.lease)); assert.equal(f.state.restarts, 1);
+  assert.equal(f.runtime().resume(f.c).state, "SOAKING"); assert.equal(f.state.restarts, 1);
 });
 
 for (const drift of ["settings", "flow", "process", "machine", "lease", "backup"]) {

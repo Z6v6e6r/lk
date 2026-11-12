@@ -12,7 +12,7 @@ import { assertProtectedFile } from "./nodered_reviewed_flow_deploy/runtime_cont
 // Deliberately no SSH, workflow dispatch, upload or automatic invocation from CI.
 export function main(args = process.argv.slice(2)) {
   const [action, packet, approvedSha, ...flags] = args;
-  if (!["status", "apply", "finish", "rollback"].includes(action) || !packet || !digest(approvedSha)) throw Error("USAGE_INVALID");
+  if (!["status", "apply", "resume", "finish", "rollback"].includes(action) || !packet || !digest(approvedSha)) throw Error("USAGE_INVALID");
   if (flags.some(f => !/^--(?:locked|restart-quiesced|recovery-pid=\d+|recovery-count=\d+|recovery-status=(?:online|errored|stopped))$/.test(f))) throw Error("FLAG_INVALID");
   if (process.platform !== "linux" || process.getuid() !== 0) throw Error("ROOT_LINUX_147_REQUIRED");
   const contractFile = path.resolve(packet, "contract.json"); assertProtectedFile(contractFile);
@@ -46,10 +46,10 @@ export function main(args = process.argv.slice(2)) {
   if (action === "apply") {
     const load = name => { const file = path.resolve(packet, name); assertProtectedFile(file); return fs.readFileSync(file); };
     result = runtime.apply(c, { bundle: load("observer.cjs"), beforeSettings: load("settings.before.js"), afterSettings: load("settings.after.js") });
-  } else if (action === "rollback") {
+  } else if (["rollback", "resume"].includes(action)) {
     const pid = flags.find(v => v.startsWith("--recovery-pid=")), count = flags.find(v => v.startsWith("--recovery-count="));
     const status = flags.find(v => v.startsWith("--recovery-status="))?.split("=")[1] || "online";
-    result = runtime.rollback(c, { restartQuiesced: flags.includes("--restart-quiesced"),
+    result = runtime[action](c, { restartQuiesced: flags.includes("--restart-quiesced"),
       recoveryProcess: pid && count ? { pid: Number(pid.split("=")[1]), restartCount: Number(count.split("=")[1]), status } : undefined });
   } else result = runtime[action](c);
   // Contract/source/lease tokens, settings and raw PM2 output never go to stdout.

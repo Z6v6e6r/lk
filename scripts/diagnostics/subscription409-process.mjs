@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 
 export function createProcessAdapter(spawn = spawnSync) {
   return {
-    inspect() {
-      const result = spawn("pm2", ["jlist"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
+    inspect({ timeoutMs = 60_000 } = {}) {
+      const result = spawn("pm2", ["jlist"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: Math.max(1, Math.min(60_000, timeoutMs)) });
       if (result.error || result.status !== 0) throw Error("PROCESS_INSPECTION_FAILED");
       const matches = JSON.parse(result.stdout).filter(p => p.name === "node-red");
       if (matches.length !== 1) throw Error("PROCESS_IDENTITY_AMBIGUOUS");

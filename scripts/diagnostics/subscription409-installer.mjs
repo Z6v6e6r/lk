@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { assertProtectedFile, assertProtectedFileModes, atomicWrite, recoverAtomicExclusivePublication,
   syncDirectory, writeFileExclusiveAtomicDurable } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
 import { ROOT, RELEASES, LEASE_NAME, sha, processEqual, validProcess, validRecoveryProcess, settingsCandidate,
@@ -14,8 +15,11 @@ const PHASES = ["PREPARED", "RESTART_INTENT", "SOAKING", "ROLLBACK_INTENT", "ROL
 // No automatic rollback/restart retry: uncertainty retains the durable shared lease.
 export function createSubscription409Installer({ root = ROOT, releases = RELEASES,
   uid = 0, gid = 0, machineSha256, assertLock, pm2, now = () => Date.now(),
-  onTransition = () => {}, soakMs = 15 * 60_000 } = {}) {
-  check(typeof assertLock === "function" && pm2 && Number.isInteger(soakMs) && soakMs >= 15 * 60_000, "INSTALLER_OPTIONS_INVALID");
+  onTransition = () => {}, soakMs = 15 * 60_000, registrationTimeoutMs = 30_000, pollMs = 100,
+  monotonic = () => performance.now(), wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  check(typeof assertLock === "function" && pm2 && Number.isInteger(soakMs) && soakMs >= 15 * 60_000
+    && Number.isInteger(registrationTimeoutMs) && registrationTimeoutMs >= 1000 && registrationTimeoutMs <= 60_000
+    && Number.isInteger(pollMs) && pollMs >= 10 && pollMs <= 1000, "INSTALLER_OPTIONS_INVALID");
   const fileOptions = { uid, gid, mode: 0o600 };
   const settings = path.join(root, "settings.js"), flow = path.join(root, "flows.json"), leasePath = path.join(root, LEASE_NAME);
   const protectedDirectory = (dir, exactMode = null) => {
@@ -110,6 +114,18 @@ export function createSubscription409Installer({ root = ROOT, releases = RELEASE
     check(r.kind === "SUBSCRIPTION409_SETTINGS_REGISTERED" && r.registered === true && r.pid === p.pid
       && r.generation === c.generation && r.bundleSha256 === c.bundleSha256, "REGISTRATION_NOT_PROVEN");
   };
+  const waitForRegistration = (c, expected) => {
+    const deadline = monotonic() + registrationTimeoutMs;
+    while (true) {
+      assertLock();
+      const remaining = deadline - monotonic(); check(remaining > 0, "REGISTRATION_TIMEOUT");
+      const current = pm2.inspect({ timeoutMs: Math.max(1, Math.min(1000, Math.ceil(remaining))) });
+      check(monotonic() < deadline, "REGISTRATION_TIMEOUT");
+      check(validProcess(current) && processEqual(current, expected), "PROCESS_DRIFT");
+      if (fs.existsSync(paths(c).ready)) { ready(c, current); return current; }
+      wait(Math.min(pollMs, Math.max(1, deadline - monotonic())));
+    }
+  };
   const completed = (c, receipt) => {
     check(receipt.contractSha256 === sha(json(c)) && ["INSTALLED", "ROLLED_BACK"].includes(receipt.state), "FINISH_RECEIPT_INVALID");
     sources(c, [receipt.state === "INSTALLED" ? c.candidateSha256 : c.settingsSha256]);
@@ -170,9 +186,30 @@ export function createSubscription409Installer({ root = ROOT, releases = RELEASE
       pm2.restart(c.process.restartCount); onTransition("restart-returned-before-receipt");
       const active = inspect();
       check(active.restartCount === c.process.restartCount + 1 && active.pid !== c.process.pid, "RESTART_OUTCOME_UNKNOWN");
-      sources(c, [c.candidateSha256]); ready(c, active);
+      sources(c, [c.candidateSha256]);
+      l = phase(c, l, "RESTART_INTENT", { registrationProcess: active, restartReturned: true });
+      waitForRegistration(c, active); sources(c, [c.candidateSha256]);
       l = phase(c, l, "SOAKING", { process: active, soakUntilMs: now() + soakMs });
       onTransition("soaking-durable"); return { state: "SOAKING", soakUntilMs: l.soakUntilMs };
+    },
+    resume(value, { recoveryProcess, restartQuiesced = false } = {}) {
+      assertLock(); const c = contract(value); const done = alreadyDone(c); if (done) return done;
+      let l = owned(c); sources(c, [c.candidateSha256]);
+      if (l.phase === "SOAKING") {
+        sameProcess(l.process); ready(c, l.process); return { state: "SOAKING", soakUntilMs: l.soakUntilMs };
+      }
+      check(l.phase === "RESTART_INTENT", "FORWARD_RESUME_PHASE_INVALID");
+      let expected = l.registrationProcess;
+      if (!l.restartReturned || !validProcess(expected)) {
+        check(restartQuiesced && validProcess(recoveryProcess), "EXPLICIT_RESTART_RECOVERY_REQUIRED");
+        sameProcess(recoveryProcess);
+        check(recoveryProcess.restartCount === c.process.restartCount + 1 && recoveryProcess.pid !== c.process.pid, "PROCESS_DRIFT");
+        expected = recoveryProcess;
+        l = phase(c, l, "RESTART_INTENT", { registrationProcess: expected, restartReturned: true });
+      }
+      const active = waitForRegistration(c, expected); sources(c, [c.candidateSha256]);
+      l = phase(c, l, "SOAKING", { process: active, soakUntilMs: now() + soakMs });
+      return { state: "SOAKING", soakUntilMs: l.soakUntilMs };
     },
     finish(value) {
       assertLock(); const c = contract(value); const done = alreadyDone(c); if (done) return done;
