@@ -196,6 +196,26 @@
   text-decoration: none;
 }
 .community-jump-ranking-screen .community-jump-play svg { width: 18px; height: 18px; }
+.community-jump-ranking-screen .community-jump-notify {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 46px;
+  margin-top: 8px;
+  padding: 10px 16px;
+  box-sizing: border-box;
+  border: 1px solid var(--phr-line);
+  border-radius: 10px;
+  color: var(--phr-text);
+  background: var(--phr-surface);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.community-jump-ranking-screen .community-jump-notify svg { flex: 0 0 18px; width: 18px; height: 18px; color: var(--phr-muted); }
 .community-jump-ranking-screen .community-jump-refresh {
   display: flex;
   align-items: center;
@@ -219,6 +239,7 @@
 .community-jump-ranking-screen .community-jump-error { margin: 12px 0; color: var(--phr-error); font-size: 14px; line-height: 21px; }
 @media (hover: hover) {
   .community-jump-ranking-screen .community-jump-play:hover { background: var(--phr-action-hover); }
+  .community-jump-ranking-screen .community-jump-notify:hover { background: var(--phr-avatar); }
   .community-jump-ranking-screen .community-jump-refresh:not(:disabled):hover { color: var(--phr-text); }
 }
 @media (max-width: 360px) {

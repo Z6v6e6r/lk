@@ -1,20 +1,12 @@
 import './event-community.css';
 import type { CommunityRecord } from '../../utils/communityApi';
-import { EXHIBITION_COMMUNITY_ID, EXHIBITION_GAME_URL, EXHIBITION_LIVE_URL, buildExhibitionPushOptInUrl, exhibitionCommunityUrl } from '../padel-jump/exhibition';
+import { EXHIBITION_COMMUNITY_ID, EXHIBITION_GAME_URL, EXHIBITION_LIVE_URL } from '../padel-jump/exhibition';
 
 /** Only the isolated exhibition; no generic game engine enters the cabinet bundle. */
 export function EventCommunityPanel({ community, isMember = false, onRegister }: { community: CommunityRecord; isMember?: boolean; onRegister: () => void }) {
   if (community.id !== EXHIBITION_COMMUNITY_ID) return null;
-  if (isMember) {
-    return <section className="community-ranking-box community-event-panel community-event-push-prompt" aria-label="Уведомления о результатах">
-      <h2>Уведомления о результатах</h2>
-      <p>Включите уведомления — пришлём результаты соревнований в сообществе {community.name}.</p>
-      <a className="btn-primary community-event-push__button" href={buildExhibitionPushOptInUrl(exhibitionCommunityUrl(community.id), community.id)}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></svg>
-        Включить уведомления
-      </a>
-    </section>;
-  }
+  // Members already have the game in the rating tab and the bell under its play action.
+  if (isMember) return null;
   return <section className="community-ranking-box community-event-panel" aria-label="Игры и рейтинг мероприятия">
     <h2>ПадлхАБ Jump — 5 жизней</h2>
     <p>Вступить в сообщество можно в любое время. ФИО, компания и email из обязательной анкеты не публикуются в рейтинге.</p>

@@ -1,3 +1,5 @@
+import { EXHIBITION_CABINET_URL } from './exhibition-route.ts';
+
 /** KorpSport 2026 emblem (owner-supplied PNG, 256x256, palette-32). */
 /** Inlined because the installed LK1 static release publishes a fixed artifact set, not an asset directory. */
 export const EXHIBITION_BRAND_LOGO_URL =
@@ -47,10 +49,7 @@ export function buildExhibitionLogoCandidates(candidates: readonly string[], com
 
 export const EXHIBITION_INVITE_HEADING = 'Вступай в сообщество КорпСпорт 2026';
 export const EXHIBITION_INVITE_NOTE = 'Все участники выставки КорпСпорт 2026.';
-export const EXHIBITION_GAME_URL = 'https://padlhub.ru/lk_new?authMode=viva&padelJumpRace=1&jumpExhibition=1';
-export const EXHIBITION_LIVE_URL = 'https://padlhub.ru/lk_new?authMode=viva&padelJumpLive=1&jumpExhibition=1';
-export const isExhibitionRoute = (search = typeof window === 'undefined' ? '' : window.location.search) => new URLSearchParams(search).get('jumpExhibition') === '1'
-  || typeof window !== 'undefined' && /^\/lk\/padel-jump-exhibition-[a-f0-9]{8}\//.test(window.location.pathname);
+export { EXHIBITION_CABINET_URL, EXHIBITION_GAME_URL, EXHIBITION_LIVE_URL, EXHIBITION_PRACTICE_URL, isExhibitionRoute } from './exhibition-route.ts';
 /** Public page override for the guest hero: a community logo/title the Tilda owner can pass in the URL. */
 export function readExhibitionBrandOverride(search = typeof window === "undefined" ? "" : window.location.search): {
   readonly logoUrl?: string;
@@ -76,7 +75,6 @@ export function resolveCommunityHeaderLogo(community: { id?: string | null; logo
   return community.logoUrl?.trim() || community.logo?.trim() || undefined;
 }
 
-export const EXHIBITION_CABINET_URL = 'https://padlhub.ru/lk_new?authMode=viva';
 export function exhibitionCommunityUrl(communityId?: string | null): string {
   const id = String(communityId || EXHIBITION_COMMUNITY_ID).trim();
   return id ? `${EXHIBITION_CABINET_URL}&openCommunity=${encodeURIComponent(id)}` : EXHIBITION_CABINET_URL;

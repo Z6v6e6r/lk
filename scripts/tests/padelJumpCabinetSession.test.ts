@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { createLiveServer } from '../../games/padel-jump/live/server.mjs';
 import { LIVE_ENGINE_VERSION, LIVE_RULE } from '../../src/components/padel-jump/live-contract.ts';
 import { racePageUrl } from '../../src/components/padel-jump/race-navigation.ts';
+import { EXHIBITION_GAME_URL, EXHIBITION_LIVE_URL, EXHIBITION_PRACTICE_URL } from '../../src/components/padel-jump/exhibition-route.ts';
 
 const origin = 'https://padlhub.ru';
 test('cabinet navigation never carries identity and standalone paths remain compatible', () => {
@@ -16,6 +17,17 @@ test('cabinet navigation never carries identity and standalone paths remain comp
     assert.equal(racePageUrl('practice', host), './padel-jump.html');
     assert.equal(racePageUrl('live', host), './padel-jump-live.html');
   }
+});
+test('exhibition navigation keeps every cabinet link on the exhibition widget', () => {
+  for (const page of ['race', 'practice', 'live'] as const) {
+    const url = new URL(racePageUrl(page, origin, true));
+    assert.equal(url.origin, origin);
+    assert.equal(url.searchParams.get('jumpExhibition'), '1');
+  }
+  assert.equal(racePageUrl('race', origin, true), EXHIBITION_GAME_URL);
+  assert.equal(racePageUrl('practice', origin, true), EXHIBITION_PRACTICE_URL);
+  assert.equal(racePageUrl('live', origin, true), EXHIBITION_LIVE_URL);
+  assert.equal(racePageUrl('live', origin, false), 'https://padlhub.su/lk/padel-jump-team-60816487/padel-jump-live.html');
 });
 test('practice return link uses the origin-aware race destination', () => {
   const source = readFileSync(new URL('../../src/components/padel-jump/PadelJump.tsx', import.meta.url), 'utf8');

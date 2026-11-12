@@ -26,14 +26,7 @@ test('non-members see the questionnaire and game actions', async () => {
   assert.equal(otherCommunity, '');
 });
 
-test('members get a bell button that hands off to LK2 with the KorpSport source marker', async () => {
+test('members no longer see the result-notification block in the feed', async () => {
   const render = await panelRenderer();
-  const html = render({ isMember: true });
-  assert.match(html, /Уведомления о результатах/);
-  assert.match(html, /Включить уведомления/);
-  assert.match(html, /community-event-push__button/);
-  assert.match(html, /href="https:\/\/lk2\.padlhub\.su\/push\?/);
-  assert.ok(html.includes('source=korp-sport-2026'));
-  assert.ok(html.includes('community=community_1794221739126_'));
-  assert.ok(!html.includes('Заполнить анкету'));
+  assert.equal(render({ isMember: true }), '');
 });
