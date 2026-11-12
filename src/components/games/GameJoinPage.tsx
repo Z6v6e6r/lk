@@ -982,11 +982,12 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             setGame((prev) => (prev ? mergeRecord(prev, patchedRecord) : patchedRecord));
             return;
           }
-          const authoritative = await apiFetchPadelGameRecord(game.id);
+          const authoritative = patchResult.status === 409
+            ? { data: patchResult.conflictRecord ?? null }
+            : await apiFetchPadelGameRecord(game.id);
           if (!alive || !authoritative.data?.id) return;
-          setGame((prev) => (prev
-            ? mergeRecord(prev, authoritative.data as PadelGameRecord)
-            : authoritative.data));
+          const canonical = authoritative.data;
+          setGame((prev) => (prev?.id === game.id ? canonical : prev));
         });
       })
       .catch(() => {
@@ -1226,6 +1227,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         metadata,
       });
 
+      if (updateResult.conflictRecord) {
+        const canonical = updateResult.conflictRecord;
+        setGame((prev) => (prev?.id === actualGame.id ? canonical : prev));
+      }
       if (updateResult.error) {
         setConfirmingSplitPaymentRef(null);
         setDecisionError(updateResult.error.message || "Не удалось подтвердить оплату участия");
@@ -1760,6 +1765,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           metadata,
         });
 
+        if (updateResult.conflictRecord) {
+          const canonical = updateResult.conflictRecord;
+          setGame((prev) => (prev?.id === actualGame.id ? canonical : prev));
+        }
         if (updateResult.error) {
           setSubmitting(null);
           setDecisionError(updateResult.error.message || "Не удалось сохранить оплату участия");
@@ -1839,6 +1848,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         metadata,
       });
 
+      if (updateResult.conflictRecord) {
+        const canonical = updateResult.conflictRecord;
+        setGame((prev) => (prev?.id === actualGame.id ? canonical : prev));
+      }
       if (updateResult.error) {
         setDecisionError(updateResult.error.message || "Не удалось обновить участие");
         setSubmitting(null);

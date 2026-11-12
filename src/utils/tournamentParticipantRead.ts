@@ -29,9 +29,23 @@ function waitForRetry(delayMs: number, signal: AbortSignal): Promise<boolean> {
   });
 }
 
+function waitForFlight(done: Promise<void>, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(false);
+    const finish = (active: boolean) => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(active);
+    };
+    const onAbort = () => finish(false);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    void done.then(() => finish(true));
+  });
+}
+
 type ReadOptions<T> = {
   key: string;
   signal?: AbortSignal;
+  fresh?: boolean;
   isCurrentSession: () => boolean;
   run: (signal: AbortSignal) => Promise<ApiResult<T>>;
 };
@@ -41,22 +55,36 @@ export function createTournamentParticipantReader<T>() {
   type Flight = {
     controller: AbortController;
     subscribers: Set<(result: ApiResult<T>) => void>;
+    done: Promise<void>;
+    complete: () => void;
   };
   const flights = new Map<string, Flight>();
 
-  return (options: ReadOptions<T>): Promise<ApiResult<T>> => {
+  const read = (options: ReadOptions<T>): Promise<ApiResult<T>> => {
     if (options.signal?.aborted || !options.isCurrentSession()) {
       return Promise.resolve(cancelled(options.signal?.reason));
     }
     let flight = flights.get(options.key);
+    if (options.fresh && flight) {
+      // Wait for the physical read, not one subscriber's cancellable promise.
+      // Waiters neither keep the old transport alive nor cancel other readers.
+      return waitForFlight(flight.done, options.signal).then((active) => (
+        active && options.isCurrentSession()
+          ? read({ ...options, fresh: false })
+          : cancelled(options.signal?.reason)
+      ));
+    }
     const isNew = !flight;
     if (!flight) {
-      flight = { controller: new AbortController(), subscribers: new Set() };
+      let complete!: () => void;
+      const done = new Promise<void>((resolve) => { complete = resolve; });
+      flight = { controller: new AbortController(), subscribers: new Set(), done, complete };
       flights.set(options.key, flight);
     }
     const shared = flight;
     const removeFlight = () => {
       if (flights.get(options.key) === shared) flights.delete(options.key);
+      shared.complete();
     };
     const result = new Promise<ApiResult<T>>((resolve) => {
       const settle = (value: ApiResult<T>) => {
@@ -109,4 +137,5 @@ export function createTournamentParticipantReader<T>() {
     }
     return result;
   };
+  return read;
 }

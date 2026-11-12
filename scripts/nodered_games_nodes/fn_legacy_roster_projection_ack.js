@@ -1,7 +1,16 @@
+// Optional failure observer; its absence/failure cannot alter the roster operation.
+const lkDiagnosticFailure = (statusCode, code) => {
+  try {
+    if (statusCode !== 503 || msg.req?.method !== "POST" || msg.req.path !== "/lk/subscription-bookings") return;
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    global.get("lkDiagnostics")?.observe(msg, "roster_projection_ack", { code, httpStatus: statusCode, sourceHash: "3ab7a8741336a9879803b727722fa65d8522c6e1aa941b18c9476df7041a19dd" });
+  } catch { /* Observability cannot alter business execution. */ }
+};
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const ctx = isObj(msg._legacyRosterBridge) ? msg._legacyRosterBridge : null;
 const write = isObj(msg._legacyRosterProjectionWrite) ? msg._legacyRosterProjectionWrite : null;
 const fail = (statusCode, code, error) => {
+  lkDiagnosticFailure(statusCode, code);
   msg.statusCode = statusCode;
   msg.headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" };
   msg.payload = { code, error };
