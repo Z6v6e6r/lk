@@ -19,7 +19,7 @@ export async function runPublicationBatch(db, { apply = false, limit = 20, withT
     } catch (error) {
       counts.pending++;
       if (apply) {
-        const permanent = typeof error?.code === 'string' && /^PUBLICATION_(?:BINDING|INTENT|TARGET|EXISTING_GAME|RENDER)/.test(error.code);
+        const permanent = typeof error?.code === 'string' && /^PUBLICATION_(?:BINDING|BOOKING|INTENT|TARGET|EXISTING_GAME|RENDER)/.test(error.code);
         const attempts = Number(operation.lk1?.publication?.attempts || 0) + 1;
         // Park poison/conflicting intents and back off transient storage failures, so
         // they cannot monopolize the bounded queue. Never downgrade a successful CAS.

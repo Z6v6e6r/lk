@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MongoClient } from 'mongodb';
 import { runPublicationBatch } from '../split_game_publication_worker.mjs';
-import { normalizePublicationIntent, publishConfirmedOperation } from '../lib/splitGamePublication.mjs';
+import { normalizePublicationIntent, normalizeBookingContract, publishConfirmedOperation } from '../lib/splitGamePublication.mjs';
 
 const uri = process.env.SPLIT_PUBLICATION_TEST_MONGO_URI;
 test('Mongo replica: concurrent workers, commit loss/restart and cancellation are atomic', { skip: !uri }, async () => {
@@ -16,13 +16,14 @@ test('Mongo replica: concurrent workers, commit loss/restart and cancellation ar
     const c = { timeFrom: '2030-11-12T18:00:00+03:00', timeTo: '2030-11-12T19:00:00+03:00', maxClientsCount: 4, roomId: 'fixture-room' };
     const intent = normalizePublicationIntent({ version: 1, settings: { isPrivate: true, ratingGame: false, minRating: null, maxRating: null },
       gameTitle: 'Fixture', participantComment: null, joinPrice: null, studioName: null, roomName: null, gameFormat: 'doubles' });
+    const bookingContract = normalizeBookingContract({ masterServiceId: 'fixture-master', subServiceIds: ['fixture-service'], shareAmountMinor: 250000 });
     const operation = { _id: 'fixture-op-key', state: 'CONFIRMED', operationId: 'fixture-operation', tenantKey: 'fixture', actorClientId: 'fixture-actor',
       clientSubscriptionId: 'fixture-sub', bookingId: 'fixture-booking', upstreamBookingId: 'fixture-booking', exerciseId: 'fixture-exercise',
       category: 'open_game', confirmedAt: '2030-11-12T10:00:00Z', lk1: { createPayload: c,
         target: { category: 'GAME', eventId: 'fixture-exercise', roomId: c.roomId, stationId: 'fixture-studio', durationMinutes: 60, startsAt: c.timeFrom },
         decision: { benefit: { finalPriceMinor: 0 }, subscriptionVisitCount: 1 }, publication: { version: 1, state: 'PENDING',
           intent, intentJson: JSON.stringify(intent), actorPhone: '79990000000', actorClientId: 'fixture-actor', tenantKey: 'fixture',
-          operationId: 'fixture-operation', createPayloadJson: JSON.stringify(c) } } };
+          operationId: 'fixture-operation', createPayloadJson: JSON.stringify(c), bookingContract, bookingContractJson: JSON.stringify(bookingContract) } } };
     await operations.insertOne(operation);
     const transaction = async execute => {
       const session = client.startSession();

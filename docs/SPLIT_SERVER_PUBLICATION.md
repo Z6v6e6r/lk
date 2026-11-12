@@ -34,6 +34,10 @@ context. The normalized intent and binding are saved in `operation.lk1.publicati
 before the existing operation insert and before provider create. Replays compare that
 same normalized intent and identity; they cannot retrofit an old operation or replace
 its author settings. The pre-provider CAS also fences on the saved intent.
+The server also freezes the existing master-service/subservice lookup selectors,
+nominal share/total/promo snapshot and deadlines. They are preserved in the game for
+future JOINs, including an ordinary-price JOIN after a promotion ends. These locators
+are not price/ownership proof: the existing JOIN pipeline revalidates them with Viva.
 
 The existing booking state machine still owns all provider writes, compensation,
 discounts, subscription usage and confirmation. The new worker has **no HTTP/provider
@@ -47,6 +51,8 @@ parallel HTTP/autojoin outputs are never executed. Paid authority is synthesized
 from the already verified zero-charge subscription operation, never from the intent.
 The persisted game marker contains a binding digest, not a second copy of private
 actor/operation/booking identifiers.
+Its digest uses a lossless alphabetic a–p nibble encoding so the existing generic
+phone-shaped string redactor cannot corrupt a valid digest; no PII filter is weakened.
 
 Production writes require a replica set and a transaction spanning game insert and
 publication receipt. A concurrent release/changed operation conflicts with that
@@ -135,6 +141,9 @@ operation observations. Failure/negative tests cover identity/intent changes, fa
 roster/payment/community authority, conflicting existing games, missing intent,
 lost acknowledgements and failed readback. The existing mandatory CI includes the
 new non-network unit suite.
+The transport regression uses the real worker record, existing GET privacy sanitizer,
+actual client normalizer and GET-only polling; the ordinary JOIN regression executes
+the real JOIN prepare/router until its authenticated price lookup, without network.
 
 No live Node-RED candidate was applied, no worker/flag was activated, no real booking
 or payment was created or changed, and no historical split/create was repeated.

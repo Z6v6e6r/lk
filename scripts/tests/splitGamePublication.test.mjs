@@ -1,24 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { normalizePublicationIntent, publicationPlan, publishConfirmedOperation, renderPublication } from '../lib/splitGamePublication.mjs';
 import { composeSplitPublicationSources, buildSplitPublicationCandidate } from '../patch_split_game_publication.mjs';
+import { makePublicationFixture as operation, publicationIntentFixture as intent, publicationBookingContractFixture as bookingContract } from './fixtures/splitGamePublicationFixture.mjs';
 
 const contract = fs.readFileSync(new URL('../nodered_game_publication_nodes/contract.js', import.meta.url), 'utf8');
-const intent = () => ({ version: 1, settings: { isPrivate: true, ratingGame: false, minRating: null, maxRating: null },
-  gameTitle: 'Fixture game', participantComment: 'Bring a racket', joinPrice: null,
-  studioName: 'Fixture studio', roomName: 'Fixture court', gameFormat: 'doubles' });
-function operation() {
-  const c = { timeFrom: '2030-11-12T18:00:00+03:00', timeTo: '2030-11-12T19:00:00+03:00', maxClientsCount: 4, roomId: 'fixture-room', trainers: [], requirements: [] };
-  const i = normalizePublicationIntent(intent());
-  return { _id: 'fixture-operation-key', operationId: 'fixture-operation', tenantKey: 'fixture-tenant', actorClientId: 'fixture-actor',
-    clientSubscriptionId: 'fixture-subscription', state: 'CONFIRMED', category: 'open_game',
-    exerciseId: 'fixture-exercise', bookingId: 'fixture-booking', upstreamBookingId: 'fixture-booking', confirmedAt: '2030-11-12T10:00:00Z',
-    lk1: { createPayload: c, target: { category: 'GAME', eventId: 'fixture-exercise', roomId: c.roomId, stationId: 'fixture-station', durationMinutes: 60, startsAt: c.timeFrom },
-      decision: { benefit: { finalPriceMinor: 0 }, subscriptionVisitCount: 1 }, publication: { version: 1, state: 'PENDING', intent: i,
-        intentJson: JSON.stringify(i), actorClientId: 'fixture-actor', actorPhone: '79990000000', tenantKey: 'fixture-tenant',
-        operationId: 'fixture-operation', createPayloadJson: JSON.stringify(c) } } };
-}
 const get = (o, k) => k.split('.').reduce((v, p) => v?.[p], o);
 function match(doc, query) { return Object.entries(query).every(([k, v]) => k === '$or'
   ? v.some(q => match(doc, q)) : Array.isArray(get(doc, k)) ? get(doc, k).includes(v) : get(doc, k) === v); }
@@ -45,6 +33,27 @@ test('confirmed booking publishes canonical private game without any HTTP/provid
   assert.deepEqual(g.booking.bookingIds, [h.operation.bookingId]); assert.equal(g.settings.isPrivate, true);
   assert.equal(g.metadata.gameTitle, 'Fixture game'); assert.equal(g.organizer.id, h.operation.actorClientId);
   assert.equal(g.payment.paid, true); assert.ok(g.resultRosterSnapshot);
+  assert.equal(g.booking.masterServiceId, 'fixture-master'); assert.deepEqual(g.booking.subServiceIds, ['fixture-service']);
+  assert.equal(g.metadata.splitPayment.shareAmountMinor, 250000);
+});
+test('published game retains selectors for a future ordinary one-time JOIN when no promo exists', () => {
+  const game = renderPublication(publicationPlan(operation()));
+  const msg = { payload: [game], _splitJoinBody: { paymentMode: 'one_time', clientPhone: '79990000001', paymentRef: 'fixture-join' },
+    req: { headers: { authorization: 'Bearer fixture-user' }, query: {} } };
+  const globals = { get(key) { return key === 'vivacrm_access_token' ? 'fixture-token' : key === 'vivacrm_token_expires_at' ? Date.now() + 3600000 : null; }, set() {} };
+  const env = { get() {} }, node = { warn() {}, error() {} };
+  const prepare = new Function('msg', 'global', 'env', 'node', fs.readFileSync(new URL('../nodered_games_nodes/fn_split_join_prepare.js', import.meta.url), 'utf8'));
+  const route = new Function('msg', 'global', 'env', 'node', fs.readFileSync(new URL('../nodered_games_nodes/fn_split_router.js', import.meta.url), 'utf8'));
+  prepare(msg, globals, env, node);
+  assert.equal(msg._splitCtx.masterServiceId, 'fixture-master'); assert.deepEqual(msg._splitCtx.subServiceIds, ['fixture-service']);
+  assert.equal(msg._splitCtx.step, 'pricing_policy');
+  msg.statusCode = 200; msg.payload = { enabled: false, selectedPromoId: null };
+  route(msg, globals, env, node);
+  assert.equal(msg._splitCtx.step, 'verify_room_studio');
+  msg.statusCode = 200; msg.payload = { id: 'fixture-room' };
+  route(msg, globals, env, node);
+  assert.equal(msg._splitCtx.step, 'ordinary_price_studios');
+  assert.equal(msg.method, 'GET'); assert.match(msg.url, /master-services\/fixture-master\/studios/);
 });
 test('disconnect/restart and two workers converge on one insert and one stable game id', async () => {
   const h = harness(); const results = await Promise.all([publishConfirmedOperation(h), publishConfirmedOperation(h)]);
@@ -117,7 +126,7 @@ test('Node-RED snapshot binds only verified create context and replay must prese
   const o = operation(), ctx = { caller: 'split', managedAction: 'CREATE_GAME', lk1BeforeCreate: true,
     actorClientId: o.actorClientId, actorPhone: '79990000000', tenantKey: o.tenantKey, operationId: o.operationId,
     lk1CreatePayload: o.lk1.createPayload, lk1: o.lk1 };
-  const split = { action: 'create', publicationEnabled: true, publicationIntent: intent() };
+  const split = { action: 'create', publicationEnabled: true, publicationIntent: intent(), ...bookingContract() };
   const stored = functions.splitPublicationSnapshot(ctx, split); assert.ok(stored);
   assert.equal(functions.splitPublicationReplayMatches(stored, ctx, split), true);
   assert.equal(functions.splitPublicationReplayMatches(stored, ctx, { ...split, publicationIntent: { ...intent(), gameTitle: 'other' } }), false);
@@ -125,6 +134,10 @@ test('Node-RED snapshot binds only verified create context and replay must prese
   assert.equal(functions.splitPublicationSnapshot({ ...ctx, managedAction: 'JOIN_GAME' }, split), null);
   assert.equal(functions.splitPublicationSnapshot(ctx, { ...split, publicationEnabled: false }), null);
   assert.equal(functions.splitPublicationReplayMatches(stored, ctx, { ...split, publicationEnabled: false }), true);
+  assert.equal(functions.splitPublicationReplayMatches(null, ctx, { ...split, publicationEnabled: false }), true);
+  assert.equal(functions.splitPublicationReplayMatches(null, ctx, split), false);
+  assert.equal(functions.splitPublicationReplayMatches(null,
+    { ...ctx, lk1: { decision: { benefit: { finalPriceMinor: 100 }, subscriptionVisitCount: 0 } } }, split), true);
 });
 test('source-driven adapter preserves Node-RED wiring and rejects missing/changed generation', () => {
   const read = file => fs.readFileSync(new URL('../' + file, import.meta.url), 'utf8');
@@ -143,6 +156,21 @@ test('source-driven adapter preserves Node-RED wiring and rejects missing/change
   assert.throws(() => composeSplitPublicationSources(composed), /generation/);
   assert.throws(() => composeSplitPublicationSources({ ...sources, prepare: '' }), /drift/);
   assert.throws(() => buildSplitPublicationCandidate([], {}), /preimage/);
+  const ids = { prepare: 'f3f9a60354d394da', gateway: 'lk_subscription_booking_router_20260804',
+    finalize: 'lk_subscription_booking_finalize_20260804', router: '8f7bd5b482fe9763' };
+  const names = { prepare: 'Prepare split game payment', gateway: 'Route atomic subscription booking',
+    finalize: 'Finalize subscription booking response', router: 'Route Viva split payment' };
+  const graph = Object.entries(sources).map(([key, func]) => ({ id: ids[key], type: 'function', name: names[key],
+    func, z: 'fixture-tab', wires: [['fixture-sink']] }));
+  graph.push({ id: 'fixture-sink', type: 'debug', name: 'fixture sink', func: '', z: 'fixture-tab', wires: [] });
+  const hashes = Object.fromEntries(Object.entries(sources).map(([k, value]) => [k, crypto.createHash('sha256').update(value).digest('hex')]));
+  const candidate = buildSplitPublicationCandidate(graph, hashes);
+  for (const original of graph) {
+    const result = candidate.find(n => n.id === original.id);
+    assert.deepEqual({ ...result, func: original.func }, original);
+  }
+  assert.deepEqual(graph.at(-1), candidate.at(-1));
+  assert.throws(() => buildSplitPublicationCandidate(graph, { ...hashes, gateway: 'a'.repeat(64) }), /preimage/);
   // Execute the real decision/insert step, starting before any decision is attached
   // to ctx.lk1. Capturing at quote creation would silently miss this publication.
   const begin = composed.gateway.indexOf('if (ctx.step === "lk1_policy_decision") {');
@@ -154,7 +182,7 @@ test('source-driven adapter preserves Node-RED wiring and rejects missing/change
     actorPhone: '79990000000', clientSubscriptionId: o.clientSubscriptionId, exerciseId: 'preflight:fixture',
     category: 'open_game', serviceDate: '2030-11-12', lk1CreatePayload: o.lk1.createPayload,
     lk1: { target: o.lk1.target, createPayload: o.lk1.createPayload } };
-  const msg = { req: { destroyed: true }, _splitCtx: { action: 'create', publicationEnabled: true, publicationIntent: intent() },
+  const msg = { req: { destroyed: true }, _splitCtx: { action: 'create', publicationEnabled: true, publicationIntent: intent(), ...bookingContract() },
     _managedSubscriptionPolicyDecision: { eligible: true, benefit: { finalPriceMinor: 0 }, subscriptionVisitCount: 1 } };
   const execute = new Function('msg', 'ctx', 'isObj', 'emit', 'OUTPUT_MONGO_INSERT', 'PREPARED_LEASE_MS', 'lk1Stop',
     contract + '\n' + step);
@@ -163,4 +191,10 @@ test('source-driven adapter preserves Node-RED wiring and rejects missing/change
   assert.equal(msg.payload[0].lk1.publication.state, 'PENDING');
   assert.equal(msg.payload[0].lk1.publication.actorClientId, o.actorClientId);
   assert.equal(msg.payload[0].lk1.publication.intent.settings.isPrivate, true);
+  const badMsg = { req: { destroyed: true }, _splitCtx: { action: 'create', publicationEnabled: true, publicationIntent: intent() },
+    _managedSubscriptionPolicyDecision: { eligible: true, benefit: { finalPriceMinor: 0 }, subscriptionVisitCount: 1 } };
+  const badCtx = { ...ctx, step: 'lk1_policy_decision', lk1: { target: o.lk1.target, createPayload: o.lk1.createPayload } };
+  assert.throws(() => execute(badMsg, badCtx, value => !!value && typeof value === 'object', () => badMsg, 2, 60000,
+    (_ctx, code) => { throw new Error(code); }), /GAME_PUBLICATION_CONTRACT_INVALID/);
+  assert.equal(badMsg.payload, undefined); // Refused before operation insert/provider dispatch.
 });

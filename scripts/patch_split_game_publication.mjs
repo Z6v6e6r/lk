@@ -19,11 +19,15 @@ export function composeSplitPublicationSources(input) {
   out.gateway = '// SPLIT_PUBLICATION_V1\n' + contract + '\n' + once(out.gateway, '  ctx.lk1.decision = JSON.parse(JSON.stringify(decision));\n',
     '  ctx.lk1.decision = JSON.parse(JSON.stringify(decision));\n'
     + '  const publication = !msg._gameCreateOwner ? splitPublicationSnapshot(ctx, msg._splitCtx) : null;\n'
+    + '  if (!msg._gameCreateOwner && ctx.caller === "split" && ctx.managedAction === "CREATE_GAME" && ctx.lk1BeforeCreate === true\n'
+    + '    && msg._splitCtx?.publicationEnabled === true && msg._splitCtx.publicationIntent\n'
+    + '    && decision.benefit.finalPriceMinor === 0 && decision.subscriptionVisitCount === 1 && !publication)\n'
+    + '    return lk1Stop(ctx, "GAME_PUBLICATION_CONTRACT_INVALID");\n'
     + '  if (publication) ctx.lk1.publication = publication;\n');
   out.gateway = once(out.gateway, '    const quote = operation.lk1;\n',
-    '    const quote = operation.lk1;\n    if (!splitPublicationReplayMatches(quote?.publication, ctx, msg._splitCtx)) return lk1Stop(ctx, "GAME_PUBLICATION_INTENT_CHANGED");\n');
+    '    const quote = operation.lk1;\n    if (!splitPublicationReplayMatches(quote?.publication, { ...ctx, lk1: quote }, msg._splitCtx)) return lk1Stop(ctx, "GAME_PUBLICATION_INTENT_CHANGED");\n');
   out.gateway = once(out.gateway, '    const actualTarget = ctx.lk1.target;\n',
-    '    if (!splitPublicationReplayMatches(operation.lk1?.publication, ctx, msg._splitCtx)) return lk1Stop(ctx, "GAME_PUBLICATION_INTENT_CHANGED");\n    const actualTarget = ctx.lk1.target;\n');
+    '    if (!splitPublicationReplayMatches(operation.lk1?.publication, { ...ctx, lk1: operation.lk1 }, msg._splitCtx)) return lk1Stop(ctx, "GAME_PUBLICATION_INTENT_CHANGED");\n    const actualTarget = ctx.lk1.target;\n');
   // The durable snapshot is already in ctx.lk1 before the existing operation insert.
   // Fence the pre-provider CAS to that same immutable snapshot as well.
   out.gateway = once(out.gateway, '      "lk1.createAttemptedAt": { $exists: false },\n',

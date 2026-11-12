@@ -9244,8 +9244,8 @@ export async function apiWaitForPublishedSplitGame(
       && !!result.bookingId && game.booking.bookingIds?.length === 1 && game.booking.bookingIds[0] === result.bookingId
       && game.status === "PAID" && game.payment?.paid === true
       && !!options.actorClientId && game.organizer?.id === options.actorClientId
-      && game.payment.paymentRef === result.operationId && marker?.version === 1
-      && typeof marker.bindingDigest === "string" && /^[a-f0-9]{64}$/.test(marker.bindingDigest)) return read;
+      && game.metadata?.paymentRef === result.operationId && marker?.version === 1
+      && typeof marker.bindingDigest === "string" && /^[a-p]{64}$/.test(marker.bindingDigest)) return read;
     if (read.status === 401 || read.status === 403) break;
     if (attempt + 1 < (options.attempts ?? 8)) await wait(1000);
   }

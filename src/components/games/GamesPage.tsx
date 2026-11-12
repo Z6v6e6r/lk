@@ -10863,6 +10863,7 @@ export default function GamesPage({
       // The first server publication cohort is one organizer, without community
       // fan-out or prefilled rosters. Other creates retain their existing path.
       publicationIntent: resolvedPaymentMode === "subscription"
+        && !!studioMasterServiceId && resolvedSelectedSubServiceIds.length > 0
         && participants.length <= 1 && participants.every(player => player.source === "ORGANIZER") && waitlistPlayers.length === 0
         && !(getCurrentCommunityAutopublishSelectionState().selectedCommunityIds.length > 0)
         && Object.keys(publicCreatePreciseRatingMetadata).length === 0

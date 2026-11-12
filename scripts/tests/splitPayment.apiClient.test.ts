@@ -2,10 +2,51 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
+import ts from "typescript";
+import { makePublicationFixture } from "./fixtures/splitGamePublicationFixture.mjs";
+import { publicationPlan, renderPublication } from "../lib/splitGamePublication.mjs";
+import { restorePartnerBookingBindings } from "../../src/utils/partnerRosterProjection.ts";
 import { resolveSplitPromoShareAmount } from "../../src/components/games/splitPromoPricing.ts";
 import type { PadelSplitPaymentPromoConfig } from "../../src/utils/apiClient.ts";
 
 const source = fs.readFileSync("src/utils/apiClient.ts", "utf8");
+
+function realRecordNormalizer() {
+  const ast = ts.createSourceFile("apiClient.ts", source, ts.ScriptTarget.Latest, true);
+  const definitions = new Map<string, ts.Node>();
+  for (const node of ast.statements) {
+    if (ts.isFunctionDeclaration(node) && node.name) definitions.set(node.name.text, node);
+    if (ts.isVariableStatement(node)) for (const declaration of node.declarationList.declarations)
+      if (ts.isIdentifier(declaration.name)) definitions.set(declaration.name.text, node);
+  }
+  const selected = new Set<ts.Node>();
+  const include = (name: string) => {
+    const definition = definitions.get(name);
+    if (!definition || selected.has(definition)) return;
+    selected.add(definition);
+    const visit = (node: ts.Node) => { if (ts.isIdentifier(node)) include(node.text); ts.forEachChild(node, visit); };
+    ts.forEachChild(definition, visit);
+  };
+  include("normalizePadelGameRecord");
+  const closure = ast.statements.filter(node => selected.has(node)).map(node => node.getText(ast)).join("\n").replace(/^export /gm, "");
+  return new Function("restorePartnerBookingBindings", stripTypeScriptTypes(closure) + "\nreturn normalizePadelGameRecord;")(restorePartnerBookingBindings);
+}
+
+test("actual worker record survives GET privacy sanitizer, normalizer and read-only publication polling", async () => {
+  const operation = makePublicationFixture(), plan = publicationPlan(operation), raw = renderPublication(plan);
+  assert.match(raw.metadata.serverPublication.bindingDigest, /^[a-p]{64}$/);
+  const msg = { payload: [raw] };
+  const response = new Function("msg", fs.readFileSync("scripts/nodered_games_nodes/fn_get_by_id_resp.js", "utf8"))(msg);
+  const normalized = realRecordNormalizer()(response[0].payload);
+  assert.equal(normalized.metadata.serverPublication.bindingDigest, raw.metadata.serverPublication.bindingDigest);
+  assert.equal(normalized.payment.paymentRef, undefined); // Do not test an invented client DTO shape.
+  const expression = stripTypeScriptTypes(extractFunctionBlock("export async function apiWaitForPublishedSplitGame").replace("export ", ""));
+  const poll = new Function("apiFetchPadelGameRecord", "isRecord", `return (${expression});`)(async () => ({ data: normalized, status: 200, error: null }),
+    (v: unknown) => !!v && typeof v === "object");
+  const result = await poll({ exerciseId: operation.exerciseId, bookingId: operation.bookingId, operationId: operation.operationId,
+    serverPublication: { candidateGameId: plan.gameId } }, { actorClientId: operation.actorClientId, attempts: 1 });
+  assert.equal(result.data.id, plan.gameId);
+});
 
 test("server publication polling uses reads only and never falls back to another booking", async () => {
   const expression = stripTypeScriptTypes(extractFunctionBlock("export async function apiWaitForPublishedSplitGame").replace("export ", ""));
@@ -14,7 +55,7 @@ test("server publication polling uses reads only and never falls back to another
     reads++;
     return reads === 1 ? { data: null, error: { status: 404 }, status: 404 }
       : { data: { id: "gsp_fixture", status: "PAID", organizer: { id: "fixture-actor" }, payment: { paid: true, paymentRef: "fixture-op" },
-          metadata: { serverPublication: { version: 1, bindingDigest: "a".repeat(64) } },
+          metadata: { paymentRef: "fixture-op", serverPublication: { version: 1, bindingDigest: "a".repeat(64) } },
           booking: { exerciseId: "fixture-exercise", bookingIds: ["fixture-booking"] } }, error: null, status: 200 };
   }, (v: unknown) => !!v && typeof v === "object");
   const result = await poll({ exerciseId: "fixture-exercise", bookingId: "fixture-booking", operationId: "fixture-op",
@@ -38,7 +79,7 @@ test("publication candidate with wrong booking, unpaid/cancelled state or owner 
     const game = { id: "gsp_fixture", status: change === "cancelled" ? "CANCELLED" : "PAID",
       organizer: { id: change === "owner" ? "other" : "fixture-actor" },
       payment: { paid: change !== "unpaid", paymentRef: "fixture-op" },
-      metadata: { serverPublication: change === "marker" ? null : { version: 1, bindingDigest: "a".repeat(64) } },
+      metadata: { paymentRef: "fixture-op", serverPublication: change === "marker" ? null : { version: 1, bindingDigest: "a".repeat(64) } },
       booking: { exerciseId: "fixture-exercise", bookingIds: [change === "booking" ? "other" : "fixture-booking"] } };
     const poll = new Function("apiFetchPadelGameRecord", "isRecord", `return (${expression});`)(async () => ({ data: game, status: 200, error: null }),
       (v: unknown) => !!v && typeof v === "object");
