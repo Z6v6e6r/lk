@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createFunction98NativeOperation } from '../nodered_reviewed_flow_deploy/function98_native_operation.mjs';
 import { createReviewedFlowRuntime } from '../nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs';
-import { function98GraphHash, createFunction98BodyPreserver } from '../nodered_reviewed_flow_deploy/function98_body_preserver.mjs';
+import { function98GraphHash, function98OrderedGraphHash, createFunction98BodyPreserver } from '../nodered_reviewed_flow_deploy/function98_body_preserver.mjs';
 import { sha256 } from '../lib/function98_safe_diagnostic.mjs';
 
 export const sourceBody = `const endpoint = msg.inputUrl;
@@ -27,7 +27,8 @@ async function fixture(t) {
   fs.writeFileSync(live, JSON.stringify(graph), { mode: 0o600 });
   let now = Date.parse('2026-11-12T11:00:00.000Z'), target = identity;
   const readback = async (g = graph, revision = 'synthetic-pre-revision') => ({ origin: 'http://127.0.0.1:18801',
-    observedAt: new Date(now).toISOString(), graphSha256: await function98GraphHash(g), revisionSha256: sha256(revision) });
+    requestedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), graphSha256: await function98GraphHash(g),
+    orderedGraphSha256: await function98OrderedGraphHash(g), editorOrderedGraphSha256: await function98OrderedGraphHash(graph), revisionSha256: sha256(revision) });
   const options = { stage, root, uid: process.getuid(), gid: process.getgid(), getUid: () => process.getuid(),
     now: () => now, readTarget: () => target, codeHash: () => code, patchOptions: { expectedFunctionSha256: sha256(sourceBody) } };
   const op = createFunction98NativeOperation(options);
@@ -38,7 +39,7 @@ async function fixture(t) {
   const begin = async () => op.begin({ expectedPlanSha256, native: await readback() });
   const candidate = JSON.parse(fs.readFileSync(path.join(stage, 'candidate.flow.json')));
   const applyFixture = async seal => {
-    const preserver = await createFunction98BodyPreserver(seal);
+    const preserver = await createFunction98BodyPreserver(seal, { rev: 'synthetic-pre-revision', flows: graph });
     const result = await preserver({ request: { url: 'http://127.0.0.1:18801/flows', method: 'POST', apiVersion: 'v2', deploymentType: 'nodes' },
       postBody: { rev: 'synthetic-pre-revision', flows: graph } });
     fs.writeFileSync(live, JSON.stringify(JSON.parse(result.postDataText).flows));
@@ -116,6 +117,7 @@ for (const [name, mutate] of [
   ['same revision', x => { x.native.revisionSha256 = sha256('synthetic-pre-revision'); }],
   ['foreign origin', x => { x.native.origin = 'http://example.invalid'; }],
   ['stale observation', x => { x.native.observedAt = '2026-11-11T11:00:00.000Z'; }],
+  ['GET started before ACK', x => { x.native.requestedAt = new Date(x.ackAt - 1).toISOString(); }],
 ]) test(`ACK refuses ${name} and keeps shared custody`, async t => {
   const f = await fixture(t); await f.reserve(); const b = await f.begin();
   const input = await f.applyFixture(b.seal); mutate(input);
@@ -142,4 +144,34 @@ test('target/source/candidate drift refuses; source-only abort is receipt-first 
   f.driftTarget(); await assert.rejects(f.op.abort(input), /TARGET_DRIFT/);
   const g = await fixture(t); fs.appendFileSync(g.live, ' '); await assert.rejects(g.reserve(), /SOURCE_DRIFT/);
   const h = await fixture(t); fs.appendFileSync(path.join(h.stage, 'candidate.flow.json'), ' '); await assert.rejects(h.reserve(), /BACKUP_DRIFT/);
+});
+
+test('reserve rejects editor and source-order drift before creating shared custody', async t => {
+  for (const key of ['editorOrderedGraphSha256', 'orderedGraphSha256']) {
+    const f = await fixture(t), native = await f.readback(); native[key] = '0'.repeat(64);
+    await assert.rejects(f.op.reserve({ expectedPlanSha256: f.expectedPlanSha256, confirmation, native }), /NATIVE_EVIDENCE/);
+    assert.equal(fs.existsSync(f.lease), false);
+  }
+});
+test('ACK rejects a different serialization pin; retained custody prevents replay', async t => {
+  const f = await fixture(t); await f.reserve(); const b = await f.begin(), input = await f.applyFixture(b.seal);
+  input.audit.editorOrderedGraphSha256 = '0'.repeat(64);
+  await assert.rejects(f.op.confirm(input), /ACK_INPUT/); assert.equal(fs.existsSync(f.lease), true);
+});
+test('a sorted-hash-equivalent reordered candidate is UNKNOWN and cannot finish', async t => {
+  const f = await fixture(t); await f.reserve(); const b = await f.begin(), input = await f.applyFixture(b.seal);
+  await f.op.confirm(input); f.advance(900000);
+  const reordered = [...f.candidate].reverse(); fs.writeFileSync(f.live, JSON.stringify(reordered));
+  const native = await f.readback(reordered, 'synthetic-post-revision');
+  assert.equal(native.graphSha256, input.native.graphSha256);
+  assert.equal((await f.op.reconcile({ expectedPlanSha256: f.expectedPlanSha256, native })).status, 'UNKNOWN');
+  await assert.rejects(f.op.finish({ expectedPlanSha256: f.expectedPlanSha256, native }), /POST_GRAPH/);
+  assert.equal(fs.existsSync(f.lease), true);
+});
+test('finish GET must start after the full soak, even if it completed after expiry', async t => {
+  const f = await fixture(t); await f.reserve(); const b = await f.begin(), input = await f.applyFixture(b.seal);
+  await f.op.confirm(input); f.advance(900000);
+  const native = await f.readback(f.candidate, 'synthetic-post-revision'); native.requestedAt = new Date(f.now() - 65000).toISOString();
+  await assert.rejects(f.op.finish({ expectedPlanSha256: f.expectedPlanSha256, native }), /SOAK_INCOMPLETE/);
+  assert.equal(fs.existsSync(f.lease), true);
 });
