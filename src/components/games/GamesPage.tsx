@@ -1,3 +1,4 @@
+import { moscowBookingEndIso } from "../../utils/bookingEndTime";
 import { BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence } from "./bookingConversionEvidence";
 import { observeGameLeave } from "./observeGameLeave";
 import { GameBookingCancellation } from "./GameBookingCancellation";
@@ -11060,7 +11061,7 @@ export default function GamesPage({
         timeFrom: fromTime,
         timeTo: toTime,
         timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-        timeToIso: `${fromDate}T${toTime}:00+03:00`,
+        timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
         durationMinutes: duration,
         slotId: selectedSlotId,
         bookingIds: resolvedBookingIds,
@@ -11383,7 +11384,7 @@ export default function GamesPage({
           timeFrom: fromTime,
           timeTo: toTime,
           timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-          timeToIso: `${fromDate}T${toTime}:00+03:00`,
+          timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,
@@ -11507,7 +11508,7 @@ export default function GamesPage({
           timeFrom: fromTime,
           timeTo: toTime,
           timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-          timeToIso: `${fromDate}T${toTime}:00+03:00`,
+          timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,
@@ -11776,7 +11777,7 @@ export default function GamesPage({
         studioId: bookingPreset.studioId,
         roomId: bookingPreset.roomId,
         timeFromIso: `${bookingPreset.date}T${bookingPreset.timeFrom}:00+03:00`,
-        timeToIso: `${bookingPreset.date}T${bookingPreset.timeTo}:00+03:00`,
+        timeToIso: moscowBookingEndIso(bookingPreset.date, bookingPreset.timeFrom, bookingPreset.timeTo),
         selfBookings: selfResult.data,
         exerciseBookings: rosterResult.data,
       });
@@ -11840,7 +11841,7 @@ export default function GamesPage({
           timeFrom: bookingPreset.timeFrom,
           timeTo: bookingPreset.timeTo,
           timeFromIso: `${bookingPreset.date}T${bookingPreset.timeFrom}:00+03:00`,
-          timeToIso: `${bookingPreset.date}T${bookingPreset.timeTo}:00+03:00`,
+          timeToIso: moscowBookingEndIso(bookingPreset.date, bookingPreset.timeFrom, bookingPreset.timeTo),
           durationMinutes: bookingPreset.durationMinutes,
           slotId: bookingPreset.slotId,
           bookingIds: bookingIdsForPayload,
