@@ -476,6 +476,7 @@ jobs:
           scripts/tests/gamesBookingLeadTimeSource.test.ts
           scripts/tests/requestTimeout.test.ts
           scripts/tests/gamePatchConflict.apiClient.test.mjs
+          scripts/tests/gamePatchCoordination.test.mjs
           scripts/tests/gamePatch409Diagnostics.test.mjs
           scripts/tests/subscriptionCriticalMatrix.test.ts
           scripts/tests/subscriptionRejoin.test.ts

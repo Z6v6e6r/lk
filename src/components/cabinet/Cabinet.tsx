@@ -1,3 +1,5 @@
+import { readAuthToken } from "../../utils/authTokenStorage";
+import { applyGamePatchSnapshot, GAME_PATCH_SNAPSHOT_EVENT } from "../../utils/gamePatchSnapshot";
 import PadelJumpCard from "../padel-jump/PadelJumpCard";
 import { tournamentIdentityKeys } from "../../utils/tournamentEventIdentity";
 import { canCreateGameAfterLookup } from "./bookingGameCreationGuard";
@@ -1012,6 +1014,8 @@ function mergeCabinetGameRecords(
       next.unshift(record);
       return;
     }
+    const snapshot = applyGamePatchSnapshot(next[existingIndex], record);
+    if (snapshot) { next[existingIndex] = snapshot; return; }
     next[existingIndex] = {
       ...next[existingIndex],
       ...record,
@@ -1900,8 +1904,10 @@ export function Cabinet({
     };
   }, [loadProfile]);
 
+  const patchSnapshotSession = readAuthToken();
   useEffect(() => {
     const handler = (event: Event) => {
+      if (event.type === GAME_PATCH_SNAPSHOT_EVENT && readAuthToken() !== patchSnapshotSession) return;
       const detail = (event as CustomEvent<GamesUpdatedEventDetail>).detail;
       const records = [
         ...(detail?.record ? [detail.record] : []),
@@ -1909,26 +1915,23 @@ export function Cabinet({
       ].filter((record): record is PadelGameRecord => Boolean(record?.id));
 
       if (records.length === 0) return;
-      const relevantRecords = records.filter((record) => (
-        isGameRelevantToCabinetIdentity(record, profile?.id ?? null, profile?.phone ?? null)
-      ));
-      const removedRecordIds = new Set(
-        records
-          .filter((record) => !relevantRecords.some((item) => item.id === record.id))
-          .map((record) => record.id),
-      );
-      setCreatedGames((prev) => (
-        mergeCabinetGameRecords(prev, relevantRecords)
-          .filter((record) => !removedRecordIds.has(record.id))
-      ));
+      // Merge partial ACK fields before identity filtering: an id-only ACK does
+      // not prove the current user left the game. Canonical snapshots replace.
+      const touchedIds = new Set(records.map((record) => record.id));
+      setCreatedGames((prev) => mergeCabinetGameRecords(prev, records).filter((record) => (
+        !touchedIds.has(record.id)
+        || isGameRelevantToCabinetIdentity(record, profile?.id ?? null, profile?.phone ?? null)
+      )));
       setCreatedGamesError(null);
     };
 
     window.addEventListener("lk-games-updated", handler);
+    window.addEventListener(GAME_PATCH_SNAPSHOT_EVENT, handler);
     return () => {
       window.removeEventListener("lk-games-updated", handler);
+      window.removeEventListener(GAME_PATCH_SNAPSHOT_EVENT, handler);
     };
-  }, [profile?.id, profile?.phone]);
+  }, [profile?.id, profile?.phone, patchSnapshotSession]);
 
   useEffect(() => {
     if (!profile) return;
@@ -2639,7 +2642,7 @@ export function Cabinet({
         if (!alive) return;
         if (result.data?.id) {
           setCreatedGames((prev) => prev.map((game) => (
-            game.id === result.data?.id ? (result.data as PadelGameRecord) : game
+            game.id === result.data?.id ? (applyGamePatchSnapshot(game, result.data as PadelGameRecord) ?? result.data as PadelGameRecord) : game
           )));
           return;
         }

@@ -19,6 +19,8 @@ import {
 import { invalidateSubscriptionSnapshot, readSubscriptionSnapshot, requestChangesSubscriptions } from "./subscriptionSessionCache";
 import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscriptionSnapshotData";
 import { readAuthToken } from "./authTokenStorage";
+import { coordinateGamePatch } from "./gamePatchCoordinator";
+import { gamePatchSnapshot, gamePatchSnapshotKind, publishGamePatchSnapshot } from "./gamePatchSnapshot";
 import { trackClientError } from "./analytics";
 import { UUID } from "./errorDiagnosticsCore.mjs";
 import { gamePatchDiagnosticUrl } from "./gamePatchDiagnostics.mjs";
@@ -7238,7 +7240,7 @@ export async function apiFetchPadelGameRecord(
     const parsed = normalizePadelGameRecord(response.data);
     if (parsed) {
       return {
-        data: parsed,
+        data: gamePatchSnapshot(response.data, parsed, normalizedGameId, "canonical") ?? parsed,
         error: null,
         status: response.status,
       };
@@ -7943,6 +7945,7 @@ async function writePadelGameRecord(
     retries?: number;
     keepalive?: boolean;
     diagnosticContext?: RequestOptions["diagnosticContext"];
+    snapshotAck?: boolean;
   } = {},
 ): Promise<ApiResult<PadelGameRecord>> {
   const baseUrl = getServ2Origin() || "";
@@ -7983,7 +7986,11 @@ async function writePadelGameRecord(
 
     const parsed = normalizePadelGameRecord(response.data);
     if (parsed) {
-      return { data: parsed, error: null, status: response.status };
+      const data = requestOptions.snapshotAck && fallbackId
+        ? gamePatchSnapshot(response.data, parsed, fallbackId, "partial_ack")
+          ?? gamePatchSnapshot({ id: fallbackId }, { id: fallbackId } as PadelGameRecord, fallbackId, "partial_ack")
+        : parsed;
+      return { data, error: null, status: response.status };
     }
 
     sawSuccessWithoutParsedRecord = true;
@@ -7993,11 +8000,9 @@ async function writePadelGameRecord(
   // but returned a body we cannot parse. Do not mask full request failures.
   if (fallbackId && sawSuccessWithoutParsedRecord) {
     return {
-      data: {
-        id: fallbackId,
-        inviteUrl: fallbackInviteUrl,
-        status: null,
-      },
+      data: requestOptions.snapshotAck
+        ? gamePatchSnapshot({ id: fallbackId }, { id: fallbackId } as PadelGameRecord, fallbackId, "partial_ack")
+        : { id: fallbackId, inviteUrl: fallbackInviteUrl, status: null },
       error: null,
       status: firstSuccessStatus,
     };
@@ -8434,9 +8439,14 @@ export async function apiFetchPadelGameByPaymentRef(
 export interface PadelGameRecordUpdateResult extends ApiResult<PadelGameRecord> {
   // A conflict refresh is for replacing local state, never evidence of a successful PATCH.
   conflictRecord?: PadelGameRecord | null;
+  writeAccepted?: boolean;
+  snapshotKind?: "canonical" | "partial_ack";
+  backgroundSkipped?: boolean;
 }
 
-export async function apiUpdatePadelGameRecord(
+export type GamePatchBackground = { kind: "roster_sync" | "related_phones"; intent: unknown };
+
+async function performPadelGameRecordPatch(
   gameId: string,
   payload: Partial<PadelGameRecordPayload>,
 ): Promise<PadelGameRecordUpdateResult> {
@@ -8462,13 +8472,13 @@ export async function apiUpdatePadelGameRecord(
     normalizedGameId,
     payload.invite?.inviteUrl?.trim() || null,
     // Replaying a mutation cannot resolve a stale version or an ambiguous network outcome.
-    { retries: 0, diagnosticContext },
+    { retries: 0, diagnosticContext, snapshotAck: true },
   );
   if (writeResult.status === 409 && writeResult.error) {
     let conflictRecord: PadelGameRecord | null = null;
     try {
       const refreshed = await apiFetchPadelGameRecord(normalizedGameId, { retries: 0, cache: "no-store" });
-      if (!refreshed.error && refreshed.data?.id === normalizedGameId) {
+      if (!refreshed.error && refreshed.data?.id === normalizedGameId && gamePatchSnapshotKind(refreshed.data) === "canonical") {
         conflictRecord = refreshed.data;
       }
     } catch {
@@ -8476,7 +8486,41 @@ export async function apiUpdatePadelGameRecord(
     }
     return { ...writeResult, data: null, conflictRecord };
   }
-  return hydratePadelGameRecordAfterWrite(writeResult);
+  if (writeResult.error || !writeResult.data?.id) return writeResult;
+  try {
+    const refreshed = await apiFetchPadelGameRecord(normalizedGameId, { retries: 0, cache: "no-store" });
+    if (!refreshed.error && refreshed.data?.id === normalizedGameId && gamePatchSnapshotKind(refreshed.data) === "canonical") {
+      return { data: refreshed.data, error: null, status: writeResult.status, writeAccepted: true, snapshotKind: "canonical" };
+    }
+  } catch { /* The write was accepted; a read failure must not replay its workflow. */ }
+  return { ...writeResult, writeAccepted: true, snapshotKind: "partial_ack" };
+}
+
+
+export async function apiUpdatePadelGameRecord(
+  gameId: string,
+  payload: Partial<PadelGameRecordPayload>,
+  options: { background?: GamePatchBackground } = {},
+): Promise<PadelGameRecordUpdateResult> {
+  const normalizedGameId = gameId.trim();
+  if (!normalizedGameId) return performPadelGameRecordPatch(gameId, payload);
+  // Snapshot exactly the JSON that will be sent, before any asynchronous admission.
+  const snapshot = JSON.parse(JSON.stringify(payload)) as Partial<PadelGameRecordPayload>;
+  const background = options.background ? JSON.parse(JSON.stringify(options.background)) as GamePatchBackground : undefined;
+  const token = readAuthToken();
+  const current = () => readAuthToken() === token;
+  const admitted = await coordinateGamePatch({
+    backend: getServ2Origin() || "", tenant: TENANT_KEY, gameId: normalizedGameId,
+    token, payload: snapshot, background, current,
+    run: async () => {
+      const result = await performPadelGameRecordPatch(normalizedGameId, snapshot);
+      if (!current()) return { data: null, error: { status: null, message: "Сеанс изменился. Обновите данные игры." }, status: null, writeAccepted: result.writeAccepted } satisfies PadelGameRecordUpdateResult;
+      const record = result.conflictRecord ?? result.data;
+      if (record) publishGamePatchSnapshot(record);
+      return result;
+    },
+  });
+  return admitted.kind === "done" ? admitted.value : { data: null, error: null, status: null, backgroundSkipped: true };
 }
 
 function normalizePadelGameResultStatus(value: unknown): PadelGameResultLifecycleStatus | string | null {

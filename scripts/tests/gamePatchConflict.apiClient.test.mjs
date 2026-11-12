@@ -3,14 +3,20 @@ import fs from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
-import { randomUUID } from "node:crypto";
+import { randomUUID, webcrypto } from "node:crypto";
 import { UUID } from "../../src/utils/errorDiagnosticsCore.mjs";
 import { gamePatchDiagnosticUrl } from "../../src/utils/gamePatchDiagnostics.mjs";
 
+const loadUtility = (file) => {
+  const source = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const exports = {}; new Function('exports', source)(exports); return exports;
+};
+const { coordinateGamePatch } = loadUtility('src/utils/gamePatchCoordinator.ts');
+const { gamePatchSnapshot, gamePatchSnapshotKind, applyGamePatchSnapshot, GAME_PATCH_PENDING_MESSAGE } = loadUtility('src/utils/gamePatchSnapshot.ts');
 const parse = (file) => ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, file.endsWith("tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 const apiSource = parse("src/utils/apiClient.ts");
 const pages = [parse("src/components/games/GamesPage.tsx"), parse("src/components/games/GameJoinPage.tsx")];
-const functions = ["request", "executeRequestWithResolvedBaseUrls", "resolveRequestBaseUrlCandidates", "dedupeBaseUrls", "isServ2LkReadRequest", "getRequestMethod", "rawRequest", "withRetry", "writePadelGameRecord", "apiUpdatePadelGameRecord", "hydratePadelGameRecordAfterWrite", "apiFetchPadelGameRecord"];
+const functions = ["request", "executeRequestWithResolvedBaseUrls", "resolveRequestBaseUrlCandidates", "dedupeBaseUrls", "isServ2LkReadRequest", "getRequestMethod", "rawRequest", "withRetry", "writePadelGameRecord", "apiUpdatePadelGameRecord", "performPadelGameRecordPatch", "hydratePadelGameRecordAfterWrite", "apiFetchPadelGameRecord"];
 const compile = (source) => ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
 const actualApi = compile(functions.map((name) => {
   const fn = apiSource.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
@@ -18,20 +24,22 @@ const actualApi = compile(functions.map((name) => {
   return fn.getText(apiSource).replace(/^export\s+/, "");
 }).join("\n") + "\nglobalThis.update = apiUpdatePadelGameRecord;");
 const clone = (value) => JSON.parse(JSON.stringify(value));
-const stale = { id: "fixture-game", updatedAt: "version-old", participants: [{ id: "old-player" }], waitlist: [], metadata: { obsolete: true } };
-const fresh = { id: "fixture-game", updatedAt: "version-new", participants: [], waitlist: [], metadata: { canonical: true } };
+const stale = { id: "fixture-game", updatedAt: "2026-11-12T10:00:00Z", participants: [{ id: "old-player" }], waitlist: [], metadata: { obsolete: true } };
+const fresh = { id: "fixture-game", updatedAt: "2026-11-12T10:01:00Z", participants: [], waitlist: [], metadata: { canonical: true } };
 const conflict = { code: "GAME_PATCH_VERSION_CONFLICT", error: "Игра уже изменилась. Обновите данные" };
 const payload = () => ({ expectedUpdatedAt: stale.updatedAt, participants: [{ id: "intended-player" }], waitlist: [] });
 
 // Run actual request/retry/write/read/hydrate code; only transport, normalization,
 // auth, cache and diagnostics boundaries are fixtures. No real network is available.
-function client({ patchStatus = 409, readStatus = 200, readBody = fresh, throwRead = false, throwPatch = false, diagnosticUnavailable = false } = {}) {
+function client({ patchStatus = 409, readStatus = 200, readBody = fresh, throwRead = false, throwPatch = false, diagnosticUnavailable = false, patchBody, readGate, sharedHost = { crypto: webcrypto }, session = { token: "fixture-session" } } = {}) {
   const calls = [], delays = [], diagnostics = [];
   const context = vm.createContext({
     Headers, Response, FormData, URL, performance,
     API_BASE: "https://fixture.invalid", SERV2: "https://fixture.invalid", SERV2_FALLBACK: "https://fixture.invalid",
     getServ2Origin: () => "https://fixture.invalid", resolveLkApiBaseUrlCandidates: () => ["https://fixture.invalid"],
-    readAuthToken: () => "fixture-session", requestChangesSubscriptions: () => false, invalidateSubscriptionSnapshot: () => {},
+    readAuthToken: () => session.token, TENANT_KEY: "fixture-tenant",
+    coordinateGamePatch: (options) => coordinateGamePatch({ ...options, host: sharedHost }),
+    gamePatchSnapshot, gamePatchSnapshotKind, publishGamePatchSnapshot: () => {}, requestChangesSubscriptions: () => false, invalidateSubscriptionSnapshot: () => {},
     isLkIdleRequestPausedError: () => false, resolveRequestCacheConfig: () => null,
     diagnosticId: () => { if (diagnosticUnavailable) throw Error("fixture crypto unavailable"); return randomUUID(); },
     callerBuild: () => "b".repeat(40), gamePatchDiagnosticUrl, abortCause: () => null, UUID,
@@ -45,8 +53,9 @@ function client({ patchStatus = 409, readStatus = 200, readBody = fresh, throwRe
       calls.push({ url, options });
       const patch = options.method === "PATCH";
       if (patch ? throwPatch : throwRead) throw new Error("fixture transport failure");
+      if (!patch && readGate) await readGate;
       const status = patch ? patchStatus : readStatus;
-      const body = patch ? (patchStatus === 200 ? { id: fresh.id, updatedAt: fresh.updatedAt } : conflict) : readBody;
+      const body = patch ? (patchStatus === 200 ? patchBody ?? { id: fresh.id, updatedAt: fresh.updatedAt } : conflict) : readBody;
       return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
     },
   });
@@ -128,6 +137,69 @@ test("successful PATCH keeps canonical hydration and does not add a conflict", a
   assert.equal(result.error, null);
   assert.deepEqual(clone(result.data), fresh);
   assert.equal(result.conflictRecord, undefined);
+});
+for (const failure of [{ readStatus: 503 }, { throwRead: true }, { readBody: { id: stale.id, updatedAt: fresh.updatedAt } }, { readBody: { ...fresh, id: 'other' } }]) {
+  test(`accepted partial ACK does not fabricate roster/version or replay workflow when canonical GET unavailable: ${JSON.stringify(failure)}`, async () => {
+    const api = client({ patchStatus: 200, ...failure });
+    const result = await api.update(stale.id, payload());
+    assert.equal(result.writeAccepted, true); assert.equal(result.error, null); assert.equal(result.snapshotKind, 'partial_ack');
+    assert.deepEqual(clone(result.data), { id: stale.id });
+    assert.equal(gamePatchSnapshotKind(result.data), 'partial_ack');
+    assert.deepEqual(api.calls.map(call => call.options.method), ['PATCH', 'GET']);
+    assert.equal(api.calls[1].options.cache, 'no-store'); assert.deepEqual(api.delays, []);
+  });
+}
+test('two bundle clients hold shared admission until canonical readback completes; no new operation after conflict rerender', async () => {
+  let finish; const readGate = new Promise(resolve => { finish = resolve; });
+  const sharedHost = { crypto: webcrypto };
+  const cabinet = client({ sharedHost, readGate }), games = client({ sharedHost, readGate });
+  const background = { kind: 'roster_sync', intent: { provider: ['fixture-player'] } };
+  const first = cabinet.update(stale.id, payload(), { background });
+  while (cabinet.calls.length < 2) await new Promise(resolve => setImmediate(resolve));
+  const second = games.update(stale.id, payload(), { background });
+  // Wait for all three async digests, keeping GET pending during admission.
+  while (sharedHost[Symbol.for('padlhub.gamePatchCoordinator.v1')].resources.values().next().value.holds < 2) await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(games.calls.length, 0);
+  finish(); const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.status, 409); assert(b.status === 409 || b.backgroundSkipped);
+  assert.deepEqual(cabinet.calls.map(call => call.options.method), ['PATCH', 'GET']);
+  assert.equal(games.calls.length, 0);
+  const rerender = await games.update(stale.id, { ...payload(), expectedUpdatedAt: fresh.updatedAt }, { background });
+  assert.equal(rerender.backgroundSkipped, true); assert.equal(games.calls.length, 0);
+});
+test('payload is snapshotted before async admission; token changes prevent old-session snapshot publication', async () => {
+  const api = client(); const body = payload(); const pending = api.update(stale.id, body, { background: { kind: 'roster_sync', intent: [] } });
+  body.participants[0].id = 'changed-after-call';
+  await pending;
+  assert.equal(JSON.parse(api.calls[0].options.body).participants[0].id, 'intended-player');
+  const session = { token: 'fixture-session' }; let finish;
+  const readGate = new Promise(resolve => { finish = resolve; });
+  const changing = client({ patchStatus: 200, readGate, session }); const result = changing.update(stale.id, payload());
+  while (changing.calls.length < 2) await new Promise(resolve => setImmediate(resolve));
+  session.token = 'other-session'; finish();
+  const actual = await result; assert.equal(actual.data, null); assert.equal(actual.conflictRecord, undefined); assert.equal(actual.writeAccepted, true);
+});
+test('actual roster success callback applies canonical GET without overlaying submitted players, while partial ACK stays accepted/pending', async () => {
+  for (const unavailable of [false, true]) {
+    const api = client({ patchStatus: 200, readStatus: unavailable ? 503 : 200 });
+    const participants = [], waitlist = [], errors = [], records = [];
+    const invoke = callback('patchGameRoster', {
+      gameRecordId: stale.id, activeGameRecord: stale, activeGameForPatchRef: { current: stale }, detailsMaxPlayers: 4, waitlistEnabled: true,
+      detailsOrganizerHasIdentity: false, getPadelPlayerIdentityKey: player => player.id, excludePlayersAlreadyInRoster: players => players,
+      setUpdatingGameRoster: () => {}, setGameRosterError: value => errors.push(value), apiUpdatePadelGameRecord: api.update,
+      mergePadelGameRecord: (before, after) => applyGamePatchSnapshot(before, after) ?? { ...before, ...after },
+      isPadelGameRecordRelevantToIdentity: () => true, profileId: 'fixture-profile', profilePhone: null, GAME_PATCH_PENDING_MESSAGE,
+      setParticipants: value => participants.push(value), setWaitlistPlayers: value => waitlist.push(value),
+      upsertGameRecordInStores: record => records.push(record),
+    });
+    assert.equal(await invoke(payload().participants, []), true);
+    assert.deepEqual(clone(participants.at(-1)), unavailable ? stale.participants : fresh.participants);
+    assert.deepEqual(clone(waitlist.at(-1)), []);
+    assert.equal(errors.at(-1), unavailable ? GAME_PATCH_PENDING_MESSAGE : null);
+    assert.equal(records.at(-1).updatedAt, unavailable ? stale.updatedAt : fresh.updatedAt);
+    assert.deepEqual(api.calls.map(call => call.options.method), ['PATCH', 'GET']);
+  }
 });
 test("invalid game ID makes no requests", async () => {
   const api = client();
@@ -225,7 +297,7 @@ for (const navigate of [false, true]) {
     let active = navigate ? another : stale;
     let community = [stale, another];
     const upsert = callback("upsertGameRecordInStores", {
-      gameRecordId: stale.id, mergePadelGameRecord: (_before, after) => after,
+      gameRecordId: stale.id, gamePatchSnapshotKind, applyGamePatchSnapshot, mergePadelGameRecord: (_before, after) => after,
       setActiveGameRecordStore: (update) => { active = update(active); },
       setCommunityGames: (update) => { community = update(community); },
       notifyGameRecordsUpdated: () => {},
