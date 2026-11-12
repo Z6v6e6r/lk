@@ -11,7 +11,7 @@ const lkDiagnostic = (fields = {}) => {
     if (msg.req?.body?.trainingRegistration || msg._subscriptionBooking?.trainingRegistration || msg.payload?.trainingRegistration) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "f6527f4fc896eff87b7e2c715fa57b852edac3c8ebd1a6ffdd5d6658a618607a", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "7f0b95883394fc18a7207abd09e7281569fd0c47bb5f93f10abc1722176beccd", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });

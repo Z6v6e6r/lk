@@ -14,10 +14,10 @@ import { PATRIOTS_PREIMAGE } from "../patch_live_lk1_patriots_friendship.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
-// Preserve frozen release contracts while separately pinning observer-only sources.
+// Preserve frozen release contracts while separately pinning current reviewed sources.
 const observerPins = {
   'scripts/nodered_games_nodes/fn_patch.js': ['04d4565f740ac2179b0bb76756eccad4f7a7e88e2a3569f3a0670f32d3ed672b', 'const isObj ='],
-  'scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js': ['24b8ca287b73752cc39d20413bdd40fc7f65cfb72f54d261e32dbb571eaab443', 'const VIVA_API_BASE'],
+  'scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js': ['77478072eff6729a5a3227b1a807197e11019b122144fc03d4bfe4f5bdaf8056', 'const VIVA_API_BASE'],
   'scripts/nodered_games_nodes/fn_game_payment_confirm_router.js': ['d5606ece01b42d4275e5d53b7a40fb5fb78be015b92d9675d41ae8f984226e16', 'const TOKEN_URL'],
 };
 function frozenBusinessHash(file) {
@@ -275,10 +275,10 @@ test("unified LK1 contract pins unbound router and Piter amendments until PROD i
     }
     assert.match(amendment.sourceSha256, /^[a-f0-9]{64}$/);
     if (target.id === "lk_subscription_booking_router_20260804") {
-      // Current owner-evidence source is distinct; never advance a historical release preimage.
+      // Current paginated source is distinct; never advance a historical release preimage.
       assert.equal(PATRIOTS_PREIMAGE.reviewedBookingRouterSource,
         "86b63d2f5e61c9046f31189c8f384ee6e6abfe5cf94c309cc51f7458d9aa1991");
-      assert.equal(actualSourceSha256, "f6527f4fc896eff87b7e2c715fa57b852edac3c8ebd1a6ffdd5d6658a618607a", target.id);
+      assert.equal(actualSourceSha256, "7f0b95883394fc18a7207abd09e7281569fd0c47bb5f93f10abc1722176beccd", target.id);
       assert.notEqual(actualSourceSha256, PATRIOTS_PREIMAGE.reviewedBookingRouterSource, target.id);
       assert.notEqual(actualSourceSha256, amendment.sourceSha256, target.id);
     } else {

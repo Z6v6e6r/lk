@@ -920,7 +920,8 @@ while (ctx.step === 'next') {
     directionId: 4588, typeId: 1613, availableClientSubscriptions: [live] };
   if (!eventRoute && ['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field]))) return stop('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
   // A proven date mismatch is different from unconfirmed subscription terms.
-  const validityEnd = canonical.lk1LifecycleInstant(live.expirationDate, true);
+  const validityEnd = !eventRoute && live.status === 'ACTIVE' && typeof canonical.lk1LifecycleInstant === 'function'
+    ? canonical.lk1LifecycleInstant(live.expirationDate, true) : null;
   if (!eventRoute && live.status === 'ACTIVE' && validityEnd !== null && validityEnd < Date.parse(ctx.target.startsAt)) {
     quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_DATE_NOT_COVERED'); continue;
   }
