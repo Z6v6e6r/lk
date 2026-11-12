@@ -472,6 +472,7 @@ jobs:
           scripts/tests/splitPayment.apiClient.test.ts
           scripts/tests/gamePatchConflict.apiClient.test.mjs
           scripts/tests/gamePatch409Diagnostics.test.mjs
+          scripts/tests/gamepatch409Installer.test.mjs
           scripts/tests/subscriptionCriticalMatrix.test.ts
           scripts/tests/subscriptionRejoin.test.ts
           scripts/tests/subscriptionRejoinGateway.test.mjs
