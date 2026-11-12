@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { LIVE_REBASE_UNITS, LIVE_REBASE_RESOLUTIONS, hash, rebaseUnitSource } from '../lib/bookedOperationOwnerLiveRebase.mjs';
 import { composeOwnerLiveRebase, LIVE_REBASE_TOPOLOGY } from '../prepare_booked_operation_owner_live_rebase.mjs';
+import { applyPaginationEdits, subscriptionBookingPaginationEdits } from '../prepare_subscription_booking_pagination.mjs';
 import * as H from './helpers/ownerLiveRebaseCharacterization.mjs';
 
 // The live preimage is private (it is the production graph); characterization runs
@@ -49,9 +50,17 @@ test('reviewed resolutions are exactly the five pinned hunks', () => {
     assert.match(rule.live, /^[a-f0-9]{64}$/); assert.match(rule.main, /^[a-f0-9]{64}$/);
   }
 });
-test('pinned canonical sources and installed base blobs are the reviewed ones', () => {
+test('frozen canonical sources recover exactly from the reviewed pagination successor', () => {
   for (const [, , files] of LIVE_REBASE_UNITS) for (const [file, blob, sha] of files) {
-    assert.equal(hash(fs.readFileSync(new URL('../nodered_subscription_booking_nodes/' + file, import.meta.url), 'utf8')), sha, file);
+    let source = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/' + file, import.meta.url), 'utf8');
+    if (file === 'fn_subscription_booking_router.js') {
+      // The historical broad rebase keeps refusing this new source until separately
+      // reviewed. Selective pagination release never advances its canonical pins.
+      assert.equal(hash(source), '0b06938e198a63cb798dfc65a050fa20f866ceaf55ab2a95a34aa74b753fdcc6', file);
+      assert.notEqual(hash(source), sha);
+      source = applyPaginationEdits(source, subscriptionBookingPaginationEdits().reverse().map(([before, after]) => [after, before]));
+    }
+    assert.equal(hash(source), sha, file);
     assert.equal(execFileSync('git', ['cat-file', '-t', blob], { encoding: 'utf8' }).trim(), 'blob', file);
   }
 });
