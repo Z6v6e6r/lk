@@ -12,7 +12,7 @@ import { buildExactGraphContract, validateReviewedFlowContract } from './nodered
 const root = path.dirname(fileURLToPath(import.meta.url));
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
-export const PREVIEW_VALIDATION_SOURCE = '54f4e1fcae930436a66d6d35a3332a13ed8463631deeb5d3681c969fa30e88cf';
+export const PREVIEW_VALIDATION_SOURCE = '279f63c7dd6223d9695e041b75a051bb29102b970e8cfd81c6c5616f90ad6e9f';
 export const PREVIEW_VALIDATION_ENTRY = '9e8b52eb081c55160c457e702174dda9fa35ca5e30c03fa27347f5e99e546cb2';
 export const PREVIEW_VALIDATION_FINAL = '144bd78464f873da2d76fbfe941664faa8cf9642456a425f5d57cc9ea354edcf';
 const reviewedEntry = '35d4eb647f5c9ba11192d9daa7438f0bfa4b937ff1af229716318e7cf3b20219';
