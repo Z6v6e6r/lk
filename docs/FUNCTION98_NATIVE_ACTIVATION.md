@@ -7,6 +7,29 @@ one **native editor Deploy modified nodes** request and preserves every other
 node and field. No inject is called, schedule changed, provider probed, process
 restarted, or live file written by the controller.
 
+## Native serialization prerequisite (protocol v2)
+
+The authenticated read-only check on 12 November found 4,985 nodes in both
+graphs, but the editor omitted two fields (including `requestTimeout`) and added
+coordinates on eight nodes: nine nodes differed. Its 10.8 MB native GET took
+about 65 seconds. The original PR #361 guard correctly cannot activate against
+that serialization. No reserve, begin, POST or production patch was performed.
+
+This reviewed **source-preserving-v2** protocol uses a private browser snapshot
+from the editor's original authenticated GET. The reader returns only hashes and
+timestamps; its `.install(seal)` passes a deep copy to the guard without exporting
+the graph. The exact editor serialization has its own sealed hash. A native POST
+must match that hash and the original revision, but its node fields are never
+copied into the forwarded graph. The guard builds the candidate exclusively from
+the pinned snapshot, changes the warning, then checks the complete candidate.
+Order-sensitive source/candidate/editor hashes also bind the original node-array
+order. Unknown editor changes after capture are refused. This is a new protocol,
+not an override or normalization exception for the old #361 guard.
+
+Plan format 2 is incompatible with old plans/seals. The shared v4 lease remains
+exclusive, with the new code/plan/attempt hashes. Old stages are not upgraded in
+place and an existing attempted operation must not be replaced or replayed.
+
 ## Authority and custody
 
 The root controller never calls `/flows` and never reads browser credentials.
@@ -62,9 +85,15 @@ need a new rehearsal/review, not an override. No change is made to this identity
 
 ## Ordered operation
 
-1. Generate/evaluate the tracked `buildFunction98EditorReadback()` function in
-   the dedicated authenticated editor. It performs only native jQuery GET
-   `/flows` v2 and returns `{origin, observedAt, revisionSha256, graphSha256}`.
+1. Generate/evaluate the tracked `buildFunction98EditorReadback()` expression in
+   the dedicated authenticated editor. It returns a callable reader. Calling it
+   performs only native jQuery GET `/flows` v2 (120-second timeout), privately
+   captures the snapshot, and returns `{origin, requestedAt, observedAt,
+   revisionSha256, graphSha256, orderedGraphSha256, editorOrderedGraphSha256}`.
+   `requestedAt` precedes GET; `observedAt` follows the complete response and all
+   hashing. Every evidence object needs a new successful GET; never refresh a
+   cached timestamp. Capture the native HTTP status/time without reading auth,
+   request data or response bodies and prove that collector before `begin`.
    Do not return the native response, graph, revision, headers or tokens. A 401,
    unexpected origin/shape or missing auth is a no-write prerequisite failure.
 2. `prepare` consumes `expectedSourceSha256`, `expectedTargetSha256`,
@@ -78,8 +107,12 @@ need a new rehearsal/review, not an override. No change is made to this identity
    neither live graph nor process state.
 4. `begin` consumes `expectedPlanSha256` and fresh PRE `native`. It exclusively
    writes the durable one-attempt marker and guarded browser source, returning
-   a safe `seal` and browser-code hash. Evaluate the exact staged browser guard
-   with that seal; verify its hash. The seal is valid for five minutes. Web Locks
+   a safe `seal` and browser-code hash. Use the exact reviewed reader's
+   `.install(seal)`, which invokes that exact guard with its private snapshot;
+   verify both generated public-code hashes before evaluation. The last capture
+   must be at most 30 seconds old and complete before arming; do not start a
+   large GET after `begin` to obtain the source snapshot. The seal is valid for
+   five minutes. Web Locks
    plus an origin-local consumed marker prevent reinstall after tab reload.
    Missing capability, storage error, duplicate/expired seal or cancellation
    fails closed. Never clear a consumed marker or reuse a saved seal.
@@ -87,10 +120,11 @@ need a new rehearsal/review, not an override. No change is made to this identity
    credential (`RED.nodes.dirty(true)`), then use its normal **Deploy modified
    nodes** button. Do not issue a replacement HTTP client request, import a node
    array, click inject, choose full/flows deployment, or retry. The guard accepts
-   only the complete exact source or candidate graph with original revision; it
-   substitutes the single safe warning if needed. It rejects every other write,
-   including `/flow/:id`, `/flows/state`, `/inject/:id` and fetch mutations. Any
-   unrelated editor serialization delta is refused, not normalized or restored.
+   only the complete exact sealed editor graph with original revision. It
+   forwards the source-snapshot candidate, preserving every original field and
+   node order except the single warning. It rejects every other write, including
+   `/flow/:id`, `/flows/state`, `/inject/:id` and fetch mutations. An unsealed
+   editor delta is refused; no field-by-field merge or normalization is used.
 6. Record only safe guard `status()` audit and native HTTP status/time. Obtain a
    fresh readback after native ACK. `confirm` consumes `expectedPlanSha256`,
    `native`, `audit`, `httpStatus:200`, and epoch-ms `ackAt`. It binds the one
@@ -100,7 +134,7 @@ need a new rehearsal/review, not an override. No change is made to this identity
    it is not itself proof of a running function. Observe normal runtime status
    and errors during the soak without invoking a provider or inject.
 7. After the full soak, `finish` consumes `expectedPlanSha256` and a new POST
-   `native` observation obtained after expiry. Disk serialization, native
+   `native` observation whose GET starts after expiry. Disk serialization, native
    revision/graph and runtime identity must still match ACK. Receipt is fsynced
    before lease removal. A receipt-only retry after unlink is verified and safe.
    Close the dedicated tab only after reconciliation; keep private stage evidence.

@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { patchFunction98Flow, sha256 } from '../lib/function98_safe_diagnostic.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract, writeFileExclusiveDurable,
   writeFileExclusiveAtomicDurable, recoverAtomicExclusivePublication, atomicWrite, syncDirectory } from './runtime_contract.mjs';
-import { function98GraphHash } from './function98_body_preserver.mjs';
+import { function98GraphHash, function98OrderedGraphHash } from './function98_body_preserver.mjs';
 import { buildFunction98BrowserGuard } from './function98_browser_guard.mjs';
 
 const ROOT = '/root/.node-red', LEASE = '.padlhub-reviewed-flow-deploy.lease.json';
@@ -81,10 +81,14 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
   const target = expected => {
     const actual = readTarget(); check(hex(actual) && (!expected || actual === expected), 'F98_TARGET_DRIFT'); return actual;
   };
-  const evidence = (value, expectedGraph, revision) => {
-    check(value && Object.keys(value).sort().join(',') === 'graphSha256,observedAt,origin,revisionSha256'
+  const evidence = (value, expectedGraph, expectedOrderedGraph, revision, editorOrderedGraph) => {
+    check(value && Object.keys(value).sort().join(',') === 'editorOrderedGraphSha256,graphSha256,observedAt,orderedGraphSha256,origin,requestedAt,revisionSha256'
       && value.origin === 'http://127.0.0.1:18801' && hex(value.graphSha256) && hex(value.revisionSha256)
+      && hex(value.orderedGraphSha256) && value.orderedGraphSha256 === expectedOrderedGraph
+      && hex(value.editorOrderedGraphSha256) && (!editorOrderedGraph || value.editorOrderedGraphSha256 === editorOrderedGraph)
       && value.graphSha256 === expectedGraph && (!revision || value.revisionSha256 === revision)
+      && typeof value.requestedAt === 'string' && new Date(Date.parse(value.requestedAt)).toISOString() === value.requestedAt
+      && Date.parse(value.requestedAt) <= Date.parse(value.observedAt)
       && typeof value.observedAt === 'string' && new Date(Date.parse(value.observedAt)).toISOString() === value.observedAt
       && Date.parse(value.observedAt) <= now() && now() - Date.parse(value.observedAt) <= 30000, 'F98_NATIVE_EVIDENCE');
     return value;
@@ -92,12 +96,15 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
   const plan = async expected => {
     const raw = read(file('plan.json')); check(hex(expected) && sha256(raw) === expected, 'F98_PLAN_HASH');
     const p = JSON.parse(raw);
-    check(p.kind === KIND && p.formatVersion === 1 && p.codeSha256 === codeHash()
+    check(p.kind === KIND && p.formatVersion === 2 && hex(p.editorOrderedGraphSha256) && p.codeSha256 === codeHash()
       && /^[a-f0-9]{40}$/.test(p.sourceCommit), 'F98_PLAN_IDENTITY');
     const source = read(file('source.flow.json')), candidate = read(file('candidate.flow.json'));
     check(sha256(source) === p.sourceSha256 && sha256(candidate) === p.candidateSha256, 'F98_BACKUP_DRIFT');
     const built = patchFunction98Flow(JSON.parse(source), patchOptions);
-    check(await function98GraphHash(built.candidate) === p.candidateGraphSha256
+    check(await function98OrderedGraphHash(JSON.parse(source)) === p.sourceOrderedGraphSha256
+      && await function98OrderedGraphHash(built.candidate) === p.candidateOrderedGraphSha256
+      && await function98OrderedGraphHash(JSON.parse(candidate)) === p.candidateOrderedGraphSha256
+      && await function98GraphHash(built.candidate) === p.candidateGraphSha256
       && await function98GraphHash(JSON.parse(candidate)) === p.candidateGraphSha256, 'F98_CANDIDATE_DRIFT');
     validateReviewedFlowContract({ liveBytes: source, candidateBytes: candidate, contract: p.contract });
     check(p.contract.allowedChanges.length === 1 && p.contract.allowedChanges[0].id === built.targetId
@@ -114,19 +121,25 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
   };
   const pre = async (p, native) => {
     target(p.targetSha256); check(sha256(live()) === p.sourceSha256, 'F98_SOURCE_DRIFT');
-    evidence(native, p.sourceGraphSha256, p.preRevisionSha256);
+    evidence(native, p.sourceGraphSha256, p.sourceOrderedGraphSha256, p.preRevisionSha256, p.editorOrderedGraphSha256);
   };
   const post = async (p, native) => {
-    target(p.targetSha256); check(await function98GraphHash(JSON.parse(live())) === p.candidateGraphSha256, 'F98_POST_GRAPH');
-    evidence(native, p.candidateGraphSha256); check(native.revisionSha256 !== p.preRevisionSha256, 'F98_REVISION_UNCHANGED');
+    target(p.targetSha256); const flow = JSON.parse(live());
+    check(await function98GraphHash(flow) === p.candidateGraphSha256
+      && await function98OrderedGraphHash(flow) === p.candidateOrderedGraphSha256, 'F98_POST_GRAPH');
+    evidence(native, p.candidateGraphSha256, p.candidateOrderedGraphSha256); check(native.revisionSha256 !== p.preRevisionSha256, 'F98_REVISION_UNCHANGED');
   };
   const confirm = async (p, native, ackMode, ackAt) => {
     const lease = owns(p); check(['reserved', 'owner-decision'].includes(lease.phase), 'F98_CONFIRM_PHASE');
     const attempt = json('attempt.json');
-    check(attempt.planSha256 === lease.planSha256 && attempt.preRevisionSha256 === p.preRevisionSha256, 'F98_ATTEMPT_BINDING');
+    check(attempt.planSha256 === lease.planSha256 && attempt.preRevisionSha256 === p.preRevisionSha256
+      && attempt.sourceOrderedGraphSha256 === p.sourceOrderedGraphSha256 && attempt.candidateOrderedGraphSha256 === p.candidateOrderedGraphSha256
+      && attempt.editorOrderedGraphSha256 === p.editorOrderedGraphSha256, 'F98_ATTEMPT_BINDING');
     await post(p, native);
-    check(now() <= attempt.notAfterMs && Date.parse(native.observedAt) >= ackAt && ackAt >= attempt.requestedAtMs, 'F98_ACK_TIMING');
+    check(now() <= attempt.notAfterMs && Date.parse(native.requestedAt) >= ackAt && ackAt >= attempt.requestedAtMs, 'F98_ACK_TIMING');
     const ack = { kind: KIND, planSha256: lease.planSha256, attemptSha256: sha256(read(file('attempt.json'))),
+      sourceOrderedGraphSha256: p.sourceOrderedGraphSha256, candidateOrderedGraphSha256: p.candidateOrderedGraphSha256,
+      editorOrderedGraphSha256: p.editorOrderedGraphSha256,
       ackMode, targetSha256: p.targetSha256, diskSha256: sha256(live()), revisionSha256: native.revisionSha256 };
     if (fs.existsSync(file('ack.json'))) check(JSON.stringify(json('ack.json')) === JSON.stringify(ack), 'F98_ACK_DRIFT');
     else write('ack.json', ack);
@@ -139,13 +152,15 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
       check(hex(expectedSourceSha256) && hex(expectedTargetSha256) && hex(expectedCodeSha256)
         && codeHash() === expectedCodeSha256 && /^[a-f0-9]{40}$/.test(sourceCommit), 'F98_PREPARE_PINS');
       target(expectedTargetSha256); const source = live(); check(sha256(source) === expectedSourceSha256, 'F98_SOURCE_DRIFT');
-      const flow = JSON.parse(source); evidence(native, await function98GraphHash(flow));
+      const flow = JSON.parse(source); evidence(native, await function98GraphHash(flow), await function98OrderedGraphHash(flow));
       const built = patchFunction98Flow(flow, patchOptions), candidate = bytes(built.candidate);
       const contract = buildExactGraphContract({ liveBytes: source, candidateBytes: candidate, deploymentId: 'function98-native-diagnostic',
         allowedChanges: [{ id: built.targetId, fields: ['func'] }], allowedAdditionIds: [] });
       validateReviewedFlowContract({ liveBytes: source, candidateBytes: candidate, contract });
-      const p = { kind: KIND, formatVersion: 1, sourceCommit, codeSha256: expectedCodeSha256, targetSha256: expectedTargetSha256,
+      const p = { kind: KIND, formatVersion: 2, sourceCommit, codeSha256: expectedCodeSha256, targetSha256: expectedTargetSha256,
         sourceSha256: sha256(source), candidateSha256: sha256(candidate), sourceGraphSha256: await function98GraphHash(flow),
+        sourceOrderedGraphSha256: await function98OrderedGraphHash(flow), candidateOrderedGraphSha256: await function98OrderedGraphHash(built.candidate),
+        editorOrderedGraphSha256: native.editorOrderedGraphSha256,
         candidateGraphSha256: await function98GraphHash(built.candidate), preRevisionSha256: native.revisionSha256,
         beforeFunctionSha256: built.beforeFunctionSha256, afterFunctionSha256: built.afterFunctionSha256,
         preparedAtMs: now(), contract, browserGuardSha256: sha256(buildFunction98BrowserGuard()) };
@@ -178,21 +193,27 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
       const p = await plan(expectedPlanSha256), lease = owns(p); await pre(p, native);
       check(lease.phase === 'reserved' && lease.expiresAtMs - now() >= 360000, 'F98_RESERVATION_TTL');
       const attempt = { kind: KIND, planSha256: expectedPlanSha256, preRevisionSha256: p.preRevisionSha256,
+        sourceOrderedGraphSha256: p.sourceOrderedGraphSha256, candidateOrderedGraphSha256: p.candidateOrderedGraphSha256,
+        editorOrderedGraphSha256: p.editorOrderedGraphSha256,
         requestedAtMs: now(), notAfterMs: now() + 300000 };
       write('attempt.json', attempt);
       const guard = buildFunction98BrowserGuard(); check(sha256(guard) === p.browserGuardSha256, 'F98_BROWSER_CODE_DRIFT');
       writeFileExclusiveDurable(file('browser-guard.js'), Buffer.from(guard), protection);
-      return { status: 'ONE_ATTEMPT_RESERVED', seal: { planSha256: expectedPlanSha256, attemptSha256: sha256(read(file('attempt.json'))),
+      return { status: 'ONE_ATTEMPT_RESERVED', seal: { protocol: 'source-preserving-v2', planSha256: expectedPlanSha256, attemptSha256: sha256(read(file('attempt.json'))),
         sourceGraphSha256: p.sourceGraphSha256, candidateGraphSha256: p.candidateGraphSha256,
+        sourceOrderedGraphSha256: p.sourceOrderedGraphSha256, candidateOrderedGraphSha256: p.candidateOrderedGraphSha256,
+        editorOrderedGraphSha256: p.editorOrderedGraphSha256,
         preRevisionSha256: p.preRevisionSha256, beforeFunctionSha256: p.beforeFunctionSha256,
         afterFunctionSha256: p.afterFunctionSha256, notAfter: new Date(attempt.notAfterMs).toISOString() }, browserGuardSha256: p.browserGuardSha256 };
     },
     async confirm({ expectedPlanSha256, native, audit, httpStatus, ackAt }) {
       const p = await plan(expectedPlanSha256); owns(p);
-      check(audit && Object.keys(audit).sort().join(',') === 'attemptSha256,candidateGraphSha256,forwarded,forwardedBodySha256,notAfter,planSha256,preRevisionSha256,rejected,status'
+      check(audit && Object.keys(audit).sort().join(',') === 'attemptSha256,candidateGraphSha256,candidateOrderedGraphSha256,editorOrderedGraphSha256,forwarded,forwardedBodySha256,notAfter,planSha256,preRevisionSha256,rejected,sourceOrderedGraphSha256,status'
         && audit.status === 'FORWARDED_AWAITING_READBACK' && audit.forwarded === 1 && audit.rejected === 0
         && audit.planSha256 === expectedPlanSha256 && audit.attemptSha256 === sha256(read(file('attempt.json')))
         && audit.candidateGraphSha256 === p.candidateGraphSha256 && audit.preRevisionSha256 === p.preRevisionSha256
+        && audit.sourceOrderedGraphSha256 === p.sourceOrderedGraphSha256 && audit.candidateOrderedGraphSha256 === p.candidateOrderedGraphSha256
+        && audit.editorOrderedGraphSha256 === p.editorOrderedGraphSha256
         && Date.parse(audit.notAfter) === json('attempt.json').notAfterMs && hex(audit.forwardedBodySha256)
         && httpStatus === 200 && Number.isSafeInteger(ackAt) && ackAt <= now(), 'F98_ACK_INPUT');
       return confirm(p, native, 'native-http-200', ackAt);
@@ -207,15 +228,22 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
       const p = await plan(expectedPlanSha256); owns(p); await post(p, native);
       check(native.revisionSha256 === expectedRevisionSha256, 'F98_ADOPT_REVISION_DRIFT');
       // Explicit adoption attests observed POST, never fabricates an HTTP ACK.
-      const attempt = json('attempt.json'); check(attempt.planSha256 === expectedPlanSha256, 'F98_ATTEMPT_BINDING');
+      const attempt = json('attempt.json'); check(attempt.planSha256 === expectedPlanSha256
+        && attempt.preRevisionSha256 === p.preRevisionSha256 && attempt.sourceOrderedGraphSha256 === p.sourceOrderedGraphSha256
+        && attempt.candidateOrderedGraphSha256 === p.candidateOrderedGraphSha256
+        && attempt.editorOrderedGraphSha256 === p.editorOrderedGraphSha256, 'F98_ATTEMPT_BINDING');
       const lease = owns(p);
       check(['reserved', 'owner-decision'].includes(lease.phase), 'F98_ADOPT_PHASE');
       const ack = { kind: KIND, planSha256: expectedPlanSha256, attemptSha256: sha256(read(file('attempt.json'))),
+        sourceOrderedGraphSha256: p.sourceOrderedGraphSha256, candidateOrderedGraphSha256: p.candidateOrderedGraphSha256,
+        editorOrderedGraphSha256: p.editorOrderedGraphSha256,
         ackMode: 'observed-post-adoption', targetSha256: p.targetSha256, diskSha256: sha256(live()), revisionSha256: native.revisionSha256 };
       if (fs.existsSync(file('ack.json'))) {
         const old = json('ack.json');
         check(old.kind === ack.kind && old.planSha256 === ack.planSha256 && old.attemptSha256 === ack.attemptSha256
           && old.targetSha256 === ack.targetSha256 && old.diskSha256 === ack.diskSha256 && old.revisionSha256 === ack.revisionSha256
+          && old.sourceOrderedGraphSha256 === ack.sourceOrderedGraphSha256 && old.candidateOrderedGraphSha256 === ack.candidateOrderedGraphSha256
+          && old.editorOrderedGraphSha256 === ack.editorOrderedGraphSha256
           && ['native-http-200', 'observed-post-adoption'].includes(old.ackMode), 'F98_ACK_DRIFT');
       } else write('ack.json', ack);
       writeLease({ ...lease, phase: 'soaking', ackSha256: sha256(read(file('ack.json'))), acquiredAtMs: now(), expiresAtMs: now() + SOAK });
@@ -224,12 +252,14 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
     async finish({ expectedPlanSha256, native }) {
       const p = await plan(expectedPlanSha256), lease = readLease(), ackRaw = read(file('ack.json')), ack = JSON.parse(ackRaw);
       check(ack.kind === KIND && ack.planSha256 === expectedPlanSha256 && ack.targetSha256 === p.targetSha256
+        && ack.sourceOrderedGraphSha256 === p.sourceOrderedGraphSha256 && ack.candidateOrderedGraphSha256 === p.candidateOrderedGraphSha256
+        && ack.editorOrderedGraphSha256 === p.editorOrderedGraphSha256
         && ['native-http-200', 'observed-post-adoption'].includes(ack.ackMode)
         && ack.attemptSha256 === sha256(read(file('attempt.json'))), 'F98_ACK_BINDING');
       const receiptExists = fs.existsSync(file('finish.json'));
       if (lease) { const owned = owns(p); check(owned.phase === 'soaking' && owned.ackSha256 === sha256(ackRaw)
         && now() >= owned.expiresAtMs && owned.expiresAtMs - owned.acquiredAtMs === SOAK
-        && Date.parse(native.observedAt) >= owned.expiresAtMs, 'F98_SOAK_INCOMPLETE'); }
+        && Date.parse(native.requestedAt) >= owned.expiresAtMs, 'F98_SOAK_INCOMPLETE'); }
       else check(receiptExists, 'F98_LEASE_ABSENT');
       await post(p, native); check(native.revisionSha256 === ack.revisionSha256 && sha256(live()) === ack.diskSha256, 'F98_FINISH_DRIFT');
       const receipt = { kind: KIND, planSha256: expectedPlanSha256, ackSha256: sha256(ackRaw), targetSha256: p.targetSha256,
