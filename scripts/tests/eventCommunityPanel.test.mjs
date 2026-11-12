@@ -12,33 +12,28 @@ async function panelRenderer() {
   const result = await build({ entryPoints: ['src/components/cabinet/EventCommunityPanel.tsx'], bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic', external: ['react', 'react/jsx-runtime'], loader: { '.css': 'empty', '.png': 'dataurl' }, logLevel: 'silent' });
   const module = { exports: {} };
   new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);
-  return props => renderToStaticMarkup(React.createElement(module.exports.EventCommunityPanel, { community: { id: EXHIBITION_COMMUNITY_ID }, onRegister() {}, ...props }));
+  return props => renderToStaticMarkup(React.createElement(module.exports.EventCommunityPanel, { community: { id: EXHIBITION_COMMUNITY_ID, name: 'КорпСпорт ПадлхАБ 2026' }, onRegister() {}, ...props }));
 }
 
-test('exhibition panel is only a pre-membership call to action', async () => {
+test('non-members see the questionnaire and game actions', async () => {
   const render = await panelRenderer();
-  const member = render({ isMember: true });
-  assert.equal(member, '', 'an active community member must not see the join/questionnaire block');
-  const nonMember = render({ isMember: false });
-  assert.match(nonMember, /ПадлхАБ Jump — 5 жизней/);
-  assert.match(nonMember, /Заполнить анкету/);
-  assert.match(nonMember, /Играть в Jump/);
+  const html = render({ isMember: false });
+  assert.match(html, /ПадлхАБ Jump — 5 жизней/);
+  assert.match(html, /Заполнить анкету/);
+  assert.match(html, /Играть в Jump/);
+  assert.ok(!html.includes('Включить уведомления'));
   const otherCommunity = render({ isMember: false, community: { id: 'another-community' } });
   assert.equal(otherCommunity, '');
 });
 
-test('a member who declined notifications sees a reconnect prompt on every entry', async () => {
+test('members get a bell button that hands off to LK2 with the KorpSport source marker', async () => {
   const render = await panelRenderer();
-  const previous = globalThis.localStorage;
-  const values = new Map([['padlhub_exhibition_push_opt_in_v1', '0']]);
-  globalThis.localStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key), clear: () => values.clear(), key: () => null, length: values.size };
-  try {
-    const declined = render({ isMember: true });
-    assert.match(declined, /Уведомления о результатах/);
-    assert.match(declined, /Подключить уведомления/);
-    values.set('padlhub_exhibition_push_opt_in_v1', '1');
-    assert.equal(render({ isMember: true }), '', 'a member who opted in must not see the reconnect prompt');
-  } finally {
-    if (previous === undefined) delete globalThis.localStorage; else globalThis.localStorage = previous;
-  }
+  const html = render({ isMember: true });
+  assert.match(html, /Уведомления о результатах/);
+  assert.match(html, /Включить уведомления/);
+  assert.match(html, /community-event-push__button/);
+  assert.match(html, /href="https:\/\/lk2\.padlhub\.su\/push\?/);
+  assert.ok(html.includes('source=korp-sport-2026'));
+  assert.ok(html.includes('community=community_1794221739126_'));
+  assert.ok(!html.includes('Заполнить анкету'));
 });
