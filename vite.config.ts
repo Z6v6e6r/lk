@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite'
+import { diagnosticBuildIdentity } from './scripts/diagnostic_build_identity'
 
 import react from '@vitejs/plugin-react'
 import cssInjectedByJsPlugin from 'vite-plugin-css-injected-by-js'
@@ -49,6 +50,7 @@ export default defineConfig(({ command, mode }) => {
         : []),
     ],
     define: {
+      'import.meta.env.VITE_DIAGNOSTIC_BUILD': JSON.stringify(diagnosticBuildIdentity()),
       __PADLHUB_JUMP_WIDGET_URL__: JSON.stringify(command === 'serve'
         ? '/src/padel-jump-widget.tsx'
         : `https://padlhub.su/lk/padel-jump-team-${gameSource.slice(0, 8)}/assets/cabinet.js`),
