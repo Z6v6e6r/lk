@@ -50,6 +50,7 @@ import { isRequestTimeoutError, runWithAbortTimeout } from "./requestTimeout.ts"
 import { SubscriptionRejoinTracker } from "./subscriptionRejoin.ts";
 import { nativeSubscriptionCancellationVerified, pollNativeSubscriptionCancellation, nativeCancellationRequestId } from "./nativeSubscriptionCancellation";
 import { SplitPaymentAmbiguityGuard } from "./splitPaymentAmbiguityGuard.ts";
+import { createTournamentParticipantReader } from "./tournamentParticipantRead.ts";
 import {
   buildPadelAvailableGamesQuery,
   type PadelAvailableGamesQueryOptions,
@@ -5582,6 +5583,8 @@ function sanitizeTournamentParticipantsPayload<T>(payload: T): T {
   return (nextPayload ?? payload) as T;
 }
 
+const readTournamentParticipants = createTournamentParticipantReader<ExerciseBooking[]>();
+
 export async function apiFetchTournamentParticipants(
   exerciseId: string,
   options: {
@@ -5592,15 +5595,27 @@ export async function apiFetchTournamentParticipants(
   } = {},
 ) {
   const base = getServ2Origin();
-  const result = await request<ExerciseBooking[]>(
-    `${base}/lk/tournaments/participants?exerciseId=${exerciseId}`,
-    {
+  const url = `${base}/lk/tournaments/participants?exerciseId=${encodeURIComponent(exerciseId)}`;
+  const auth = options.auth ?? true;
+  // Raw reads also serve booking mutation verification: preserve their fresh-read path.
+  const result = options.sanitize === false
+    ? await request<ExerciseBooking[]>(url, {
       method: "GET",
-      auth: options.auth ?? true,
+      auth,
       retries: options.retries ?? 1,
       signal: options.signal,
-    },
-  );
+    })
+    : await (() => {
+      const session = auth ? readAuthToken() : null;
+      return readTournamentParticipants({
+        key: JSON.stringify([base, exerciseId, auth, session]),
+        signal: options.signal,
+        isCurrentSession: () => !auth || readAuthToken() === session,
+        // This leaf owns its three busy-key retries. Generic retries would multiply
+        // attempts and retry unrelated rate limits; retries:0 callers still get recovery.
+        run: (signal) => request<ExerciseBooking[]>(url, { method: "GET", auth, retries: 0, signal }),
+      });
+    })();
   return {
     ...result,
     data: result.data && options.sanitize !== false
