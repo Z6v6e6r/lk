@@ -233,11 +233,38 @@ const station = extractStation(text, buttonValue);
 const updateType = toStr(rawPayload.update_type || rawPayload.type || rawMessage.type || transportData?.type) || "message";
 const updateTimestamp = toInt(rawPayload.timestamp || rawMessage.timestamp || transportData?.timestamp) ?? Date.now();
 
+// Optional new-only epoch. Read provider fields before any Date.now fallback can relabel an old event.
+let maxGeneration = null;
+let maxAfter = null;
+try {
+  maxGeneration = env.get("SUPPORT_MAX_GENERATION");
+  maxAfter = env.get("SUPPORT_MAX_GENERATION_AFTER");
+} catch { /* Missing configuration keeps the historical path. */ }
+const newOnly = maxGeneration != null || maxAfter != null;
+const callbackId = toStr(rawPayload.callback?.callback_id || rawPayload.callback_id);
+const providerAt = callbackId ? (rawPayload.callback?.timestamp ?? rawPayload.timestamp)
+  : (rawPayload.timestamp ?? rawMessage.timestamp ?? transportData?.timestamp);
+const providerId = callbackId || toStr(rawMessage.mid || rawMessage.message_id || body.mid || body.message_id);
+if (newOnly) {
+  const boundary = typeof maxAfter === "string" ? Date.parse(maxAfter) : NaN;
+  const valid = typeof maxGeneration === "string" && /^[a-f0-9-]{36}$/.test(maxGeneration)
+    && Number.isFinite(boundary) && new Date(boundary).toISOString() === maxAfter
+    && typeof providerAt === "number" && Number.isSafeInteger(providerAt) && providerAt > boundary
+    && providerAt <= Date.now() + 5000 && providerAt > 1000000000000 && providerId
+    && (!isWebhook || Boolean(expectedSecret));
+  if (!valid) {
+    const held = makeHttpResponse(msg, 200, { ok: true, accepted: false, code: "MAX_INGRESS_HELD" });
+    return [null, isWebhook ? held : null, { payload: { code: "MAX_INGRESS_HELD" } }];
+  }
+}
+
 const normalized = {
   provider: "max",
   updateType,
-  timestamp: updateTimestamp,
-  messageId: toStr(rawMessage.mid || rawMessage.message_id || body.mid || body.message_id || rawPayload.messageId),
+  timestamp: newOnly ? providerAt : updateTimestamp,
+  generation: newOnly ? maxGeneration : undefined,
+  providerTimestampVerified: newOnly ? true : undefined,
+  messageId: newOnly ? providerId : toStr(rawMessage.mid || rawMessage.message_id || body.mid || body.message_id || rawPayload.messageId),
   messageTimestamp: toInt(rawMessage.timestamp || body.timestamp) ?? updateTimestamp,
   text,
   command,
@@ -285,6 +312,6 @@ const httpResponse = isWebhook
     })
   : null;
 
-const debugMsg = Object.assign({}, downstreamMsg);
+const debugMsg = newOnly ? { payload: { code: "MAX_INGRESS_NEEDS_ADMISSION" } } : Object.assign({}, downstreamMsg);
 
 return [downstreamMsg, httpResponse, debugMsg];

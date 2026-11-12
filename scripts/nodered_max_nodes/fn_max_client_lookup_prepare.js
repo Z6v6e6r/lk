@@ -1,3 +1,17 @@
+// One bot scope for reservation, lookup, support event and direct service branches.
+let maxConnector = "MAX_BOT";
+try {
+  const generation = env.get("SUPPORT_MAX_GENERATION");
+  const after = env.get("SUPPORT_MAX_GENERATION_AFTER");
+  if (generation != null || after != null) {
+    maxConnector = env.get("MAX_CONNECTOR");
+    const admission = msg.maxIngressAdmission;
+    if (!["MAX_BOT", "MAX_ACADEMY_BOT"].includes(maxConnector)
+      || !admission || admission.connector !== maxConnector
+      || admission.generation !== generation || admission.after !== after
+      || typeof admission.admissionId !== "string" || !/^ingress:[a-f0-9]{64}$/.test(admission.admissionId)) return null;
+  }
+} catch { return null; }
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
@@ -22,7 +36,7 @@ if (!update) {
 try {
   if (typeof global !== "undefined") {
     const diagnostics = global.get("lkDiagnostics");
-    diagnostics?.observe(msg, "max_ingress", { connector: "MAX_BOT", targetPresent: Boolean(update.recipient?.chatId || update.sender?.userId), targetSource: "inbound", targetType: update.recipient?.chatId ? "chat" : update.sender?.userId ? "user" : "UNKNOWN",
+    diagnostics?.observe(msg, "max_ingress", { connector: maxConnector, targetPresent: Boolean(update.recipient?.chatId || update.sender?.userId), targetSource: "inbound", targetType: update.recipient?.chatId ? "chat" : update.sender?.userId ? "user" : "UNKNOWN",
       bindingRef: diagnostics.ref("binding", String(update.recipient?.chatId || update.sender?.userId || "")), botIdentityKnown: false, accessEvidenceKnown: false });
   }
 } catch { /* no-throw */ }
@@ -52,7 +66,7 @@ const addQuery = (key, value) => {
 };
 
 addQuery("channel", "MAX");
-addQuery("connector", "MAX_BOT");
+addQuery("connector", maxConnector);
 addQuery("channelUserId", update.sender?.userId);
 addQuery("userId", update.sender?.userId);
 addQuery("chatId", update.recipient?.chatId);
