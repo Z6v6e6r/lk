@@ -372,3 +372,40 @@ test("actual disk loader refuses every unapproved cache source before mutating t
     assert.deepEqual(flow, before);
   }
 });
+
+const HISTORICAL_CACHE_DIAGNOSTIC_SHA256 = "e1455ea45a58706cb217d1000442f51ec3c7506caef922f50146e3111b18ba89";
+const HISTORICAL_CACHE_BUSINESS_SHA256 = "9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785";
+function historicalCacheFixture(observed = execFileSync('git', ['show',
+  '45a287a63c595ba86cf19a999e177f4780f80f49:scripts/nodered_tournament_participants_nodes/fn_cache_gate_v2.js',
+], { cwd: path.resolve(SCRIPT_DIR, '../..'), encoding: 'utf8' })) {
+  assert.equal(sha256(observed), HISTORICAL_CACHE_DIAGNOSTIC_SHA256);
+  const start = observed.indexOf('const CACHE_KEY =');
+  assert.ok(start > 0);
+  const rejectObserver = '  lkDiagnostic({ code: reason, httpStatus: statusCode, cacheUsable: Boolean(currentEntry), inflightPresent: Boolean(exerciseInflight), markerAgeMs: exerciseInflight ? Math.max(0, now - Number(exerciseInflight[1]?.startedAt || now)) : undefined });\n';
+  assert.equal(observed.split(rejectObserver).length, 2);
+  const business = observed.slice(start).replace(rejectObserver, '');
+  assert.equal(sha256(business), HISTORICAL_CACHE_BUSINESS_SHA256);
+  return { observed, business };
+}
+
+test("historical cache generation stays isolated from current business and diagnostic pins", () => {
+  const { observed, business } = historicalCacheFixture();
+  const current = fs.readFileSync(path.join(REAL_SOURCE_DIR, 'fn_cache_gate_v2.js'), 'utf8');
+  const currentBusiness = cacheGateBusinessSource(current);
+  const { flow, contract, sources } = fixture();
+  const before = structuredClone(flow);
+  contract.sources.cacheGate = { file: 'fn_cache_gate_v2.js', sha256: HISTORICAL_CACHE_BUSINESS_SHA256 };
+  const result = buildTournamentParticipantRefreshCandidate(structuredClone(flow), contract.wholeFlowSha256, contract,
+    { ...sources, cacheGate: business });
+  assert.equal(result.candidate.find(node => node.id === contract.ids.cacheGate).func, business);
+  for (const cacheGate of [observed, current, currentBusiness, business + '\n// historical drift']) {
+    assert.throws(() => buildTournamentParticipantRefreshCandidate(flow, contract.wholeFlowSha256, contract,
+      { ...sources, cacheGate }), /Approved source missing or drifted: cacheGate/);
+    assert.deepEqual(flow, before);
+  }
+  assert.throws(() => historicalCacheFixture(observed + '\n// diagnostic drift'));
+  assert.throws(() => historicalCacheFixture(current));
+  contract.sources.cacheGate = { ...TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate };
+  assert.throws(() => buildTournamentParticipantRefreshCandidate(flow, contract.wholeFlowSha256, contract,
+    { ...sources, cacheGate: business }), /Approved source missing or drifted: cacheGate/);
+});
