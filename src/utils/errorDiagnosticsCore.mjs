@@ -15,6 +15,7 @@ codes.push("LK1_DAILY_VISIT_CHANGED", "LK1_FREE_CANCEL_RETURN_PENDING", "LK1_FRE
   "LK1_FREE_CANCEL_ACTIVE_BOOKING_UNVERIFIED", "LK1_FREE_CANCEL_BASELINE_UNAVAILABLE",
   "GROUP_DISCOUNT_QUOTE_CHANGED", "TOURNAMENT_DISCOUNT_QUOTE_CHANGED",
   "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE", "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE", "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE");
+codes.push('PREVIEW_EMPTY_TARIFF_OBSERVED');
 const targetReasons = ["target_missing", "target_upstream_error", "target_identity", "target_category", "target_start_invalid", "target_not_future", "target_duration", "target_room", "target_studio", "target_type", "target_cancelled", "target_lifecycle"];
 const enums = {
   upstreamPhase: ["profile", "exercise", "exercise_recheck", "prospective_subscriptions", "lk1_money_owned_subscriptions", "lk1_product_identity_return", "subscription_name", "active_bookings", "history_bookings", "managed_runtime_context", "managed_runtime_recheck", "managed_entitlement_reserve", "managed_entitlement_confirm", "managed_entitlement_release", "managed_first_use_activation", "booking_create", "confirmation_bookings", "roster_bridge_response", "UNKNOWN"],
@@ -26,6 +27,7 @@ const enums = {
   previewDuration: ['MINUTES_60', 'MINUTES_90', 'MINUTES_120', 'UNKNOWN'],
   previewDayRelation: ['NEXT_DAY', 'OTHER', 'UNKNOWN'],
   previewElapsedBucket: ['LT1S', 'LT5S', 'LT15S', 'LE28S', 'OVER28S', 'UNKNOWN'],
+  tariffListShape: ['ROOT_ARRAY', 'DIRECT_ARRAY', 'NESTED_ARRAY', 'NO_RECOGNIZED_ARRAY', 'UNKNOWN'],
   suppressedEventKind: ["stage", "request_terminal", "operation_result", "client_error", "audit", "transport"],
   eventKind: ["stage", "request_terminal", "operation_result", "client_error", "audit", "transport", "suppression"],
   source: ["nginx", "node_red", "browser", "support_backend", "collector"], routeTemplate: ROUTES,
@@ -45,7 +47,14 @@ const enums = {
 const flags = ["operationReadValid", "operationFound", "sameOperationKey", "sameOperationTarget", "idempotencyKeyPresent", "pendingExpired", "reqPresent", "resPresent", "errorPresent", "contextPresent", "subjectPresent", "authorizedPartyPresent", "tenantPresent", "dtoIdPresent", "dtoPaymentUrlPresent", "dtoResultPresent", "expectedRevisionPresent", "actualRevisionPresent", "revisionEqual", "expectedUpdatedAtPresent", "actualUpdatedAtPresent", "updatedAtEqual", "bindingEqual", "bindingPresent", "preconditionPresent", "acknowledged", "cacheUsable", "inflightPresent", "targetFuture", "targetTimeValid", "sourceTimeValid", "dependencyPresent", "registrationPresent", "mountPresent", "originEqual", "hostEqual", "protocolEqual", "assetBuildEqual", "dataPresent", "fileFound", "parseOk", "admitted", "clientVerified", "botIdentityKnown", "accessEvidenceKnown", "targetPresent", "targetEqual", "leasePresent", "leaseExpired", "executionObserved", "suppressed", "refUnavailable", "topFramePresent", "deviceClockTrusted", "serverLinked", "legacyEvent", "sdkOutputPresent", "sdkErrorPresent", "diagnosticWarning", "routeValid", "framingValid", "clientBound", "logoUrlPresent", "logoThumbPresent", "logoLegacyPresent", "aggregate", "parseAttempted", "scriptLoadObserved"];
 const numbers = { httpStatus: [100, 599], upstreamStatus: [100, 599], durationMs: [0, 86400000], attempt: [1, 10000], leaseAttempt: [0, 10000], scopeGeneration: [0, 1000000], matchedCount: [0, 2], modifiedCount: [0, 2], lookupCount: [0, 2], tariffCount: [0, 1000], leaseAgeMs: [0, 86400000], markerAgeMs: [0, 86400000], deferredDeliveries: [0, Number.MAX_SAFE_INTEGER], queueEvictions: [0, Number.MAX_SAFE_INTEGER], suppressedCount: [0, Number.MAX_SAFE_INTEGER] };
 flags.push('previewOffsetValid', 'previewEndAtMidnight', 'previewSubservicesMatched', 'previewSubservices2xx');
+flags.push('tariffCompleteListGuardPassed', 'tariffExtractedEmpty', 'tariffTransportErrorPresent',
+  'tariffBindingContextPresent', 'tariffMethodMatch', 'tariffRequestScopeMatch', 'tariffResponseUrlPresent',
+  'tariffResponseScopeMatch', 'tariffTenantScopeMatch', 'tariffExerciseScopeMatch',
+  'tariffEventIdentityMatch', 'tariffEventCategoryMatch', 'tariffEventStartMatch',
+  'tariffShapeScanTruncated', 'tariffShapeScanFailed', 'tariffShadowedNonemptyArray',
+  'tariffAlternateArrayPresent', 'tariffAlternateNonemptyArray');
 Object.assign(numbers, { previewSelectedSubserviceCount: [0, 20], previewSubserviceSetSize: [0, 21] });
+Object.assign(numbers, { tariffRecognizedArrayCount: [0, 1000] });
 function timestamp(value) { return typeof value === "string" && value.length === 24 && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value; }
 export function responseKind(value) { return value === undefined ? "missing" : value === null ? "null" : Array.isArray(value) ? "array" : typeof value === "string" ? "text" : ["object", "number", "boolean"].includes(typeof value) ? typeof value : "UNKNOWN"; }
 export function routeTemplate(path) {
@@ -75,6 +84,8 @@ export function sanitizeEvent(input) {
     for (const key of ["sourceRelease", "serverRelease", "callerBuild", "sourceHash"]) out[key] = typeof input[key] === "string" && hash.test(input[key]) ? input[key] : "UNKNOWN";
     for (const key of ["serverRequestId", "logicalOperation", "attemptReference"]) if (typeof input[key] === "string" && UUID.test(input[key])) out[key] = input[key].toLowerCase();
     for (const key of ["entityRef", "operationRef", "bindingRef", "outboxRef"]) if (typeof input[key] === "string" && /^h1:[0-9a-f]{32}$/.test(input[key])) out[key] = input[key];
+    if (out.source === 'node_red' && out.routeTemplate === '/lk/subscriptions/game-price-preview'
+      && typeof input.correlationHash === 'string' && /^c1:[0-9a-f]{64}$/.test(input.correlationHash)) out.correlationHash = input.correlationHash;
     return JSON.stringify(out).length <= 4096 ? out : null;
   } catch { return null; }
 }

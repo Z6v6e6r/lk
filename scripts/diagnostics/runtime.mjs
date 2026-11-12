@@ -1,8 +1,9 @@
 import { createDiagnosticBudget } from "../../src/utils/diagnosticBudget.mjs";
-import { randomUUID, createHmac } from "node:crypto";
+import { randomUUID, createHmac, createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { sanitizeEvent, routeTemplate, responseKind } from "../../src/utils/errorDiagnosticsCore.mjs";
 import { createSubscriptionBookingConflictObserver } from "./subscription-booking-conflicts.mjs";
+import { previewEmptyTariffFacts } from "./preview-empty-tariffs.mjs";
 
 // Importing this module has no timers, writes, network or registration side effects.
 export function createDiagnostics({ sink, release, key, detailLimit = 600, now = () => new Date(), monotonic = () => performance.now() } = {}) {
@@ -32,6 +33,12 @@ export function createDiagnostics({ sink, release, key, detailLimit = 600, now =
     if (!ctx) {
       ctx = { ...msg._lkDiagnosticContext, requestId: msg._lkDiagnosticContext?.requestId || randomUUID(), started: msg._lkDiagnosticContext?.started ?? monotonic(), stage: "ingress", outcome: "outcome_unknown", routeTemplate: routeTemplate(msg.req?.path), method: msg.req?.method ?? "UNKNOWN" };
       contexts.set(owner, ctx);
+      if (ctx.routeTemplate === '/lk/subscriptions/game-price-preview') {
+        // Hash only a server-minted diagnostic ID. Never hash _msgid, incoming
+        // correlation headers, entity IDs, tenant keys or any provider values.
+        ctx.requestId = randomUUID();
+        ctx.correlationHash = `c1:${createHash('sha256').update(`lk-preview-request-v1\0${ctx.requestId}`).digest('hex')}`;
+      }
     }
     return ctx;
   }
@@ -72,8 +79,11 @@ export function createDiagnostics({ sink, release, key, detailLimit = 600, now =
       const operation = msg.req?.headers?.["idempotency-key"];
       const target = command?.targetExternalChatId || command?.targetExternalUserId;
       const conflict = bookingConflict(msg, stage, fields);
+      const tariff = ctx.routeTemplate === '/lk/subscriptions/game-price-preview' && ctx.method === 'POST'
+        ? previewEmptyTariffFacts(msg, stage, fields) : {};
       emit(ctx, { eventKind: "stage", code: "STAGE_ENTER", entityRef: ref("entity", entity), operationRef: ref("operation", operation),
-        outboxRef: ref("outbox", command?.id), bindingRef: ref("binding", target), ...fields, ...conflict, stage,
+        outboxRef: ref("outbox", command?.id), bindingRef: ref("binding", target), ...fields, ...conflict, ...tariff, stage,
+        correlationHash: ctx.correlationHash,
         operationStage: conflict?.operationStage ?? msg._referralSubscriptionCtx?.step ?? msg._subscriptionBooking?.step ?? msg._splitCtx?.step ?? msg._subscriptionPricePreview?.step,
         reqPresent: Boolean(msg.req), resPresent: Boolean(msg.res), refUnavailable: !Buffer.isBuffer(key) || key.length < 32 });
     } catch { metrics.loggerFailures++; }

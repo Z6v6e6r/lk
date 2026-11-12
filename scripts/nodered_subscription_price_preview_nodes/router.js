@@ -520,6 +520,23 @@ if (ctx.step === 'groupTariff') {
     const reason = rows.length === 0 ? 'empty_tariff_list'
       : rows.length > 1 ? 'multiple_tariffs' : 'invalid_tariff_record';
     ctx.errorDetails = tariffDetails(reason, 'tariff_shape');
+    if (reason === 'empty_tariff_list') {
+      const binding = {};
+      try {
+        // Comparisons only, with no new reads or changes to the decision. The
+        // shared observer inspects the already-read tariff reply before stop.
+        if (canonical.isObj(ctx.exercise)) {
+          const identity = ctx.exercise.id || ctx.exercise.exerciseId;
+          if (typeof identity === 'string' && identity) binding.tariffEventIdentityMatch = identity === ctx.exerciseId;
+          binding.tariffEventCategoryMatch = canonical.resolveCategory(ctx.exercise) === eventRoute?.category;
+          const eventStart = Date.parse(canonical.eventStartsAt(ctx.exercise));
+          const targetStart = Date.parse(ctx.target?.startsAt);
+          if (Number.isFinite(eventStart) && Number.isFinite(targetStart)) binding.tariffEventStartMatch = eventStart === targetStart;
+        }
+      } catch { /* Missing comparison evidence stays unknown. */ }
+      lkDiagnostic({ eventKind: 'audit', code: 'PREVIEW_EMPTY_TARIFF_OBSERVED', reason, tariffCount: rows.length,
+        httpStatus: 503, outcome: 'refused', ...binding });
+    }
     return stop("LK1_EVENT_TARIFF_AMBIGUOUS");
   }
   const product = rows[0];
