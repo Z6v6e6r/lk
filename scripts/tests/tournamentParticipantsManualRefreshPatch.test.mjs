@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -216,40 +217,98 @@ test("guarded participant refresh builder rejects an existing manual refresh rou
 // The historical builder consumes business bytes, while correlated diagnostics
 // add a separately attested observer candidate. Never widen the release pin to
 // accept that candidate merely because its declared sourceHash matches.
-const CACHE_GATE_DIAGNOSTIC_SHA256 = "e1455ea45a58706cb217d1000442f51ec3c7506caef922f50146e3111b18ba89";
+const CACHE_GATE_DIAGNOSTIC_BINDINGS = new Map([
+  ['e1455ea45a58706cb217d1000442f51ec3c7506caef922f50146e3111b18ba89',
+    '9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785'],
+  ['062c7dc5068fa64e84dd49ed3d2d39d7d5e3df6b345c52de66ed09f0925fa878',
+    'c3ee07fdcbdad0afa7b3258b4cf51f0f65b78086fe8a70f102ee153b4890568c'],
+]);
+const LEGACY_CACHE_GATE_BUSINESS_SHA256 = '9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785';
 function cacheGateBusinessSource(observed) {
-  assert.equal(sha256(observed), CACHE_GATE_DIAGNOSTIC_SHA256);
+  const expectedBusiness = CACHE_GATE_DIAGNOSTIC_BINDINGS.get(sha256(observed));
+  assert.ok(expectedBusiness, 'unreviewed diagnostic source');
   const start = observed.indexOf('const CACHE_KEY =');
   assert.ok(start > 0);
   const rejectObserver = '  lkDiagnostic({ code: reason, httpStatus: statusCode, cacheUsable: Boolean(currentEntry), inflightPresent: Boolean(exerciseInflight), markerAgeMs: exerciseInflight ? Math.max(0, now - Number(exerciseInflight[1]?.startedAt || now)) : undefined });\n';
   assert.equal(observed.split(rejectObserver).length, 2);
-  return observed.slice(start).replace(rejectObserver, '');
+  const business = observed.slice(start).replace(rejectObserver, '');
+  assert.equal(sha256(business), expectedBusiness, 'diagnostic candidate changed business bytes');
+  return business;
 }
 
 test("default builder contract pins business sources separately from the exact cache diagnostic candidate", () => {
   for (const sourceContract of Object.values(TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources)) {
     const current = fs.readFileSync(path.join(REAL_SOURCE_DIR, sourceContract.file), "utf8");
     const business = sourceContract.file === 'fn_cache_gate_v2.js' ? cacheGateBusinessSource(current) : current;
-    assert.equal(sha256(business), sourceContract.sha256, sourceContract.file);
+    // A later explicitly reviewed contract can pin the full observer candidate.
+    // The older contract still requires the separately pinned business bytes.
+    const registered = sha256(current) === sourceContract.sha256 ? current : business;
+    assert.equal(sha256(registered), sourceContract.sha256, sourceContract.file);
   }
-  assert.equal(TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate.sha256,
-    '9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785');
+  assert.ok([LEGACY_CACHE_GATE_BUSINESS_SHA256, ...CACHE_GATE_DIAGNOSTIC_BINDINGS.keys(), ...CACHE_GATE_DIAGNOSTIC_BINDINGS.values()]
+    .includes(TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate.sha256));
 });
 
 test("participant refresh builder accepts the pinned business source and rejects diagnostic or arbitrary source drift", () => {
   const current = fs.readFileSync(path.join(REAL_SOURCE_DIR, 'fn_cache_gate_v2.js'), 'utf8');
-  const business = cacheGateBusinessSource(current);
+  const currentBusiness = cacheGateBusinessSource(current);
+  const business = execFileSync('git', ['show', '91b016eb84be8269abc2b21d05a791dbfb87f4c3:scripts/nodered_tournament_participants_nodes/fn_cache_gate_v2.js'], { encoding: 'utf8' });
+  assert.equal(sha256(business), LEGACY_CACHE_GATE_BUSINESS_SHA256);
   const { flow, contract, sources } = fixture();
-  contract.sources.cacheGate = { ...TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate };
+  contract.sources.cacheGate = { ...TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate, sha256: LEGACY_CACHE_GATE_BUSINESS_SHA256 };
   const before = structuredClone(flow);
   const result = buildTournamentParticipantRefreshCandidate(structuredClone(flow), contract.wholeFlowSha256, contract,
     { ...sources, cacheGate: business });
   assert.equal(result.candidate.find(node => node.id === contract.ids.cacheGate).func, business);
   assert.deepEqual(flow, before);
-  for (const cacheGate of [current, business + '\n// business drift']) {
+  for (const cacheGate of [current, ...(sha256(currentBusiness) === LEGACY_CACHE_GATE_BUSINESS_SHA256 ? [] : [currentBusiness]), business + '\n// business drift']) {
     assert.throws(() => buildTournamentParticipantRefreshCandidate(flow, contract.wholeFlowSha256, contract,
       { ...sources, cacheGate }), /Approved source missing or drifted: cacheGate/);
     assert.deepEqual(flow, before);
   }
   assert.throws(() => cacheGateBusinessSource(current + '\n// diagnostic drift'));
+});
+
+
+test('current reviewed cache contract accepts its exact business bytes and rejects observer or arbitrary drift', () => {
+  const current = fs.readFileSync(path.join(REAL_SOURCE_DIR, 'fn_cache_gate_v2.js'), 'utf8');
+  const { flow, contract, sources } = fixture();
+  const registered = TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate;
+  const business = cacheGateBusinessSource(current);
+  assert.equal(sha256(business), registered.sha256);
+  contract.sources.cacheGate = { ...registered };
+  const result = buildTournamentParticipantRefreshCandidate(structuredClone(flow), contract.wholeFlowSha256, contract,
+    { ...sources, cacheGate: business });
+  assert.equal(result.candidate.find(node => node.id === contract.ids.cacheGate).func, business);
+  for (const cacheGate of [current, business + '\n// drift']) {
+    assert.throws(() => buildTournamentParticipantRefreshCandidate(flow, contract.wholeFlowSha256, contract,
+      { ...sources, cacheGate }), /Approved source missing or drifted: cacheGate/);
+  }
+});
+
+
+test('registered marker successor changes only the reviewed busy-key response in business bytes', () => {
+  const legacy = execFileSync('git', ['show', '91b016eb84be8269abc2b21d05a791dbfb87f4c3:scripts/nodered_tournament_participants_nodes/fn_cache_gate_v2.js'], { encoding: 'utf8' });
+  const before = '    : { error: errorMessage, retryAfterMs: boundedRetryAfterMs };';
+  const after = `    : {
+      error: errorMessage,
+      retryAfterMs: boundedRetryAfterMs,
+      // Cross-origin Tilda cannot rely on access to the cache response header.
+      ...(!isManualRefresh && cacheState === "busy-key" ? { code: "PARTICIPANTS_BUSY_KEY" } : {}),
+    };`;
+  assert.equal(legacy.split(before).length, 2);
+  const current = fs.readFileSync(path.join(REAL_SOURCE_DIR, 'fn_cache_gate_v2.js'), 'utf8');
+  assert.equal(cacheGateBusinessSource(current), legacy.replace(before, after));
+});
+
+test("default disk source loader derives only the pinned coalescing business bytes", () => {
+  const { flow, contract } = fixture();
+  contract.sources = TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources;
+  const before = structuredClone(flow);
+  // No providedSources override: exercise the same disk-loading path as the CLI publisher.
+  const result = buildTournamentParticipantRefreshCandidate(structuredClone(flow), contract.wholeFlowSha256, contract);
+  const cache = result.candidate.find(node => node.id === contract.ids.cacheGate).func;
+  assert.equal(sha256(cache), "c3ee07fdcbdad0afa7b3258b4cf51f0f65b78086fe8a70f102ee153b4890568c");
+  assert.equal(cache.includes("lkDiagnostic("), false);
+  assert.deepEqual(flow, before);
 });
