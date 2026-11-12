@@ -44,7 +44,7 @@ test('schema excludes arbitrary secret/PII/control strings, objects, getters and
   assert.equal(sanitizeEvent({ ...base(), schemaVersion: 2 }), null);
 });
 test('exact production source routes, queries and negative lookalikes map to bounded templates', () => {
-  for (const path of ['/lk/subscriptions/game-price-preview', '/lk/tournaments/referral-subscription/purchase', '/lk/tournaments/referral-subscription/confirm', '/lk/tournaments/participants', '/lk/analytics/auth-consents']) {
+  for (const path of ['/lk/subscriptions/game-price-preview', '/lk/tournaments/referral-subscription/purchase', '/lk/tournaments/referral-subscription/confirm', '/lk/tournaments/summer-subscription/purchase', '/lk/tournaments/participants', '/lk/analytics/auth-consents']) {
     assert.equal(routeTemplate(path), path); assert.equal(routeTemplate(`${path}?secret=hidden`), path);
     assert.equal(routeTemplate(`${path}/wrong`), 'UNKNOWN');
   }
