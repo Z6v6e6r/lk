@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { createHash } from 'node:crypto';
 import { createDiagnostics } from '../diagnostics/runtime.mjs';
+import { previewEmptyTariffFacts } from '../diagnostics/preview-empty-tariffs.mjs';
+import { sanitizeEvent } from '../../src/utils/errorDiagnosticsCore.mjs';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
 import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, composeSubscriptionPreviewServerTimeArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
@@ -213,22 +216,26 @@ test('exercise diagnostics do not mask explicit read errors or the overall timeo
 
 // Run the actual router and final with the booking graph's list helpers, without
 // a private production flow or any provider/database access.
-function tariffDiagnostic(payload, overrides = {}) {
+function tariffDiagnostic(payload, overrides = {}, options = {}) {
   const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
   const bookingSource = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
-  const roots = ['extractItems', 'hasCompleteBookingList', 'isObj'];
+  const roots = ['extractItems', 'hasCompleteBookingList', 'isObj', 'resolveCategory', 'eventStartsAt'];
   const helpers = extractSubscriptionPricePreviewSource({ source: bookingSource, roots }).source;
   const canonical = new Function(`${helpers}; return {${roots.join(',')}};`)();
   canonical.identityMoneyOwned = () => assert.fail('Tariff diagnostics must not reach ownership evaluation');
   const url = `https://api.vivacrm.ru/end-user/api/v2/fixture/products/one-times?exerciseId=${exerciseId}`;
-  const ctx = { step: 'groupTariff', exerciseId, tenantKey: 'fixture', eventCategory: 'GROUP_TRAINING', requestedIds: [] };
+  const ctx = { step: 'groupTariff', exerciseId, tenantKey: 'fixture', eventCategory: 'GROUP_TRAINING', requestedIds: [],
+    exercise: { id: exerciseId, typeId: 605, timeFrom: target.startsAt }, target: { startsAt: target.startsAt }, ...options.ctx };
+  const diagnosticEvents = [];
+  const observer = Object.hasOwn(options, 'observer') ? options.observer : createDiagnostics({ sink: event => diagnosticEvents.push(event) });
+  const global = { get: () => observer };
   const msg = { _msgid: 'fixture-correlation', _subscriptionPricePreview: ctx, payload, statusCode: 200,
+    req: { path: '/lk/subscriptions/game-price-preview', method: 'POST' },
     method: 'GET', url, responseUrl: url, ...overrides };
-  const outputs = new Function('msg', 'canonical', source('router'))(msg, canonical);
+  const outputs = new Function('msg', 'canonical', 'global', source('router'))(msg, canonical, global);
   assert.equal(outputs[4], msg);
   const warnings = [];
-  const diagnosticEvents = [];
-  new Function('msg', 'node', 'global', source('final'))(msg, { warn: text => warnings.push(JSON.parse(text)) }, { get: () => createDiagnostics({ sink: event => diagnosticEvents.push(event) }) });
+  new Function('msg', 'node', 'global', source('final'))(msg, { warn: text => warnings.push(JSON.parse(text)) }, global);
   return { msg, ctx, warnings, diagnosticEvents };
 }
 
@@ -278,6 +285,137 @@ test('other tariff refusals retain their verdict and distinguish unknown count f
   assert.deepEqual(accepted.msg.payload.quotes, []);
   assert.ok(Number.isSafeInteger(accepted.msg.payload.serverTimeMs));
   assert.deepEqual(accepted.warnings, []);
+});
+
+const emptyTariffEvent = result => result.diagnosticEvents.find(e => e.stage === 'preview_router' && e.reason === 'empty_tariff_list');
+test('empty tariff diagnostics describe complete reply shapes and preserve the exact refusal', () => {
+  for (const [payload, shape, count, shadowed, alternate] of [
+    [[], 'ROOT_ARRAY', 1, false, false],
+    [{ content: [] }, 'DIRECT_ARRAY', 1, false, false],
+    [{ data: { items: [], totalElements: 0 } }, 'NESTED_ARRAY', 1, false, false],
+    [{ result: { payload: { records: [] } } }, 'NESTED_ARRAY', 1, false, false],
+    [{ content: [], data: { content: [{ privateValue: 'fixture-sensitive' }] } }, 'DIRECT_ARRAY', 2, true, false],
+    [{ content: [], products: [{ privateValue: 'fixture-sensitive' }] }, 'DIRECT_ARRAY', 1, false, true],
+  ]) {
+    const result = tariffDiagnostic(payload);
+    const event = emptyTariffEvent(result);
+    assert.ok(event);
+    assert.equal(event.upstreamStatus, 200);
+    assert.equal(event.responseKind, Array.isArray(payload) ? 'array' : 'object');
+    assert.equal(event.tariffListShape, shape);
+    assert.equal(event.tariffRecognizedArrayCount, count);
+    assert.equal(event.tariffShadowedNonemptyArray, shadowed);
+    assert.equal(event.tariffAlternateNonemptyArray, alternate);
+    assert.equal(event.tariffCompleteListGuardPassed, true);
+    assert.equal(event.tariffExtractedEmpty, true);
+    assert.equal(event.tariffShapeScanTruncated, false);
+    assert.equal(event.tariffShapeScanFailed, false);
+    for (const key of ['tariffRequestScopeMatch', 'tariffTenantScopeMatch', 'tariffExerciseScopeMatch',
+      'tariffMethodMatch', 'tariffResponseUrlPresent', 'tariffResponseScopeMatch', 'tariffEventIdentityMatch',
+      'tariffEventCategoryMatch', 'tariffEventStartMatch']) assert.equal(event[key], true, key);
+    assert.deepEqual(result.msg.payload, { error: { code: 'LK1_EVENT_TARIFF_AMBIGUOUS', details: {
+      exerciseId, tariffCount: 0, reason: 'empty_tariff_list', stage: 'tariff_shape', observed: {},
+    } } });
+    assert.equal(result.msg.statusCode, 503);
+    assert.equal(result.ctx.basePriceMinor, undefined);
+    const serialized = JSON.stringify(result.diagnosticEvents);
+    for (const privateValue of ['fixture-sensitive', exerciseId, 'api.vivacrm.ru', 'exerciseId=', 'fixture-correlation']) {
+      assert(!serialized.includes(privateValue), privateValue);
+    }
+    assert(!JSON.stringify(result.msg.payload).includes('correlationHash'));
+  }
+});
+test('empty tariff evidence keeps missing response provenance and binding evidence unknown', () => {
+  const result = tariffDiagnostic([], { responseUrl: undefined, statusCode: '204' }, { ctx: { exercise: undefined, target: undefined } });
+  const event = emptyTariffEvent(result);
+  assert.equal(result.msg.statusCode, 503);
+  assert.equal(event.tariffResponseUrlPresent, false);
+  for (const key of ['tariffResponseScopeMatch', 'tariffEventIdentityMatch', 'tariffEventCategoryMatch', 'tariffEventStartMatch', 'upstreamStatus']) {
+    assert.equal(event[key], undefined, key);
+  }
+  const mismatched = emptyTariffEvent(tariffDiagnostic([], {}, { ctx: {
+    exercise: { id: uuid(99), typeId: 1613, timeFrom: '2099-09-22T07:00:00+03:00' },
+  } }));
+  assert.equal(mismatched.tariffEventIdentityMatch, false);
+  assert.equal(mismatched.tariffEventCategoryMatch, false);
+  assert.equal(mismatched.tariffEventStartMatch, false);
+});
+test('empty tariff observation is absent for preceding guards, other refusals and accepted tariffs', () => {
+  for (const [payload, patch, code] of [
+    [[], { statusCode: 401 }, 'LK1_EVENT_TARIFF_UNAVAILABLE'],
+    [{ content: [], hasNext: true }, {}, 'LK1_EVENT_TARIFF_UNAVAILABLE'],
+    [{ products: [] }, {}, 'LK1_EVENT_TARIFF_UNAVAILABLE'],
+    [[], { responseUrl: 'https://other.invalid' }, 'LK1_EVENT_TARIFF_UNVERIFIED'],
+    [[], { method: 'POST' }, 'LK1_EVENT_TARIFF_UNVERIFIED'],
+    [[], { error: { code: 'ETIMEDOUT' } }, 'PRICE_PREVIEW_READ_FAILED'],
+    [[{}, {}], {}, 'LK1_EVENT_TARIFF_AMBIGUOUS'],
+    [[null], {}, 'LK1_EVENT_TARIFF_AMBIGUOUS'],
+    [[{ id: 'fixture-product', type: 'SERVICE', cost: 12345 }], {}, undefined],
+  ]) {
+    const result = tariffDiagnostic(payload, patch);
+    assert.equal(result.msg.payload.error?.code, code);
+    assert.equal(emptyTariffEvent(result), undefined);
+    assert(!result.diagnosticEvents.some(e => e.tariffExtractedEmpty !== undefined));
+  }
+});
+test('empty tariff correlation hashes are server-owned and join stages of one request only', () => {
+  const a = tariffDiagnostic([], { _msgid: 'fixture-sensitive',
+    _lkDiagnosticContext: { requestId: uuid(90) } });
+  const b = tariffDiagnostic([], { _msgid: 'fixture-sensitive' });
+  const event = emptyTariffEvent(a);
+  assert.match(event.correlationHash, /^c1:[a-f0-9]{64}$/);
+  assert.notEqual(event.requestId, uuid(90));
+  assert.equal(event.correlationHash, 'c1:' + createHash('sha256').update(`lk-preview-request-v1\0${event.requestId}`).digest('hex'));
+  assert.notEqual(event.correlationHash, emptyTariffEvent(b).correlationHash);
+  assert.ok(a.diagnosticEvents.length >= 3);
+  assert(a.diagnosticEvents.every(e => e.correlationHash === event.correlationHash));
+  const observer = createDiagnostics();
+  const safe = observer.clientEnvelope({ event: 'client_error', payload: { ...event, correlationHash: event.correlationHash } });
+  assert.equal(safe.payload.correlationHash, undefined, 'Client intake cannot claim a server correlation hash');
+  assert.equal(sanitizeEvent({ ...event, correlationHash: 'fixture-sensitive' }).correlationHash, undefined);
+  const hostile = sanitizeEvent({ ...event, tariffListShape: 'fixture-sensitive',
+    tariffShadowedNonemptyArray: 'fixture-sensitive', tariffRecognizedArrayCount: 'fixture-sensitive' });
+  assert.equal(hostile.tariffListShape, 'UNKNOWN');
+  assert.equal(hostile.tariffShadowedNonemptyArray, undefined);
+  assert.equal(hostile.tariffRecognizedArrayCount, undefined);
+});
+test('bounded shape inspection never reads rows/getters or claims absence after truncation', () => {
+  const fields = { code: 'PREVIEW_EMPTY_TARIFF_OBSERVED', reason: 'empty_tariff_list' };
+  const msg = payload => ({ payload, _subscriptionPricePreview: { step: 'groupTariff' } });
+  let touched = 0;
+  const payload = { content: [], data: {} };
+  Object.defineProperty(payload.data, 'items', { get() { touched++; throw Error('fixture-sensitive'); } });
+  const row = {};
+  Object.defineProperty(row, 'privateValue', { get() { touched++; throw Error('fixture-sensitive'); } });
+  payload.products = [row];
+  const safe = previewEmptyTariffFacts(msg(payload), 'preview_router', fields);
+  assert.equal(touched, 0);
+  assert.equal(safe.tariffAlternateNonemptyArray, true);
+  const cyclic = { content: [] }; cyclic.data = cyclic;
+  assert.equal(previewEmptyTariffFacts(msg(cyclic), 'preview_router', fields).tariffShapeScanFailed, false);
+  let deep = { products: [row] };
+  for (let i = 0; i < 20; i++) deep = { data: deep };
+  const truncated = previewEmptyTariffFacts(msg({ content: [], data: deep }), 'preview_router', fields);
+  assert.equal(truncated.tariffShapeScanTruncated, true);
+  assert.equal(truncated.tariffAlternateNonemptyArray, undefined);
+  assert.equal(truncated.tariffShadowedNonemptyArray, undefined);
+  const failed = previewEmptyTariffFacts(msg(new Proxy({}, { getOwnPropertyDescriptor() { throw Error('fixture-sensitive'); } })), 'preview_router', fields);
+  assert.equal(failed.tariffShapeScanFailed, true);
+  assert.equal(failed.tariffShadowedNonemptyArray, undefined);
+  assert(!JSON.stringify(failed).includes('fixture-sensitive'));
+});
+test('observer absence, inspection failure and synchronous/asynchronous sink failure preserve fail-closed response', async () => {
+  const expected = tariffDiagnostic([], {}, { observer: null }).msg.payload;
+  const options = [{ observer: null }, { observer: { observe() { throw Error('fixture-sensitive'); } } },
+    { observer: createDiagnostics({ sink() { throw Error('fixture-sensitive'); } }) },
+    { observer: createDiagnostics({ sink() { return Promise.reject(Error('fixture-sensitive')); } }) }];
+  for (const option of options) {
+    const result = tariffDiagnostic([], {}, option);
+    assert.deepEqual(result.msg.payload, expected);
+    assert.equal(result.msg.statusCode, 503);
+    assert.equal(result.ctx.basePriceMinor, undefined);
+  }
+  await new Promise(resolve => setImmediate(resolve));
 });
 
 test('successful preview publishes its own response clock without changing quotes or errors', () => {

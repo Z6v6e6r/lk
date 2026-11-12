@@ -11,6 +11,7 @@ export function schemaV1() {
   for (const key of ['sourceRelease', 'serverRelease', 'callerBuild', 'sourceHash']) properties[key] = { type: 'string', pattern: '^(?:UNKNOWN|[0-9a-f]{40}|[0-9a-f]{64})$' };
   for (const key of ['serverRequestId', 'logicalOperation', 'attemptReference']) properties[key] = id;
   for (const key of ['entityRef', 'operationRef', 'bindingRef', 'outboxRef']) properties[key] = { type: 'string', pattern: '^h1:[0-9a-f]{32}$' };
+  properties.correlationHash = { type: 'string', pattern: '^c1:[0-9a-f]{64}$' };
   return { $schema: 'https://json-schema.org/draft/2020-12/schema', title: 'PadlHub safe diagnostics v1', type: 'object', additionalProperties: false,
     required: ['schemaVersion', 'diagnosticEventId', 'eventKind', 'source', 'routeTemplate', 'method', 'stage', 'code', 'retriable', 'outcome'],
     allOf: [{ if: { properties: { eventKind: { not: { const: 'suppression' } } } }, then: { required: ['requestId'] } }], properties };
