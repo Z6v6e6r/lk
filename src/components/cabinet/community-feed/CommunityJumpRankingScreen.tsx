@@ -6,6 +6,7 @@ import { CommunitySecondaryNav, type CommunitySecondaryNavItemId } from './Commu
 import { CommunityBottomNav } from './CommunityBottomNav';
 import type { CommunityBottomNavItemId } from './feedTypes';
 import { fetchCommunityJumpRanking, formatJumpRankingTime, jumpGameUrl, type CommunityJumpRanking, type CommunityJumpRankingRow } from './communityJumpRanking';
+import { EXHIBITION_COMMUNITY_ID, buildExhibitionPushOptInUrl, exhibitionCommunityUrl } from '../../padel-jump/exhibition';
 import './community-jump-ranking.css';
 
 type Props = {
@@ -73,6 +74,7 @@ export function CommunityJumpRankingScreen({ community, profileKey, currentUserA
       <div className="community-jump-title"><h3>ПадлхАБ Jump</h3><p>Больше звёзд — выше место.</p></div>
       <details className="community-jump-rules"><summary>Как считается рейтинг</summary><p>Сначала сравниваем количество звёзд. При равенстве выше игрок с меньшим временем.</p></details>
       <a className="community-jump-play" href={jumpGameUrl(community.id)} target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="m8 4 12 8-12 8Z" /></svg>Играть</a>
+      {community.id === EXHIBITION_COMMUNITY_ID && <a className="community-jump-notify" href={buildExhibitionPushOptInUrl(exhibitionCommunityUrl(community.id), community.id)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></svg>Включить уведомления</a>}
       {!canHideSearch && <label className="community-jump-search"><span className="community-visually-hidden">Поиск игрока</span><input type="search" placeholder="Поиск игрока" aria-label="Поиск игрока" value={search} onChange={event => setSearch(event.target.value)} /></label>}
       {error && <p role="alert" className="community-jump-error">{error}{data ? ' Показаны последние полученные данные.' : ''}</p>}
       {loading && <p role="status" className="community-jump-note">{data ? 'Обновляем результат…' : 'Загружаем рейтинг Jump…'}</p>}

@@ -21,7 +21,3 @@
 .community-event-registration__legal { color: #6b6674; font-size: 12px; line-height: 1.45; }
 .community-event-registration__legal summary { cursor: pointer; }
 .community-event-registration__legal p { margin: 8px 0 0; }
-
-/* Member-facing push CTA in the community card. */
-.community-event-push__button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
-.community-event-push__button svg { flex: 0 0 18px; width: 18px; height: 18px; }
