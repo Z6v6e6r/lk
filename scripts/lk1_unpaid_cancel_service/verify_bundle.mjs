@@ -11,6 +11,8 @@ export const BUNDLE_FILES = [
   'lib/lk1LiveGatewayGuard.mjs',
   'lib/lk1FlowReadTokenAuth.cjs',
   'lib/lk1UnpaidScanCursor.mjs',
+  'lib/lk1FreeCancellation.mjs',
+  'lib/lk1FreeCancellationWorker.mjs',
   'package.json',
   'package-lock.json',
   'lk1-unpaid-cancel.service',

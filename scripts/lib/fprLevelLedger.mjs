@@ -375,7 +375,7 @@ export async function processFprLevelLedger(db, client, { context, config, nowIs
 }
 
 /** FPR projections are isolated from the legacy blind dispatcher and always use current canonical values. */
-export async function processFprProjectionOutbox(db, projectionUrl, nowIso, dryRun) {
+export async function processFprProjectionOutbox(db, projectionUrl, nowIso, dryRun, withRowLock = work => work()) {
   const rows = await db.collection('rating_projection_outbox').find({ fprProjection: true, attempts: { $lt: 30 }, $or: [
     { status: { $in: ['PENDING', 'FAILED_RETRYABLE'] }, nextAttemptAt: { $lte: nowIso } },
     { status: 'SENDING', projectionLeaseUntil: { $lte: nowIso } },
@@ -383,7 +383,13 @@ export async function processFprProjectionOutbox(db, projectionUrl, nowIso, dryR
     .sort({ createdAt: 1 }).limit(200).toArray();
   const result = { scanned: rows.length, synced: 0, superseded: 0, failed: 0 };
   if (dryRun) return result;
-  for (const row of rows) {
+  for (const candidate of rows) await withRowLock(async () => {
+    // The previous row's send may have allowed a roster initialization to supersede this one.
+    const row = await db.collection('rating_projection_outbox').findOne({ _id: candidate._id, $or: [
+      { status: { $in: ['PENDING', 'FAILED_RETRYABLE'] }, nextAttemptAt: { $lte: nowIso } },
+      { status: 'SENDING', projectionLeaseUntil: { $lte: nowIso } },
+    ] });
+    if (!row) return;
     const states = await db.collection('player_rating_state').find({ clientId: row.clientId }).limit(3).toArray();
     if (states.length !== 1) throw new Error('FPR_LEVEL_PROJECTION_IDENTITY_CONFLICT');
     const state = states[0];
@@ -391,13 +397,13 @@ export async function processFprProjectionOutbox(db, projectionUrl, nowIso, dryR
       const next = buildFprProjectionOutbox(state, nowIso);
       await db.collection('rating_projection_outbox').updateOne({ _id: row._id, status: row.status }, { $set: { status: 'SUPERSEDED', supersededBy: next.id, updatedAt: nowIso } });
       await db.collection('rating_projection_outbox').updateOne({ _id: next.id }, { $setOnInsert: next }, { upsert: true });
-      result.superseded++; continue;
+      result.superseded++; return;
     }
     const leaseOwner = crypto.randomUUID();
     const claim = await db.collection('rating_projection_outbox').updateOne({ _id: row._id, status: row.status,
       ...(row.status === 'SENDING' ? { projectionLeaseOwner: row.projectionLeaseOwner, projectionLeaseUntil: row.projectionLeaseUntil } : {}) },
     { $set: { status: 'SENDING', projectionLeaseOwner: leaseOwner, projectionLeaseUntil: new Date(Date.now() + 60000).toISOString() }, $inc: { attempts: 1 } });
-    if (claim.modifiedCount !== 1) continue;
+    if (claim.modifiedCount !== 1) return;
     const owned = { _id: row._id, status: 'SENDING', projectionLeaseOwner: leaseOwner };
     try {
       const beforeSend = await db.collection('player_rating_state').findOne({ _id: state._id });
@@ -406,7 +412,7 @@ export async function processFprProjectionOutbox(db, projectionUrl, nowIso, dryR
         await db.collection('rating_projection_outbox').updateOne({ _id: next.id }, { $setOnInsert: next }, { upsert: true });
         await db.collection('rating_projection_outbox').updateOne(owned, { $set: { status: 'SUPERSEDED', supersededBy: next.id, updatedAt: nowIso },
           $unset: { projectionLeaseOwner: '', projectionLeaseUntil: '' } });
-        result.superseded++; continue;
+        result.superseded++; return;
       }
       const response = await fetch(projectionUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(row.payload), signal: AbortSignal.timeout(20000) });
       const body = await response.json();
@@ -420,7 +426,7 @@ export async function processFprProjectionOutbox(db, projectionUrl, nowIso, dryR
         await db.collection('rating_projection_outbox').updateOne({ _id: next.id }, { $setOnInsert: next }, { upsert: true });
         await db.collection('rating_projection_outbox').updateOne(owned, { $set: { status: 'SUPERSEDED', supersededBy: next.id, updatedAt: nowIso },
           $unset: { projectionLeaseOwner: '', projectionLeaseUntil: '' } });
-        result.superseded++; continue;
+        result.superseded++; return;
       }
       await db.collection('rating_projection_outbox').updateOne(owned, { $set: { status: 'SYNCED', syncedAt: nowIso, updatedAt: nowIso },
         $unset: { projectionLeaseOwner: '', projectionLeaseUntil: '' } });
@@ -430,6 +436,6 @@ export async function processFprProjectionOutbox(db, projectionUrl, nowIso, dryR
         nextAttemptAt: new Date(Date.parse(nowIso) + 600000).toISOString(), updatedAt: nowIso }, $unset: { projectionLeaseOwner: '', projectionLeaseUntil: '' } });
       result.failed++;
     }
-  }
+  });
   return result;
 }

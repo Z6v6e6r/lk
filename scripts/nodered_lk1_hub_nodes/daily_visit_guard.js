@@ -87,7 +87,9 @@ if (ctx.step === "lk1_daily_visit_owner") {
     || owner.serviceDate !== ctx.serviceDate || owner.lk1?.decision?.subscriptionVisitCount !== 1) {
     return lk1Stop(ctx, "LK1_DAILY_VISIT_BINDING_INVALID");
   }
-  const released = owner.state === "RELEASED" && typeof owner.releasedAt === "string"
+  const returnedNative = typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(owner);
+  const existingGameLeave = owner.releaseSource === "GAME_LEAVE" && typeof owner.releaseOperationId === "string";
+  const released = (returnedNative || existingGameLeave) && owner.state === "RELEASED" && typeof owner.releasedAt === "string"
     && Number.isFinite(Date.parse(owner.releasedAt))
     && !owner.lk1?.transactionAttemptedAt && !owner.lk1?.visitJob
     && ((owner.bookingId && owner.releaseBookingId === owner.bookingId

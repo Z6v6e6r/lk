@@ -1,0 +1,82 @@
+{
+  "scripts/nodered_lk1_hub_nodes/gateway.js": [
+    [
+      "// HUB_STEPS",
+      "// lk1Free* pure protocol is embedded from lib/lk1FreeCancellation.mjs.\nconst lk1FreeServiceToken = () => {\n  try {\n    const token = toStr(readGlobal('vivacrm_access_token'));\n    const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));\n    return typeof claims.exp === 'number' && claims.exp * 1000 > Date.now() + 60_000 ? token : null;\n  } catch (_) { return null; }\n};\nconst lk1FreeApplyEffect = (ctx, effect) => {\n  if (effect.kind === 'reply') {\n    delete ctx.lk1FreeCancellation;\n    if (effect.status >= 400) return finishError(ctx, effect.status, effect.payload.message, effect.payload.details);\n    msg._subscriptionBooking = ctx; msg.statusCode = effect.status;\n    msg.headers = responseHeaders(); msg.payload = effect.payload;\n    return emit(OUTPUT_FINAL);\n  }\n  if (effect.kind === 'find') {\n    delete ctx.lk1FreeExpectedHttp;\n    return lk1Find(ctx, 'lk1_free_cancel_effect', effect.query);\n  }\n  if (effect.kind === 'update') {\n    delete ctx.lk1FreeExpectedHttp;\n    if (effect.change.$set?.phase === 'CANCEL_INTENT' && !lk1FreeServiceToken()) {\n      return lk1FreeApplyEffect(ctx, lk1FreeStep(ctx.lk1FreeCancellation, { error: true }));\n    }\n    ctx.step = 'lk1_free_cancel_effect'; msg._subscriptionBooking = ctx;\n    msg.payload = [effect.query, effect.change, effect.options]; delete msg.error;\n    return emit(OUTPUT_MONGO_UPDATE);\n  }\n  if (effect.kind === 'http') {\n    const token = lk1FreeServiceToken();\n    if (!token) return lk1FreeApplyEffect(ctx, lk1FreeStep(ctx.lk1FreeCancellation, { error: true }));\n    ctx.lk1FreeExpectedHttp = { method: effect.method, url: VIVA_API_BASE + effect.path };\n    return prepareHttp(ctx, 'lk1_free_cancel_effect', effect.method, VIVA_API_BASE + effect.path,\n      effect.body, { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' });\n  }\n  return lk1Stop(ctx, 'LK1_FREE_CANCEL_EFFECT_INVALID');\n};\nconst lk1FreeStart = (ctx, verifyOnly = false) => {\n  const begun = lk1FreeBegin({ tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,\n    bookingId: ctx.releaseBookingId, requestId: verifyOnly ? null : ctx.operationId, verifyOnly });\n  ctx.lk1FreeCancellation = begun.state;\n  return lk1FreeApplyEffect(ctx, begun.effect);\n};\nconst lk1FreePrewriteGate = (ctx, continuation) => {\n  ctx.lk1FreeGateContinuation = continuation;\n  return lk1Find(ctx, 'lk1_free_cancel_booking_gate', { kind: 'LK1_FREE_CANCEL_JOB_V1',\n    tenantKey: ctx.tenantKey, clientSubscriptionId: normalizeId(ctx.clientSubscriptionId),\n    phase: { $in: lk1FreePending } });\n};\n\n// HUB_STEPS\nif (ctx.step === 'lk1_profile_continue' && ctx.action === 'cancel-free') return lk1FreeStart(ctx);\nif (ctx.step === 'lk1_free_cancel_effect') {\n  if (!ctx.lk1FreeCancellation) return lk1Stop(ctx, 'LK1_FREE_CANCEL_CONTEXT_MISSING');\n  const expected = ctx.lk1FreeExpectedHttp;\n  const provenanceError = expected && (msg.method !== expected.method || msg.url !== expected.url || msg.responseUrl !== expected.url);\n  delete ctx.lk1FreeExpectedHttp;\n  return lk1FreeApplyEffect(ctx, lk1FreeStep(ctx.lk1FreeCancellation,\n    { payload: msg.payload, status: msg.statusCode, error: !!msg.error || !!provenanceError }));\n}\nif (ctx.step === 'lk1_free_cancel_booking_gate') {\n  if (msg.error || !Array.isArray(msg.payload)) return lk1Stop(ctx, 'LK1_FREE_CANCEL_GATE_READ_UNAVAILABLE');\n  if (msg.payload.length) return finishError(ctx, 409,\n    'Дождитесь подтверждения возврата посещения по отменяемой записи.', { code: 'LK1_FREE_CANCEL_RETURN_PENDING' });\n  const continuation = ctx.lk1FreeGateContinuation;\n  delete ctx.lk1FreeGateContinuation; ctx.lk1FreeGateCleared = true;\n  return continuation === 'booking' ? prepareBookingCreate(ctx) : preparePreaccept(ctx);\n}\n"
+    ],
+    [
+      "// A successor is selected by a later explicit click, never by a polling retry.\nconst lk1HttpRejoinIdentity = id => {\n  const match = typeof id === \"string\" && /^(lk-subscription-[a-z0-9]+)(?::rejoin:([1-9]\\d{0,3}))?$/.exec(id);\n  return match && Number(match[2] || 0) <= 1000\n    ? { base: match[1], generation: Number(match[2] || 0) } : null;\n};\nconst lk1HttpRejoinPrevious = id => {\n  const value = lk1HttpRejoinIdentity(id);\n  return value?.generation > 0\n    ? (value.generation === 1 ? value.base : `${value.base}:rejoin:${value.generation - 1}`) : null;\n};\nconst lk1HttpRejoinRequest = ctx => ctx.caller === \"http\" && ctx.action === \"book\";\nconst lk1SafeCancelledUnpaidSuccessor = operation => {\n  const proof = operation.lk1?.cancelledAllowanceRelease;\n  const checkout = operation.lk1?.checkout;\n  const intent = operation.lk1?.transactionIntent;\n  const identity = lk1HttpRejoinIdentity(operation.operationId);\n  const previousId = lk1HttpRejoinPrevious(operation.operationId);\n  return identity && identity.generation < 1000 && operation.state === \"RELEASED\"\n    && [\"group_training\", \"tournament\"].includes(operation.category)\n    && (operation.releaseReason === \"CANCELLED_UNPAID_BOOKING\" ? !operation.lk1?.unpaidCancellation\n      : operation.releaseReason === \"LK1_UNPAID_CHECKOUT_EXPIRED\"\n        && operation.lk1?.unpaidCancellation?.phase === \"CANCELLED\"\n        && operation.lk1.unpaidCancellation.verifiedAt === operation.releasedAt)\n    && operation.lk1?.decision?.subscriptionVisitCount === 0 && !operation.lk1?.visitJob\n    && proof?.schemaVersion === 1\n    && proof.proofId === operation.operationId && proof.bookingState === \"CANCELLED\"\n    && proof.transactionState === \"UNPAID_EXPIRED\" && proof.verifiedAt === operation.releasedAt\n    && Number.isFinite(Date.parse(proof.verifiedAt))\n    && proof.bookingId === operation.bookingId && proof.transactionId === checkout?.transactionId\n    && proof.transactionId === operation.lk1.transactionId\n    && intent?.bookingId === operation.bookingId && intent.actorClientId === operation.actorClientId\n    && Number.isSafeInteger(proof.amountMinor) && proof.amountMinor > 0\n    && proof.amountMinor === checkout.toPayMinor && proof.amountMinor === intent.chargeMinor\n    && proof.amountMinor === operation.lk1.decision.benefit?.finalPriceMinor\n    && (!operation.upstreamBookingId || operation.upstreamBookingId === operation.bookingId)\n    && operation.serviceDate === operation.lk1.target?.startsAt?.slice(0, 10)\n    && (!previousId || (operation.rejoinPredecessor?.rootOperationId === identity.base\n      && operation.rejoinPredecessor?.operationId === previousId));\n};\nif (ctx.step === \"lk1_http_rejoin_predecessor_find\") {\n  const previousId = lk1HttpRejoinPrevious(ctx.operationId);\n  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1\n    || !lk1HttpRejoinRequest(ctx) || !previousId\n    || !lk1ReplayIdentityMatches(ctx, msg.payload[0], previousId)\n    || !lk1SafeCancelledUnpaidSuccessor(msg.payload[0])) {\n    return lk1Stop(ctx, \"LK1_RELEASE_RECONCILIATION_REQUIRED\");\n  }\n  const previous = msg.payload[0];\n  ctx.lk1Rejoin = { operationId: previousId, rootOperationId: lk1HttpRejoinIdentity(ctx.operationId).base,\n    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease.proofId,\n    releasedAt: previous.releasedAt };\n  delete ctx.lk1IngressReplay;\n  ctx.step = \"lk1_profile_continue\";\n}\n",
+      "// A successor is selected by a later explicit click, never by a polling retry.\nconst lk1HttpRejoinIdentity = id => {\n  const match = typeof id === \"string\" && /^(lk-subscription-[a-z0-9]+)(?::rejoin:([1-9]\\d{0,3}))?$/.exec(id);\n  return match && Number(match[2] || 0) <= 1000\n    ? { base: match[1], generation: Number(match[2] || 0) } : null;\n};\nconst lk1HttpRejoinPrevious = id => {\n  const value = lk1HttpRejoinIdentity(id);\n  return value?.generation > 0\n    ? (value.generation === 1 ? value.base : `${value.base}:rejoin:${value.generation - 1}`) : null;\n};\nconst lk1HttpRejoinRequest = ctx => ctx.caller === \"http\" && ctx.action === \"book\";\nconst lk1SafeCancelledUnpaidSuccessor = operation => {\n  const proof = operation.lk1?.cancelledAllowanceRelease;\n  const checkout = operation.lk1?.checkout;\n  const intent = operation.lk1?.transactionIntent;\n  const identity = lk1HttpRejoinIdentity(operation.operationId);\n  const previousId = lk1HttpRejoinPrevious(operation.operationId);\n  return identity && identity.generation < 1000 && operation.state === \"RELEASED\"\n    && [\"group_training\", \"tournament\"].includes(operation.category)\n    && (operation.releaseReason === \"CANCELLED_UNPAID_BOOKING\" ? !operation.lk1?.unpaidCancellation\n      : operation.releaseReason === \"LK1_UNPAID_CHECKOUT_EXPIRED\"\n        && operation.lk1?.unpaidCancellation?.phase === \"CANCELLED\"\n        && operation.lk1.unpaidCancellation.verifiedAt === operation.releasedAt)\n    && operation.lk1?.decision?.subscriptionVisitCount === 0 && !operation.lk1?.visitJob\n    && proof?.schemaVersion === 1\n    && proof.proofId === operation.operationId && proof.bookingState === \"CANCELLED\"\n    && proof.transactionState === \"UNPAID_EXPIRED\" && proof.verifiedAt === operation.releasedAt\n    && Number.isFinite(Date.parse(proof.verifiedAt))\n    && proof.bookingId === operation.bookingId && proof.transactionId === checkout?.transactionId\n    && proof.transactionId === operation.lk1.transactionId\n    && intent?.bookingId === operation.bookingId && intent.actorClientId === operation.actorClientId\n    && Number.isSafeInteger(proof.amountMinor) && proof.amountMinor > 0\n    && proof.amountMinor === checkout.toPayMinor && proof.amountMinor === intent.chargeMinor\n    && proof.amountMinor === operation.lk1.decision.benefit?.finalPriceMinor\n    && (!operation.upstreamBookingId || operation.upstreamBookingId === operation.bookingId)\n    && operation.serviceDate === operation.lk1.target?.startsAt?.slice(0, 10)\n    && (!previousId || (operation.rejoinPredecessor?.rootOperationId === identity.base\n      && operation.rejoinPredecessor?.operationId === previousId));\n};\nconst lk1HttpReleaseAllowsRejoin = operation => {\n  if (lk1SafeCancelledUnpaidSuccessor(operation)) return true;\n  const identity = lk1HttpRejoinIdentity(operation.operationId);\n  const previous = lk1HttpRejoinPrevious(operation.operationId);\n  return identity && identity.generation < 1000\n    && typeof lk1FreeReturnedOperation === \"function\" && lk1FreeReturnedOperation(operation)\n    && (!previous || (operation.rejoinPredecessor?.rootOperationId === identity.base\n      && operation.rejoinPredecessor?.operationId === previous));\n};\nif (ctx.step === \"lk1_http_rejoin_predecessor_find\") {\n  const previousId = lk1HttpRejoinPrevious(ctx.operationId);\n  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1\n    || !lk1HttpRejoinRequest(ctx) || !previousId\n    || !lk1ReplayIdentityMatches(ctx, msg.payload[0], previousId)\n    || !lk1HttpReleaseAllowsRejoin(msg.payload[0])) {\n    return lk1Stop(ctx, \"LK1_RELEASE_RECONCILIATION_REQUIRED\");\n  }\n  const previous = msg.payload[0];\n  ctx.lk1Rejoin = { operationId: previousId, rootOperationId: lk1HttpRejoinIdentity(ctx.operationId).base,\n    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey,\n    releasedAt: previous.releasedAt };\n  delete ctx.lk1IngressReplay;\n  ctx.step = \"lk1_profile_continue\";\n}\n"
+    ],
+    [
+      "if (!lk1SafeCancelledUnpaidSuccessor(operation)) return lk1Stop(ctx, \"LK1_RELEASE_RECONCILIATION_REQUIRED\");",
+      "if (!lk1HttpReleaseAllowsRejoin(operation)) return lk1Stop(ctx, \"LK1_RELEASE_RECONCILIATION_REQUIRED\");"
+    ],
+    [
+      "const lk1ReleasedWithoutPayment = (operation) => {",
+      "const lk1ReleasedWithoutPayment = (operation) => {\n  if (typeof lk1FreeReturnedOperation === \"function\" && lk1FreeReturnedOperation(operation)) return true;"
+    ],
+    [
+      "operationId: previousId, releaseOperationId: previous.releaseOperationId,",
+      "operationId: previousId, releaseOperationId: previous.releaseOperationId || previous.lk1?.freeCancellationReturn?.jobKey,"
+    ]
+  ],
+  "scripts/nodered_lk1_hub_nodes/gateway_hooks.js": [
+    [
+      "} else if (ctx.action !== \"release\") {",
+      "} else if (![\"release\", \"cancel-free\"].includes(ctx.action)) {"
+    ],
+    [
+      "ctx.step = \"lk1_profile_continue\";",
+      "ctx.step = \"lk1_profile_continue\";\nif (ctx.action === \"cancel-free\") return lk1FreeStart(ctx);"
+    ]
+  ],
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js": [
+    [
+      "const prepareBookingCreate = (ctx) => {",
+      "const prepareBookingCreate = (ctx) => {\n  if (ctx.lk1?.decision?.subscriptionVisitCount === 1 && ctx.lk1FreeGateCleared !== true\n    && typeof lk1FreePrewriteGate === \"function\") return lk1FreePrewriteGate(ctx, \"booking\");"
+    ],
+    [
+      "const preparePreaccept = (ctx) => {",
+      "const preparePreaccept = (ctx) => {\n  if (ctx.lk1?.decision?.subscriptionVisitCount === 1 && ctx.lk1FreeGateCleared !== true\n    && typeof lk1FreePrewriteGate === \"function\") return lk1FreePrewriteGate(ctx, \"preaccept\");"
+    ],
+    [
+      "      serviceDate: ctx.serviceDate,\n      exerciseId: ctx.exerciseId,\n    });\n  }\n  let sameExerciseBooking",
+      "      serviceDate: ctx.serviceDate,\n      exerciseId: ctx.exerciseId,\n      $or: [{ bookingId: ctx.releaseBookingId }, { upstreamBookingId: ctx.releaseBookingId }],\n    });\n  }\n  let sameExerciseBooking"
+    ],
+    [
+      "  if (ctx.action === \"release\") {\n    if (ctx.managedSelfLeave && rows.length !== 1)",
+      "  if (ctx.action === \"release\") {\n    if (!ctx.managedSelfLeave && rows.length === 1 && typeof lk1FreeNativeOperation === \"function\"\n      && lk1FreeNativeOperation(rows[0])) return lk1FreeStart(ctx, true);\n    if (ctx.managedSelfLeave && rows.length !== 1)"
+    ]
+  ],
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js": [
+    [
+      "if (!['book', 'release'].includes(action)) {",
+      "if (!['book', 'release', 'cancel-free'].includes(action)) {"
+    ],
+    [
+      "if (action === \"release\" && !releaseBookingId) {",
+      "if ([\"release\", \"cancel-free\"].includes(action) && !releaseBookingId) {"
+    ],
+    [
+      "msg._subscriptionBooking = {\n  caller: \"http\",",
+      "if (action === \"cancel-free\" && (body.managedSelfLeave !== undefined || body.managedJoinV2 !== undefined\n  || Object.keys(body).some(key => ![\"action\", \"bookingId\", \"operationId\"].includes(key)))) {\n  return finish(400, \"Некорректный запрос отмены\", { code: \"LK1_FREE_CANCEL_REQUEST_INVALID\" });\n}\nmsg._subscriptionBooking = {\n  caller: \"http\","
+    ]
+  ],
+  "scripts/lib/eventPaymentSources.mjs": [
+    [
+      "export function hubGatewaySource() {",
+      "export function freeCancellationProtocolSource() {\n  return fs.readFileSync(new URL('./lk1FreeCancellation.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');\n}\nexport function hubGatewaySource() {"
+    ],
+    [
+      "return planRulesSource() + proTrainingExclusionSource()",
+      "return freeCancellationProtocolSource() + planRulesSource() + proTrainingExclusionSource()"
+    ]
+  ],
+  "scripts/nodered_lk1_hub_nodes/daily_visit_guard.js": [
+    [
+      "  const released = owner.state === \"RELEASED\"",
+      "  const returnedNative = typeof lk1FreeReturnedOperation === \"function\" && lk1FreeReturnedOperation(owner);\n  const existingGameLeave = owner.releaseSource === \"GAME_LEAVE\" && typeof owner.releaseOperationId === \"string\";\n  const released = (returnedNative || existingGameLeave) && owner.state === \"RELEASED\""
+    ]
+  ]
+}

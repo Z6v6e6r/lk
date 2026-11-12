@@ -6,6 +6,8 @@ import { createLk1VivaCancellationProvider, reconcileLk1UnpaidBooking,
 import { createLk1VivaServiceToken } from './lib/lk1VivaServiceToken.mjs';
 import { createLk1LiveGatewayGuard } from './lib/lk1LiveGatewayGuard.mjs';
 import { openLk1UnpaidScanCursor, scanLk1UnpaidPage } from './lib/lk1UnpaidScanCursor.mjs';
+import { lk1FreePending } from './lib/lk1FreeCancellation.mjs';
+import { createLk1FreeCancellationProvider, runLk1FreeCancellationJob } from './lib/lk1FreeCancellationWorker.mjs';
 
 const args = process.argv.slice(2);
 const value = name => { const index = args.indexOf(name); return index < 0 ? null : args[index + 1]; };
@@ -91,17 +93,22 @@ try {
       ? createLk1VivaServiceToken({ readConfig: async () => serviceEnvironment })
       : async () => (await readPrivateFile(tokenFile)).trim();
   const provider = createLk1VivaCancellationProvider({ token });
+  const freeProvider = createLk1FreeCancellationProvider({ token });
   async function scanPhase(phase, limit) {
     try {
       return await scanLk1UnpaidPage({ phase, limit, cursor, shouldStop,
         loadRows: afterId => {
-          const query = buildLk1UnpaidScanQuery({ tenantKey, cohortFrom: cutoffIso, afterId, phase });
+          const query = phase === 'FREE' ? { tenantKey, kind: 'LK1_FREE_CANCEL_JOB_V1',
+            phase: { $in: lk1FreePending }, ...(afterId ? { _id: { $gt: afterId } } : {}) }
+            : buildLk1UnpaidScanQuery({ tenantKey, cohortFrom: cutoffIso, afterId, phase });
           return operations.find(query).sort({ _id: 1 }).limit(limit).toArray();
         },
         visit: async op => {
           let result;
-          try { result = await reconcileLk1UnpaidBooking({ op, operations, provider, cohortFrom: cutoffIso,
-            mode, shouldStop }); }
+          try { result = phase === 'FREE'
+            ? mode === 'ENFORCE_NEW' ? await runLk1FreeCancellationJob({ job: op, operations,
+              provider: freeProvider, shouldStop }) : { state: 'FREE_CANCEL_SHADOW' }
+            : await reconcileLk1UnpaidBooking({ op, operations, provider, cohortFrom: cutoffIso, mode, shouldStop }); }
           catch (error) { result = { state: 'PRECHECK_REQUIRED',
             reason: /^[A-Z_]+$/.test(error?.message || '') ? error.message : 'READ_UNAVAILABLE' }; }
           if (result.state !== 'SKIPPED' || !['NOT_DUE', 'PAID'].includes(result.reason)) {
@@ -119,7 +126,8 @@ try {
     // Reconcile outstanding INTENT first. Together the two pages never exceed
     // 100 rows per cycle, while durable cursors survive PM2/worker restarts.
     const intents = await scanPhase('INTENT', 20);
-    if (!stopped) await scanPhase('UNCLAIMED', 100 - intents);
+    const free = stopped ? 0 : await scanPhase('FREE', 20);
+    if (!stopped) await scanPhase('UNCLAIMED', 100 - intents - free);
     if (args.includes('--once') || stopped) break;
     // A large cohort is traversed one bounded page per interval. Never burst
     // through the full history with unbounded Viva GET traffic.

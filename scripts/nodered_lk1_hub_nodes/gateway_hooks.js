@@ -216,7 +216,7 @@ if (internalCreate) {
     && typeof ctx.lk1CreateBinding.fingerprint === "string"
     && ctx.lk1CreateBinding.fingerprint === split.lk1CreateBinding.fingerprint;
   if (!before && !after) return lk1Stop(ctx, "LK1_CREATE_CONTINUATION_UNBOUND");
-} else if (ctx.action !== "release") {
+} else if (!["release", "cancel-free"].includes(ctx.action)) {
   if (!/^[A-Za-z0-9._:-]{8,200}$/.test(ctx.operationId || "")
     || typeof ctx.tenantKey !== "string" || !/^[A-Za-z0-9_-]+$/.test(ctx.tenantKey)) {
     return lk1Stop(ctx, "LK1_REQUEST_IDENTITY_INVALID");
@@ -227,6 +227,7 @@ if (internalCreate) {
   });
 }
 ctx.step = "lk1_profile_continue";
+if (ctx.action === "cancel-free") return lk1FreeStart(ctx);
 // The club co-pay needs one more server-owned number than the event tariff: the whole price
 // of the event's court window. It is proved before the ownership readback, so every later
 // step (including the stored fingerprint) prices the same target.
@@ -459,6 +460,8 @@ if (ctx.lk1 && ctx.action !== "release") {
       || (bookingClientId(booking) && normalizeId(bookingClientId(booking)) !== normalizeId(ctx.actorClientId)))) {
       return lk1Stop(ctx, "LK1_ACTOR_BOOKINGS_UNRESOLVED");
     }
+    ctx.lk1.cancellationSnapshot = { observedAt: ctx.bookingsObservedAt,
+      active: extractItems(activeBookingsPayload), history: extractItems(msg.payload) };
     ctx.lk1.bookings = bookings;
     ctx.lk1.activeBookings = mergeBookings(activeBookingsPayload, []).filter((booking) => !isInactiveBooking(booking));
     return lk1Find(ctx, "lk1_usage_operations", { tenantKey: ctx.tenantKey,

@@ -58,6 +58,7 @@ import {
 } from "./patch_live_lk1_topokraty_friendship_hotfix.mjs";
 import { clubMoneyFragment } from "./patch_live_lk1_topokraty_copay_hotfix.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
+import { restorePreCancelledAllowanceSource } from "./patch_live_cancelled_day_allowance.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -159,7 +160,7 @@ const POST_G1_FRIENDSHIP_DELTAS = Object.freeze([
 export function g1ReviewedSource(source, relative, pin, label) {
   if (sha256(source) === pin) return source;
   const compatibility = POST_G1_SPANISH_DELTAS[relative];
-  let historical = source;
+  let historical = restorePreCancelledAllowanceSource(source, relative);
   if (compatibility?.pin === pin && historical.split(compatibility.delta).length === 2) {
     historical = historical.replace(compatibility.delta, "");
   }
