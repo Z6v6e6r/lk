@@ -33,6 +33,17 @@ export function applyFreeCancellationOwnedSource(source, file) {
   for (const [before, after] of deltas[file] || []) source = freeReplace(source, before, after);
   return source;
 }
+// Dispatch must follow every daily-visit helper initializer it may call.
+export function moveFreeCancellationStepsAfterDailyHelpers(source) {
+  const steps = read('./nodered_lk1_hub_nodes/free_cancel.js').split('// FREE_CANCEL_STEPS\n')[1].trim();
+  const anchor = 'if (ctx.step === "lk1_daily_visit_claim") {';
+  let out = freeReplace(source, steps, '');
+  if (out.indexOf('const lk1DailyVisitReject =') < 0
+    || out.indexOf('const lk1DailyVisitReject =') > out.indexOf(anchor)) {
+    throw Error('Free cancellation daily helper order drift');
+  }
+  return freeReplace(out, anchor, steps + '\n\n' + anchor);
+}
 export function patchFreeCancellationRouter(source) {
   let out = source;
   const [helpers, steps] = read('./nodered_lk1_hub_nodes/free_cancel.js').split('// FREE_CANCEL_STEPS\n');
@@ -51,7 +62,7 @@ export function patchFreeCancellationRouter(source) {
   }
   out = freeReplace(out, 'if (ctx.step === "lk1_profile_continue") {',
     'if (ctx.step === "lk1_profile_continue") {\n  if (ctx.action === "cancel-free") return lk1FreeStart(ctx);');
-  return out;
+  return moveFreeCancellationStepsAfterDailyHelpers(out);
 }
 export function composeFreeCancellation(liveBytes, options = {}) {
   if (hash(liveBytes) !== (options.sourceSha ?? FREE_CANCEL_SOURCE)) throw Error('Free cancellation whole-flow drift');
