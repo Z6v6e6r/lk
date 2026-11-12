@@ -147,7 +147,8 @@ test('provider-error background continuation keeps internal failure but emits no
   assert.deepEqual(result.slice(0, 3), [null, null, null]);
   assert.equal(result[3].statusCode, 502);
   assert.deepEqual(warnings, [{ event: 'subscription_router_background_failed',
-    code: 'SUBSCRIPTION_ROUTER_BACKGROUND_FAILED', statusCode: 502 }]);
+    code: 'SUBSCRIPTION_ROUTER_BACKGROUND_FAILED', statusCode: 502,
+    step: 'token_confirm', originalError: 'VIVA_TOKEN_ERROR', correlationHash: null, correlationScope: 'WARNING_EVENT' }]);
   assert.ok(!JSON.stringify(warnings).includes('fixture-private'));
 });
 test('foreground provider-error continuation keeps original status, body and handles', () => {
@@ -262,7 +263,13 @@ test('successor source pins are exact while the deployed predecessor generation 
     const promo = JSON.parse(fs.readFileSync(new URL('../subscription_friendship_promo_generation.json', import.meta.url)));
     const successor = promo.targets.find(item => item.id === target.id);
     if (successor) assert.equal(successor.preimageSha256, target.candidateSha256);
-    const currentHash = successor?.candidateSha256 ?? target.candidateSha256;
+    const diagnostic = JSON.parse(fs.readFileSync(new URL('../subscription_router_diagnostic_generation.json', import.meta.url)));
+    const diagnosticSuccessor = diagnostic.targets.find(item => item.id === target.id);
+    let currentHash = successor?.candidateSha256 ?? target.candidateSha256;
+    if (diagnosticSuccessor) {
+      assert.equal(diagnosticSuccessor.preimageSha256, currentHash);
+      currentHash = diagnosticSuccessor.candidateSha256;
+    }
     assert.equal(sha(fs.readFileSync(new URL('../' + target.source, import.meta.url))), currentHash);
     assert.equal(newestReviewedSourceSha256(target.fileName), currentHash);
   }
