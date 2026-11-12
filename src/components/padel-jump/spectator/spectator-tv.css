@@ -41,7 +41,7 @@
 
 /* Live games */
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-live-area{display:flex;flex-direction:column;min-height:0;min-width:0}
-.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-courts{--ph-area-w:calc(1920 * var(--u) - 96 * var(--u) - 36 * var(--u) - var(--ph-side));--ph-area-h:calc(1080 * var(--u) - 104 * var(--u) - 92 * var(--u) - 36 * var(--u) - 44 * var(--u));--ph-head:calc(92 * var(--u));--ph-card-w:min(calc((var(--ph-area-w) - (var(--ph-fields, 1) - 1) * var(--ph-gap)) / var(--ph-fields, 1)),calc((var(--ph-area-h) - var(--ph-head)) * 420 / 640));flex:1 1 auto;min-height:0;display:flex!important;justify-content:center;align-items:flex-start;gap:var(--ph-gap)}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-courts{--ph-area-w:calc(1920 * var(--u) - 96 * var(--u) - 36 * var(--u) - var(--ph-side));--ph-area-h:calc(1080 * var(--u) - 104 * var(--u) - 92 * var(--u) - 36 * var(--u) - 44 * var(--u) - var(--ph-roster-h, 0px));--ph-head:calc(92 * var(--u));--ph-card-w:min(calc((var(--ph-area-w) - (var(--ph-fields, 1) - 1) * var(--ph-gap)) / var(--ph-fields, 1)),calc((var(--ph-area-h) - var(--ph-head)) * 420 / 640));flex:1 1 auto;min-height:0;display:flex!important;justify-content:center;align-items:flex-start;gap:var(--ph-gap)}
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-courts .ph-player{width:var(--ph-card-w);max-width:none!important;flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:var(--ph-head) auto;grid-template-areas:"head balls" "court court";border-radius:calc(22 * var(--u));border:calc(2 * var(--u)) solid var(--ph-line);box-shadow:0 calc(10 * var(--u)) calc(30 * var(--u)) #2c154214}
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-player-heading{grid-area:head;padding:calc(14 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u)) calc(20 * var(--u));gap:calc(12 * var(--u));min-width:0}
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-person{min-width:0}
@@ -121,7 +121,23 @@
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-tv-cta strong{display:block;font-size:calc(40 * var(--u));line-height:1.1}
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-tv-cta div span{display:block;font-size:calc(28 * var(--u));opacity:.92}
 .ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-tv-page{margin-left:auto;font-size:calc(22 * var(--u));opacity:.85;white-space:nowrap}
+/* More players than fields: a roster strip keeps everyone on screen. */
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-roster="1"]{--ph-roster-h:calc(122 * var(--u))}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster{flex:0 0 auto;margin-top:calc(14 * var(--u))}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-title{margin:0 0 calc(8 * var(--u));font-size:calc(20 * var(--u));font-weight:700;color:var(--ph-muted);letter-spacing:.04em;text-transform:uppercase}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(var(--ph-roster-cols,8),minmax(0,1fr));gap:calc(8 * var(--u))}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-chip{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;align-items:center;column-gap:calc(8 * var(--u));height:calc(66 * var(--u));padding:calc(6 * var(--u)) calc(14 * var(--u));border-radius:calc(14 * var(--u));background:var(--ph-surface);border:calc(2 * var(--u)) solid var(--ph-line)}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-chip.is-visible{border-color:var(--ph-purple);background:var(--ph-soft)}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-chip.is-finished{opacity:.6}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-name{grid-column:1;font-size:calc(23 * var(--u));font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-meta{grid-column:1;font-size:calc(15 * var(--u));color:var(--ph-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-balls{grid-column:2;grid-row:1/3;display:flex;align-items:center;gap:calc(6 * var(--u));font-size:calc(30 * var(--u));font-variant-numeric:tabular-nums}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-balls .ph-ball{width:calc(20 * var(--u));height:calc(20 * var(--u))}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-balls .ph-ball::before,.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-balls .ph-ball::after{width:calc(11 * var(--u));height:calc(18 * var(--u))}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-balls .ph-ball::before{left:calc(-6 * var(--u))}.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-roster-balls .ph-ball::after{right:calc(-6 * var(--u))}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-roster="2"] .ph-live-note{display:none}
+.ph-jump-spectator[data-tv]:not(#ph-tv-stage) .ph-screen[data-roster="2"]{--ph-roster-h:calc(196 * var(--u) - 44 * var(--u))}
 /* Outside the TV stage: demo labels stay readable, TV-only parts stay out. */
 .ph-jump-spectator .ph-demo-badge,.ph-jump-spectator .ph-player-demo{display:inline-block;padding:3px 10px;border-radius:999px;background:#ffe9a8;color:#5c4300;font-size:12px;font-weight:700;white-space:nowrap}
 .ph-jump-spectator:not([data-tv]) .ph-player-demo{margin-left:auto;align-self:flex-start}
-.ph-jump-spectator:not([data-tv]) .ph-tv-connection,.ph-jump-spectator:not([data-tv]) .ph-tv-rating{display:none}
+.ph-jump-spectator:not([data-tv]) .ph-tv-connection,.ph-jump-spectator:not([data-tv]) .ph-tv-rating,.ph-jump-spectator:not([data-tv]) .ph-roster{display:none}

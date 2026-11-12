@@ -165,7 +165,7 @@ the board cannot be read. After 15s without any successful read (45s after a pre
 success) and with nobody playing, the TV shows labelled demonstration games
 (`demo-runs.mjs`: real engine and art, autopilot, “Демонстрация” badge and “Демо”
 tags). They never enter the rating and disappear on the next successful read.
-`?jumpDemo=1..5|loop` runs a fully offline wall (no network reads, sample rating) —
+`?jumpDemo=1..7|loop` (6 = seven players, 7 = sixteen — demo only, the live server admits at most 12) runs a fully offline wall (no network reads, sample rating) —
 used to record the stand's fallback videos.
 
 ## Checks

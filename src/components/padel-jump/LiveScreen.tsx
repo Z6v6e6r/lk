@@ -9,7 +9,7 @@ import './spectator/spectator-ui-extra.css';
 import './spectator/scoreboard.css';
 import './spectator/spectator-tv.css';
 
-const DEMO_SCENARIOS = new Set(['1', '2', '3', '4', '5', 'loop']);
+const DEMO_SCENARIOS = new Set(['1', '2', '3', '4', '5', '6', '7', 'loop']);
 
 /** `tv=1|0` forces the 16:9 stage; otherwise a landscape exhibition wall gets it automatically. */
 export function wantsTvStage(search: string, width: number, height: number, exhibition: boolean): boolean {

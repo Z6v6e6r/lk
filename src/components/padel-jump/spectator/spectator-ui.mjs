@@ -36,7 +36,7 @@ export function mountSpectatorView(root, {
       </header>
       <div class="ph-section-heading"><div class="ph-now-title"><h1>Пока никто не играет</h1><span class="ph-player-count" hidden>0</span></div><div class="ph-view-switch" role="group" aria-label="Вид табло"><button type="button" data-view="games" aria-pressed="true">Игры и рейтинг</button><button type="button" data-view="rating" aria-pressed="false">Только рейтинг</button></div></div>
       <main class="ph-content" data-layout="empty">
-        <section class="ph-live-area" aria-label="Текущие прохождения" hidden><div class="ph-player-picker" role="group" aria-label="Выбрать игрока"></div><div class="ph-courts"></div><p class="ph-live-note">Зрительский режим · движение показано приблизительно</p></section>
+        <section class="ph-live-area" aria-label="Текущие прохождения" hidden><div class="ph-player-picker" role="group" aria-label="Выбрать игрока"></div><div class="ph-courts"></div><div class="ph-roster" hidden><p class="ph-roster-title"></p><ol></ol></div><p class="ph-live-note">Зрительский режим · движение показано приблизительно</p></section>
         <aside class="ph-standings" aria-label="Рейтинг сообщества"><div class="ph-standings-title"><h2>Рейтинг сообщества</h2><span>Лучший заезд каждого</span></div><table class="ph-ranking-table"><caption class="ph-sr-only">Подтверждённые результаты сообщества</caption><colgroup><col class="ph-col-place"><col><col class="ph-col-balls"><col class="ph-col-time"></colgroup><thead><tr><th scope="col">№</th><th scope="col">Игрок</th><th scope="col">Мячи</th><th scope="col">Время</th></tr></thead><tbody><tr><td colspan="4">Рейтинг загружается…</td></tr></tbody></table><p class="ph-ranking-rule">Больше мячей — выше место.<br>При равенстве — меньшее время.</p></aside>
         <section class="ph-tv-rating" aria-label="Рейтинг сообщества" hidden><div class="ph-tv-rating-head"><h2>Рейтинг сообщества</h2><p data-rating-note>Лучший заезд каждого · больше мячей — выше место</p></div><ol class="ph-podium"></ol><ol class="ph-tv-list"></ol><div class="ph-tv-cta"><span class="ph-ball" aria-hidden="true"></span><div><strong>Кто следующий?</strong><span>Открой ПадлхАБ Jump на телефоне и начни игру в сообществе</span></div><span class="ph-tv-page" data-rating-page></span></div></section>
         <section class="ph-empty-state" aria-label="Ожидание игроков"><div><h2>Кто следующий?</h2><p>Открой Jump на телефоне<br>и начни игру в сообществе.</p></div></section>
@@ -51,6 +51,7 @@ export function mountSpectatorView(root, {
   const cards = new Map(), canvasCards = new WeakMap();
   let order = [], visible = [], selectedIndex = 0, capacity = 1, view = 'games';
   let destroyed = false, raf = null, lastTick = -Infinity;
+  let rosterAt = -Infinity;
   let ratingRows = [], ratingPage = 0, rotation = null, ratingStatus = 'Рейтинг загружается…', ratingLoaded = false;
   const media = win.matchMedia('(prefers-reduced-motion: reduce)');
   const removers = [];
@@ -165,6 +166,7 @@ export function mountSpectatorView(root, {
     q('.ph-player-count').textContent = String(activeCount); q('.ph-player-count').hidden = !activeCount || view === 'rating';
     q('.ph-standings-title').hidden = view === 'rating';
     q('.ph-tv-rating').hidden = !tv || q('.ph-content').dataset.layout !== 'empty';
+    renderRoster();
     shell.dataset.layout = q('.ph-content').dataset.layout;
     shell.dataset.fields = String(visible.length);
     shell.style.setProperty('--ph-fields', String(Math.max(1, visible.length)));
@@ -187,8 +189,42 @@ export function mountSpectatorView(root, {
     c.error = true; const message = c.element.querySelector('.ph-court-message');
     message.textContent = 'Не удалось отобразить игру'; message.hidden = false; report(error, c.player.runId);
   }
+  // TV with more players than fields: everyone stays on screen as a compact chip.
+  function renderRoster() {
+    const roster = q('.ph-roster'), list = roster.querySelector('ol');
+    roster.hidden = !tv || order.length <= capacity || view !== 'games';
+    shell.dataset.roster = roster.hidden ? '0' : order.length > 8 ? '2' : '1';
+    if (roster.hidden) { list.replaceChildren(); return; }
+    roster.querySelector('.ph-roster-title').textContent = `Все в игре · ${order.length}`;
+    list.style.setProperty('--ph-roster-cols', String(Math.min(8, order.length)));
+    list.replaceChildren(...order.map(id => {
+      const c = cards.get(id), li = doc.createElement('li');
+      li.className = 'ph-roster-chip'; li.dataset.run = id;
+      li.classList.toggle('is-visible', visible.includes(id)); li.classList.toggle('is-finished', !!c.player.finished);
+      li.innerHTML = '<span class="ph-roster-name"></span><span class="ph-roster-meta"></span><span class="ph-roster-balls"><span class="ph-ball" aria-hidden="true"></span><b></b></span>';
+      li.querySelector('.ph-roster-name').textContent = c.player.name;
+      fillChip(li, c.last);
+      return li;
+    }));
+  }
+  function fillChip(li, s) {
+    li.querySelector('.ph-roster-meta').textContent = s && STATIONS[s.station] ? `${STATIONS[s.station].name} · ${s.section + 1}/3 · ♥${s.lives}` : 'в игре';
+    li.querySelector('.ph-roster-balls b').textContent = s ? String(s.score) : '—';
+  }
+  function refreshRoster(now) {
+    if (q('.ph-roster').hidden || now - rosterAt < 500) return;
+    rosterAt = now;
+    for (const li of q('.ph-roster ol').children) {
+      const c = cards.get(li.dataset.run); if (!c) continue;
+      // Hidden fields are sampled at 2Hz only for their confirmed numbers; no drawing.
+      if (!visible.includes(c.player.runId)) try { const frame = c.player.getFrame(now); if (frame?.confirmed) c.last = frame.confirmed; } catch (error) { report(error, c.player.runId); }
+      fillChip(li, c.last);
+      li.classList.toggle('is-finished', !!c.player.finished);
+    }
+  }
   function updateHud(c, frame) {
     const s = frame.confirmed;
+    if (s) c.last = s;
     const key = [s?.score, s?.lives, s?.elapsedMs, s?.status, s?.phase, s?.station, s?.section, frame.state, c.player.initialLives].join('|');
     if (key === c.hudKey) return; c.hudKey = key;
     if (s) {
@@ -260,6 +296,7 @@ export function mountSpectatorView(root, {
         } catch (error) { failCard(c, error); }
       }
     }
+    refreshRoster(now);
     raf = win.requestAnimationFrame(tick);
   }
   listen(doc, 'visibilitychange', () => {

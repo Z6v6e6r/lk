@@ -130,6 +130,8 @@ function runDemo(view, show, label) {
   const update = () => {
     const seconds = (performance.now() - startedAt) / 1000;
     const players = show.players(seconds);
+    // Keep runs on hidden fields moving too (their fields only sample, never step).
+    for (const run of players) run.frameAt(seconds);
     const nextKey = players.map(p => p.runId + (p.finished ? ':done' : '')).join(',');
     if (nextKey === key) return;
     key = nextKey;
