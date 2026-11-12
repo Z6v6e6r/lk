@@ -1190,8 +1190,9 @@ export default function TournamentSignupPage({
     if (cachedRoster && !options.force) return cachedRoster;
 
     const inFlight = publicRosterRequestsRef.current.get(normalizedExerciseId);
-    if (inFlight && !options.force) return inFlight;
-    if (inFlight) {
+    // Ordinary readers subscribe through the API coordinator, which owns transport
+    // sharing and independent cancellation. A page promise belongs to its old signal.
+    if (inFlight && options.force) {
       // An earlier GET may predate the refusal/cache invalidation. Wait for it,
       // then fetch again; concurrent forced callers share the newer request.
       await inFlight.catch(() => null);
