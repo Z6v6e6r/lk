@@ -13,7 +13,7 @@ const PHASES = ["PREPARED", "RESTART_INTENT", "SOAKING", "ROLLBACK_INTENT", "ROL
 // Every mutating entrypoint requires a live kernel-lock assertion. Production CLI
 // supplies /proc/locks verification; tests inject a fake lock and a fake PM2 adapter.
 // No automatic rollback/restart retry: uncertainty retains the durable shared lease.
-export function createSubscription409Installer({ root = ROOT, releases = RELEASES,
+export function createSubscription409Installer({ root = ROOT, releases = RELEASES, etcRoot = "/etc",
   uid = 0, gid = 0, machineSha256, assertLock, pm2, now = () => Date.now(),
   onTransition = () => {}, soakMs = 15 * 60_000, registrationTimeoutMs = 30_000, pollMs = 100,
   monotonic = () => performance.now(), wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
@@ -81,6 +81,18 @@ export function createSubscription409Installer({ root = ROOT, releases = RELEASE
     for (const f of c.preservedFiles) {
       assertProtectedFileModes(f.path, { uid, gid, modes: [0o600, 0o644] });
       check(sha(fs.readFileSync(f.path)) === f.sha256, "PRESERVED_SOURCE_DRIFT");
+    }
+    for (const pin of c.authFilePins || []) {
+      const base = pin.scope === "node-red" ? root : etcRoot;
+      check(typeof base === "string" && path.isAbsolute(base) && path.resolve(base) === base, "AUTH_SCOPE_INVALID");
+      const file = path.join(base, pin.relativePath);
+      // Every ancestor within the declared scope must be owned and non-writable
+      // by other users. realpath checks reject ancestor symlinks as well.
+      for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+        protectedDirectory(dir); if (dir === base) break;
+      }
+      assertProtectedFile(file, fileOptions);
+      check(sha(fs.readFileSync(file)) === pin.sha256, "AUTH_INPUT_DRIFT");
     }
     check(allowedSettings.includes(settingsHash(c)), "SETTINGS_DRIFT");
   };

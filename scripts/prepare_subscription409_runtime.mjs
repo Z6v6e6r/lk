@@ -36,6 +36,7 @@ export function packetContents({ settings, flow, metadata, release, artifacts, g
     installerSha256: sha(artifacts.installer), machineSha256: metadata.machineSha256,
     settingsMode: metadata.settingsMode,
     process: metadata.process, hooks: metadata.hooks, preservedFiles: metadata.preservedFiles,
+    ...(metadata.authFilePins === undefined ? {} : { authFilePins: metadata.authFilePins }),
     createdAtMs: metadata.collectedAtMs, coordinatedRestartApproved: metadata.coordinatedRestartApproved === true });
   return { "settings.before.js": settings, "settings.after.js": after, "observer.cjs": artifacts.bundle,
     "installer.cjs": artifacts.installer, "contract.json": Buffer.from(JSON.stringify(c)),

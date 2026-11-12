@@ -28,6 +28,7 @@ operator; files must be regular0600 single-link files:
   `flowSha256`, `machineSha256` (hash of raw `/etc/machine-id`),
   `process` (`pid`, `restartCount`, `status=online`), `hooks` (`router`, `finalize`
   function hashes), `preservedFiles` (exact paths/hashes of existing auth helpers),
+  `authFilePins` (private auth inputs: `{scope, relativePath, sha256}`),
   `collectedAtMs` and `coordinatedRestartApproved=true`.
 
 The last field attests an operator-agreed restart window with all competing
@@ -48,6 +49,31 @@ preserved on atomic publication and rollback, with strict owner/group/type/link
 checks. There is no preparatory chmod of production. Flow and all private
 backups, leases, receipts and artifacts remain protected0600. Unsupported modes
 or mode drift are refused instead of silently changing permissions.
+
+Auth dependency preparation includes code and runtime file inputs. The offline
+`inspectAuthDependencySyntax` helper accepts a pinned parser; it never evaluates
+settings/helper source. It supports the reviewed builtin-only helper layout,
+traces the zero-argument inline factory to its default file and the settings
+literal file read, and refuses unsupported loaders, aliases or file inputs.
+Keep the full graph, exact paths and input digests server-private. Public evidence
+contains counts, builtin names, Node/parser versions and an aggregate graph hash.
+Do not copy auth input values into a packet, archive, log or Git.
+
+`preservedFiles` continues to pin helper code under `/opt`. `authFilePins` adds
+strict0600 root-owned single-link inputs relative to either `node-red`
+(`/root/.node-red`) or `etc` (`/etc`). Empty/dot/traversal/absolute components,
+unknown scopes, duplicate pins, symlinks and writable/foreign ancestor directories
+are refused. The existing kernel-lock/source checks validate these inputs on
+apply, resume, finish and rollback, including after finish. A missing field keeps
+legacy contract behavior; a full-closure packet must explicitly include every
+observed private input. Builtin dependencies are bound to recorded Node runtime
+metadata and must be re-attested against the actual PM2 interpreter in the window.
+
+Auth-input drift during soak/recovery is a STOP that retains custody. The
+installer never restores, rotates, chmods or copies auth files. Resolve the changed
+condition with the owner; do not revert a rotated key or alter a durable contract
+to bypass rollback guards. In preparation without a window, retain approval=false
+in a non-executable proposal and omit canonical `contract.json`.
 
 The contract pins target, machine, source SHA, process identity, source/candidate
 settings, unchanged flow, enabled reachable hooks, preserved auth helpers, both

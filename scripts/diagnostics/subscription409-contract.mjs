@@ -15,6 +15,13 @@ export const validProcess = p => p?.status === "online" && Number.isSafeInteger(
 export const validRecoveryProcess = p => validProcess(p) || (["errored", "stopped"].includes(p?.status)
   && p.pid === 0 && Number.isSafeInteger(p.restartCount) && p.restartCount >= 0);
 export const transactionDirectory = (root, generation) => path.join(root, ".subscription409-transactions", generation);
+// Private auth configuration is hashed in place, never copied into packets or logs.
+// Scoped relative names avoid granting the installer an arbitrary absolute reader.
+export const validAuthFilePins = pins => pins === undefined || (Array.isArray(pins) && pins.length <= 64
+  && new Set(pins.map(p => `${p?.scope}:${p?.relativePath}`)).size === pins.length
+  && pins.every(p => ["node-red", "etc"].includes(p?.scope) && digest(p.sha256)
+    && typeof p.relativePath === "string" && p.relativePath.length <= 512
+    && p.relativePath.split("/").every(s => /^[A-Za-z0-9_.-]+$/.test(s) && s !== "." && s !== "..")));
 
 // A suffix preserves the entire existing settings body, including auth/middleware.
 // Verify BEFORE require: an untrusted artifact must not execute during startup.
@@ -38,7 +45,8 @@ export function validateContract(c) {
     || !validProcess(c.process) || !Number.isSafeInteger(c.createdAtMs)
     || ![0o600, 0o640, 0o644].includes(c.settingsMode)
     || c.coordinatedRestartApproved !== true || !Array.isArray(c.preservedFiles)
-    || c.preservedFiles.some(f => !digest(f.sha256) || !/^\/opt\/[A-Za-z0-9_./-]+$/.test(f.path) || f.path.includes("/../"))) {
+    || c.preservedFiles.some(f => !digest(f.sha256) || !/^\/opt\/[A-Za-z0-9_./-]+$/.test(f.path) || f.path.includes("/../"))
+    || !validAuthFilePins(c.authFilePins)) {
     throw Error("CONTRACT_INVALID");
   }
   return c;
