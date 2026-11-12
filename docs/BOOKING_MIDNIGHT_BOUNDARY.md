@@ -55,3 +55,22 @@ changed price/service date, or incorrect conflict/preflight binding. Stop method
 do not merge/deploy the candidate; any later release must use a fresh private live
 preimage and reviewed guarded contract. No real bookings, payments, business API
 probes or production mutations are part of this implementation.
+
+## Focused release preparation
+
+`prepare_booking_midnight_release.mjs` accepts a fresh verified private147
+workspace, a new private output directory, the clean source commit and an explicit
+full source SHA256. Four exact installed function hashes are additionally pinned.
+The candidate changes only preparation, split router, finalizer and preview router;
+all three installed split end expressions (durable approval fingerprint,
+prospective target and sole CREATE POST) move together. The observer initializer
+only rebinds fixed source/release identity, preserving its schema/runtime bundle,
+finalize and native libraries. The exact graph contract retains all other fields
+and nodes. Unknown source, function, observer or anchor drift fails closed.
+
+This preparer never imports, deploys or restarts anything. Actual activation uses
+the existing reviewed-flow runtime with protected backups, matching lock/lease,
+exact rollback and a15-minute soak. A pre-existing stopped worker is preserved;
+reactivating cancellation work is outside the no-business-actions release scope.
+For the current mixed frontend, use separate exact cabinet/games installed-source
+overlays and retain the other13 static hashes; never rebuild all of main over it.

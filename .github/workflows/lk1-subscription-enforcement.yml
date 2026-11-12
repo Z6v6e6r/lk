@@ -420,6 +420,7 @@ jobs:
           scripts/tests/subscriptionPricePreview.apiClient.test.mjs
           scripts/tests/subscriptionPricePreviewBackend.test.mjs
           scripts/tests/bookingMidnightBoundary.test.mjs
+          scripts/tests/bookingMidnightRelease.test.mjs
           scripts/tests/friendshipSpecialResidencyPreview.test.mjs
           scripts/tests/productionErrorCauses.test.mjs
           scripts/tests/subscriptionBookingConflictDiagnostics.test.mjs
