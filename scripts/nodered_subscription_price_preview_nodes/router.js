@@ -61,6 +61,52 @@ lkDiagnostic({ code: "STAGE_ENTER" });
 // Dedicated advisory graph. `canonical` consists only of source-bound helpers.
 const ctx = msg._subscriptionPricePreview;
 if (!ctx) return null;
+// Only called after the existing legacy guard has refused. Never rerun a resolver,
+// inspect provider rows, or put plan/product names or identity into diagnostics.
+const lkLegacyPlanDiagnostic = (plan, configured, name) => {
+  try {
+    const event = { event: 'subscription_price_preview_legacy_plan_refused', schemaVersion: 1,
+      code: 'PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED', stage: 'preview_router', step: 'next',
+      previewLegacyPlanVerdict: !plan ? 'NO_PLAN' : typeof plan === 'string' ? 'OPEN_GAME_EXCLUDED' : 'UNKNOWN',
+      previewLegacyRuleDisposition: 'UNKNOWN', previewLegacyResolverEvidence: !plan ? 'NO_RECOGNIZED_MARKER' : 'UNKNOWN',
+      previewTargetKind: 'UNKNOWN', previewLegacyOrigin: 'UNKNOWN',
+      previewLegacyRequestedCountBucket: 'UNKNOWN', previewLegacyFactsFailed: true };
+    try {
+      const own = (object, key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(object, key);
+        if (!descriptor) return undefined;
+        if (!Object.hasOwn(descriptor, 'value')) throw 0;
+        return descriptor.value;
+      };
+      const matched = own(configured, 'matched'), legacy = own(configured, 'legacy');
+      if (matched === false) event.previewLegacyRuleDisposition = 'NO_MATCH';
+      else if (matched === true && legacy === true) {
+        if (own(configured, 'stationLegacy') === true) event.previewLegacyRuleDisposition = 'STATION_EXCLUDED';
+        else {
+          const purchase = own(configured, 'purchaseDate'), cutoff = own(configured, 'enforceFrom');
+          if (own(configured, 'source') === 'PLAN' && typeof purchase === 'string'
+            && typeof cutoff === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(purchase)
+            && /^\d{4}-\d{2}-\d{2}$/.test(cutoff) && purchase < cutoff) {
+            event.previewLegacyRuleDisposition = 'SALE_BEFORE_CUTOFF';
+          }
+        }
+      } else if (matched === true && legacy === false) event.previewLegacyRuleDisposition = 'MANAGED';
+      const existing = own(ctx, 'existingGame');
+      event.previewTargetKind = existing === true ? 'EXISTING_GAME' : existing === false ? 'NEW_GAME' : 'UNKNOWN';
+      const requested = own(ctx, 'requestedIds'), quotes = own(ctx, 'quotes');
+      if (Array.isArray(requested)) {
+        const count = own(requested, 'length');
+        event.previewLegacyRequestedCountBucket = count === 1 ? 'ONE' : count > 1 ? 'MULTIPLE' : 'UNKNOWN';
+      }
+      if (Array.isArray(quotes)) event.previewLegacyPartialQuotesDiscarded = own(quotes, 'length') > 0;
+      if (typeof name === 'string') event.previewLegacyBoundNamePresent = name.trim().length > 0;
+      event.previewLegacyFactsFailed = false;
+    } catch { /* Missing/unreadable optional facts stay UNKNOWN; no exception text. */ }
+    // Dedicated info event also works when an installed scoped observer silently
+    // filters other codes. It does not duplicate the final refusal warning/count.
+    if (typeof node !== 'undefined' && typeof node.log === 'function') node.log(JSON.stringify(event));
+  } catch { /* Optional diagnostics cannot change the business verdict. */ }
+};
 // Event identity is checked again against Viva; caller input cannot select a game tariff.
 const eventCategory = ctx.eventCategory || (ctx.groupTraining ? 'GROUP_TRAINING' : null);
 const eventRoute = eventCategory === 'GROUP_TRAINING'
@@ -981,7 +1027,10 @@ while (ctx.step === 'next') {
       continue;
     }
     const plan = canonical.compatibilityPlanKey(canonical.resolvePlanKey(owned), { enabled: false });
-    if (!plan || !canonical.PLAN_CATEGORIES[plan]?.includes('open_game')) return stop('PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED');
+    if (!plan || !canonical.PLAN_CATEGORIES[plan]?.includes('open_game')) {
+      lkLegacyPlanDiagnostic(plan, configured, name);
+      return stop('PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED');
+    }
     const limit = canonical.resolveLimitMode(plan, ctx.target.startsAt.slice(0, 10));
     let conflict = false;
     for (const booking of ctx.bookings) {
