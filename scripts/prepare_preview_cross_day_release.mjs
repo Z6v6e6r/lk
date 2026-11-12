@@ -43,9 +43,10 @@ export function composePreviewCrossDayRelease(liveBytes, release) {
   const anchor = "  if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10))";
   const old = anchor + " return stop('PRICE_PREVIEW_CROSS_DAY_UNRESOLVED');";
   const end = '  // Function nodes do not expose Node.js URLSearchParams';
-  const a = tracked.indexOf(anchor), b = tracked.indexOf(end, a);
-  if (a < 0 || b < 0 || tracked.indexOf(anchor, a + 1) !== -1 || router.func.split(old).length !== 2) throw Error('PREVIEW_RELEASE_ANCHOR_DRIFT');
-  const branch = tracked.slice(a, b).trimEnd();
+  const diagnosticStart = "    // Derive bounded shape only.";
+  const a = tracked.indexOf(diagnosticStart), b = tracked.indexOf(end, a);
+  if (a < 0 || b < 0 || tracked.indexOf(diagnosticStart, a + 1) !== -1 || router.func.split(old).length !== 2) throw Error('PREVIEW_RELEASE_ANCHOR_DRIFT');
+  const branch = anchor + ' {\n' + tracked.slice(a, b).trimEnd();
   const prefix = `// Scoped PR350 diagnostic adapter; business preimage ${PREVIEW_RELEASE_ROUTER}.\nconst lkDiagnostic = (fields = {}) => {\n  try {\n    const observer = globalThis.${slot};\n    if (observer?.owner === '${owner}') observer.observe(msg, 'preview_router', fields);\n  } catch { /* Optional diagnostics never alter the guard. */ }\n};\n`;
   const original = router.func;
   router.func = prefix + original.replace(old, branch);

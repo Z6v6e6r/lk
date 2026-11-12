@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { verifyWorkspace } from './verify_nodered_source_origin.mjs';
+import { extractSubscriptionPricePreviewSource } from './lib/subscriptionPricePreviewSources.mjs';
 
 export const SOURCE_SHA = '7775475aea2436ca5d6ec26cdc6acc4c682556f05b71af2fb79f6e0c0edbcb71';
 export const AVAILABILITY_SHA = '9d99a77d9319c869ded3f8f05943a0bf00b4795a64fcb9aa6e7a275f02825df5';
@@ -20,6 +21,13 @@ export function replaceOnce(source, before, after) {
 }
 export function patchSources(source) {
   const out = { ...source };
+  const midnightHelper = extractSubscriptionPricePreviewSource({
+    source: fs.readFileSync(path.join(dir, 'nodered_games_nodes/fn_split_router.js'), 'utf8'),
+    roots: ['splitCreateEndDate'],
+  }).source;
+  for (const key of ['split', 'finalize']) {
+    if (!/const splitCreateEndDate =/.test(out[key])) out[key] = midnightHelper + '\n' + out[key];
+  }
   const start = 'const continueSplitAfterVerifiedPrice = (ctx) => {\n  if (ctx.action === "create") {';
   out.split = replaceOnce(out.split, start, start + '\n' + snippet('split_start'));
   const token = 'if (ctx.step === "token") {';
