@@ -20,7 +20,8 @@ import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscr
 import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
 import { UUID } from "./errorDiagnosticsCore.mjs";
-import { abortCause, diagnosticId, routeTemplate } from "./errorDiagnostics";
+import { gamePatchDiagnosticUrl } from "./gamePatchDiagnostics.mjs";
+import { abortCause, callerBuild, diagnosticId, routeTemplate } from "./errorDiagnostics";
 import type {
   BookingCancellationAction,
   BookingCancellationOptionsResponse,
@@ -4296,7 +4297,16 @@ export async function request<T>(
   url: string,
   options: RequestOptions = {},
 ): Promise<ApiResult<T>> {
-  try { options = { ...options, diagnosticContext: { logicalOperation: diagnosticId(), attempt: 0 } }; } catch { /* no crypto */ }
+  let diagnosticContext: RequestOptions["diagnosticContext"];
+  try {
+    const supplied = options.diagnosticContext;
+    const valid = supplied && typeof supplied.logicalOperation === "string" && UUID.test(supplied.logicalOperation) && Number.isSafeInteger(supplied.attempt)
+      && supplied.attempt >= 0 && supplied.attempt < 10000;
+    diagnosticContext = valid
+      ? { logicalOperation: supplied.logicalOperation, attempt: supplied.attempt }
+      : { logicalOperation: diagnosticId(), attempt: 0 };
+  } catch { /* Missing crypto or malformed diagnostic claims cannot stop the request. */ }
+  options = { ...options, diagnosticContext };
   const cacheConfig = resolveRequestCacheConfig(url, options);
 
   if (cacheConfig) {
@@ -7912,6 +7922,7 @@ async function writePadelGameRecord(
   requestOptions: {
     retries?: number;
     keepalive?: boolean;
+    diagnosticContext?: RequestOptions["diagnosticContext"];
   } = {},
 ): Promise<ApiResult<PadelGameRecord>> {
   const baseUrl = getServ2Origin() || "";
@@ -7931,6 +7942,7 @@ async function writePadelGameRecord(
       baseUrl,
       retries,
       keepalive,
+      diagnosticContext: requestOptions.diagnosticContext,
       body: JSON.stringify(payload),
     });
 
@@ -8417,13 +8429,20 @@ export async function apiUpdatePadelGameRecord(
     };
   }
 
+  let url = `/lk/games/${encodeURIComponent(normalizedGameId)}`;
+  let diagnosticContext: RequestOptions["diagnosticContext"];
+  try {
+    diagnosticContext = { logicalOperation: diagnosticId(), attempt: 0 };
+    url = gamePatchDiagnosticUrl(url, { callerBuild: callerBuild(), logicalOperation: diagnosticContext.logicalOperation });
+  } catch { /* No diagnostic failure may prevent a mutation. */ }
+
   const writeResult = await writePadelGameRecord(
-    [{ url: `/lk/games/${encodeURIComponent(normalizedGameId)}`, method: "PATCH" }],
+    [{ url, method: "PATCH" }],
     payload as unknown as Record<string, unknown>,
     normalizedGameId,
     payload.invite?.inviteUrl?.trim() || null,
     // Replaying a mutation cannot resolve a stale version or an ambiguous network outcome.
-    { retries: 0 },
+    { retries: 0, diagnosticContext },
   );
   if (writeResult.status === 409 && writeResult.error) {
     let conflictRecord: PadelGameRecord | null = null;
