@@ -15,3 +15,17 @@ test('the jump play action stays above the empty state and results', () => {
   assert.ok(refresh > results, 'refresh stays at the bottom of the ranking card');
   assert.match(css, /\.community-jump-play \{[^}]*margin-top: 16px/);
 });
+
+test('the notification bell sits under play, only for the exhibition, as a quieter action', () => {
+  const play = screen.indexOf('community-jump-play');
+  const notify = screen.indexOf('community-jump-notify', play);
+  const search = screen.indexOf('community-jump-search', notify);
+  assert.ok(notify > play, 'the bell must follow the play button');
+  assert.ok(search > notify, 'play and the bell stay above the search and results');
+  assert.match(screen, /community\.id === EXHIBITION_COMMUNITY_ID && <a className="community-jump-notify"/);
+  assert.match(screen, /buildExhibitionPushOptInUrl\(exhibitionCommunityUrl\(community\.id\), community\.id\)/);
+  assert.match(screen, /<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/);
+  assert.match(css, /\.community-jump-notify \{[^}]*border: 1px solid var\(--phr-line\)/);
+  assert.match(css, /\.community-jump-notify \{[^}]*background: var\(--phr-surface\)/);
+  assert.match(css, /\.community-jump-notify \{[^}]*margin-top: 8px/);
+});
