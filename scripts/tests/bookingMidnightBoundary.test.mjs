@@ -188,13 +188,45 @@ test('historical preflight composer carries a single midnight helper into both s
     finalize: read('nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js') };
   // Also cover the original uncomposed generation which had no closing helper.
   for (const input of [sources, { ...sources, split: routerSource.replace(
-    extractSubscriptionPricePreviewSource({ source: routerSource, roots: ['splitCreateEndDate'] }).source, '') }]) {
+    extractSubscriptionPricePreviewSource({ source: routerSource, roots: ['splitCreateEndDate'] }).source, '')
+      .replace('timeTo: `${splitCreateEndDate(ctx)}T${ctx.toTime}+03:00`,', 'timeTo: `${ctx.date}T${ctx.toTime}+03:00`,')
+      .replace('const targetEnd = `${splitCreateEndDate(ctx)}T${ctx.toTime}${ctx.toTime.length === 5 ? ":00" : ""}+03:00`;',
+        'const targetEnd = `${ctx.date}T${ctx.toTime}:00+03:00`;') }]) {
     const patched = patchSources(input);
+    const ctx = { action: 'create', step: 'ordinary_exact_price', paymentMode: 'one_time',
+      date: '2099-12-31', fromTime: '22:00', toTime: '00:00', durationMinutes: 120,
+      roomId: 'synthetic-court', studioId: 'synthetic-studio', verifiedRoomId: 'synthetic-court',
+      verifiedStudioId: 'synthetic-studio', token: 'synthetic-token', subServiceIds: ['synthetic-subservice'] };
+    const create = new Function('msg', 'global', 'env', patched.split)(
+      { _splitCtx: ctx, statusCode: 200, payload: { 'synthetic-subservice': { price: 8000 } } }, globals, env)[0];
+    assert.equal(create.method, 'POST');
+    assert.equal(create.url, 'https://api.vivacrm.ru/api/v1/exercises');
+    assert.equal(create.payload.timeTo, '2100-01-01T00:00+03:00');
+    assert.equal((Date.parse(create.payload.timeTo) - Date.parse(create.payload.timeFrom)) / 60000, 120);
+    const conflict = extract(patched.split, ['extractConflictExerciseId']).extractConflictExerciseId;
+    const exact = { conflictingExerciseId: 'synthetic-exercise', roomId: ctx.roomId,
+      timeFrom: '2099-12-31T22:00:00+03:00', timeTo: '2100-01-01T00:00:00+03:00' };
+    assert.equal(conflict({ conflicts: [exact] }, ctx), 'synthetic-exercise');
+    assert.equal(conflict({ conflicts: [{ ...exact, timeTo: '2099-12-31T00:00:00+03:00' }] }, ctx), null);
     for (const key of ['split', 'finalize']) {
       assert.equal(patched[key].split('const splitCreateEndDate =').length - 1, 1);
       const helper = extract(patched[key], ['splitCreateEndDate']).splitCreateEndDate;
       assert.equal(helper({ date: '2099-12-31', fromTime: '22:00', toTime: '00:00' }), '2100-01-01');
       new Function('msg', 'global', 'env', 'node', patched[key]);
     }
+  }
+});
+
+test('preflight composer rejects unknown or duplicate closing endpoint anchors', () => {
+  const sources = { split: routerSource,
+    gateway: read('nodered_subscription_booking_nodes/fn_subscription_booking_router.js'),
+    finalize: read('nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js') };
+  const post = 'timeTo: `${splitCreateEndDate(ctx)}T${ctx.toTime}+03:00`,';
+  const conflict = 'const targetEnd = `${splitCreateEndDate(ctx)}T${ctx.toTime}${ctx.toTime.length === 5 ? ":00" : ""}+03:00`;';
+  for (const split of [routerSource.replace(post, 'timeTo: unknownClosingEndpoint,'),
+    routerSource + '\n// ' + post, routerSource.replace(conflict, 'const targetEnd = unknownClosingEndpoint;'),
+    routerSource + '\n// timeTo: `${ctx.date}T${ctx.toTime}+03:00`,',
+    routerSource + '\n// const targetEnd = `${ctx.date}T${ctx.toTime}:00+03:00`;']) {
+    assert.throws(() => patchSources({ ...sources, split }), /closing endpoint anchor drift/);
   }
 });
