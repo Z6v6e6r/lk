@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { build, transformSync } from 'esbuild';
 import { parseEventRegistrationPolicy } from '../../src/services/community-policy.ts';
-import { EXHIBITION_COMMUNITY_ID, buildPushOptInUrl, readExhibitionBrandOverride } from '../../src/components/padel-jump/exhibition.ts';
+import { EXHIBITION_BRAND_LOGO_URL, EXHIBITION_COMMUNITY_ID, buildExhibitionLogoCandidates, buildPushOptInUrl, readExhibitionBrandOverride, resolveExhibitionHeroLogo } from '../../src/components/padel-jump/exhibition.ts';
 
 const require=createRequire(import.meta.url), React=require('react');
 const {renderToStaticMarkup}=require('react-dom/server');
@@ -33,6 +33,17 @@ async function formRenderer() {
   new Function('require','module','exports',compiled.outputFiles[0].text)(require,module,module.exports);
   return value=>renderToStaticMarkup(React.createElement(module.exports.EventRegistrationForm,{notice:value,onSubmit:async()=>null,onCancel(){}}));
 }
+
+test('exhibition emblem is bundled, overrides empty branding and stays first for the exhibition community',()=>{
+  assert.match(EXHIBITION_BRAND_LOGO_URL,/^data:image\/png;base64,[A-Za-z0-9+/=]+$/);
+  assert.ok(EXHIBITION_BRAND_LOGO_URL.length>20000);
+  assert.equal(resolveExhibitionHeroLogo(null),EXHIBITION_BRAND_LOGO_URL);
+  assert.equal(resolveExhibitionHeroLogo('  '),EXHIBITION_BRAND_LOGO_URL);
+  assert.equal(resolveExhibitionHeroLogo(' https://static.example/logo.png '),'https://static.example/logo.png');
+  const uploaded='https://api.example/logo.png';
+  assert.deepEqual(buildExhibitionLogoCandidates([uploaded],EXHIBITION_COMMUNITY_ID),[EXHIBITION_BRAND_LOGO_URL,uploaded]);
+  assert.deepEqual(buildExhibitionLogoCandidates([uploaded],'another-community'),[uploaded]);
+});
 
 test('perpetual exhibition questionnaire is the short form with phone, notification opt-in and collapsed legal notice',async t=>{
   const render=await formRenderer();

@@ -4,7 +4,6 @@ import {
   apiFetchCommunities,
   apiJoinCommunityByInvite,
   buildCommunityInviteLink,
-  buildCommunityLogoCandidates,
   communityErrorMessage,
   extractCommunityInviteCode,
   type CommunityRecord,
@@ -12,7 +11,7 @@ import {
   type EventRegistration,
 } from "../../utils/communityApi";
 import { EventRegistrationForm } from '../cabinet/EventRegistrationForm';
-import { EXHIBITION_COMMUNITY_ID, EXHIBITION_INVITE_HEADING, EXHIBITION_INVITE_NOTE, buildPushOptInUrl, isExhibitionInvite, readExhibitionBrandOverride } from '../padel-jump/exhibition';
+import { EXHIBITION_COMMUNITY_ID, EXHIBITION_INVITE_HEADING, EXHIBITION_INVITE_NOTE, buildPushOptInUrl, isExhibitionInvite, readExhibitionBrandOverride, resolveExhibitionHeroLogo } from '../padel-jump/exhibition';
 import { apiFetchProfile, type UserProfileType } from "../../utils/apiClient";
 import {
   CUSTOM_FIELD_IDS,
@@ -353,7 +352,7 @@ export default function CommunityJoinPage({
     return {
       heading: override.heading ?? EXHIBITION_INVITE_HEADING,
       note: EXHIBITION_INVITE_NOTE,
-      logoUrl: override.logoUrl ?? buildCommunityLogoCandidates(community)[0] ?? null,
+      logoUrl: resolveExhibitionHeroLogo(override.logoUrl),
     };
   }, [community, normalizedInviteCode]);
   const pushReturnUrl = useMemo(() => {

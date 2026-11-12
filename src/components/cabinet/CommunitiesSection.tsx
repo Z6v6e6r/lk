@@ -1,7 +1,7 @@
 import { BuySupscription } from "./BuySubscription";
 import { EventRegistrationForm } from './EventRegistrationForm';
 import { EventCommunityPanel } from './EventCommunityPanel';
-import { EXHIBITION_COMMUNITY_ID } from '../padel-jump/exhibition';
+import { EXHIBITION_COMMUNITY_ID, buildExhibitionLogoCandidates } from '../padel-jump/exhibition';
 import type { EventNotice, EventRegistration } from '../../utils/communityApi';
 import { useCommunityRatingMonth } from "./community-feed/useCommunityRatingMonth";
 import { AvatarImage } from "../UI/AvatarImage";
@@ -3624,16 +3624,20 @@ export function CommunitiesSection({
     }
   };
 
+  const getCommunityLogoCandidates = useCallback((community: CommunityRecord) => (
+    buildExhibitionLogoCandidates(buildCommunityLogoCandidates(community), community.id)
+  ), []);
+
   const getCommunityLogoSrc = useCallback((community: CommunityRecord) => {
-    const candidates = buildCommunityLogoCandidates(community);
+    const candidates = getCommunityLogoCandidates(community);
     const signature = candidates.join("|");
     const fallbackState = communityLogoFallbackById[community.id];
     const index = fallbackState?.signature === signature ? fallbackState.index : 0;
     return candidates[index] ?? null;
-  }, [communityLogoFallbackById]);
+  }, [communityLogoFallbackById, getCommunityLogoCandidates]);
 
   const handleCommunityLogoError = useCallback((community: CommunityRecord) => {
-    const candidates = buildCommunityLogoCandidates(community);
+    const candidates = getCommunityLogoCandidates(community);
     const signature = candidates.join("|");
     setCommunityLogoFallbackById((current) => {
       const fallbackState = current[community.id];
@@ -3650,7 +3654,7 @@ export function CommunitiesSection({
         },
       };
     });
-  }, []);
+  }, [getCommunityLogoCandidates]);
 
   const renderNodeFace = (community: CommunityRecord, isCompact = false) => {
     const palette = getNodePalette(community.name);
