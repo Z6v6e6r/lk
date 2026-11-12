@@ -96,9 +96,14 @@ const lkLegacyPlanDiagnostic = (plan, configured, name) => {
       const requested = own(ctx, 'requestedIds'), quotes = own(ctx, 'quotes');
       if (Array.isArray(requested)) {
         const count = own(requested, 'length');
-        event.previewLegacyRequestedCountBucket = count === 1 ? 'ONE' : count > 1 ? 'MULTIPLE' : 'UNKNOWN';
+        if (Number.isSafeInteger(count)) {
+          event.previewLegacyRequestedCountBucket = count === 1 ? 'ONE' : count > 1 ? 'MULTIPLE' : 'UNKNOWN';
+        }
       }
-      if (Array.isArray(quotes)) event.previewLegacyPartialQuotesDiscarded = own(quotes, 'length') > 0;
+      if (Array.isArray(quotes)) {
+        const count = own(quotes, 'length');
+        if (Number.isSafeInteger(count)) event.previewLegacyPartialQuotesDiscarded = count > 0;
+      }
       if (typeof name === 'string') event.previewLegacyBoundNamePresent = name.trim().length > 0;
       event.previewLegacyFactsFailed = false;
     } catch { /* Missing/unreadable optional facts stay UNKNOWN; no exception text. */ }

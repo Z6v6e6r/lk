@@ -421,6 +421,18 @@ test('legacy optional facts and unavailable/throwing sinks cannot change the ref
   assert.deepEqual(missing.info, []);
   const existing = legacyDiagnostic({ ctx: { existingGame: true, exercise: { availableClientSubscriptions: [{ id: legacySub }] } } });
   assert.equal(existing.info[0].previewTargetKind, 'EXISTING_GAME');
+  for (const field of ['requestedIds', 'quotes']) {
+    const array = new Proxy([], { getOwnPropertyDescriptor(target, key) {
+      if (key === 'length') return { configurable: false, enumerable: false, writable: true,
+        value: { valueOf() { assert.fail('Diagnostic length coercion executed'); } } };
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    } });
+    const result = legacyDiagnostic({ ctx: { [field]: array } });
+    assert.equal(result.msg.statusCode, 503);
+    assert.equal(result.info[0].previewLegacyFactsFailed, false);
+    if (field === 'requestedIds') assert.equal(result.info[0].previewLegacyRequestedCountBucket, 'UNKNOWN');
+    else assert.equal(result.info[0].previewLegacyPartialQuotesDiscarded, undefined);
+  }
 });
 
 test('legacy facts are allowlisted consistently by sanitizer and schema; spoofed values remain unknown', () => {
