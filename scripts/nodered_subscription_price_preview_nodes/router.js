@@ -479,6 +479,29 @@ if (ctx.step === 'catalog') {
   }
   return http('activeBookings', `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
 }
+// Extract the same collector as the write path. Older pinned generations keep
+// the existing single-page refusal below until both sources are upgraded.
+if (['activeBookings', 'historyBookings'].includes(ctx.step)
+  && typeof canonical.collectBookingPage === 'function' && ok()) {
+  if (ctx.step === 'activeBookings' && !ctx.bookingPages) ctx.activeObservedAt = new Date().toISOString();
+  const page = canonical.collectBookingPage(msg.payload, ctx.bookingPages, ctx.actorClientId, Date.now());
+  if (page.error) {
+    lkDiagnostic({ eventKind: 'audit', code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE',
+      operationStage: ctx.step, firstFailure: 'list_incomplete_or_unrecognized',
+      upstreamStatus: Number(msg.statusCode), httpStatus: 503, outcome: 'refused' });
+    return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+  }
+  if (!page.done) {
+    ctx.bookingPages = page.state;
+    const path = ctx.step === 'activeBookings' ? 'bookings?' : 'bookings/history?includeCanceled=true&';
+    const output = http(ctx.step, `/end-user/api/v2/${ctx.tenantKey}/${path}size=1000&page=${page.nextPage}`);
+    msg.requestTimeout = Math.max(1, Math.min(msg.requestTimeout,
+      20000 - (Date.now() - page.state.startedAt), 28000 - (Date.now() - ctx.startedAt)));
+    return output;
+  }
+  delete ctx.bookingPages;
+  msg.payload = page.payload;
+}
 if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
   const refuseBookings = firstFailure => {
     try {
@@ -509,7 +532,7 @@ if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
   })) return refuseBookings(firstFailure);
   if (ctx.step === 'activeBookings') {
     ctx.activePayload = msg.payload;
-    ctx.activeObservedAt = new Date().toISOString();
+    ctx.activeObservedAt ||= new Date().toISOString();
     return http('historyBookings', `/end-user/api/v2/${ctx.tenantKey}/bookings/history?includeCanceled=true&size=1000`);
   }
   ctx.cancellationSnapshot = { observedAt: ctx.activeObservedAt,
@@ -896,6 +919,11 @@ while (ctx.step === 'next') {
     timeFrom: ctx.target.startsAt, timeTo: new Date(Date.parse(ctx.target.startsAt) + ctx.target.durationMinutes * 60000).toISOString(),
     directionId: 4588, typeId: 1613, availableClientSubscriptions: [live] };
   if (!eventRoute && ['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field]))) return stop('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
+  // A proven date mismatch is different from unconfirmed subscription terms.
+  const validityEnd = canonical.lk1LifecycleInstant(live.expirationDate, true);
+  if (!eventRoute && live.status === 'ACTIVE' && validityEnd !== null && validityEnd < Date.parse(ctx.target.startsAt)) {
+    quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_DATE_NOT_COVERED'); continue;
+  }
   if (!eventRoute && (canonical.preflightAvailability.resolveSplitSubscriptionLifecycle(live, ctx.target.startsAt.slice(0, 10)) === 'UNAVAILABLE'
     || live.holdUntil || live.frozenUntil || live.isFrozen === true || live.visitsLeft === 0)) {
     quote(id, live.visitsLeft === 0 ? 'LIMIT_USED' : 'UNAVAILABLE', null, 0, 0, live.visitsLeft === 0 ? 'SUBSCRIPTION_VISITS_EXHAUSTED' : 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;

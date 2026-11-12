@@ -908,6 +908,40 @@ const hasCompleteBookingList = (value, seen = new Set()) => {
   return ["data", "payload", "result"].some((key) => hasCompleteBookingList(value[key], seen));
 };
 
+// Incomplete lists require a contiguous, bounded Viva page sequence. Never
+// calculate allowance or cancellation from a partial or shifting history.
+const collectBookingPage = (payload, previous, actorClientId, now) => {
+  if (!previous && hasCompleteBookingList(payload)) return { done: true, payload };
+  const invalid = () => ({ error: true });
+  if (!isObj(payload) || !Array.isArray(payload.content)) return invalid();
+  const { number, size, totalElements, totalPages } = payload;
+  if (![number, size, totalElements, totalPages].every(Number.isSafeInteger)
+    || number < 0 || size < 1 || size > 1000 || totalElements < 1 || totalElements > 20000
+    || totalPages < 1 || totalPages > 20 || totalPages !== Math.ceil(totalElements / size)
+    || number >= totalPages || !Number.isFinite(now)) return invalid();
+  const page = previous || { nextPage: 0, size, totalElements, totalPages, startedAt: now, rows: [], ids: [] };
+  if (number !== page.nextPage || size !== page.size || totalElements !== page.totalElements
+    || totalPages !== page.totalPages || now < page.startedAt || now - page.startedAt >= 20000
+    || payload.content.length !== Math.min(size, totalElements - number * size)
+    || (payload.last !== undefined && payload.last !== (number === totalPages - 1))
+    || (payload.hasNext !== undefined && payload.hasNext !== (number < totalPages - 1))) return invalid();
+  const ids = new Set(page.ids);
+  for (const row of payload.content) {
+    if (!isObj(row)) return invalid();
+    const id = normalizeId(bookingId(row));
+    const owner = bookingClientId(row);
+    if (!id || ids.has(id) || (owner && normalizeId(owner) !== normalizeId(actorClientId))) return invalid();
+    ids.add(id);
+  }
+  const allRows = page.rows.concat(payload.content);
+  if (allRows.length > totalElements) return invalid();
+  if (number === totalPages - 1) {
+    return allRows.length === totalElements ? { done: true, payload: allRows } : invalid();
+  }
+  return { done: false, nextPage: number + 1,
+    state: { ...page, nextPage: number + 1, rows: allRows, ids: [...ids] } };
+};
+
 const findArrayForKey = (value, targetKey, seen = new Set()) => {
   if (!value || typeof value !== "object" || seen.has(value)) return [];
   seen.add(value);
@@ -2332,7 +2366,8 @@ if (ctx.managedSelfLeave && ["profile", "active_bookings", "history_bookings"].i
   const paths = { profile: `/end-user/api/v1/${ctx.tenantKey}/profile`,
     active_bookings: `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`,
     history_bookings: `/end-user/api/v2/${ctx.tenantKey}/bookings/history?includeCanceled=true&size=1000` };
-  if (msg.error || msg.statusCode !== 200 || msg.responseUrl !== `${VIVA_API_BASE}${paths[ctx.step]}`) {
+  const pageQuery = ctx.step !== "profile" && ctx.bookingPages ? `&page=${ctx.bookingPages.nextPage}` : "";
+  if (msg.error || msg.statusCode !== 200 || msg.responseUrl !== `${VIVA_API_BASE}${paths[ctx.step]}${pageQuery}`) {
     return managedLeavePending(ctx, "MANAGED_SELF_LEAVE_PROVIDER_READ_INVALID");
   }
 }
@@ -2964,6 +2999,35 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
   return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
 }
 
+if (["active_bookings", "history_bookings"].includes(ctx.step) && isHttpOk(msg.statusCode)
+  && hasBookingListShape(msg.payload)) {
+  if (ctx.step === "active_bookings" && !ctx.bookingPages) ctx.activeBookingsObservedAt = new Date().toISOString();
+  const page = collectBookingPage(msg.payload, ctx.bookingPages, ctx.actorClientId, Date.now());
+  if (page.error) {
+    return finishError(ctx, 502, "Список записей Viva неполон", {
+      code: ctx.step === "active_bookings" ? "SUBSCRIPTION_BOOKINGS_ACTIVE_INCOMPLETE" : "SUBSCRIPTION_BOOKINGS_HISTORY_INCOMPLETE",
+    });
+  }
+  if (!page.done) {
+    if (!ctx.bookingPages) ctx.bookingPagesTimeout = {
+      present: Object.prototype.hasOwnProperty.call(msg, "requestTimeout"), value: msg.requestTimeout,
+    };
+    ctx.bookingPages = page.state;
+    const path = ctx.step === "active_bookings" ? "bookings?" : "bookings/history?includeCanceled=true&";
+    const output = prepareUserGet(ctx, ctx.step,
+      `/end-user/api/v2/${ctx.tenantKey}/${path}size=1000&page=${page.nextPage}`);
+    msg.requestTimeout = Math.max(1, Math.min(10000, 20000 - (Date.now() - page.state.startedAt)));
+    return output;
+  }
+  if (ctx.bookingPagesTimeout) {
+    if (ctx.bookingPagesTimeout.present) msg.requestTimeout = ctx.bookingPagesTimeout.value;
+    else delete msg.requestTimeout;
+    delete ctx.bookingPagesTimeout;
+  }
+  delete ctx.bookingPages;
+  msg.payload = page.payload;
+}
+
 if (ctx.step === "active_bookings") {
   if (!isHttpOk(msg.statusCode)) {
     return finishError(ctx, 502, "Не удалось загрузить активные записи для проверки лимита", {
@@ -2981,7 +3045,6 @@ if (ctx.step === "active_bookings") {
     });
   }
   ctx.activeBookingsPayload = msg.payload;
-  ctx.activeBookingsObservedAt = new Date().toISOString();
   return prepareUserGet(
     ctx,
     "history_bookings",

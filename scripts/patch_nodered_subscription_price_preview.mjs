@@ -316,6 +316,7 @@ export function previewSources(flow, options = {}) {
     // body from before that rule omits those roots, so they stay optional and the closure falls
     // back to the discount-only behaviour of that generation.
     ...freeFirstRoots(booking), ...usageRoots,
+    ...(bookingDeclarations.has('collectBookingPage') ? ['collectBookingPage'] : []),
     ...PREVIEW_EVENT_HELPERS, 'preflightAvailability',
     ...PREVIEW_CONTRACT_ROOTS,
     'mergeBookings', 'isInactiveBooking', 'isSubscriptionBooking', 'bookingSubscriptionId', 'eventDate',
@@ -358,8 +359,9 @@ export function previewSources(flow, options = {}) {
   const supportsPatriotsGameScope = (bookingDeclarations.get('resolveCategory') || '')
     .includes('if(typeId===2349&&directionId===6181)return"open_game";')
     && lk1EvaluatorDeclarations(evaluator).has('PATRIOTS_DISCOUNT_EVENTS');
-  const capabilities = `const supportsPatriotsGameScope = ${supportsPatriotsGameScope};`;
-  const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name)), 'supportsPatriotsGameScope'])];
+  const capabilities = `const supportsPatriotsGameScope = ${supportsPatriotsGameScope};`
+    + (bookingDeclarations.has('collectBookingPage') ? '' : '\nconst collectBookingPage = undefined;');
+  const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name)), 'supportsPatriotsGameScope', 'collectBookingPage'])];
   assertNoUndeclaredContractNames(`${helper.source}\n${proTraining.injected}\n${spanishTraining.injected}`, declared, rules, reader, accessor);
   const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${spanishTraining.injected}\n${reader}\n${accessor}\n${capabilities}\nreturn {${exported.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
