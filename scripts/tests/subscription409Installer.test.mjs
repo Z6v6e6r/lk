@@ -8,11 +8,12 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { createSubscription409Installer } from "../diagnostics/subscription409-installer.mjs";
 import { createScopedObserver } from "../diagnostics/subscription409-scope.mjs";
-import { settingsCandidate, sha, LEASE_NAME, ROOT } from "../diagnostics/subscription409-contract.mjs";
+import { settingsCandidate, sha, LEASE_NAME, ROOT, validAuthFilePins } from "../diagnostics/subscription409-contract.mjs";
 import { registerSettings } from "../diagnostics/subscription409-bootstrap.mjs";
 import { buildRuntimeArtifacts, packetContents } from "../prepare_subscription409_runtime.mjs";
 import { createProcessAdapter } from "../diagnostics/subscription409-process.mjs";
 import { assertKernelFlock } from "../diagnostics/subscription409-lock.mjs";
+import { inspectAuthDependencySyntax } from "../diagnostics/subscription409-auth-dependencies.mjs";
 
 const uid = process.getuid(), gid = process.getgid(), generation = "a".repeat(32), release = "b".repeat(40);
 function fixture(t, { settingsMode = 0o600 } = {}) {
@@ -74,6 +75,122 @@ test("apply, guarded soak, finish and idempotent finish never alter flow or cred
   assert.deepEqual(f.runtime().apply(f.c, f.packet), done); assert.equal(f.state.restarts, 1);
   assert(fs.readFileSync(f.flowPath).equals(initial)); assert(fs.readFileSync(f.settings).subarray(0, f.before.length).equals(f.before));
 });
+
+function authFixture(t) {
+  const f = fixture(t), etcRoot = path.join(f.root, "etc");
+  fs.mkdirSync(etcRoot, { mode: 0o700 }); f.options.etcRoot = etcRoot;
+  f.authBytes = Buffer.from("synthetic authentication input\n");
+  f.authFiles = [path.join(f.root, "auth-fixture.conf"), path.join(etcRoot, "auth-fixture.conf")];
+  for (const file of f.authFiles) fs.writeFileSync(file, f.authBytes, { mode: 0o600 });
+  f.c.authFilePins = ["node-red", "etc"].map(scope => ({ scope, relativePath: "auth-fixture.conf", sha256: sha(f.authBytes) }));
+  return f;
+}
+
+test("private auth inputs are guarded through apply, finish and rollback without copying values", t => {
+  const f = authFixture(t);
+  assert.equal(f.runtime().apply(f.c, f.packet).state, "SOAKING");
+  for (const file of f.authFiles) assert(fs.readFileSync(file).equals(f.authBytes));
+  assert.equal(fs.existsSync(path.join(f.tx, "auth-fixture.conf")), false);
+  f.state.time += 900_001; assert.equal(f.runtime().finish(f.c).state, "INSTALLED");
+  assert.equal(f.runtime().rollback(f.c).state, "ROLLED_BACK");
+  for (const file of f.authFiles) assert(fs.readFileSync(file).equals(f.authBytes));
+});
+
+for (const index of [0, 1]) test(`auth input ${index} drift refuses apply before publication`, t => {
+  const f = authFixture(t); fs.writeFileSync(f.authFiles[index], "changed synthetic input");
+  assert.throws(() => f.runtime().apply(f.c, f.packet), /AUTH_INPUT_DRIFT/);
+  assert.equal(f.state.restarts, 0); assert.equal(fs.existsSync(f.lease), false);
+  assert.equal(fs.existsSync(f.tx), false); assert(fs.readFileSync(f.settings).equals(f.before));
+});
+
+for (const unsafe of ["mode", "symlink", "hardlink", "parent-write", "scope"]) test(`unsafe auth input ${unsafe} refuses apply`, t => {
+  const f = authFixture(t), file = f.authFiles[1];
+  if (unsafe === "mode") fs.chmodSync(file, 0o644);
+  if (unsafe === "symlink") { fs.renameSync(file, `${file}.actual`); fs.symlinkSync(`${file}.actual`, file); }
+  if (unsafe === "hardlink") fs.linkSync(file, `${file}.alias`);
+  if (unsafe === "parent-write") fs.chmodSync(f.options.etcRoot, 0o777);
+  if (unsafe === "scope") f.options.etcRoot += "/";
+  assert.throws(() => f.runtime().apply(f.c, f.packet));
+  assert.equal(f.state.restarts, 0); assert.equal(fs.existsSync(f.lease), false);
+  assert(fs.readFileSync(f.settings).equals(f.before));
+});
+
+test("auth drift during soak blocks finish and rollback while retaining own lease", t => {
+  const f = authFixture(t); f.runtime().apply(f.c, f.packet); f.state.time += 900_001;
+  fs.writeFileSync(f.authFiles[1], "changed synthetic input");
+  assert.throws(() => f.runtime().finish(f.c), /AUTH_INPUT_DRIFT/);
+  assert.throws(() => f.runtime().rollback(f.c), /AUTH_INPUT_DRIFT/);
+  assert.equal(f.state.restarts, 1); assert.equal(JSON.parse(fs.readFileSync(f.lease)).phase, "SOAKING");
+  // Scratch fixture restoration only; production auth repair is never automatic.
+  fs.writeFileSync(f.authFiles[1], f.authBytes);
+  assert.equal(f.runtime().rollback(f.c).state, "ROLLED_BACK"); assert.equal(f.state.restarts, 2);
+});
+
+test("auth pin schema rejects traversal, absolute names, duplicate and unknown scopes", () => {
+  const pin = { scope: "node-red", relativePath: "private/auth.conf", sha256: "a".repeat(64) };
+  assert(validAuthFilePins(undefined)); assert(validAuthFilePins([])); assert(validAuthFilePins([pin]));
+  for (const relativePath of ["", "/etc/auth.conf", "../auth.conf", "private/../auth.conf", "private//auth.conf", "./auth.conf", "private/./auth.conf", "private/", "private\\auth.conf"])
+    assert.equal(validAuthFilePins([{ ...pin, relativePath }]), false);
+  assert.equal(validAuthFilePins([{ ...pin, scope: "root" }]), false);
+  assert.equal(validAuthFilePins([{ ...pin, sha256: "invalid" }]), false);
+  assert.equal(validAuthFilePins([pin, pin]), false); assert.equal(validAuthFilePins(null), false);
+  assert.equal(validAuthFilePins([null]), false);
+});
+
+const authSyntaxFixture = () => ({ helperPath: "/opt/auth-fixture/helper.cjs",
+  helperSource: 'const fs=require("node:fs"); const DEFAULT_FILE="/root/.node-red/auth-fixture.conf"; function factory(file=DEFAULT_FILE){return function(request){let fd;fd=fs.openSync(file,"r");try{return fs.readFileSync(fd);}finally{fs.closeSync(fd);}}} module.exports={factory};',
+  settingsSource: 'module.exports={middleware:require("/opt/auth-fixture/helper.cjs").factory(),users:JSON.parse(require("fs").readFileSync("/etc/auth-fixture/users.json"))};',
+  parse: createRequire(import.meta.url)("acorn").parse });
+
+test("auth syntax closure traces inline factory default and both private file inputs without executing source", () => {
+  const input = authSyntaxFixture(), result = inspectAuthDependencySyntax(input);
+  assert.deepEqual(result.helperPaths, [input.helperPath]);
+  assert.deepEqual(result.privateInputPaths, ["/root/.node-red/auth-fixture.conf", "/etc/auth-fixture/users.json"]);
+  assert.deepEqual(result.builtinModules, ["fs"]); assert.equal(result.unresolvedModuleCount, 0);
+  assert.equal(result.factoryUsesDefaultPath, true);
+});
+
+test("auth syntax closure includes existing builtin globals and dirname metadata guards", () => {
+  const input = authSyntaxFixture();
+  input.settingsSource = input.settingsSource.replace("module.exports={", 'module.exports={functionGlobalContext:{fs:require("fs")},');
+  input.helperSource = input.helperSource.replace('const fs=require("node:fs");', 'const fs=require("node:fs"), path=require("path");')
+    .replace("let fd;", "const parent=path.dirname(file);fs.lstatSync(parent);fs.realpathSync(parent);let fd;");
+  assert.deepEqual(inspectAuthDependencySyntax(input).builtinModules, ["fs", "path"]);
+});
+
+test("auth syntax closure permits fixed adminAuth configuration extension without fs capability readback", () => {
+  const input = authSyntaxFixture();
+  input.settingsSource += ';const original=module.exports.adminAuth;module.exports.adminAuth={...original,type:"credentials"};const metadata={};metadata.module;';
+  assert.equal(inspectAuthDependencySyntax(input).factoryUsesDefaultPath, true);
+});
+
+for (const mutation of ["override", "dynamic-require", "new-package", "loader", "fs-computed", "fs-escape", "extra-file", "fd", "path", "shadow", "mutable-default", "loader-alias", "loader-computed", "process-alias", "fd-shadow", "export-readback", "fake-global-context", "path-for-of", "fd-for-in", "factory-alias"]) {
+  test(`auth syntax closure fails closed for ${mutation}`, () => {
+    const input = authSyntaxFixture();
+    if (mutation === "override") input.settingsSource = input.settingsSource.replace(".factory()", '.factory("/etc/other.conf")');
+    if (mutation === "dynamic-require") input.helperSource += "; require(request.name);";
+    if (mutation === "new-package") input.helperSource += '; require("extra-package");';
+    if (mutation === "loader") input.helperSource += '; new Function("return 1");';
+    if (mutation === "fs-computed") input.helperSource += '; fs["readFileSync"]("/etc/other.conf");';
+    if (mutation === "fs-escape") input.helperSource += '; const another=fs;';
+    if (mutation === "extra-file") input.helperSource += '; fs.readFileSync("/etc/other.conf");';
+    if (mutation === "fd") input.helperSource = input.helperSource.replace('fd=fs.openSync', 'fd=2; const unused=fs.openSync');
+    if (mutation === "path") input.helperSource = input.helperSource.replace('let fd;', 'file=request.file;let fd;');
+    if (mutation === "shadow") input.helperSource = input.helperSource.replace('let fd;', 'const file=request.unpinned;let fd;');
+    if (mutation === "mutable-default") input.helperSource = input.helperSource.replace('const DEFAULT_FILE=', 'let DEFAULT_FILE=') + ';DEFAULT_FILE="/etc/unpinned.conf";';
+    if (mutation === "loader-alias") input.helperSource += ';const load=process.getBuiltinModule;const other=load("fs");other.readFileSync("/etc/unpinned.conf");';
+    if (mutation === "loader-computed") input.helperSource += ';process["getBuiltinModule"]("fs").readFileSync("/etc/unpinned.conf");';
+    if (mutation === "process-alias") input.helperSource += ';const host=process;host.getBuiltinModule("fs");';
+    if (mutation === "fd-shadow") input.helperSource = input.helperSource.replace('try{return', 'try{const fd=request.unpinned;return');
+    if (mutation === "export-readback") input.settingsSource = input.settingsSource.replace('module.exports={', 'module.exports={functionGlobalContext:{fs:require("fs")},')
+      + ';const hidden=module.exports.functionGlobalContext.fs;hidden.readFileSync("/etc/unpinned.conf");';
+    if (mutation === "fake-global-context") input.settingsSource += ';const fake={functionGlobalContext:{fs:require("fs")}};fake.functionGlobalContext.fs.readFileSync("/etc/unpinned.conf");';
+    if (mutation === "path-for-of") input.helperSource = input.helperSource.replace('let fd;', 'for(file of request.paths){}let fd;');
+    if (mutation === "fd-for-in") input.helperSource = input.helperSource.replace('try{return', 'for(fd in request.descriptors){}try{return');
+    if (mutation === "factory-alias") input.helperSource = input.helperSource.replace('module.exports={factory}', 'const saved=factory;factory=()=>saved("/etc/unpinned.conf");module.exports={factory}');
+    assert.throws(() => inspectAuthDependencySyntax(input), /^Error: AUTH_/);
+  });
+}
 
 for (const settingsMode of [0o640, 0o644]) test(`apply and rollback preserve original settings mode ${settingsMode.toString(8)}`, t => {
   const f = fixture(t, { settingsMode });
@@ -348,10 +465,12 @@ test("settings suffix preserves auth/middleware, rejects bad module BEFORE requi
 });
 
 test("build produces a standalone CJS packet; bootstrap registration is attested without fake409 logs", async t => {
-  const f = fixture(t), artifacts = await buildRuntimeArtifacts();
+  const f = authFixture(t), artifacts = await buildRuntimeArtifacts();
   const data = packetContents({ settings: f.before, flow: fs.readFileSync(f.flowPath), metadata: { sourceKind: "live-147", sourceHost: "lk-primary-147",
     settingsSha256: f.c.settingsSha256, flowSha256: f.c.flowSha256, machineSha256: f.c.machineSha256, hooks: f.c.hooks,
-    process: f.c.process, settingsMode: f.c.settingsMode, preservedFiles: [], collectedAtMs: f.c.createdAtMs, coordinatedRestartApproved: true }, release, artifacts, generation, root: f.root, releases: f.releases });
+    process: f.c.process, settingsMode: f.c.settingsMode, preservedFiles: [], authFilePins: f.c.authFilePins,
+    collectedAtMs: f.c.createdAtMs, coordinatedRestartApproved: true }, release, artifacts, generation, root: f.root, releases: f.releases });
+  assert.deepEqual(JSON.parse(data["contract.json"]).authFilePins, f.c.authFilePins);
   const c = JSON.parse(data["contract.json"]), dir = path.join(f.releases, c.bundleSha256); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const artifact = path.join(dir, "observer.cjs"); fs.writeFileSync(artifact, data["observer.cjs"], { mode: 0o600 });
   fs.mkdirSync(f.tx, { recursive: true, mode: 0o700 });
