@@ -11,6 +11,19 @@ const lkDiagnostic = (fields = {}) => {
   // Installed flows may predate the shared observer. Use a separate info event,
   // so this does not duplicate the final node's legacy refusal warning/count.
   try {
+    if (fields.code === 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE') {
+      if (!['activeBookings', 'historyBookings'].includes(fields.operationStage)
+        || !['upstream_status', 'list_incomplete_or_unrecognized', 'row_not_object',
+          'row_id_missing', 'row_owner_mismatch'].includes(fields.firstFailure)
+        || typeof node === 'undefined' || typeof node.log !== 'function') return;
+      const event = { event: 'subscription_price_preview_bookings_refused', code: fields.code,
+        stage: 'preview_router', operationStage: fields.operationStage, firstFailure: fields.firstFailure };
+      if (Number.isInteger(fields.upstreamStatus) && fields.upstreamStatus >= 100 && fields.upstreamStatus <= 599) {
+        event.upstreamStatus = fields.upstreamStatus;
+      }
+      node.log(JSON.stringify(event));
+      return;
+    }
     const reasons = ['target_upstream_error', 'target_missing', 'target_identity', 'target_category',
       'target_studio', 'target_room', 'target_duration', 'target_start_invalid', 'target_cancelled',
       'target_lifecycle', 'PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID'];
@@ -411,8 +424,33 @@ if (ctx.step === 'catalog') {
   return http('activeBookings', `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
 }
 if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
-  if (!ok() || !canonical.hasCompleteBookingList(msg.payload) || rows().some(row => !canonical.isObj(row)
-    || !canonical.bookingId(row) || (canonical.bookingClientId(row) && canonical.normalizeId(canonical.bookingClientId(row)) !== canonical.normalizeId(ctx.actorClientId)))) return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+  const refuseBookings = firstFailure => {
+    try {
+      // Read only a primitive status; diagnostics must not invoke a getter or
+      // provider-controlled coercion, inspect the DTO again, or expose its values.
+      const raw = Object.getOwnPropertyDescriptor(msg, 'statusCode')?.value;
+      const status = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : null;
+      lkDiagnostic({ eventKind: 'audit', code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE',
+        operationStage: ctx.step, firstFailure,
+        upstreamStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
+        httpStatus: 503, outcome: 'refused' });
+    } catch { /* Diagnostics cannot change the refusal. */ }
+    return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+  };
+  // Keep the original predicates, helper calls and short-circuit order. In
+  // particular, a missing row owner is still accepted by the existing contract.
+  if (!ok()) return refuseBookings('upstream_status');
+  if (!canonical.hasCompleteBookingList(msg.payload)) return refuseBookings('list_incomplete_or_unrecognized');
+  let firstFailure;
+  if (rows().some(row => {
+    if (!canonical.isObj(row)) { firstFailure = 'row_not_object'; return true; }
+    if (!canonical.bookingId(row)) { firstFailure = 'row_id_missing'; return true; }
+    if (canonical.bookingClientId(row)
+      && canonical.normalizeId(canonical.bookingClientId(row)) !== canonical.normalizeId(ctx.actorClientId)) {
+      firstFailure = 'row_owner_mismatch'; return true;
+    }
+    return false;
+  })) return refuseBookings(firstFailure);
   if (ctx.step === 'activeBookings') {
     ctx.activePayload = msg.payload;
     ctx.activeObservedAt = new Date().toISOString();
