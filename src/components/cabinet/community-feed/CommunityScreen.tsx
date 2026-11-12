@@ -24,7 +24,7 @@ import type {
 interface CommunityScreenProps {
   community: Pick<
     CommunityRecord,
-    "name" | "logo" | "isVerified" | "visibility" | "createdAt" | "memberCount" | "city" | "minimumLevel" | "description" | "focusTags"
+    "id" | "name" | "logo" | "logoUrl" | "isVerified" | "visibility" | "createdAt" | "memberCount" | "city" | "minimumLevel" | "description" | "focusTags"
   >;
   entries: FeedEntry[];
   isLoading: boolean;

@@ -9,7 +9,7 @@ import { fetchCommunityJumpRanking, formatJumpRankingTime, jumpGameUrl, type Com
 import './community-jump-ranking.css';
 
 type Props = {
-  community: Pick<CommunityRecord, 'id' | 'name' | 'logo' | 'memberCount'>;
+  community: Pick<CommunityRecord, 'id' | 'name' | 'logo' | 'logoUrl' | 'memberCount'>;
   profileKey: string; currentUserAvatar?: string | null; chatBadgeCount: number;
   onOpenMenu: () => void; onClose: () => void;
   onSelectSectionNav: (id: CommunitySecondaryNavItemId) => void;

@@ -7,7 +7,7 @@ import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 import type { CommunityBottomNavItemId } from "./feedTypes";
 
 interface CommunityTableScreenProps {
-  community: Pick<CommunityRecord, "name" | "logo" | "isVerified">;
+  community: Pick<CommunityRecord, "id" | "name" | "logo" | "logoUrl" | "isVerified">;
   members: CommunityMember[];
   currentUserId: string | null;
   currentUserPhone: string | null;

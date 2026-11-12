@@ -71,6 +71,11 @@ export const isExhibitionInvite = (inviteCode?: string | null) => {
 export const exhibitionApi = (origin = typeof window === 'undefined' ? '' : window.location.origin) => origin === 'https://padlhub.ru' ? 'https://padlhub.su/jump-exhibition-api/' : '/jump-exhibition-api/';
 
 /** Web Push can only be subscribed on the LK2 origin (service worker scope), so the page hands off. */
+export function resolveCommunityHeaderLogo(community: { id?: string | null; logo?: string | null; logoUrl?: string | null }): string | undefined {
+  if (community.id === EXHIBITION_COMMUNITY_ID) return EXHIBITION_BRAND_LOGO_URL;
+  return community.logoUrl?.trim() || community.logo?.trim() || undefined;
+}
+
 export const EXHIBITION_CABINET_URL = 'https://padlhub.ru/lk_new?authMode=viva';
 export function exhibitionCommunityUrl(communityId?: string | null): string {
   const id = String(communityId || EXHIBITION_COMMUNITY_ID).trim();
@@ -78,8 +83,17 @@ export function exhibitionCommunityUrl(communityId?: string | null): string {
 }
 
 export const LK2_PUSH_OPT_IN_URL = 'https://lk2.padlhub.su/push';
+export const EXHIBITION_PUSH_SOURCE = 'korp-sport-2026';
 export function buildPushOptInUrl(returnTo: string): string {
   const url = new URL(LK2_PUSH_OPT_IN_URL);
   if (returnTo) url.searchParams.set('returnTo', returnTo);
+  return url.toString();
+}
+/** Exhibition hand-off: the LK2 push page receives a stable source marker for attribution. */
+export function buildExhibitionPushOptInUrl(returnTo: string, communityId?: string | null): string {
+  const url = new URL(LK2_PUSH_OPT_IN_URL);
+  if (returnTo) url.searchParams.set('returnTo', returnTo);
+  url.searchParams.set('source', EXHIBITION_PUSH_SOURCE);
+  if (communityId) url.searchParams.set('community', communityId);
   return url.toString();
 }
