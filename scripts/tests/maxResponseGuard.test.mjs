@@ -22,7 +22,7 @@ const sources = buildSources(fixture('client'), fixture('messages-api'));
 function load(source, dependencies = {}, globals = {}) {
   const module = { exports: {} };
   const script = vm.runInNewContext(`(function(require,module,exports) { ${source}\n})`, {
-    URL, Buffer, SyntaxError, ...globals,
+    URL, Buffer, Error, SyntaxError, ...globals,
   });
   script(name => {
     assert.ok(Object.hasOwn(dependencies, name), `Unexpected dependency ${name}`);
@@ -31,17 +31,18 @@ function load(source, dependencies = {}, globals = {}) {
   return module.exports;
 }
 
-function sdk(fetchImpl) {
+function sdk(fetchImpl, patched = true) {
   const debug = [];
-  const { createClient } = load(sources[clientFile], {
+  const { createClient } = load(patched ? sources[clientFile] : fixture('client'), {
     debug: () => (...args) => debug.push(args),
     './max-response-guard.cjs': { parseMaxJsonResponse },
   }, { fetch: fetchImpl });
   const { MaxError } = load(fixture('error'));
   const { BaseApi } = load(fixture('base-api'), { './error': { MaxError } });
-  const { MessagesApi } = load(sources[messagesFile], { '../../base-api': { BaseApi } });
+  const { MessagesApi } = load(patched ? sources[messagesFile] : fixture('messages-api'), { '../../base-api': { BaseApi },
+    '../../error': { MaxError }, 'node:timers/promises': { setTimeout: () => { throw new Error('UNEXPECTED_SEND_RETRY'); } }, });
   const client = createClient('synthetic-auth-marker');
-  return { messages: new MessagesApi(client), client, debug, MaxError };
+  return { messages: new MessagesApi(client), client, debug, MaxError, BaseApi, createClient };
 }
 
 function jsonResponse(data, status = 200, mime = 'application/json') {
@@ -267,4 +268,140 @@ test('constructor refuses an existing helper instead of overwriting unknown sour
   fs.writeFileSync(path.join(root, helperFile), 'synthetic-foreign-source');
   assert.throws(() => prepareCandidate(root, output), /MAX_SDK_HELPER_ALREADY_EXISTS/);
   assert.ok(!fs.existsSync(output));
+});
+
+// Public Bot/Api/RawApi/Polling and actual contrib config/receive sources. Only
+// unrelated update handlers, upload helpers, timers and fetch are substituted.
+function receiverRuntime({ stage, response, patched = true }) {
+  const requests = [], errors = [], pollingTimers = new Map(), receiverTimers = new Map();
+  const statuses = [], hooks = {};
+  let stops = 0, done = 0;
+  const transport = sdk(async (url, init) => {
+    const pathname = new URL(url).pathname;
+    requests.push({ pathname, method: init.method, redirect: init.redirect });
+    assert.equal(init.method, 'GET'); // Identity/poll recovery must never POST/send.
+    if (stage === 'updates' && pathname === '/me') return jsonResponse({ username: 'synthetic-bot' });
+    return response();
+  }, patched);
+  const { BaseApi, MaxError, createClient } = transport;
+  const { BotsApi } = load(fixture('bots-api'), { '../../base-api': { BaseApi } });
+  const { SubscriptionsApi } = load(fixture('subscriptions-api'), { '../../base-api': { BaseApi } });
+  const { RawApi } = load(fixture('raw-api'), { './modules': { BaseApi, BotsApi, SubscriptionsApi } });
+  const { Api } = load(fixture('public-api'), {
+    './core/helpers/attachments': {}, './core/helpers/upload': { Upload: class {} },
+    './core/network/api': { RawApi },
+  });
+  const noopDebug = { debug: () => () => {} };
+  const schedule = timers => (fn, ms) => {
+    const token = {};
+    timers.set(token, { fn, ms });
+    return token;
+  };
+  const { Polling } = load(fixture('polling'), { ...noopDebug, './api': { MaxError } }, {
+    AbortController, setTimeout: schedule(pollingTimers),
+  });
+  const { Bot } = load(fixture('bot'), {
+    ...noopDebug, './composer': { Composer: class { on() {} command() {} action() {} } },
+    './context': { Context: class {} }, './core/network/api': { createClient },
+    './core/network/polling': { Polling }, './api': { Api },
+  });
+  class TrackedBot extends Bot {
+    constructor(...args) {
+      super(...args);
+      const originalStop = this.stop;
+      this.stop = () => { stops++; originalStop(); };
+    }
+  }
+  let Config, Receive;
+  const configs = new Map();
+  const RED = { nodes: {
+    createNode(node) {
+      node.credentials = { token: 'synthetic-auth-marker' };
+      node.on = (name, callback) => { hooks[name] = callback; };
+      node.error = message => errors.push(message);
+      node.status = status => statuses.push(status.text);
+      node.send = () => { throw new Error('UNEXPECTED_UPDATE_OUTPUT'); };
+    },
+    getNode: key => configs.get(key),
+    registerType(type, constructor) {
+      if (type === 'maxbot-config') Config = constructor;
+      if (type === 'maxbot-receive') Receive = constructor;
+    },
+  } };
+  load(fixture('maxbot-config'), { '@maxhub/max-bot-api': { Bot: TrackedBot } }).default(RED);
+  configs.set('synthetic-config', new Config({}));
+  assert.equal(requests.length, 0); // The actual config constructor does not start polling.
+  load(fixture('maxbot-receive'), { '@maxhub/max-bot-api': { Bot: TrackedBot } }, {
+    setTimeout: schedule(receiverTimers), clearTimeout: token => receiverTimers.delete(token),
+  }).default(RED);
+  new Receive({ bot: 'synthetic-config' });
+  return { requests, errors, statuses, pollingTimers, receiverTimers,
+    stops: () => stops, close: () => { hooks.close(() => done++); }, done: () => done };
+}
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+for (const stage of ['identity', 'updates']) for (const [status, mime, type, body] of [
+  [502, 'text/html', 'html', '<html>synthetic-body-marker</html>'],
+  [503, 'text/plain; charset=synthetic-mime-marker', 'text', 'synthetic-server-body-marker'],
+  [307, 'text/html', 'html', '<html>synthetic-body-marker</html>'],
+]) {
+  test(`actual Bot/Polling/receiver start.catch: ${stage} ${status}/${type}`, async () => {
+    const response = () => new Response(body, { status, headers: { 'content-type': mime } });
+    for (const patched of [false, true]) {
+      const runtime = receiverRuntime({ stage, response, patched });
+      await settle();
+      const expectedPaths = stage === 'identity' ? ['/me'] : ['/me', '/updates'];
+      assert.deepEqual(runtime.requests.map(x => x.pathname), expectedPaths);
+      assert.equal(runtime.pollingTimers.size, 0); // Same classification as native SyntaxError, not SDK MaxError retry.
+      assert.equal(runtime.receiverTimers.size, 1);
+      assert.equal(runtime.stops(), 1);
+      assert.equal(runtime.errors.length, 1);
+      assert.ok(runtime.statuses.includes('disconnected'));
+      const [timer] = runtime.receiverTimers.values();
+      assert.equal(timer.ms, 5000);
+      if (patched) {
+        for (const request of runtime.requests) assert.equal(request.redirect, 'manual');
+        assert.ok(runtime.errors[0].startsWith('MAX Bot error: '));
+        const message = runtime.errors[0].slice('MAX Bot error: '.length);
+        assert.deepEqual(JSON.parse(message), {
+          event: 'max_response_format_failed', code: 'MAX_RESPONSE_FORMAT_INVALID',
+          upstreamStatus: status, responseType: type, reason: 'invalid_json', delivery: 'unknown', retryable: false,
+        });
+        for (const marker of ['synthetic-body-marker', 'synthetic-server-body-marker', 'synthetic-auth-marker',
+          'synthetic-mime-marker', 'SyntaxError', 'cause']) assert.ok(!message.includes(marker));
+      }
+      // Execute one pre-existing read-recovery callback without real waiting/network.
+      runtime.receiverTimers.clear();
+      timer.fn();
+      await settle();
+      assert.deepEqual(runtime.requests.map(x => x.pathname), [...expectedPaths, ...expectedPaths]);
+      assert.ok(runtime.requests.every(x => x.method === 'GET'));
+      assert.equal(runtime.receiverTimers.size, 1); // retryable:false does not disable outer read recovery.
+      assert.equal(runtime.stops(), 2);
+      runtime.close();
+      assert.equal(runtime.receiverTimers.size, 0);
+      assert.equal(runtime.done(), 1);
+    }
+  });
+}
+
+test('valid JSON 503 keeps actual Polling MaxError delay classification unchanged', async () => {
+  for (const patched of [false, true]) {
+    const runtime = receiverRuntime({ stage: 'updates', patched,
+      response: () => jsonResponse({ code: 'synthetic-provider-code', message: 'synthetic-provider-description' }, 503),
+    });
+    await settle();
+    assert.deepEqual(runtime.requests.map(x => x.pathname), ['/me', '/updates']);
+    assert.equal(runtime.errors.length, 0);
+    assert.equal(runtime.receiverTimers.size, 0);
+    assert.equal(runtime.pollingTimers.size, 1);
+    const [timer] = runtime.pollingTimers.values();
+    assert.equal(timer.ms, 5000);
+    runtime.pollingTimers.clear();
+    timer.fn();
+    await settle();
+    assert.equal(runtime.requests.length, 2); // SDK source returns after its delay; no send or added recovery here.
+    runtime.close();
+    assert.equal(runtime.done(), 1);
+  }
 });

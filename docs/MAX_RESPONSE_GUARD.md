@@ -91,3 +91,47 @@ valid JSON and 401 compatibility, one attempt for `attachment.not.ready`, error
 outputs/no success ACK, and constructor source/path custody. They do not execute
 real sends, production APIs, DB/provider readback or installed-target acceptance.
 The existing MAX CI workflow runs these tests in a separate step.
+
+## Identity/start/polling acceptance and monitor boundary
+
+The shared client guard also covers `getMyInfo` (`GET /me`) and `getUpdates`
+(`GET /updates`). The start-error logger with source SHA256
+`4ef4dbe52a57841f7209de25a2b2811be564ea12738dd27e5fd831cd903e1ab0`
+is **`node-red-contrib-maxbot/dist/nodes/maxbot-receive.js:100`**, not the
+credential/config constructor. `maxbot-config` constructs a Bot without calling
+start; `maxbot-receive` invokes `Bot.start()` and logs only `err.message` in its
+promise catch. The new message therefore preserves safe JSON status/type/reason
+through this logger without retaining the native error body fragment.
+
+Tests use the actual public config, receiver, Bot, public Api, RawApi, BotsApi,
+SubscriptionsApi, Polling and BaseApi sources with the patched client. Only
+transport/timers and unrelated middleware/upload helpers are mocked. Identity
+and polling failures cover HTML 502, server text 503 and HTML redirect 307.
+For the same supplied mock responses, original and patched clients have the
+same recovery class:
+receiver catches the error, calls stop, schedules one 5-second read restart,
+and clears its timer on close. One callback is executed synthetically and all
+observed operations remain GET. `retryable: false` describes the diagnostic/send
+policy; it **does not disable existing receiver read-recovery**. Neither the
+receiver recovery source nor its timeout is modified by this candidate.
+
+A format/read failure remains neither `FetchError` nor SDK `MaxError`, so a 5xx
+HTML body still escapes `Polling.loop` to the outer receiver catch as the old
+native SyntaxError did. Correctly parsed JSON 503 retains the separate existing
+`MaxError` delay path inside Polling. Tests compare that classification too;
+they do not repair or reinterpret existing read-recovery/lifecycle behavior.
+Manual redirect policy prevents implicit HTTP forwarding and keeps a returned
+3xx observable. No call to a redirect Location is made by the patched client.
+The original-client 307 comparison injects a final mock Response, bypassing
+its old redirect-follow behavior; it does not establish real HTTP equivalence.
+
+The old external monitoring collector is outside this diff. It does not yet
+recognize `max_response_format_failed` or `MaxResponseFormatError`; even with
+safe JSON present it can still count the event as `runtime_unknown` under a new
+fingerprint. Updating that classifier requires a separate scoped change. Loss
+of a previous fingerprint is not incident closure. Future natural-event
+acceptance needs safely classified status/type/reason from the actual emitting
+path, plus independent evidence of upstream recovery. No natural post-change
+event is claimed here because the candidate has not been deployed. This parser
+fix does not establish an upstream root cause, eliminate a provider incident,
+or confirm delivery of any message.

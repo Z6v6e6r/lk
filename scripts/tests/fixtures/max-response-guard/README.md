@@ -2,12 +2,15 @@
 
 These are unmodified public package sources, not production flow exports.
 
-- `client`, `messages-api`, `base-api`, `error`: `@maxhub/max-bot-api@0.2.2`, MIT,
+- `client`, `messages-api`, `base-api`, `error`, `bot`, `polling`, `public-api`,
+  `raw-api`, `bots-api`, `subscriptions-api`: `@maxhub/max-bot-api@0.2.2`, MIT,
   npm tarball shasum `ba27c84401372bddd2171404021710a562be4f81`.
-  Paths under `dist/core/network/api/`; messages source is `modules/messages/api.js`.
+  API internals are under `dist/core/network/api/`; messages, bots and subscriptions
+  sources are `modules/<module>/api.js`. Bot/public-api are `dist/bot.js` and
+  `dist/api.js`; Polling is `dist/core/network/polling.js`.
   License: `LICENSE-sdk.txt`.
-- `maxbot-send`: `node-red-contrib-maxbot@0.6.1`, MIT, author Kirov Ilya,
-  `dist/nodes/maxbot-send.js`. The npm package declares MIT but contains no
+- `maxbot-send`, `maxbot-receive`, `maxbot-config`: `node-red-contrib-maxbot@0.6.1`, MIT, author Kirov Ilya,
+  `dist/nodes/<node-name>.js`. The npm package declares MIT but contains no
   separate LICENSE file; retain the notice below with this fixture.
 
 Client and sender SHA256 match the installed source fingerprints established by
