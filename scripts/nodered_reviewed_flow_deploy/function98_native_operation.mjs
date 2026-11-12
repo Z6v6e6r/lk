@@ -153,7 +153,7 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
       writeFileExclusiveDurable(file('source.flow.json'), source, protection);
       writeFileExclusiveDurable(file('candidate.flow.json'), candidate, protection); write('plan.json', p);
       return { status: 'PREPARED', planSha256: sha256(read(file('plan.json'))), candidateSha256: p.candidateSha256,
-        changedNodeCount: 1, changedFieldCount: 1, liveMutationPerformed: false };
+        changedNodeCount: 1, changedFieldCount: 1, liveFlowWritten: false };
     },
     async reserve({ expectedPlanSha256, confirmation, native }) {
       check(confirmation === 'RESERVE_FUNCTION98_NATIVE_NO_RESTART_147', 'F98_RESERVE_CONFIRMATION');
@@ -172,7 +172,7 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
         candidateSha256: p.candidateSha256, acquiredAtMs: now(), expiresAtMs: now() + SOAK };
       if (previous) writeLease(lease); else writeFileExclusiveAtomicDurable(leasePath, bytes(lease), protection);
       try { await pre(p, native); } catch { writeLease({ ...lease, phase: 'owner-decision' }); throw new Error('F98_RESERVATION_DRIFT_RETAINED'); }
-      return { status: 'RESERVED', liveMutationPerformed: false, nodeRedRestarted: false };
+      return { status: 'RESERVED', liveFlowWritten: false, nodeRedRestarted: false };
     },
     async begin({ expectedPlanSha256, native }) {
       const p = await plan(expectedPlanSha256), lease = owns(p); await pre(p, native);
