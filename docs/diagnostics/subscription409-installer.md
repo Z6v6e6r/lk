@@ -1,7 +1,7 @@
 # Scoped subscription409 runtime installer
 
 Owner: LK1 backend / operator of server147. Audience: release and incident operators.
-This change includes the source from Draft PR354 plus a scoped adapter, offline
+This change builds on PR354, already in main, and adds a scoped adapter, offline
 packet builder and guarded settings/runtime transaction. It does not merge,
 upload, install, restart, dispatch a workflow or contact production automatically.
 
