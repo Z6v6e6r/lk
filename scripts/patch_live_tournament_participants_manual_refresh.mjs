@@ -59,7 +59,8 @@ export const TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT = Object.freeze({
   sources: {
     cacheGate: {
       file: "fn_cache_gate_v2.js",
-      sha256: "062c7dc5068fa64e84dd49ed3d2d39d7d5e3df6b345c52de66ed09f0925fa878",
+      // Frozen business bytes for this whole-flow preimage, not a later diagnostic candidate.
+      sha256: "9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785",
     },
     terminal: {
       file: "fn_terminal_v2.js",
