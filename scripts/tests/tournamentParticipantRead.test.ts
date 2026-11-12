@@ -158,6 +158,88 @@ test("unexpected transport throws release all subscribers and the flight", async
   assert.equal(await read({ ...options, run: async () => success }), success);
 });
 
+test("fresh callers wait for the physical flight despite subscriber cancellation and share its successor", async () => {
+  for (const abortBeforeForce of [false, true]) {
+    const read = createTournamentParticipantReader<string[]>();
+    let complete!: (result: ApiResult<string[]>) => void;
+    let calls = 0;
+    const run = () => { calls += 1; return new Promise<ApiResult<string[]>>((resolve) => { complete = resolve; }); };
+    const latest = new AbortController();
+    const a = read({ ...options, run });
+    const b = read({ ...options, run, signal: latest.signal });
+    if (abortBeforeForce) { latest.abort(); await b; }
+    const fresh1 = read({ ...options, run, fresh: true });
+    const fresh2 = read({ ...options, run, fresh: true });
+    // A new ordinary subscriber must not be mistaken for a fresh generation.
+    const c = read({ ...options, run });
+    latest.abort();
+    await b;
+    assert.equal(calls, 1);
+    complete({ ...success, data: ["old"] });
+    assert.deepEqual((await a).data, ["old"]);
+    assert.deepEqual((await c).data, ["old"]);
+    await setImmediate();
+    assert.equal(calls, 2);
+    complete(success);
+    assert.equal(await fresh1, success);
+    assert.equal(await fresh2, success);
+  }
+});
+
+test("later fresh requests wait for the newer generation instead of reusing its pre-mutation data", async () => {
+  const read = createTournamentParticipantReader<string[]>();
+  let complete!: (result: ApiResult<string[]>) => void;
+  let calls = 0;
+  const run = () => { calls += 1; return new Promise<ApiResult<string[]>>((resolve) => { complete = resolve; }); };
+  const initial = read({ ...options, run });
+  const firstRefresh = read({ ...options, run, fresh: true });
+  complete(success);await initial;await setImmediate();
+  assert.equal(calls, 2);
+  const laterRefresh = read({ ...options, run, fresh: true });
+  complete({ ...success, data: ["before-second-mutation"] });
+  await firstRefresh;await setImmediate();
+  assert.equal(calls, 3);
+  complete(success);assert.equal(await laterRefresh, success);
+});
+
+test("fresh wait cancellation never aborts the old reader or starts another request", async () => {
+  const read = createTournamentParticipantReader<string[]>();
+  let complete!: (result: ApiResult<string[]>) => void;
+  let transport!: AbortSignal;
+  let calls = 0;
+  const run = (signal: AbortSignal) => { calls += 1; transport = signal;
+    return new Promise<ApiResult<string[]>>((resolve) => { complete = resolve; }); };
+  const old = read({ ...options, run });
+  const waiter = new AbortController();
+  const fresh = read({ ...options, run, signal: waiter.signal, fresh: true });
+  waiter.abort();assert.equal((await fresh).data, null);
+  assert.equal(transport.aborted, false);
+  complete(success);assert.equal(await old, success);await setImmediate();
+  assert.equal(calls, 1);
+});
+
+test("fresh wait is released when the last old subscriber closes even if transport ignores abort", async () => {
+  const read = createTournamentParticipantReader<string[]>();
+  const controller = new AbortController();
+  let calls = 0;
+  const run = async () => { calls += 1; return calls === 1 ? new Promise<ApiResult<string[]>>(() => {}) : success; };
+  const old = read({ ...options, run, signal: controller.signal });
+  const fresh = read({ ...options, run, fresh: true });
+  controller.abort();await old;assert.equal(await fresh, success);assert.equal(calls, 2);
+});
+
+test("session changes and thrown old transports release fresh barriers safely", async () => {
+  const read = createTournamentParticipantReader<string[]>();
+  let reject!: (error: Error) => void;
+  let calls = 0, current = true;
+  const run = () => { calls += 1; return new Promise<ApiResult<string[]>>((_, fail) => { reject = fail; }); };
+  const old = read({ ...options, run });
+  const fresh = read({ ...options, run, fresh: true, isCurrentSession: () => current });
+  current = false;reject(new Error("fixture"));
+  await old;assert.equal((await fresh).data, null);assert.equal(calls, 1);
+  assert.equal(await read({ ...options, run: async () => success, fresh: true }), success);
+});
+
 test("owning Node-RED gate marks only a cold duplicate, preserving owner and global rejection", () => {
   const source = fs.readFileSync("scripts/nodered_tournament_participants_nodes/fn_cache_gate_v2.js", "utf8");
   const gate = new Function("msg", "flow", "global", source);

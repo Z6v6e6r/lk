@@ -26,14 +26,25 @@ const responsePayload = msg.payload;
 const explicitError = responsePayload && typeof responsePayload === 'object'
   ? (responsePayload.error || responsePayload.message || null)
   : null;
-const ok = !explicitError && httpStatus !== null && httpStatus >= 200 && httpStatus < 300;
+// ret=obj leaves the original string in place when the HTTP node cannot parse it.
+// Do not reinterpret a JSON string/scalar as an acknowledgement. Node-RED maps
+// a real 204 to {}, while bare function callers may represent no content as null/''.
+const jsonPayload = Array.isArray(responsePayload)
+  || (responsePayload !== null && Object.prototype.toString.call(responsePayload) === '[object Object]');
+const noContent = httpStatus === 204 && (responsePayload == null || responsePayload === ''
+  || (jsonPayload && !Array.isArray(responsePayload) && Object.keys(responsePayload).length === 0));
+const responseValid = httpStatus === 204 ? noContent : jsonPayload;
+const ok = !msg.error && !explicitError && responseValid
+  && httpStatus !== null && httpStatus >= 200 && httpStatus < 300;
 
 msg.payload = {
   fieldId: update.fieldId || null,
   requestedValue: update.requestedValue || null,
   httpStatus,
   ok,
-  error: ok ? null : (explicitError || (httpStatus ? `Viva PUT failed with HTTP ${httpStatus}` : 'Viva PUT failed')),
+  error: ok ? null : (explicitError || (!responseValid && httpStatus >= 200 && httpStatus < 300
+    ? 'Viva PUT response acknowledgement is invalid'
+    : (httpStatus ? `Viva PUT failed with HTTP ${httpStatus}` : 'Viva PUT failed'))),
   response: responsePayload ?? null,
 };
 delete msg._vivaFieldUpdate;

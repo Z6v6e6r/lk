@@ -190,3 +190,93 @@ and sink provisioning require the separately authorized rollout; no production s
 
 LOCAL/CI results are recorded in the PR and final handoff. No STAGING/PROVIDER/PRODUCTION result is
 claimed by these source fixtures or builds.
+
+## Cross-day game price preview guard
+
+Owner: LK1 backend. Audience: incident investigation. When the existing
+`POST /lk/subscriptions/game-price-preview` router reaches
+`PRICE_PREVIEW_CROSS_DAY_UNRESOLVED`, it emits an optional `preview_router` observation
+through `lkDiagnostics`. The guard still returns HTTP 503 with the same error body,
+and never requests a price for a cross-day interval. Diagnostics add no provider,
+DB, network or business writes and change no payment or booking decision.
+
+The observation adds only this bounded shape:
+
+| Fields | Meaning |
+| --- | --- |
+| `previewTargetKind` | `NEW_GAME`, `EXISTING_GAME`, or `UNKNOWN` |
+| `previewTargetSource` | `CLIENT_INPUT` for a new-game interval; `SERVER_CONFIRMED` after the existing-game/exercise checks; otherwise `UNKNOWN` |
+| `previewDuration` | `MINUTES_60`, `MINUTES_90`, `MINUTES_120`, or `UNKNOWN`; no arbitrary duration value |
+| `previewDayRelation` | `NEXT_DAY`, `OTHER`, or `UNKNOWN`, comparing Moscow calendar dates without emitting either date |
+| `previewEndAtMidnight` | Whether the calculated Moscow end is exactly 00:00:00.000; distinguishes the midnight boundary from an overrun |
+| `previewOffsetValid` | Explicit `+03:00` format and calendar roundtrip agree |
+| `previewSelectedSubserviceCount` | Count in 0–20; the public entry requires 1–20 |
+| `previewSubserviceSetSize` | Size of the router's parsed membership set, saturated at 21 (21 means **21 or more**); not catalogue row count or completeness proof |
+| `previewSubservicesMatched`, `previewSubservices2xx` | The earlier selected-membership and successful-response checks passed; not provider price/provenance proof |
+| `previewElapsedBucket` | `<1s`, `<5s`, `<15s`, `≤28s`, `>28s`, or `UNKNOWN`, encoded as fixed enums; no target clock time |
+
+Filter `source=node_red`, `stage=preview_router`,
+`operationStage=subservices`, `code=PRICE_PREVIEW_CROSS_DAY_UNRESOLVED` for this shape.
+The existing `preview_final` refusal observation remains: these are two stages of
+one request, not two refusals. Group by the existing observer's server-generated
+opaque `requestId`, never a domain/message ID. No new correlation header or ID is
+introduced. Dates, target times, station/game/exercise/subscription IDs, selected
+subservice values, URLs/query values, names, auth and provider bodies are excluded.
+The shared sanitizer independently allowlists every new enum, boolean and count.
+
+An absent/failing observer or a diagnostic-derivation failure leaves the original
+response unchanged. Missing fields are unknown, not an inferred same-day interval.
+This evidence explains which accepted target shape triggered the guard; it cannot
+prove provider cross-day support, correct client selection, catalogue completeness,
+or actual booking/payment outcomes. It cannot recover a historical unlogged interval.
+
+Touched function: `lk_subscription_price_preview_20260908_router`; final/entry,
+HTTP responses, graph and business rules are unchanged. The shared contract source
+is `src/utils/errorDiagnosticsCore.mjs`, with generated `schema.v1.json`.
+No flow import/export is generated. A separately authorized activation must prepare
+a focused candidate from a fresh verified live preimage and install the matching
+observer/sanitizer contract: an older or absent observer omits these fields.
+Stop on unexpected diagnostic data; disable the existing observer or restore the
+reviewed router/observer preimages to stop observation. This does not undo business
+operations. Draft PR preparation does not authorize merge, deploy or restart.
+
+Tests: `node --test scripts/tests/subscriptionPricePreviewBackend.test.mjs
+scripts/tests/correlatedErrorDiagnostics.test.mjs`. Local fixtures mock the
+subservices response and prior existing-game confirmation; they make no external
+requests and are not production acceptance.
+
+### Scoped activation on the installed November 12 generation
+
+The live generation has no shared `lkDiagnostics` observer. Its safe activation
+adapter is `scripts/prepare_preview_cross_day_release.mjs`. It pins the freshly
+verified full-flow and router hashes; unknown drift is rejected. It surgically
+copies the reviewed cross-day branch, preserving the rest of the live router.
+It does not regenerate the older live business helpers from current main.
+
+Only the router's `func`, `initialize`, `finalize` and `libs` change. Setup embeds
+the matching sanitizer/runtime and `preview-cross-day-observer.mjs` bundle in the
+node-local VM. The two function libs are native `crypto` and `perf_hooks`; verify
+them through the installed Node-RED importer before apply. No npm install,
+settings/middleware/routing/shared-global change or secret is required. A lexical
+require shim admits only those two native modules and is not exposed globally.
+The local observer admits only this guard before consuming budget, selects the
+11 fields explicitly, and never receives the original payload, headers or
+correlation context. Its random requestId is observation-local: it does not prove
+HTTP linkage. The legacy live final warning remains separate and unchanged.
+
+A fixed safe startup marker carries schema/bundle/source/release hashes and field
+count. A different fixed envelope names guard observations, preventing accidental
+double counting as legacy final warnings. Both use server timestamps, never the
+target date or time. Finalize disposes/deletes only the owned VM observer.
+Standard exact-graph backup/rollback covers all four node fields and all observer
+state; there are no extra installed settings/module files to roll back.
+
+Preparation: `node scripts/prepare_preview_cross_day_release.mjs
+/absolute/fresh/private/workspace /absolute/new/private/output FULL_SOURCE_COMMIT`.
+The output directory must already exist with mode0700; all files are new/private.
+Apply and rollback use the existing reviewed-flow lock, lease and exact-graph
+contract. Stop on source drift, failed native imports/startup marker, unexpected
+error growth or hash mismatch. Postcheck uses disk hashes, PM2/listener/flow-ready
+logs, safe aggregates and an isolated synthetic replay; it sends no business API,
+provider, booking or payment requests. Activation has explicit authority only
+when separately requested by the owner.
