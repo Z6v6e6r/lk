@@ -8,11 +8,12 @@ No real send, replay, old queue release, provider/DB readback, credential/endpoi
 change or new postinstall/PM2 policy is included.
 
 `scripts/nodered_max_activation.mjs` is a focused root-only installer. Its production
-CLI fixes userdir `/root/.node-red`, hoisted SDK0.2.2, contrib0.6.1 and exact six
-node-identity hashes: two receivers, two senders, two legacy outbox injects. It
-rejects extra MAX node types and literal direct MAX API/SDK references in flow
+CLI fixes userdir `/root/.node-red`, hoisted SDK0.2.2, contrib0.6.1 and exact eight
+node-identity hashes: two receivers, two senders, two legacy outbox injects and two callback-answer
+formatter functions. The latter are additionally pinned by exact source hashes. It
+rejects extra MAX node types and unknown literal direct MAX API/SDK references in flow
 URL/function/initializer/library declarations. Full flow SHA binds other content;
-only those six `d:true` flags may differ semantically. The SDK files and43-file JS
+only those eight `d:true` flags may differ semantically. The SDK files and43-file JS
 closure are pinned to reviewed pre/candidate digests. The helper is a separately
 pinned CJS file and is not included in the43 `.js` count.
 
@@ -63,7 +64,7 @@ Apply creates durable private flow/two-SDK backups and a generation journal unde
 stage/transaction. It publishes non-expiring `applying` custody BEFORE stop.
 `STOPPING` is journalled before exactly one PM2stop; missing acknowledgment is
 reconciled only by stopped/PID0 plus old-process absence. No target files are
-published while active. It writes the six-node paused flow, then SDK helper,
+published while active. It writes the eight-node paused flow, then SDK helper,
 messages and client, using same-directory atomic rename and file/directory fsync.
 All expected bytes, caller resolution, closure and protected config hashes are
 checked before a single PM2start of the existing saved definition.
@@ -78,7 +79,7 @@ call a business endpoint or provider.
 Only successful readback enters15-minute `soaking`. `observe` binds the same packet,
 installer, machine, generation, flow, SDK, protected config and exact PM2 identity.
 After successful complete soak it retains private receipt and releases only its
-own shared lease. All six MAX nodes remain disabled. No unpause command exists.
+own shared lease. All eight MAX nodes remain disabled. No unpause command exists.
 This establishes installed artifact/resolution/new-process/readiness evidence;
 natural MAX error-path observation remains false while consumers are paused.
 It does not establish global absence of all provider traffic from unrelated apps.
@@ -111,9 +112,15 @@ unchanged. Monitoring classifier changes and old-queue reconciliation are separa
 node --test scripts/tests/maxActivation.test.mjs
 ```
 
-Synthetic filesystem/PM2 tests cover happy path, exact six-node scope, both lost
+Synthetic filesystem/PM2 tests cover happy path, exact eight-node scope, both lost
 acknowledgments, unchanged restart counter, stop uncertainty, each publication
 failure, foreign state, malformed/active lease, packet binding, watch/cron denial,
 startup readiness/failure, post-soak-publication failure and soak quarantine.
 Transport and PM2 are mocked; no activation test sends are performed. Existing
 MAX workflow runs this suite separately from its unchanged rate-limit suite.
+
+The two exact paused callback formatters issue provider POST `/answers`. Their
+references are allowlisted only with matching node and function SHA and `d:true`;
+all other direct references still fail. These are MAX callback confirmations, not
+inbound HTTP webhook responses or old-outbox delivery ACKs. They remain unavailable
+while both contours are paused. No function body is replaced by this extension.

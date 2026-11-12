@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import test from 'node:test';
-import { createActivation, FILES, hash, PAUSE, classifyStartup } from '../nodered_max_activation.mjs';
+import { createActivation, FILES, hash, PAUSE, DIRECT_PINS, classifyStartup } from '../nodered_max_activation.mjs';
 import { buildSources } from '../prepare_max_response_guard.mjs';
 const fixtures = new URL('./fixtures/max-response-guard/', import.meta.url);
 const source = n => fs.readFileSync(new URL(n + '.js.txt', fixtures), 'utf8');
@@ -28,10 +28,12 @@ function scenario(t, options = {}) {
   const before = entries(), preClosure = hash(JSON.stringify(before));
   const postClosure = hash(JSON.stringify(before.map(([p, h]) => [p, candidates[p] ? hash(candidates[p]) : h])));
   for (const [file, name] of FILES) put(path.join(stage, name), candidates[file]);
-  const types = ['maxbot-receive', 'maxbot-receive', 'maxbot-send', 'maxbot-send', 'inject', 'inject'];
+  const types = ['maxbot-receive', 'maxbot-receive', 'maxbot-send', 'maxbot-send', 'inject', 'inject', 'function', 'function'];
   const flow = types.map((type, i) => ({ id: 'synthetic-' + i, type, wires: [], d: false }));
+  const directPins = new Map();
+  for (const n of flow.slice(6, 8)) { n.func = "msg.method='POST'; msg.url='https://platform-api.max.ru/answers'; return msg;"; directPins.set(hash(n.id), hash(n.func)); }
   flow.push({ id: 'unrelated', type: 'function', func: 'return msg;', wires: [] });
-  const pause = new Map(flow.slice(0, 6).map(n => [hash(n.id), n.type]));
+  const pause = new Map(flow.slice(0, 8).map(n => [hash(n.id), n.type]));
   put(path.join(root, 'flows.json'), JSON.stringify(flow));
   for (const n of ['settings.js', 'package.json', 'flows_cred.json']) put(path.join(root, n), '{}');
   let clock = 100000, stopCalls = 0, startCalls = 0;
@@ -49,7 +51,7 @@ function scenario(t, options = {}) {
     start() {
       startCalls++;
       assert.equal(state.status, 'stopped');
-      assert.ok(JSON.parse(fs.readFileSync(path.join(root, 'flows.json'))).slice(0, 6).every(n => n.d === true));
+      assert.ok(JSON.parse(fs.readFileSync(path.join(root, 'flows.json'))).slice(0, 8).every(n => n.d === true));
       for (const [p,,, h] of FILES) assert.equal(hash(fs.readFileSync(path.join(sdk, p))), h);
       state = { ...state, status: 'online', pid: 900002, uptime: 2000, restarts: initial.restarts + (options.restartLoop ? 2 : options.counterUnchanged ? 0 : 1) };
       return !options.startAckLost;
@@ -57,7 +59,7 @@ function scenario(t, options = {}) {
   };
   const runtime = createActivation({ root, pm2, uid: process.getuid(), gid: process.getgid(), now: () => clock,
     machineHash: () => '1'.repeat(64), installerHash: () => '2'.repeat(64), resolveSdk: () => path.join(sdk, 'dist/index.js'),
-    preClosure, postClosure, pause, readinessTimeoutMs: 0, processAbsent: () => !options.stopUnknown,
+    preClosure, postClosure, pause, directPins, readinessTimeoutMs: 0, processAbsent: () => !options.stopUnknown,
     checkpoint: value => {
       if (value === options.failAt) throw Error('synthetic-private-error');
       if (value === 'VERIFIED_PAUSED' && options.foreignAfterStart === 'settings') fs.appendFileSync(path.join(root, 'settings.js'), '\n');
@@ -75,16 +77,16 @@ function scenario(t, options = {}) {
     journal: () => JSON.parse(fs.readFileSync(path.join(stage, 'transaction/journal.json'))),
     lease: () => JSON.parse(fs.readFileSync(path.join(root, '.padlhub-reviewed-flow-deploy.lease.json'))) };
 }
-test('production pause set has exactly two receivers, senders and pollers', () => {
-  assert.equal(PAUSE.size, 6);
-  for (const type of ['maxbot-receive', 'maxbot-send', 'inject']) assert.equal([...PAUSE.values()].filter(x => x === type).length, 2);
+test('production pause set has exactly two receivers, senders, pollers and callback formatters', () => {
+  assert.equal(PAUSE.size, 8);
+  for (const type of ['maxbot-receive', 'maxbot-send', 'inject', 'function']) assert.equal([...PAUSE.values()].filter(x => x === type).length, 2);
 });
-test('stopped transaction commits complete SDK, only six disabled flags, one start and soak', t => {
+test('stopped transaction commits complete SDK, only eight disabled flags, one start and soak', t => {
   const s = scenario(t), original = fs.readFileSync(path.join(s.root, 'flows.json'));
   const result = s.activate();
   assert.equal(result.status, 'ACTIVATED_MAX_PAUSED'); assert.equal(s.stopCalls(), 1); assert.equal(s.startCalls(), 1);
   const paused = JSON.parse(fs.readFileSync(path.join(s.root, 'flows.json'))), before = JSON.parse(original);
-  assert.deepEqual(paused, before.map((n, i) => i < 6 ? { ...n, d: true } : n));
+  assert.deepEqual(paused, before.map((n, i) => i < 8 ? { ...n, d: true } : n));
   assert.equal(s.lease().phase, 'soaking'); assert.equal(s.journal().phase, 'VERIFIED_PAUSED');
   assert.equal(fs.statSync(path.join(s.stage, 'transaction/flows.before.json')).mode & 0o777, 0o600);
   assert.equal(s.runtime.observe(s.stage, s.packet, hash(Buffer.from(JSON.stringify(s.packet)))).status, 'SOAKING_MAX_PAUSED');
@@ -104,7 +106,7 @@ test('ambiguous stop makes no flow/SDK publication or start', t => {
 for (const failAt of ['FLOW_PAUSED', 'HELPER_COMMITTED', 'MESSAGES_COMMITTED', 'CLIENT_COMMITTED', 'FILES_COMMITTED']) test(`interruption after ${failAt}: stopped, no rollback to enabled graph`, t => {
   const s = scenario(t, { failAt }); assert.throws(s.activate, /MAX_ACTIVATION_INTERRUPTED/);
   assert.equal(s.stopCalls(), 1); assert.equal(s.startCalls(), 0);
-  assert.ok(JSON.parse(fs.readFileSync(path.join(s.root, 'flows.json'))).slice(0, 6).every(n => n.d));
+  assert.ok(JSON.parse(fs.readFileSync(path.join(s.root, 'flows.json'))).slice(0, 8).every(n => n.d));
   assert.equal(s.journal().phase, 'OWNER_RECOVERY_REQUIRED'); assert.equal(s.lease().phase, 'applying');
   assert.ok(!JSON.stringify(s.journal()).includes('synthetic-private-error'));
 });
@@ -195,4 +197,18 @@ test('startup readiness requires a new complete boot and rejects startup failure
   assert.equal(classifyStartup(started + '[info] Stopping flows').startedFlows, false);
   assert.equal(classifyStartup(started.replace('[info] Started flows', 'Error loading module\n[info] Started flows')).startupFailure, true);
   assert.equal(classifyStartup(started + 'SyntaxError in unrelated background operation').startupFailure, false);
+});
+
+test('direct callback allowlist requires pinned identity and exact disabled source', t => {
+  assert.equal(DIRECT_PINS.size, 2);
+  const s = scenario(t), p = path.join(s.root, 'flows.json'), flow = JSON.parse(fs.readFileSync(p));
+  flow[6].func += '\n'; fs.writeFileSync(p, JSON.stringify(flow));
+  assert.throws(() => s.runtime.prepare(s.stage), /MAX_DIRECT_SOURCE_DRIFT/); assert.equal(s.stopCalls(), 0);
+});
+
+test('pinned formatter cannot authorize extra direct-provider initializer or URL fields', t => {
+  const s = scenario(t), p = path.join(s.root, 'flows.json'), flow = JSON.parse(fs.readFileSync(p));
+  flow[6].initialize = "fetch('https://platform-api.max.ru/messages')";
+  fs.writeFileSync(p, JSON.stringify(flow)); assert.throws(() => s.runtime.prepare(s.stage), /MAX_PAUSE_COVERAGE/);
+  assert.equal(s.stopCalls(), 0);
 });

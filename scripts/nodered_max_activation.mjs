@@ -24,6 +24,11 @@ export const PAUSE = new Map([
   ['86593a32f10baa2c97514089aeae1d504fb0bf595d5b24d0152ae91da4111157', 'inject'],
   ['07012cfff48f1f340d20a18b91ff92171cdd13bceb1acc913ac9db672b37e43a', 'inject'],
 ]);
+export const DIRECT_PINS = new Map([
+  ['c4181506f9fd49b5dedbf113db7f17430a8f900bd87b3ff9d4c64a2c26105b29', 'f613dee82da08b62e245e709df946b309b5da023251a28dc075c0f5ec0d4ea4c'],
+  ['bce91ef6d5d011c542ce5e697eb14b87d7440c87616a85ca4f55469d67568467', 'fb8bb2f015021be4f800e9e0f22ba9428d5dd001ab596f6227b23e8c359dee19'],
+]);
+for (const idHash of DIRECT_PINS.keys()) PAUSE.set(idHash, 'function');
 const CALLERS = {
   'maxbot-send': '1f959b7b6fd6971ea57b4f53b844c77ec53eb25e79fcb2adb9be2c5bd75a162e',
   'maxbot-receive': '4ef4dbe52a57841f7209de25a2b2811be564ea12738dd27e5fd831cd903e1ab0',
@@ -87,7 +92,7 @@ export function createActivation({ root = '/root/.node-red', pm2 = createPm2(), 
   now = Date.now, preClosure = PRE_CLOSURE, postClosure = POST_CLOSURE,
   machineHash = () => hash(fs.readFileSync('/etc/machine-id')),
   installerHash = () => hash(fs.readFileSync(self)), resolveSdk,
-  pause = PAUSE, releaseCommit = SOURCE, readinessTimeoutMs = 60000, checkpoint = () => {}, processAbsent = pid => { try { process.kill(pid, 0); return false; } catch (e) { return e.code === 'ESRCH'; } },
+  pause = PAUSE, directPins = DIRECT_PINS, releaseCommit = SOURCE, readinessTimeoutMs = 60000, checkpoint = () => {}, processAbsent = pid => { try { process.kill(pid, 0); return false; } catch (e) { return e.code === 'ESRCH'; } },
 } = {}) {
   const sdk = path.join(root, 'node_modules/@maxhub/max-bot-api');
   const contrib = path.join(root, 'node_modules/node-red-contrib-maxbot');
@@ -147,16 +152,21 @@ export function createActivation({ root = '/root/.node-red', pm2 = createPm2(), 
     const found = new Set(); let direct = 0;
     for (const n of flow) {
       const h = hash(n.id), type = pause.get(h);
-      if (type) { check(n.type === type, 'MAX_PAUSE_NODE_TYPE'); found.add(h); n.d = true; }
+      if (type) { check(n.type === type, 'MAX_PAUSE_NODE_TYPE');
+        if (directPins.has(h)) check(n.type === 'function' && hash(n.func || '') === directPins.get(h), 'MAX_DIRECT_SOURCE_DRIFT');
+        found.add(h); n.d = true; }
       if (['maxbot-send', 'maxbot-receive'].includes(n.type)) check(type === n.type, 'MAX_EXTRA_CALLER');
       check(!(/max/i.test(n.type) && !['maxbot-send', 'maxbot-receive', 'maxbot-config'].includes(n.type)), 'MAX_CUSTOM_CALLER');
-      const src = [n.url, n.func, n.initialize, ...(n.libs || []).map(x => x.module)].filter(x => typeof x === 'string').join('\n');
-      if (/(?:platform-api\d*\.max\.ru|@maxhub\/max-bot-api)/i.test(src)) direct++;
+      const extras = [n.url, n.initialize, ...(n.libs || []).map(x => x.module)].filter(x => typeof x === 'string').join('\n');
+      const src = [extras, n.func].filter(x => typeof x === 'string').join('\n');
+      if (/(?:platform-api\d*\.max\.ru|@maxhub\/max-bot-api)/i.test(src)
+        && !(directPins.has(h) && n.d === true && hash(n.func || '') === directPins.get(h)
+          && !/(?:platform-api\d*\.max\.ru|@maxhub\/max-bot-api)/i.test(extras))) direct++;
     }
-    check(found.size === 6 && direct === 0, 'MAX_PAUSE_COVERAGE');
+    check(found.size === pause.size && direct === 0, 'MAX_PAUSE_COVERAGE');
     return Buffer.from(JSON.stringify(flow, null, 2) + '\n');
   };
-  const assertPaused = b => { const flow = JSON.parse(b); check(flow.filter(n => pause.has(hash(n.id)) && n.d === true).length === 6, 'MAX_PAUSE_NOT_ACTIVE'); };
+  const assertPaused = b => { const flow = JSON.parse(b); check(flow.filter(n => pause.has(hash(n.id)) && n.d === true).length === pause.size, 'MAX_PAUSE_NOT_ACTIVE'); };
   const currentHashes = () => Object.fromEntries(FILES.map(([p]) => [p, exists(path.join(sdk, p)) ? hash(read(path.join(sdk, p))) : null]));
   const assetBytes = stage => {
     regular(stage, true); check((fs.statSync(stage).mode & 0o777) === 0o700, 'MAX_STAGE_MODE');
@@ -253,7 +263,7 @@ export function createActivation({ root = '/root/.node-red', pm2 = createPm2(), 
       journal.after = after; phase('VERIFIED_PAUSED');
       lease.phase = 'soaking'; lease.acquiredAtMs = now(); lease.expiresAtMs = now() + 900000;
       lease.sdkJournalSha256 = hash(read(journalPath)); jsonWrite(leasePath, lease); checkpoint('SOAK_LEASE_PUBLISHED');
-      return { status: 'ACTIVATED_MAX_PAUSED', sourceCommit: SOURCE, sdkFiles: 3, pausedNodes: 6,
+      return { status: 'ACTIVATED_MAX_PAUSED', sourceCommit: SOURCE, sdkFiles: 3, pausedNodes: pause.size,
         flowSha256: packet.pausedFlowSha256, sdkJsClosureSha256: postClosure, beforePid: packet.pm2.pid,
         afterPid: after.pid, beforeRestarts: packet.pm2.restarts, afterRestarts: after.restarts,
         protectedUnchanged: true, naturalErrorPathObserved: false, testProviderCalls: 0, soakUntilMs: lease.expiresAtMs };
@@ -309,7 +319,7 @@ export function createActivation({ root = '/root/.node-red', pm2 = createPm2(), 
       j.phase = 'SOAK_VERIFIED_MAX_PAUSED'; j.updatedAtMs = now(); jsonWrite(journalPath, j);
       fs.unlinkSync(leasePath); syncDir(root);
     }
-    return { status: complete ? 'SOAK_VERIFIED_MAX_PAUSED' : 'SOAKING_MAX_PAUSED', pausedNodes: 6,
+    return { status: complete ? 'SOAK_VERIFIED_MAX_PAUSED' : 'SOAKING_MAX_PAUSED', pausedNodes: pause.size,
       pid: j.after.pid, restarts: j.after.restarts, sdkJsClosureSha256: postClosure,
       flowSha256: packet.pausedFlowSha256, naturalErrorPathObserved: false, leaseReleased: complete };
   };
