@@ -214,3 +214,24 @@ after creation. The 26-minute bound protects the extra five minutes of link
 life even when the earlier provider due time has passed.
 The final transaction GET prevents local claim release if an unexpected payment
 appears and leaves that operation for manual reconciliation.
+
+### Free-cancel gate ordering hotfix (2026-11-12)
+
+`patch_live_lk1_free_gate_order.mjs` consumes a fresh verified private 147
+workspace and changes only `lk_subscription_booking_router_20260804.func`.
+It moves cancellation dispatch behind daily-visit helper initialization;
+allowance decisions, claims, payment and booking contracts are unchanged.
+Both free-cancellation and daily-visit composers preserve that order.
+`lk1FreeGateOrder.test.mjs` reproduces the former exception and exercises
+preaccept/booking continuations, pending cancellation and invalid reads.
+With `LK1_FREE_GATE_LIVE_SOURCE` it verifies the entire exact candidate router.
+
+The worker guard pins the resulting flow and router hashes. Deploy the flow
+and a verified worker bundle from the same clean pushed task commit together:
+stop/wait for the existing worker, guarded flow preflight/apply with exact
+backup, active-flow and runtime checks after settling, then switch to the
+verified bundle and restart the worker with its unchanged environment, mode,
+cohort, cursor and token. Never reset operation records or replay client
+bookings as part of this release. Stop on source/lease/binding drift or a new
+router exception. Exact source rollback must also restore the prior matching
+worker bundle; no settings, credentials, provider or historical-data rollback.
