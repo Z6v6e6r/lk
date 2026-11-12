@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import { patchFunction98Flow, sha256, FUNCTION98_SAFE_DIAGNOSTIC } from '../lib/function98_safe_diagnostic.mjs';
+import { createFunction98BodyPreserver, function98GraphHash, function98OrderedGraphHash } from '../nodered_reviewed_flow_deploy/function98_body_preserver.mjs';
 
 const runtimeRoot = process.env.NODERED_RUNTIME_ROOT;
 test('real Node-RED 4.0.9 modified-nodes preserves inject/HTTP instances and makes zero startup provider calls',
@@ -47,22 +48,37 @@ test('real Node-RED 4.0.9 modified-nodes preserves inject/HTTP instances and mak
         { id: 'inject', type: 'inject', z: 'tab', once: false, repeat: '', crontab: '0 0 1 1 *', wires: [['target']] },
         { id: 'entry', type: 'http in', z: 'tab', url: '/probe', method: 'get', wires: [['target']] },
         { id: 'target', type: 'function', z: 'tab', name: 'function 98', func: source, outputs: 1, wires: [['http', 'debug']] },
-        { id: 'http', type: 'http request', z: 'tab', method: 'GET', ret: 'txt', url: '', wires: [['response']] },
+        { id: 'http', type: 'http request', z: 'tab', method: 'GET', ret: 'txt', url: '', requestTimeout: '120000', customRuntimeOption: 'synthetic-preserve', wires: [['response']] },
         { id: 'debug', type: 'debug', z: 'tab', active: false, complete: 'true', wires: [] },
         { id: 'response', type: 'http response', z: 'tab', wires: [] }];
       // Node-RED distinguishes runtime nodes from config nodes by coordinates.
       for (const node of flow) if (node.type !== 'tab') Object.assign(node, { x: 0, y: 0 });
       await admin('POST', { rev: (await admin('GET'))?.rev, flows: flow });
       const inject = RED.nodes.getNode('inject'), httpNode = RED.nodes.getNode('http'), fn = RED.nodes.getNode('target');
+      const syntheticCredentials = { user: 'fixture-user', password: 'fixture-password' };
+      RED.nodes.addCredentials('http', syntheticCredentials);
       inject.on('input', () => injectInputs++);
       await new Promise(resolve => setTimeout(resolve, 100)); assert.equal(providerCalls, 0);
       assert.equal(await (await request(base + '/api/probe')).text(), 'provider-ok'); assert.equal(providerCalls, 1);
       const warningsBefore = logs.length, before = await admin('GET');
       const patched = patchFunction98Flow(flow, { expectedFunctionSha256: sha256(source) }).candidate;
-      const result = await admin('POST', { rev: before.rev, flows: patched });
+      const editor = structuredClone(before.flows);
+      delete editor.find(n => n.id === 'http').requestTimeout; delete editor.find(n => n.id === 'http').customRuntimeOption;
+      editor.find(n => n.id === 'tab').x = 0; editor.find(n => n.id === 'tab').y = 0;
+      const seal = { protocol: 'source-preserving-v2', planSha256: 'a'.repeat(64), attemptSha256: 'b'.repeat(64),
+        sourceGraphSha256: await function98GraphHash(before.flows), candidateGraphSha256: await function98GraphHash(patched),
+        sourceOrderedGraphSha256: await function98OrderedGraphHash(before.flows), candidateOrderedGraphSha256: await function98OrderedGraphHash(patched),
+        editorOrderedGraphSha256: await function98OrderedGraphHash(editor), preRevisionSha256: sha256(before.rev),
+        beforeFunctionSha256: sha256(source), afterFunctionSha256: sha256(patched.find(n => n.id === 'target').func) };
+      const preserve = await createFunction98BodyPreserver(seal, before);
+      const output = await preserve({ request: { url: 'http://127.0.0.1:18801/flows', method: 'POST', apiVersion: 'v2', deploymentType: 'nodes' }, postBody: { rev: before.rev, flows: editor } });
+      assert.deepEqual(JSON.parse(output.postDataText).flows, patched);
+      const result = await admin('POST', JSON.parse(output.postDataText));
+      assert.deepEqual((await admin('GET')).flows, patched);
       assert.notEqual(result.rev, before.rev);
       assert.strictEqual(RED.nodes.getNode('inject'), inject);
       assert.strictEqual(RED.nodes.getNode('http'), httpNode);
+      assert.deepEqual(RED.nodes.getCredentials('http'), syntheticCredentials);
       assert.notStrictEqual(RED.nodes.getNode('target'), fn);
       await new Promise(resolve => setTimeout(resolve, 200));
       assert.equal(providerCalls, 1); assert.equal(injectInputs, 0);

@@ -9,6 +9,7 @@ import { sanitizeEvent } from '../../src/utils/errorDiagnosticsCore.mjs';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
 import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, composeSubscriptionPreviewServerTimeArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
+import { composePreviewBookingsRelease, ORIGINAL_BOOKINGS_GUARD } from '../prepare_preview_bookings_release.mjs';
 
 const bookingsRouterSource = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js', import.meta.url), 'utf8');
 const bookingsStart = "if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {";
@@ -189,6 +190,55 @@ test('firstFailure and booking stages remain finite enums through sanitizer and 
     assert.equal(safe.firstFailure, 'row_owner_mismatch');
   }
   assert.equal(sanitizeEvent({ ...base, get firstFailure() { throw Error('fixture-sensitive'); } }), null);
+});
+
+test('bookings activation changes only func and bypasses a silently filtering scoped observer', () => {
+  const original = [
+    { id: 'fixture-tab', type: 'tab' },
+    { id: 'lk_subscription_price_preview_20260908_router', type: 'function', z: 'fixture-tab',
+      func: bookingsBaselineSource, initialize: '/* existing diagnostic initialization */',
+      finalize: '/* existing diagnostic disposal */', libs: [{ var: 'existing', module: 'crypto' }], outputs: 6,
+      wires: Array.from({ length: 6 }, () => []) },
+    { id: 'fixture-unrelated', type: 'function', z: 'fixture-tab', func: 'return msg;', wires: [[]] },
+  ];
+  const liveBytes = Buffer.from(JSON.stringify(original));
+  const sha = value => createHash('sha256').update(value).digest('hex');
+  const options = { release: 'a'.repeat(40), expectedSourceSha256: sha(liveBytes), expectedRouterSha256: sha(bookingsBaselineSource) };
+  const packet = composePreviewBookingsRelease(liveBytes, options);
+  const candidate = JSON.parse(packet.candidateBytes);
+  assert.deepEqual(candidate.map(n => n.id), original.map(n => n.id));
+  const changed = candidate[1];
+  assert.deepEqual({ ...changed, func: original[1].func }, original[1]);
+  assert.deepEqual(candidate[0], original[0]); assert.deepEqual(candidate[2], original[2]);
+  assert.equal(packet.report.changedNodeCount, 1);
+  assert.deepEqual(packet.report.changedFields, ['func']);
+  assert.equal(packet.report.originalRecoveredExactly, true);
+  const execute = new Function('msg', 'canonical', 'global', 'node', changed.func);
+  for (const step of ['activeBookings', 'historyBookings']) {
+    const info = [];
+    const msg = { payload: [ownedBooking({ clientId: 'fixture-other' })], statusCode: 200,
+      _subscriptionPricePreview: { step, startedAt: Date.now(), actorClientId: 'fixture-owner' } };
+    const output = execute(msg, bookingsCanonical, { get: () => ({ observe() {} }) }, { log: text => info.push(JSON.parse(text)) });
+    assert.equal(output[4], msg);
+    assert.equal(msg._subscriptionPricePreview.error, 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+    assert.deepEqual(info, [{ event: 'subscription_price_preview_bookings_refused',
+      code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE', stage: 'preview_router', operationStage: step,
+      firstFailure: 'row_owner_mismatch', upstreamStatus: 200 }]);
+  }
+  assert.throws(() => composePreviewBookingsRelease(liveBytes, {}), /EXACT_IDENTITY/);
+  assert.throws(() => composePreviewBookingsRelease(liveBytes, { ...options, expectedSourceSha256: 'b'.repeat(64) }), /FLOW_DRIFT/);
+  assert.throws(() => composePreviewBookingsRelease(liveBytes, { ...options, expectedRouterSha256: 'b'.repeat(64) }), /ROUTER_DRIFT/);
+  for (const mutate of [
+    flow => { flow[1].d = true; },
+    flow => { flow[0].disabled = true; },
+    flow => { flow[1].func = flow[1].func.replace(ORIGINAL_BOOKINGS_GUARD, ORIGINAL_BOOKINGS_GUARD.replace('!ok()', 'false')); },
+    flow => { flow[1].func += '\nconst lkBookingsDiagnostic = () => {};'; },
+  ]) {
+    const modified = structuredClone(original); mutate(modified);
+    const bytes = Buffer.from(JSON.stringify(modified));
+    assert.throws(() => composePreviewBookingsRelease(bytes, { ...options,
+      expectedSourceSha256: sha(bytes), expectedRouterSha256: sha(modified[1].func) }), /ROUTER_DRIFT|GUARD_DRIFT/);
+  }
 });
 
 const fixturePath = process.env.LK_PRICE_PREVIEW_FLOW_FIXTURE;

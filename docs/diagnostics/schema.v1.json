@@ -55,6 +55,14 @@
         "UNKNOWN"
       ]
     },
+    "patchConflictStage": {
+      "enum": [
+        "binding",
+        "precondition",
+        "cas",
+        "UNKNOWN"
+      ]
+    },
     "upstreamPhase": {
       "enum": [
         "profile",
@@ -494,6 +502,7 @@
         "/lk/games/split/create",
         "/lk/games/payment/confirm",
         "/lk/games/confirm",
+        "/lk/games/records/:gameId",
         "UNKNOWN"
       ]
     },
