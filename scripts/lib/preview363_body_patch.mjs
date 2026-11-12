@@ -1,6 +1,6 @@
 // This module is also embedded in the browser guard. It has no I/O or imports.
 export const PREVIEW363_TARGET = 'lk_subscription_price_preview_20260908_router';
-export const PREVIEW363_FUNCTION_SHA = '9d5a757b316e76c514487ac0c7b048d1b5fb2dfdb0cea6d80d1f98e2d85aade4';
+export const PREVIEW363_FUNCTION_SHA = '2053d6679bb41354bda6484ebb4ea1f558884cd946f1c5ba57eddf262f78f37a';
 export const PREVIEW363_ANCHOR = "    ctx.errorDetails = tariffDetails(reason, 'tariff_shape');\n";
 export const PREVIEW363_HOOK = `    if (reason === 'empty_tariff_list') {
       const binding = {};
