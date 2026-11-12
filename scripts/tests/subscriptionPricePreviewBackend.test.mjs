@@ -90,7 +90,7 @@ test('preview source never calls CREATE or a product cache miss resolver',()=>{
   assert.doesNotMatch(router,/\/split\/create|\/seliger|insertOne|updateOne|global\.set/);
 });
 
-function exerciseDiagnostic(payload, overrides = {}, observer) {
+function exerciseDiagnostic(payload, overrides = {}, observer, logger) {
   const booking = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
   const roots = ['unwrapRecord', 'resolveCategory', 'eventStartsAt', 'eventDurationMinutes', 'exerciseRoomId'];
   const helpers = extractSubscriptionPricePreviewSource({ source: booking, roots }).source;
@@ -103,7 +103,7 @@ function exerciseDiagnostic(payload, overrides = {}, observer) {
   const msg = { payload, statusCode: 200, _msgid: 'fixture-sensitive', _subscriptionPricePreview: ctx,
     headers: { 'content-type': 'application/json; fixture-sensitive' }, ...overrides };
   const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
-  const outputs = new Function('msg', 'canonical', 'global', source('router'))(msg, canonical, globals);
+  const outputs = new Function('msg', 'canonical', 'global', 'node', source('router'))(msg, canonical, globals, logger);
   if (outputs[4]) new Function('msg', 'global', source('final'))(msg, globals);
   return { msg, outputs, events, ctx };
 }
@@ -177,6 +177,28 @@ test('missing or throwing observers cannot change exercise guard verdicts', () =
   }
   const headers = { get 'content-type'() { throw Error('header'); } };
   assert.equal(exerciseDiagnostic(null, { headers }).msg.statusCode, 503);
+});
+test('installed flows without the shared observer emit one safe info diagnostic and keep the legacy warning separate', () => {
+  for (const observer of [null, { observe() { throw Error('sink'); } }]) {
+    const info = [];
+    const logger = { log: text => info.push(JSON.parse(text)), warn() { assert.fail('No second refusal warning'); } };
+    const { msg } = exerciseDiagnostic({ ...previewExercise(), roomId: uuid(99) }, {}, observer, logger);
+    assert.equal(msg.statusCode, 503);
+    assert.deepEqual(msg.payload, { error: { code: 'PRICE_PREVIEW_GAME_UNRESOLVED' } });
+    assert.deepEqual(info, [{ event: 'subscription_price_preview_exercise_refused',
+      code: 'PRICE_PREVIEW_GAME_UNRESOLVED', step: 'exercise', reason: 'target_room',
+      upstreamStatus: 200, responseKind: 'object', contentTypeClass: 'json' }]);
+    assert(!JSON.stringify(info).includes('fixture-sensitive'));
+    assert(!JSON.stringify(info).includes(exerciseId));
+    assert(!JSON.stringify(info).includes(room));
+    exerciseDiagnostic(previewExercise(), {}, observer, logger);
+    assert.equal(info.length, 1);
+  }
+  const info = [];
+  exerciseDiagnostic(null, {}, undefined, { log: value => info.push(value) });
+  assert.deepEqual(info, [], 'A configured observer needs no duplicate info event');
+  const failed = exerciseDiagnostic(null, {}, null, { log() { throw Error('log'); } });
+  assert.equal(failed.msg.statusCode, 503);
 });
 test('exercise diagnostics do not mask explicit read errors or the overall timeout', () => {
   const failed = exerciseDiagnostic(previewExercise(), { error: { code: 'ETIMEDOUT' } });

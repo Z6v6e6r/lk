@@ -1,10 +1,34 @@
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
-    if (typeof global === "undefined" || typeof global.get !== "function") return;
-    const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "preview_router", { sourceHash: "d421c9c431db409c6c4b39f5ce445f31f2e6eecdd6f6d919b9ba2f9c03e93536", ...fields });
+    const observer = typeof global !== "undefined" && typeof global.get === "function"
+      ? global.get("lkDiagnostics") : null;
+    if (typeof observer?.observe === "function") {
+      observer.observe(msg, "preview_router", { sourceHash: "d421c9c431db409c6c4b39f5ce445f31f2e6eecdd6f6d919b9ba2f9c03e93536", ...fields });
+      return;
+    }
   } catch { /* Observability cannot alter business execution. */ }
+  // Installed flows may predate the shared observer. Use a separate info event,
+  // so this does not duplicate the final node's legacy refusal warning/count.
+  try {
+    const reasons = ['target_upstream_error', 'target_missing', 'target_identity', 'target_category',
+      'target_studio', 'target_room', 'target_duration', 'target_start_invalid', 'target_cancelled',
+      'target_lifecycle', 'PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID'];
+    if (fields.code !== 'PRICE_PREVIEW_GAME_UNRESOLVED' || !reasons.includes(fields.reason)
+      || typeof node === 'undefined' || typeof node.log !== 'function') return;
+    const event = { event: 'subscription_price_preview_exercise_refused', code: fields.code,
+      step: 'exercise', reason: fields.reason };
+    if (Number.isInteger(fields.upstreamStatus) && fields.upstreamStatus >= 100 && fields.upstreamStatus <= 599) {
+      event.upstreamStatus = fields.upstreamStatus;
+    }
+    if (['object', 'array', 'text', 'number', 'boolean', 'null', 'missing', 'UNKNOWN'].includes(fields.responseKind)) {
+      event.responseKind = fields.responseKind;
+    }
+    if (['json', 'text', 'html', 'other', 'missing'].includes(fields.contentTypeClass)) {
+      event.contentTypeClass = fields.contentTypeClass;
+    }
+    node.log(JSON.stringify(event));
+  } catch { /* The optional fallback cannot change a business verdict either. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
 // Dedicated advisory graph. `canonical` consists only of source-bound helpers.

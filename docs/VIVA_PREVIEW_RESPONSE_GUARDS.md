@@ -23,6 +23,13 @@ credentials are copied into the new fields. A text shape alone does not prove
 whether the original response was invalid JSON. Missing/throwing observers and
 diagnostic metadata failures leave the business verdict unchanged.
 
+For an installed flow without the shared observer (or a failing observer), the
+router emits `subscription_price_preview_exercise_refused` through `node.log`.
+This fallback independently allowlists the same reason/status/shape enums, contains
+no IDs or arbitrary text, and emits only on exercise refusal. It uses info level
+and a separate event name, leaving the final node's legacy refusal warning/count
+unchanged. No global settings/runtime activation is needed for this fallback.
+
 Touched source nodes: onboarding `Capture Viva level PUT result` and subscription
 preview `router`. The PUT builder, HTTP nodes, graph wiring, final response node,
 pricing rules and writes are unchanged. No flow JSON/import/export is generated.
