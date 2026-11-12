@@ -65,6 +65,15 @@ booking mutation verification keep their independent fresh-read path and retry
 policy. Separate tabs or independently loaded IIFE bundles still rely on the
 server's shared single-flight guard.
 
+The signup page subscribes directly through this coordinator; it must not reuse
+a page promise owned by a cancelled reader. Its forced refresh passes
+`fresh: true`: wait for the current physical GET to settle, then start or join a
+successor GET. Cancelling one ordinary subscriber cannot release that freshness
+barrier while another subscriber still owns the old read. Concurrent fresh
+callers waiting for the same old flight share its successor; a fresh caller
+arriving after that successor started waits for a newer snapshot. Waiting can
+be cancelled without cancelling other readers or retaining an old flight.
+
 Only the explicit busy-key JSON marker permits three fast retries, after
 750/1500/3000 ms plus 0–250 ms jitter each (at most four HTTP attempts and six
 seconds of retry delays). These probes re-enter the existing cache gate and do

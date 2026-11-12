@@ -1,3 +1,11 @@
+// Optional failure observer; its absence/failure cannot alter the roster operation.
+const lkDiagnosticFailure = (statusCode, code) => {
+  try {
+    if (statusCode !== 503 || msg.req?.method !== "POST" || msg.req.path !== "/lk/subscription-bookings") return;
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    global.get("lkDiagnostics")?.observe(msg, "roster_bridge_response", { code, httpStatus: statusCode, sourceHash: "bc18bbb2240b5f7964b366db1bec51b32f2bae41a9e72925eb2c5e1f6b5f02d2", upstreamStatus: msg.statusCode });
+  } catch { /* Observability cannot alter business execution. */ }
+};
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -5,6 +13,7 @@ const toStr = (value) => {
   return normalized || null;
 };
 const respond = (statusCode, code, error, raw = null) => {
+  lkDiagnosticFailure(statusCode, code);
   msg.statusCode = statusCode;
   msg.headers = {
     "Content-Type": "application/json; charset=utf-8",

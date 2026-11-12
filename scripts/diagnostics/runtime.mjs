@@ -71,10 +71,10 @@ export function createDiagnostics({ sink, release, key, detailLimit = 600, now =
       const entity = typeof msg.req?.params?.gameId === "string" ? msg.req.params.gameId : undefined;
       const operation = msg.req?.headers?.["idempotency-key"];
       const target = command?.targetExternalChatId || command?.targetExternalUserId;
-      const conflict = bookingConflict(msg, stage);
+      const conflict = bookingConflict(msg, stage, fields);
       emit(ctx, { eventKind: "stage", code: "STAGE_ENTER", entityRef: ref("entity", entity), operationRef: ref("operation", operation),
         outboxRef: ref("outbox", command?.id), bindingRef: ref("binding", target), ...fields, ...conflict, stage,
-        operationStage: msg._referralSubscriptionCtx?.step ?? msg._subscriptionBooking?.step ?? msg._splitCtx?.step ?? msg._subscriptionPricePreview?.step,
+        operationStage: conflict?.operationStage ?? msg._referralSubscriptionCtx?.step ?? msg._subscriptionBooking?.step ?? msg._splitCtx?.step ?? msg._subscriptionPricePreview?.step,
         reqPresent: Boolean(msg.req), resPresent: Boolean(msg.res), refUnavailable: !Buffer.isBuffer(key) || key.length < 32 });
     } catch { metrics.loggerFailures++; }
   }
