@@ -611,6 +611,7 @@ jobs:
           scripts/tests/matchResult.cardStateHydration.test.ts
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs
           scripts/tests/function98SafeDiagnostic.test.mjs
+          scripts/tests/function296SafeDiagnostic.test.mjs
           scripts/tests/function98NativeOperation.test.mjs
           scripts/tests/function98BrowserGuard.test.mjs
           scripts/tests/vivaSessionCompatibility.test.mjs
