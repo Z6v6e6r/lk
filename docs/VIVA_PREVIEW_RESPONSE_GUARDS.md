@@ -101,7 +101,8 @@ clock does not reset the budget. The quota is consumed before logging; logger
 failure, missing/throwing context, or invalid budget state cannot alter business
 outputs. Missing context or invalid state omits this event. It does not replace or
 rate-limit the pre-existing shared observer; suppression counts cover this event
-only and reset on node-context reset/restart.
+only. Clearing this context resets the counters; restart persistence follows the
+configured Node-RED context store (the default memory store resets on restart).
 
 Owner: backend maintainers. Audience: incident diagnostics operators. Expected
 result: the next admitted natural refusal exposes its upstream status and bounded
