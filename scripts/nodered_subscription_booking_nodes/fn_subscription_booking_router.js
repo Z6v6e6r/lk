@@ -908,6 +908,84 @@ const hasCompleteBookingList = (value, seen = new Set()) => {
   return ["data", "payload", "result"].some((key) => hasCompleteBookingList(value[key], seen));
 };
 
+// Bounded read-only pagination shared with advisory preview by canonical extraction.
+// Never infer a full list from a partial page or silently deduplicate offset drift.
+const collectVivaBookingPage = (payload, previous, options) => {
+  const fail = error => ({ error });
+  const { actorId, binding, baseUrl, method, requestUrl, responseUrl, now, deadlineAt } = options;
+  if (typeof actorId !== "string" || !actorId || typeof binding !== "string" || !binding
+    || method !== "GET" || !Number.isSafeInteger(now) || !Number.isSafeInteger(deadlineAt)
+    || now >= deadlineAt || typeof baseUrl !== "string") return fail("list_incomplete_or_unrecognized");
+  const page = previous ? previous.nextPage : 0;
+  if (!Number.isSafeInteger(page) || page < 0 || page >= 10
+    || previous && (previous.binding !== binding || previous.actorId !== actorId
+      || previous.baseUrl !== baseUrl || previous.deadlineAt !== deadlineAt)) return fail("list_incomplete_or_unrecognized");
+  const expectedUrl = baseUrl + (page ? `&page=${page}` : "");
+  if (requestUrl !== expectedUrl || responseUrl !== undefined && responseUrl !== expectedUrl) {
+    return fail("list_incomplete_or_unrecognized");
+  }
+  if (!isObj(payload) || !Array.isArray(payload.content)
+    || payload.number !== page || !Number.isSafeInteger(payload.totalElements) || payload.totalElements < 0
+    || !Number.isSafeInteger(payload.totalPages) || payload.totalPages < 1 || payload.totalPages > 10
+    || page >= payload.totalPages || payload.totalElements > 10000 || payload.content.length > 1000
+    || typeof payload.last !== "boolean" || payload.last !== (page === payload.totalPages - 1)
+    || payload.hasNext !== undefined && (typeof payload.hasNext !== "boolean" || payload.hasNext === payload.last)
+    || payload.content.length === 0 && !payload.last
+    || previous && (payload.totalElements !== previous.total || payload.totalPages !== previous.totalPages)) {
+    return fail("list_incomplete_or_unrecognized");
+  }
+  const rows = previous ? previous.rows.slice() : [];
+  const ids = new Set(rows.map(row => normalizeId(bookingId(row))));
+  if (rows.length > 10000 || ids.size !== rows.length) return fail("list_incomplete_or_unrecognized");
+  for (const row of payload.content) {
+    if (!isObj(row)) return fail("row_not_object");
+    const id = normalizeId(bookingId(row));
+    if (!id) return fail("row_id_missing");
+    const owner = bookingClientId(row);
+    if (owner && normalizeId(owner) !== normalizeId(actorId)) return fail("row_owner_mismatch");
+    if (ids.has(id)) return fail("list_incomplete_or_unrecognized");
+    ids.add(id); rows.push(row);
+  }
+  if (rows.length > payload.totalElements || rows.length > 10000
+    || payload.last && rows.length !== payload.totalElements
+    || !payload.last && (rows.length >= payload.totalElements || page + 1 >= 10)) return fail("list_incomplete_or_unrecognized");
+  return { complete: payload.last, rows, state: { binding, actorId, baseUrl, deadlineAt,
+    total: payload.totalElements, totalPages: payload.totalPages, nextPage: page + 1,
+    observedAt: previous ? previous.observedAt : new Date(now).toISOString(), rows } };
+};
+
+// A bounded GET timeout must never leak into a later booking/payment POST.
+const restoreBookingPageTimeout = (ctx) => {
+  const previous = ctx.bookingPagesRequestTimeout;
+  if (!previous) return;
+  if (previous.present) msg.requestTimeout = previous.value;
+  else delete msg.requestTimeout;
+  delete ctx.bookingPagesRequestTimeout;
+};
+
+// Transport stays in the booking owner; the canonical collector above owns no I/O.
+const continueBookingPages = (ctx, stage) => {
+  const baseUrl = `${VIVA_API_BASE}/end-user/api/v2/${ctx.tenantKey}/bookings`
+    + (stage === "history_bookings" ? "/history?includeCanceled=true&size=1000" : "?size=1000");
+  const now = Date.now();
+  const oldest = Date.parse(ctx.activeBookingsObservedAt);
+  const deadlineAt = ctx.bookingsPagesDeadlineAt
+    ?? ((Number.isFinite(oldest) && oldest <= now ? oldest : now) + 25000);
+  const result = collectVivaBookingPage(msg.payload, ctx.bookingPages, {
+    actorId: ctx.actorClientId, binding: JSON.stringify([ctx.tenantKey, ctx.actorClientId, stage]),
+    baseUrl, method: msg.method, requestUrl: msg.url, responseUrl: msg.responseUrl, now, deadlineAt,
+  });
+  if (result.error) { restoreBookingPageTimeout(ctx); delete ctx.bookingPages; delete ctx.bookingsPagesDeadlineAt; return result; }
+  ctx.bookingsPagesDeadlineAt = deadlineAt;
+  if (stage === "active_bookings") ctx.activeBookingsObservedAt = result.state.observedAt;
+  if (result.complete) { restoreBookingPageTimeout(ctx); msg.payload = result.rows; delete ctx.bookingPages; return result; }
+  ctx.bookingPages = result.state;
+  ctx.bookingPagesRequestTimeout ??= { present: Object.prototype.hasOwnProperty.call(msg, "requestTimeout"), value: msg.requestTimeout };
+  const next = prepareUserGet(ctx, stage, baseUrl.slice(VIVA_API_BASE.length) + `&page=${result.state.nextPage}`);
+  msg.requestTimeout = Math.min(10000, Math.max(1, deadlineAt - Date.now()));
+  return { next };
+};
+
 const findArrayForKey = (value, targetKey, seen = new Set()) => {
   if (!value || typeof value !== "object" || seen.has(value)) return [];
   seen.add(value);
@@ -2332,7 +2410,13 @@ if (ctx.managedSelfLeave && ["profile", "active_bookings", "history_bookings"].i
   const paths = { profile: `/end-user/api/v1/${ctx.tenantKey}/profile`,
     active_bookings: `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`,
     history_bookings: `/end-user/api/v2/${ctx.tenantKey}/bookings/history?includeCanceled=true&size=1000` };
-  if (msg.error || msg.statusCode !== 200 || msg.responseUrl !== `${VIVA_API_BASE}${paths[ctx.step]}`) {
+  const baseReadUrl = `${VIVA_API_BASE}${paths[ctx.step]}`;
+  const pages = ctx.bookingPages;
+  const paged = pages && pages.binding === JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.step])
+    && pages.actorId === ctx.actorClientId && pages.baseUrl === baseReadUrl
+    && Number.isSafeInteger(pages.nextPage) && pages.nextPage > 0 && pages.nextPage < 10;
+  const expectedReadUrl = baseReadUrl + (paged ? `&page=${pages.nextPage}` : "");
+  if (msg.error || msg.statusCode !== 200 || msg.responseUrl !== expectedReadUrl) {
     return managedLeavePending(ctx, "MANAGED_SELF_LEAVE_PROVIDER_READ_INVALID");
   }
 }
@@ -2975,13 +3059,14 @@ if (ctx.step === "active_bookings") {
       code: "SUBSCRIPTION_BOOKINGS_ACTIVE_SCHEMA_UNRECOGNIZED",
     });
   }
-  if (!hasCompleteBookingList(msg.payload)) {
-    return finishError(ctx, 502, "Список активных записей Viva неполон", {
-      code: "SUBSCRIPTION_BOOKINGS_ACTIVE_INCOMPLETE",
-    });
+  if (!hasCompleteBookingList(msg.payload) || ctx.bookingPages
+    || ctx.bookingsPagesDeadlineAt !== undefined && (!Number.isSafeInteger(ctx.bookingsPagesDeadlineAt) || Date.now() >= ctx.bookingsPagesDeadlineAt)) {
+    const page = continueBookingPages(ctx, "active_bookings");
+    if (page.next) return page.next;
+    if (page.error) return finishError(ctx, 502, "Список активных записей Viva неполон", { code: "SUBSCRIPTION_BOOKINGS_ACTIVE_INCOMPLETE" });
   }
   ctx.activeBookingsPayload = msg.payload;
-  ctx.activeBookingsObservedAt = new Date().toISOString();
+  ctx.activeBookingsObservedAt ||= new Date().toISOString();
   return prepareUserGet(
     ctx,
     "history_bookings",
@@ -3000,11 +3085,13 @@ if (ctx.step === "history_bookings") {
       code: "SUBSCRIPTION_BOOKINGS_HISTORY_SCHEMA_UNRECOGNIZED",
     });
   }
-  if (!hasCompleteBookingList(msg.payload)) {
-    return finishError(ctx, 502, "История записей Viva неполна", {
-      code: "SUBSCRIPTION_BOOKINGS_HISTORY_INCOMPLETE",
-    });
+  if (!hasCompleteBookingList(msg.payload) || ctx.bookingPages
+    || ctx.bookingsPagesDeadlineAt !== undefined && (!Number.isSafeInteger(ctx.bookingsPagesDeadlineAt) || Date.now() >= ctx.bookingsPagesDeadlineAt)) {
+    const page = continueBookingPages(ctx, "history_bookings");
+    if (page.next) return page.next;
+    if (page.error) return finishError(ctx, 502, "История записей Viva неполна", { code: "SUBSCRIPTION_BOOKINGS_HISTORY_INCOMPLETE" });
   }
+  delete ctx.bookingsPagesDeadlineAt;
   const activeBookingsPayload = ctx.activeBookingsPayload;
   // Use the oldest provider receipt; history completion must not renew older active rows.
   const activeObservedMs = Date.parse(ctx.activeBookingsObservedAt);

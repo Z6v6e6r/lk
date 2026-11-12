@@ -411,6 +411,8 @@ jobs:
           scripts/tests/tournamentParticipantRefresh.test.ts
           scripts/tests/messageDelivery.test.ts
           scripts/tests/subscriptionBookingGateway.nodered.test.ts
+          scripts/tests/subscriptionBookingPagination.nodered.test.mjs
+          scripts/tests/subscriptionBookingPaginationPatch.test.mjs
           scripts/tests/bookingConversionEvidence.test.ts
           scripts/tests/cabinetBookingConversionGuard.test.ts
           scripts/tests/gamesCreateBookingConvertGuard.test.ts
