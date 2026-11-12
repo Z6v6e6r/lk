@@ -2302,7 +2302,8 @@ function scoreMasterService(service: MasterServiceOption, studioId: string): num
   return hasStudio + nameBoost + service.roomsCount;
 }
 
-async function resolveMasterServiceIdByStudio(studioId: string): Promise<string | null> {
+async function resolveMasterServiceIdByStudio(studioId: string, signal?: AbortSignal): Promise<string | null> {
+  signal?.throwIfAborted();
   if (!studioId) return null;
   const cached = masterServiceByStudioCache.get(studioId);
   if (cached) return cached;
@@ -2326,7 +2327,9 @@ async function resolveMasterServiceIdByStudio(studioId: string): Promise<string 
       method: "GET",
       auth: true,
       retries: 1,
+      signal,
     });
+    signal?.throwIfAborted();
     if (result.error) continue;
 
     const services = extractMasterServiceItems(result.data)
@@ -2351,7 +2354,8 @@ async function resolveMasterServiceIdByStudio(studioId: string): Promise<string 
   return null;
 }
 
-async function bootstrapMasterService(masterServiceId: string, studioId?: string | null) {
+async function bootstrapMasterService(masterServiceId: string, studioId?: string | null, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   if (!masterServiceId) return;
 
   const cacheKey = `${masterServiceId}:${studioId ?? ""}`;
@@ -2361,43 +2365,55 @@ async function bootstrapMasterService(masterServiceId: string, studioId?: string
   const baseSubServicesUrl = `${base}/subServices?`;
   const studiosUrl = `${base}/studios?`;
 
+  signal?.throwIfAborted();
   await request<unknown>(`${base}/meta`, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
 
+  signal?.throwIfAborted();
   await request<unknown>(baseSubServicesUrl, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
 
+  signal?.throwIfAborted();
   const studiosResult = await request<unknown>(studiosUrl, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
+  signal?.throwIfAborted();
   const timeZone =
     extractMasterServiceTimeZone(studiosResult.data, studioId) ??
     masterServiceTimeZoneCache.get(masterServiceId) ??
     "Europe/Moscow";
   masterServiceTimeZoneCache.set(masterServiceId, timeZone);
 
+  signal?.throwIfAborted();
   await request<unknown>(`${API_BASE}/api/v1/time?timeZone=${encodeURIComponent(timeZone)}`, {
     method: "GET",
     retries: 1,
+    signal,
   });
 
   if (studioId) {
+    signal?.throwIfAborted();
     const studioSubServicesResult = await request<unknown>(
       `${base}/subServices?studioId=${encodeURIComponent(studioId)}&showAll=true`,
       {
         method: "GET",
         auth: true,
         retries: 1,
+        signal,
       },
     );
+    signal?.throwIfAborted();
     const studioGameModes = extractStudioGameModes(studioSubServicesResult.data, studioId);
     masterServiceStudioGameModesCache.set(cacheKey, studioGameModes);
 
@@ -2420,6 +2436,7 @@ async function bootstrapMasterService(masterServiceId: string, studioId?: string
     }
   }
 
+  signal?.throwIfAborted();
   masterServiceBootstrapCache.add(cacheKey);
 }
 
@@ -4677,11 +4694,13 @@ async function withRetry<T>(
   }
 }
 
-export async function apiFetchProfile() {
+export async function apiFetchProfile(signal?: AbortSignal) {
+  signal?.throwIfAborted();
   return request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
 }
 
@@ -10199,6 +10218,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
 export async function apiFetchMasterServiceTimeslots(
   date: string,
   options: {
+    signal?: AbortSignal;
     studioId?: string | null;
     masterServiceId?: string | null;
     preferredSubServiceId?: string | null;
@@ -10206,11 +10226,13 @@ export async function apiFetchMasterServiceTimeslots(
     preferredRoomIds?: string[];
   } = {},
 ) {
+  const signal = options.signal;
+  signal?.throwIfAborted();
   const explicitMasterServiceId = options.masterServiceId?.trim() || null;
   const studioId = options.studioId?.trim() || null;
   const resolvedByStudio =
     ENABLE_MASTER_SERVICE_AUTO_DISCOVERY && !explicitMasterServiceId && studioId
-      ? await resolveMasterServiceIdByStudio(studioId)
+      ? await resolveMasterServiceIdByStudio(studioId, signal)
       : null;
   const fallbackMasterServiceId = studioId ? null : DEFAULT_GAMES_MASTER_SERVICE_ID;
   const masterServiceId =
@@ -10218,6 +10240,7 @@ export async function apiFetchMasterServiceTimeslots(
     resolvedByStudio ??
     fallbackMasterServiceId;
 
+  signal?.throwIfAborted();
   if (!masterServiceId) {
     return {
       data: [] as GameTimeSlot[],
@@ -10231,7 +10254,8 @@ export async function apiFetchMasterServiceTimeslots(
     };
   }
 
-  await bootstrapMasterService(masterServiceId, studioId);
+  await bootstrapMasterService(masterServiceId, studioId, signal);
+  signal?.throwIfAborted();
 
   const cacheKey = `${masterServiceId}:${studioId ?? ""}`;
   const explicitPreferredIds = uniqueIds(options.preferredSubServiceIds ?? []).filter((value) =>
@@ -10274,10 +10298,12 @@ export async function apiFetchMasterServiceTimeslots(
       method: "POST",
       auth: true,
       retries: 1,
+      signal,
       body: JSON.stringify(requestPayload),
     },
   );
 
+  signal?.throwIfAborted();
   if (result.error) {
     return {
       data: [] as GameTimeSlot[],
