@@ -52,10 +52,10 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
             <span><b>{subscriptionBoost ? `По подписке и РАбуста${subscriptionBoost.amount === 0 ? ' — бесплатно' : ''}` : 'По подписке'}</b><small>{personalBase == null ? 'Дождитесь расчёта стоимости корта' : subscriptionBoost?.kind === 'boost' ? boostNote : subscriptionNote}</small></span>
             <span className="matrix-quarter-price">{(discount(subscriptionPrice) || (personalBase != null && subscriptionBoost?.amount === 0)) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(subscriptionPrice)}</strong></span>
           </span>
-          <span className="matrix-quarter-row matrix-quarter-row--residency">
+          {!settings.profile.subscription && <span className="matrix-quarter-row matrix-quarter-row--residency">
             <span><b>{residencyBoost ? `С Резидентством и РАбуста${residencyBoost.amount === 0 ? ' — бесплатно' : ''}` : 'С Резидентством'}</b><small>{residencyBoost ? boostNote : settings.profile.residency ? 'Ваша скидка 30%' : 'Скидка 30% при наличии Резидентства'}</small></span>
             <span className="matrix-quarter-price">{(discount(residencyPrice) || (personalBase != null && residencyBoost?.amount === 0)) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(residencyPrice)}</strong></span>
-          </span>
+          </span>}
         </span>
       </span>
     </label>

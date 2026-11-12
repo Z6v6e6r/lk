@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookingButtonText, combineResidencyBoost, combineSubscriptionBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutRedundantBoost } from './bookingCheckout.ts';
+import { bookingButtonText, combineResidencyBoost, combineSubscriptionBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutResidencyForSubscribers, withoutRedundantBoost } from './bookingCheckout.ts';
 import { buildBookingPaymentOptions, PRIVILEGE_PROFILES, readMatrixSettings, type PaymentOption } from './paymentMatrix.ts';
 
 test('subscription and Boost become one card using the lower quote and preserving the entitlement method', () => {
@@ -16,7 +16,7 @@ test('subscription and Boost become one card using the lower quote and preservin
       assert.equal(options.filter(option => option.kind === 'subscription' || option.kind === 'boost').length, 1);
       assert.equal(combined.amount, Math.min(base.amount!, boost.amount!));
       assert.equal(combined.kind, base.amount! <= boost.amount! ? 'subscription' : 'boost');
-      assert.equal(defaultPaymentOption(options)?.kind, 'residency', 'Residency retains the explicitly requested default');
+      assert.equal(defaultPaymentOption(withoutResidencyForSubscribers(options, profile))?.kind, combined.kind);
       assert.equal(createPreviewOrder(combined)?.method, combined.kind);
       assert.equal(createPreviewOrder(combined)?.product, null, 'Owned products are never purchased again');
       assert.equal(raw.some(option => option.withSubscription), false);
@@ -177,14 +177,21 @@ test('Boost remains distinct when it improves the price, the subscription is uno
   }
 });
 
-test('residency is preselected for every profile and subscription plan, including purchase offers', () => {
+test('subscribers default to their subscription or Boost; non-subscribers retain residency default', () => {
   for (const profile of PRIVILEGE_PROFILES) for (const subscriptionPlan of ['friendship', 'friendship-2', 'ra'] as const) {
     for (const service of ['game', 'training', 'tournament'] as const) {
-      const options = buildBookingPaymentOptions(service, profile, { subscription: true, pass: true },
+      const raw = buildBookingPaymentOptions(service, profile, { subscription: true, pass: true },
         { subscriptionPlan, durationMinutes: 90, boost: true }, service === 'game' ? 'quarter' : undefined, 6000);
+      const options = withoutResidencyForSubscribers(combineResidencyBoost(combineSubscriptionBoost(raw, profile), profile), profile);
       const choice = defaultPaymentOption(service === 'game' ? withPersonalSubscription(options, profile.subscription) : options)!;
-      assert.equal(choice.kind, 'residency');
-      assert.equal(choice.mode, profile.residency ? 'book' : 'offer');
+      if (profile.subscription) {
+        assert.ok(!options.some(option => option.kind === 'residency' || option.withResidency));
+        assert.ok(choice.kind === 'subscription' || choice.kind === 'boost');
+        assert.equal(choice.mode, 'book');
+      } else {
+        assert.ok(choice.kind === 'residency' || choice.withResidency);
+        assert.equal(choice.mode, profile.residency ? 'book' : 'offer');
+      }
     }
   }
 });
@@ -325,4 +332,40 @@ test('legacy Energy purchase offers and invalid balances cannot authorize a purc
     assert.deepEqual(withPassBalance([legacy, owned], remaining), []);
   }
   assert.deepEqual(withPassBalance([legacy, owned], 1), [owned]);
+});
+
+test('subscribers hide owned and purchasable residency in every stage and quota state without changing quotes', () => {
+  for (const stage of ['current', 'full']) for (const subscriptionPlan of ['friendship', 'friendship-2', 'ra']) {
+    for (const service of ['game', 'training', 'tournament'] as const) for (const residency of ['0', '1']) {
+      for (const dailyQuota of ['available', 'used']) for (const activeLimitExceeded of ['0', '1']) {
+        const settings = readMatrixSettings(new URLSearchParams({ stage, subscription: '1', residency, boost: '1', subscriptionPlan, dailyQuota, activeLimitExceeded }));
+        const raw = buildBookingPaymentOptions(service, settings.profile, settings.applicability, { ...settings, durationMinutes: 90 }, service === 'game' ? 'quarter' : undefined, 6000);
+        const snapshot = structuredClone(raw);
+        const visible = withoutResidencyForSubscribers(raw, settings.profile);
+        assert.ok(!visible.some(option => option.kind === 'residency' || option.withResidency));
+        for (const option of visible.filter(option => option.kind !== 'full')) assert.deepEqual(option, raw.find(original => original.kind === option.kind));
+        assert.ok(defaultPaymentOption(visible));
+        assert.deepEqual(raw, snapshot);
+      }
+    }
+  }
+});
+
+test('hiding residency restores full payment when the owned subscription cannot cover the event', () => {
+  const profile = PRIVILEGE_PROFILES[3];
+  const raw = buildBookingPaymentOptions('game', profile, { subscription: false, pass: false }, { subscriptionPlan: 'friendship' }, 'quarter', 6000);
+  assert.equal(raw.find(option => option.kind === 'full')?.mode, 'reference');
+  const visible = withoutResidencyForSubscribers(raw, profile);
+  const choice = defaultPaymentOption(visible)!;
+  assert.equal(choice.kind, 'full');
+  assert.equal(choice.amount, 1500);
+  assert.deepEqual(createPreviewOrder(choice), { method: 'full', bookingAmount: 1500, product: null, productAmount: 0, total: 1500 });
+  assert.equal(withoutResidencyForSubscribers(raw, PRIVILEGE_PROFILES[1]), raw);
+});
+
+test('the reported RA daily-used training shows just the subscription discount instead of duplicate residency', () => {
+  const settings = readMatrixSettings(new URLSearchParams('subscription=1&residency=1&subscriptionPlan=ra&dailyQuota=used&dailyUsage=game-hour&pass=0&passFits=0'));
+  const visible = withoutResidencyForSubscribers(buildBookingPaymentOptions('training', settings.profile, settings.applicability, settings), settings.profile);
+  assert.deepEqual(visible.filter(isSelectableMethod).map(option => [option.kind, option.amount]), [['subscription', 2750]]);
+  assert.equal(bookingButtonText(defaultPaymentOption(visible)), 'Записаться за 2 750 ₽');
 });

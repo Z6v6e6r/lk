@@ -9,7 +9,19 @@ export function isSelectableMethod(option: PaymentOption) {
 }
 
 export function defaultPaymentOption(options: PaymentOption[]): PaymentOption | undefined {
-  return options.find(option => (option.kind === 'residency' || option.withResidency) && isSelectableMethod(option)) || options.find(isSelectableMethod);
+  return options.find(option => (option.kind === 'residency' || option.withResidency) && isSelectableMethod(option))
+    || options.find(option => (option.kind === 'subscription' || option.withSubscription) && option.mode === 'book')
+    || options.find(isSelectableMethod);
+}
+
+// Subscribers use their subscription/Boost, not a duplicate residency method.
+// If neither applies, retain full-price booking instead of a stale reference.
+export function withoutResidencyForSubscribers(options: PaymentOption[], privileges: Privileges): PaymentOption[] {
+  if (!privileges.subscription) return options;
+  const visible = options.filter(option => option.kind !== 'residency' && !option.withResidency);
+  const hasBenefit = visible.some(option => option.kind !== 'full' && option.mode === 'book');
+  return visible.map(option => option.kind === 'full' && option.mode === 'reference' && !hasBenefit
+    ? { ...option, mode: 'book' } : option);
 }
 
 // Keep Boost as the actual booking method; only combine its presentation with

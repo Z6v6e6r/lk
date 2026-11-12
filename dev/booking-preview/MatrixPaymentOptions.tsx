@@ -3,7 +3,7 @@ import { Modal } from '../../src/components/UI/Modal';
 import { AuthForm } from '../../src/components/auth/AuthForm';
 import { useAuth } from './auth';
 import { buildBookingPaymentOptions, formatRubles, readMatrixSettings, SERVICES, type GamePaymentScope, type PaymentKind, type PaymentOption, type ServiceKind } from './paymentMatrix';
-import { bookingButtonText, combineResidencyBoost, combineSubscriptionBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, type PreviewOrder } from './bookingCheckout';
+import { bookingButtonText, combineResidencyBoost, combineSubscriptionBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutResidencyForSubscribers, type PreviewOrder } from './bookingCheckout';
 import { recommendedSubscriptionChoice, subscriptionPurchaseChoices, type SubscriptionOffer } from './subscriptionOffers';
 import { SUBSCRIPTION_PLANS } from './privilegeRules';
 import './matrix.css';
@@ -47,7 +47,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const subscriptionPurchaseOption = purchaseSubscriptionChoice?.option;
   const rawPaymentOptions = withPassBalance(buildBookingPaymentOptions(service, profile, applicability, paymentContext, gamePaymentScope, courtAmount), passRemaining)
     .flatMap(option => option.kind === 'subscription' && !profile.subscription ? subscriptionPurchaseOption ? [subscriptionPurchaseOption] : [] : [option]);
-  const paymentOptions = combineResidencyBoost(combineSubscriptionBoost(rawPaymentOptions, profile), profile);
+  const paymentOptions = withoutResidencyForSubscribers(combineResidencyBoost(combineSubscriptionBoost(rawPaymentOptions, profile), profile), profile);
   const options = isPersonalGame ? withPersonalSubscription(paymentOptions, profile.subscription) : paymentOptions;
   const available = options.filter(isSelectableMethod);
   const defaultChoice = defaultPaymentOption(options);
