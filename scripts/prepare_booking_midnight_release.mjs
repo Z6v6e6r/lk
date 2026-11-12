@@ -15,7 +15,7 @@ export const MIDNIGHT_LIVE_PINS = Object.freeze({
   prepare: { id: 'f3f9a60354d394da', sha256: 'b69eb36c138d5b9ae6ac020202148ca6d86f7495b4046811f7dde1473ea0ef9d' },
   split: { id: '8f7bd5b482fe9763', sha256: 'd93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b' },
   finalize: { id: 'lk_subscription_booking_finalize_20260804', sha256: '62ac99bd56a710179e57c5de48826da21417beccfd08090493e6a4194a4299b2' },
-  preview: { id: 'lk_subscription_price_preview_20260908_router', sha256: '2053d6679bb41354bda6484ebb4ea1f558884cd946f1c5ba57eddf262f78f37a' },
+  preview: { id: 'lk_subscription_price_preview_20260908_router', sha256: '345d5f39625fe68bddc76329d852bf290aae80ffcd1e7bb5efb2ebb81c286ee8' },
 });
 export function midnightReplace(source, before, after, count = 1) {
   if (source.split(before).length - 1 !== count) throw Error('MIDNIGHT_RELEASE_ANCHOR_DRIFT');
