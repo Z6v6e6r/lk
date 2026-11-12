@@ -183,7 +183,7 @@ test("cancellation close refreshes bookings, subscriptions and game records", ()
 });
 
 test("rejected roster CAS refreshes server state instead of applying an optimistic fallback", () => {
-  assert.match(gameJoinSource, /const authoritative = await apiFetchPadelGameRecord\(game\.id\)/);
+  assert.match(gameJoinSource, /const authoritative = patchResult\.status === 409[\s\S]{0,120}patchResult\.conflictRecord/);
   assert.doesNotMatch(gameJoinSource, /participants:\s*mergedParticipants,[\s\S]{0,180}fallback/);
   assert.match(gamesPageSource, /patch_rejected_authoritative_refreshed/);
   assert.match(gamesPageSource, /recordMode\?: "merge" \| "replace"/);
