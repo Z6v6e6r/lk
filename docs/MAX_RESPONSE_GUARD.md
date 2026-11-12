@@ -135,3 +135,6 @@ path, plus independent evidence of upstream recovery. No natural post-change
 event is claimed here because the candidate has not been deployed. This parser
 fix does not establish an upstream root cause, eliminate a provider incident,
 or confirm delivery of any message.
+
+The separately reviewed stop-before-publication installer and retained MAX pause
+are described in [MAX_RESPONSE_GUARD_ACTIVATION.md](MAX_RESPONSE_GUARD_ACTIVATION.md).
