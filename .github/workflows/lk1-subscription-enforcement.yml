@@ -644,7 +644,7 @@ jobs:
         env:
           DELIVERY_CATEGORY: business
         id: check_15
-        run: node --test scripts/tests/noderedModularToolchain.test.mjs
+        run: node --test scripts/tests/noderedModularToolchain.test.mjs scripts/tests/legacyStartup*.test.mjs
 
       - name: Validate combined legacy game command prerequisites
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
