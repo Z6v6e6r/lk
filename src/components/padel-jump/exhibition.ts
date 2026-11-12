@@ -7,6 +7,31 @@ export const EXHIBITION_BRAND_LOGO_URL =
 export const EXHIBITION_COMMUNITY_ID = 'community_1794221739126_корпспорт-падлхаб-2026';
 /** Public Tilda invite slug. It only selects presentation: admission stays server-side. */
 export const EXHIBITION_INVITE_SLUG = 'корпспорт-падлхаб-2026-vokxwv';
+const EXHIBITION_PUSH_OPT_IN_STORAGE_KEY = "padlhub_exhibition_push_opt_in_v1";
+
+function exhibitionLocalStorage(): Storage | null {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) return window.localStorage;
+    return typeof globalThis !== "undefined" && globalThis.localStorage ? globalThis.localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Device-scoped choice from the exhibition questionnaire; false means the member declined result notifications. */
+export function rememberExhibitionPushOptIn(value: boolean): void {
+  try { exhibitionLocalStorage()?.setItem(EXHIBITION_PUSH_OPT_IN_STORAGE_KEY, value ? "1" : "0"); } catch { /* storage can be unavailable */ }
+}
+
+export function readExhibitionPushOptIn(): boolean | null {
+  try {
+    const value = exhibitionLocalStorage()?.getItem(EXHIBITION_PUSH_OPT_IN_STORAGE_KEY);
+    return value === "1" ? true : value === "0" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The exhibition always carries the owner-supplied KorpSport emblem; an explicit URL override wins. */
 export function resolveExhibitionHeroLogo(overrideUrl?: string | null): string {
   return overrideUrl?.trim() || EXHIBITION_BRAND_LOGO_URL;
@@ -46,6 +71,12 @@ export const isExhibitionInvite = (inviteCode?: string | null) => {
 export const exhibitionApi = (origin = typeof window === 'undefined' ? '' : window.location.origin) => origin === 'https://padlhub.ru' ? 'https://padlhub.su/jump-exhibition-api/' : '/jump-exhibition-api/';
 
 /** Web Push can only be subscribed on the LK2 origin (service worker scope), so the page hands off. */
+export const EXHIBITION_CABINET_URL = 'https://padlhub.ru/lk_new?authMode=viva';
+export function exhibitionCommunityUrl(communityId?: string | null): string {
+  const id = String(communityId || EXHIBITION_COMMUNITY_ID).trim();
+  return id ? `${EXHIBITION_CABINET_URL}&openCommunity=${encodeURIComponent(id)}` : EXHIBITION_CABINET_URL;
+}
+
 export const LK2_PUSH_OPT_IN_URL = 'https://lk2.padlhub.su/push';
 export function buildPushOptInUrl(returnTo: string): string {
   const url = new URL(LK2_PUSH_OPT_IN_URL);

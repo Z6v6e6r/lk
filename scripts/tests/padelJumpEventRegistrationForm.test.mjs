@@ -45,6 +45,12 @@ test('exhibition emblem is bundled, overrides empty branding and stays first for
   assert.deepEqual(buildExhibitionLogoCandidates([uploaded],'another-community'),[uploaded]);
 });
 
+test('exhibition notification opt-in is enabled by default',async()=>{
+  const render=await formRenderer();
+  const html=render(notice);
+  assert.match(html,/name="pushOptIn"[^>]*checked=""/);
+});
+
 test('perpetual exhibition questionnaire is the short form with phone, notification opt-in and collapsed legal notice',async t=>{
   const render=await formRenderer();
   t.mock.timers.enable({apis:['Date'],now:Date.parse('2028-11-14T09:00:00.000Z')});

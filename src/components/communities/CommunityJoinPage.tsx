@@ -11,7 +11,7 @@ import {
   type EventRegistration,
 } from "../../utils/communityApi";
 import { EventRegistrationForm } from '../cabinet/EventRegistrationForm';
-import { EXHIBITION_COMMUNITY_ID, EXHIBITION_INVITE_HEADING, EXHIBITION_INVITE_NOTE, buildPushOptInUrl, isExhibitionInvite, readExhibitionBrandOverride, resolveExhibitionHeroLogo } from '../padel-jump/exhibition';
+import { EXHIBITION_COMMUNITY_ID, EXHIBITION_INVITE_HEADING, EXHIBITION_INVITE_NOTE, buildPushOptInUrl, isExhibitionInvite, readExhibitionBrandOverride, rememberExhibitionPushOptIn, resolveExhibitionHeroLogo } from '../padel-jump/exhibition';
 import { apiFetchProfile, type UserProfileType } from "../../utils/apiClient";
 import {
   CUSTOM_FIELD_IDS,
@@ -323,7 +323,7 @@ export default function CommunityJoinPage({
       if (!confirmed || (community && confirmed.id !== community.id) || !findInviteCommunity([confirmed], normalizedInviteCode, normalizedInviteLink)) throw new Error("JOIN_SCOPE_UNKNOWN");
       setCommunity(confirmed);
       setEventNotice(null);
-      if (isCommunityMember(confirmed, profile)) { setEventAdmissionConfirmed(true); setPushOptInRequested(registration?.pushOptIn === true); setState("member"); return null; }
+      if (isCommunityMember(confirmed, profile)) { setEventAdmissionConfirmed(true); setPushOptInRequested(registration?.pushOptIn === true); rememberExhibitionPushOptIn(registration?.pushOptIn === true); setState("member"); return null; }
       if (isCommunityMember(confirmed, profile, "PENDING") || response.data?.membershipStatus === "PENDING") { setState("pending"); return null; }
       throw new Error("MEMBERSHIP_UNCONFIRMED");
     } catch {
@@ -363,9 +363,15 @@ export default function CommunityJoinPage({
     return target;
   }, [cabinetUrl, community?.id]);
   const pushOptInUrl = buildPushOptInUrl(pushReturnUrl);
+  const pushRedirected = useRef(false);
   const current = loadedContext === context;
   const visibleState = !current || loading ? "checking" : state;
   const exhibition = Boolean(brand);
+  useEffect(() => {
+    if (!exhibition || !current || visibleState !== "member" || !pushOptInRequested || pushRedirected.current) return;
+    pushRedirected.current = true;
+    if (typeof window !== "undefined") window.location.assign(pushOptInUrl);
+  }, [current, exhibition, pushOptInRequested, pushOptInUrl, visibleState]);
   // The exhibition invitation must open the questionnaire right after authentication:
   // one canonical preflight command obtains the server notice, then the form replaces this state.
   useEffect(() => {

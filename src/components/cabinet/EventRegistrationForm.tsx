@@ -20,7 +20,7 @@ export function EventRegistrationForm({ onSubmit, onCancel, notice }: {
   notice?: EventNotice;
 }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
-  const [pushOptIn, setPushOptIn] = useState(false);
+  const [pushOptIn, setPushOptIn] = useState(true);
   const perpetual = notice?.retentionMode === 'submitted-year-v1';
   const available = !!notice && (perpetual || Date.now() < Date.parse(notice.policy.endsAt));
   const submit = async (event: FormEvent<HTMLFormElement>) => {

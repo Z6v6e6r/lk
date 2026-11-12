@@ -26,3 +26,19 @@ test('exhibition panel is only a pre-membership call to action', async () => {
   const otherCommunity = render({ isMember: false, community: { id: 'another-community' } });
   assert.equal(otherCommunity, '');
 });
+
+test('a member who declined notifications sees a reconnect prompt on every entry', async () => {
+  const render = await panelRenderer();
+  const previous = globalThis.localStorage;
+  const values = new Map([['padlhub_exhibition_push_opt_in_v1', '0']]);
+  globalThis.localStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key), clear: () => values.clear(), key: () => null, length: values.size };
+  try {
+    const declined = render({ isMember: true });
+    assert.match(declined, /Уведомления о результатах/);
+    assert.match(declined, /Подключить уведомления/);
+    values.set('padlhub_exhibition_push_opt_in_v1', '1');
+    assert.equal(render({ isMember: true }), '', 'a member who opted in must not see the reconnect prompt');
+  } finally {
+    if (previous === undefined) delete globalThis.localStorage; else globalThis.localStorage = previous;
+  }
+});

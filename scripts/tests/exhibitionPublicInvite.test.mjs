@@ -28,7 +28,7 @@ function harness({ member = false, response, freshContext = true, initialNotice 
     normalizedInviteCode: 'synthetic-invite', normalizedInviteLink: null,
     setActionError: value => errors.push(value), setSubmitting() {},
     setState: value => states.push(value), setCommunity() {},
-    setEventNotice: value => notices.push(value), setEventAdmissionConfirmed() {}, setPushOptInRequested() {},
+    setEventNotice: value => notices.push(value), setEventAdmissionConfirmed() {}, setPushOptInRequested() {}, rememberExhibitionPushOptIn() {},
     requireLogin: () => { logins++; },
     redirectToCabinet: (...args) => { redirects.push(args); return true; },
     buildCommunityActor: profile => ({ id: profile.id }),
