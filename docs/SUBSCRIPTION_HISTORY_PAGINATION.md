@@ -1,57 +1,36 @@
-# Полная история для проверки абонемента
+# История записей и срок абонемента
 
-Владелец: PadlHub LK. Пользователи: участники игр с абонементами.
-Результат: история длиннее одной страницы полностью поступает в проверку лимитов;
-истёкший на дату игры абонемент получает понятное сообщение.
-
-`POST /lk/subscriptions/game-price-preview` и `POST /lk/subscription-bookings`
-используют один pure helper `collectBookingPage` из
-`scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js`.
-Preview composer извлекает его вместе с зависимостями из проверенного booking
-router. Для исторических pinned-поколений без helper экспортируется `undefined`:
-они сохраняют отказ на неполной истории, а не принимают частичный список.
-Для исправления работающего контура оба router должны содержать новую реализацию.
-
-При неполном Spring DTO (`content`, `number`, `size`, `totalElements`, `totalPages`)
-запрашиваются следующие страницы того же user-scoped GET с прежним Bearer.
-Номер страницы последовательный, размер и totals стабильны, строки имеют уникальные
-нормализованные booking ID. Явно чужой владелец, неполная страница, повторы, изменение
-метаданных, ошибка HTTP или исчерпание бюджета останавливают расчёт. Отсутствующий
-owner сохраняет прежний контракт single-page проверки; новое обязательное поле
-провайдера не вводится. Все страницы нужны до проверки дневного лимита и отмены.
-
-Бюджет каждого списка: до 20 страниц, 20000 строк и 20 секунд от первого ответа.
-Preview дополнительно сохраняет общий deadline 28 секунд. Время следующего GET
-ограничено остатком бюджета. Booking router восстанавливает прежний override
-requestTimeout после пагинации, чтобы он не перешёл в provider write.
-Срок доказательства active snapshot начинается с первой страницы и не обновляется
-после загрузки истории. Self-leave сохраняет точную проверку response URL с page.
-Обычный полный single-page DTO продолжает обрабатываться прежним helper.
+Владелец: PadlHub LK. Аудитория: участники игр с абонементами.
+Пагинация использует уже объединённую реализацию main из
+[SUBSCRIPTION_BOOKING_PAGINATION.md](SUBSCRIPTION_BOOKING_PAGINATION.md): один
+`collectVivaBookingPage`, 10 страниц/10000 строк, общий бюджет25секунд,
+проверка actor/stage/URL/полноты, сохранение timeout и старейшего receipt.
+Второй механизм чтения истории поверх неё не устанавливается.
 
 Для ACTIVE экземпляра с доказанной expirationDate раньше начала игры preview
 возвращает UNAVAILABLE / SUBSCRIPTION_DATE_NOT_COVERED. Виджет выводит:
 «Действие абонемента не распространяется на дату игры».
-При HTTP ошибке, неизвестном сроке, неполном, устаревшем или чужом quote batch
-это сообщение не подменяет техническую неопределённость. Проверка всего batch
-остаётся обязательной перед отображением отдельных вариантов.
+Отсутствие доказательства срока, HTTP ошибка или неполный/устаревший quote batch
+сохраняют техническую неопределённость. Причины отдельных абонементов отображаются
+только после проверки полного batch. Лимиты, даты и существующие записи не меняются.
 
-Проверки входят в существующие CI suites subscriptionPricePreviewBackend,
-subscriptionBookingGateway.nodered и subscriptionPricePreview. Регрессия: 1001
-запись, конфликт на последней странице, повреждения и HTTP ошибки второй страницы,
-сохранение timeout и старейшего receipt, разные причины отказа нескольких подписок.
+`prepare_subscription_history_release.mjs` готовит один focused candidate поверх
+fresh private live147 workspace: source-preserving pagination composer при её
+отсутствии, затем точная вставка причины даты. Проверяются whole-flow/function SHA,
+unique IDs, enabled targets, обратимость дельт и exact graph (только func двух router,
+без additions/wires/lifecycle/settings). Уже установленная пагинация сохраняется;
+частичная установка или повторная установка date reason отклоняется.
 
-Продуктовые лимиты, число посещений, даты и существующие операции не меняются.
-Сигнал остановки: неполная/противоречивая история, новые 5xx/timeout или неверный
-допуск/цена. До live активации нужен свежий private preimage сервера 147 и отдельно
-проверенный source-driven candidate с exact graph contract. Исторические diagnostic
-preparers не являются механизмом установки нового поведения. В этом изменении
-flow import/export, deploy, restart и data repair не выполняются.
-Откат — возврат проверенных прежних router/frontend через существующий release
-процесс; после него длинная история снова будет fail-closed. Сам откат требует
-авторизации live действий. Уже выполненные записи таким откатом не отменяются.
+CLI: `node scripts/prepare_subscription_history_release.mjs <private-live-workspace>
+<empty-private-output> <clean-source-SHA> <flow-SHA256> <booking-SHA256> <preview-SHA256>`.
+Кандидат/contract/report остаются вне Git. Этот preparer не выполняет live apply.
+Исполнение — через существующий reviewed-flow runtime с shared flock, matching
+lease, durable backups и guarded recovery. Перед restart проверить startup injects.
+Публикация frontend требует чистого pushed source, prod config, manifest/hash readback.
 
-Ограничения: offset pagination не даёт атомарного snapshot при конкурентных
-изменениях без revision/cursor протокола Viva; метаданные и повторы проверяются,
-но net-zero изменения между страницами полностью доказать нельзя. Отдельный
-confirmation_bookings read по-прежнему требует полный single-page список активных
-записей; этот случай не связан с историей из 1001 записи и здесь не расширяется.
+При новых5xx/timeout, неправильной цене/допуске или несовпавших хэшах остановить
+выкладку и использовать matching rollback без удаления чужого lease. Проверка
+исходной ссылки выполняет только preview, без реальной записи/оплаты.
+Offset paging не является атомарным Viva snapshot; отдельный confirmation_bookings
+read сохраняет прежний single-page контракт. Исторические broad release/rebase
+pins не продвигаются новым исходником и продолжают fail-closed.

@@ -308,7 +308,7 @@ export function previewSources(flow, options = {}) {
     .filter(name => !bookingDeclarations.has(name));
   const usageRoots = subscriptionPreviewUsageRoots(booking + '\n'
     + injectedUsageNames.map(name => `const ${name} = () => false;`).join('\n'), usage);
-  const roots = ['isObj', 'isValidDateKey', 'unwrapRecord', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId',
+  const roots = [...(bookingDeclarations.has('collectVivaBookingPage') ? ['collectVivaBookingPage'] : []), 'isObj', 'isValidDateKey', 'unwrapRecord', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId',
     'normalizeId', 'collectExactProductIds', 'collectSubscriptionPurchaseDateEvidence', 'identityOwned', 'lk1Config', 'lk1Fields',
     // The first covered event of the day is priced by the shared usage block, which reads the
     // cohort tables and coverage/category/direction helpers: without those dependencies the preview kept the
@@ -316,7 +316,6 @@ export function previewSources(flow, options = {}) {
     // body from before that rule omits those roots, so they stay optional and the closure falls
     // back to the discount-only behaviour of that generation.
     ...freeFirstRoots(booking), ...usageRoots,
-    ...(bookingDeclarations.has('collectBookingPage') ? ['collectBookingPage'] : []),
     ...PREVIEW_EVENT_HELPERS, 'preflightAvailability',
     ...PREVIEW_CONTRACT_ROOTS,
     'mergeBookings', 'isInactiveBooking', 'isSubscriptionBooking', 'bookingSubscriptionId', 'eventDate',
@@ -336,6 +335,18 @@ export function previewSources(flow, options = {}) {
   // canonical closure itself: the resolver needs the closure's date/product
   // helpers, and the reader is what HUB quotes fail closed on.
   const declared = declarationMap(helper.source);
+  // Older pinned booking generations keep their original calculations. Add only
+  // the tracked pure pagination collector, without adopting newer pricing helpers.
+  let pagination = '';
+  if (!declared.has('collectVivaBookingPage')) {
+    const collected = extractSubscriptionPricePreviewSource({
+      source: fs.readFileSync(path.join(ROOT, 'nodered_subscription_booking_nodes/fn_subscription_booking_router.js'), 'utf8'),
+      roots: ['collectVivaBookingPage'], label: 'booking pagination',
+    });
+    pagination = `const collectVivaBookingPage = (() => {\n${collected.source}\nreturn collectVivaBookingPage; })();`;
+    declared.set('collectVivaBookingPage', 'generated');
+    roots.push('collectVivaBookingPage');
+  }
   const rules = planRulesEmbedding(declared);
   const proTraining = proTrainingEmbedding(declared, booking);
   const spanishTraining = spanishTrainingEmbedding(declared, booking);
@@ -359,11 +370,10 @@ export function previewSources(flow, options = {}) {
   const supportsPatriotsGameScope = (bookingDeclarations.get('resolveCategory') || '')
     .includes('if(typeId===2349&&directionId===6181)return"open_game";')
     && lk1EvaluatorDeclarations(evaluator).has('PATRIOTS_DISCOUNT_EVENTS');
-  const capabilities = `const supportsPatriotsGameScope = ${supportsPatriotsGameScope};`
-    + (bookingDeclarations.has('collectBookingPage') ? '' : '\nconst collectBookingPage = undefined;');
-  const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name)), 'supportsPatriotsGameScope', 'collectBookingPage'])];
+  const capabilities = `const supportsPatriotsGameScope = ${supportsPatriotsGameScope};`;
+  const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name)), 'supportsPatriotsGameScope'])];
   assertNoUndeclaredContractNames(`${helper.source}\n${proTraining.injected}\n${spanishTraining.injected}`, declared, rules, reader, accessor);
-  const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${spanishTraining.injected}\n${reader}\n${accessor}\n${capabilities}\nreturn {${exported.join(',')}}; })();`;
+  const canonical = `const canonical = (() => {\n${helper.source}\n${pagination}\n${rules.injected}\n${proTraining.injected}\n${spanishTraining.injected}\n${reader}\n${accessor}\n${capabilities}\nreturn {${exported.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
   const usageFunction = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
     const { ${usageRoots.join(', ')} } = canonical;

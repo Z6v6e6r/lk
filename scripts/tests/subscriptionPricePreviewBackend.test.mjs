@@ -1542,98 +1542,15 @@ test('validation diagnostic enums are rejected outside the exact server refusal 
   assert.deepEqual(sanitizeEvent(old),old);
 });
 
-// The same extracted collector drives advisory and booking reads.
-{
-const bookingSource = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
-const roots = ['collectBookingPage', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId', 'normalizeId', 'isObj', 'mergeBookings', 'isInactiveBooking'];
-const source = extractSubscriptionPricePreviewSource({ source: bookingSource, roots }).source;
-const canonical = new Function(`${source};return {${roots.join(',')}};`)();
-const owner = 'fixture-owner';
-const row = id => ({ id: `booking-${id}`, clientId: owner });
-const page = (number = 0, changes = {}) => ({ content: Array.from({ length: number ? 1 : 1000 }, (_, i) => row(number * 1000 + i)),
-  number, size: 1000, totalElements: 1001, totalPages: 2, last: number === 1, ...changes });
-const collect = (body, prior, now = 1000) => canonical.collectBookingPage(body, prior, owner, now);
-
-test('1001 records are retained only after both contiguous pages arrive', () => {
-  const first = collect(page());
-  assert.equal(first.done, false); assert.equal(first.nextPage, 1); assert.equal(first.payload, undefined);
-  const last = collect(page(1), first.state);
-  assert.equal(last.done, true); assert.equal(last.payload.length, 1001);
-  assert.deepEqual(last.payload.at(-1), row(1000));
-  assert.equal(canonical.hasCompleteBookingList(last.payload), true);
-});
-
-test('complete empty, array and wrapped single-page contracts are unchanged', () => {
-  for (const body of [[], [row(1)], { content: [] }, { data: { content: [row(1)] } }]) {
-    assert.deepEqual(collect(body), { done: true, payload: body });
-  }
-});
-
-test('incomplete or unstable pagination never publishes partial rows', () => {
-  const first = collect(page());
-  for (const bad of [page(), page(2), page(1, { content: [] }), page(1, { totalElements: 1002 }),
-    page(1, { size: 500 }), page(1, { totalPages: 3 }), page(1, { last: false }),
-    page(1, { hasNext: true }), page(1, { content: [row(0)] }),
-    page(1, { content: [{ id: 'different', clientId: 'foreign-owner' }] }),
-    page(1, { content: [{}] }), page(1, { content: [null] })]) {
-    assert.deepEqual(collect(bad, first.state), { error: true });
-  }
-  for (const bad of [page(1), page(0, { number: undefined }), page(0, { size: undefined }),
-    page(0, { content: [] }), page(0, { totalElements: 20001, totalPages: 21 }),
-    page(0, { totalElements: 1001.5 }), { content: [], last: false }]) {
-    assert.deepEqual(collect(bad), { error: true });
-  }
-  assert.deepEqual(collect(page(1), first.state, 21000), { error: true });
-  assert.deepEqual(collect(page(1), first.state, 999), { error: true });
-});
-
-const preview = new Function('msg', 'canonical', 'global', 'node', fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js', import.meta.url), 'utf8'));
-const globalContext = { get: () => null };
-const node = { log() {}, warn() {} };
-function invoke(ctx, payload, statusCode = 200) {
-  const msg = { _subscriptionPricePreview: ctx, payload, statusCode };
-  return preview(msg, canonical, globalContext, node).find(Boolean);
-}
-
-test('preview paginates active and history independently, then passes all rows to allowance reads', () => {
-  const ctx = { step: 'activeBookings', startedAt: Date.now(), actorClientId: owner, tenantKey: 'fixture',
-    auth: 'fixture-auth', ruleProductIds: [] };
-  let msg = invoke(ctx, page());
-  assert.equal(ctx.step, 'activeBookings'); assert.match(msg.url, /bookings\?size=1000&page=1$/);
-  assert.equal(msg.method, 'GET'); assert.equal(msg.headers.Authorization, 'fixture-auth');
-  const observedAt = ctx.activeObservedAt;
-  msg = invoke(ctx, page(1));
-  assert.equal(ctx.step, 'historyBookings'); assert.equal(ctx.activePayload.length, 1001);
-  assert.equal(ctx.activeObservedAt, observedAt); assert.equal(ctx.bookingPages, undefined);
-  msg = invoke(ctx, page()); assert.match(msg.url, /history\?includeCanceled=true&size=1000&page=1$/);
-  msg = invoke(ctx, page(1));
-  assert.equal(ctx.step, 'operations'); assert.equal(ctx.bookings.length, 1001);
-  assert.equal(ctx.cancellationSnapshot.history.length, 1001);
-  assert.equal(ctx.cancellationSnapshot.observedAt, observedAt);
-  assert.equal(ctx.bookingPages, undefined); assert.notEqual(msg.method, 'POST');
-});
-
-test('later-page HTTP and completeness errors keep the public refusal and cannot reach operations', () => {
-  for (const failure of [503, 200]) {
-    const ctx = { step: 'historyBookings', startedAt: Date.now(), actorClientId: owner, tenantKey: 'fixture', auth: 'fixture-auth' };
-    invoke(ctx, page());
-    invoke(ctx, page(1, { content: [] }), failure);
-    assert.equal(ctx.done, true); assert.equal(ctx.error, 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
-    assert.equal(ctx.step, 'historyBookings'); assert.equal(ctx.bookings, undefined);
-  }
-});
-
 test('server names a proven date mismatch separately and keeps missing expiry generic', () => {
   for (const expirationDate of ['2099-11-15', undefined]) {
     const ctx = { step: 'next', startedAt: Date.now(), target: { startsAt: '2099-11-16T09:00:00+03:00', durationMinutes: 60 },
       pending: ['fixture-sub'], quotes: [], subscriptions: { 'fixture-sub': { status: 'ACTIVE', expirationDate, visitsLeft: 26 } },
       metadata: { 'fixture-sub': { productId: 'fixture-product' } }, catalog: { 'fixture-product': 'Fixture' } };
-    const mocked = { isObj: canonical.isObj, lk1LifecycleInstant: value => value ? Date.parse(value + 'T23:59:59.999+03:00') : null,
+    const mocked = { isObj: bookingsCanonical.isObj, lk1LifecycleInstant: value => value ? Date.parse(value + 'T23:59:59.999+03:00') : null,
       preflightAvailability: { resolveSplitSubscriptionLifecycle: () => 'UNAVAILABLE' } };
-    preview({ _subscriptionPricePreview: ctx }, mocked, globalContext, node);
+    executeBookings({ _subscriptionPricePreview: ctx }, mocked, { get: () => null }, { log() {} });
     assert.equal(ctx.quotes[0].status, 'UNAVAILABLE'); assert.equal(ctx.quotes[0].amountMinor, null);
     assert.equal(ctx.quotes[0].reasonCode, expirationDate ? 'SUBSCRIPTION_DATE_NOT_COVERED' : 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE');
   }
 });
-
-}

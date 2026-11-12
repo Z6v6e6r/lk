@@ -479,29 +479,52 @@ if (ctx.step === 'catalog') {
   }
   return http('activeBookings', `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
 }
-// Extract the same collector as the write path. Older pinned generations keep
-// the existing single-page refusal below until both sources are upgraded.
-if (['activeBookings', 'historyBookings'].includes(ctx.step)
-  && typeof canonical.collectBookingPage === 'function' && ok()) {
-  if (ctx.step === 'activeBookings' && !ctx.bookingPages) ctx.activeObservedAt = new Date().toISOString();
-  const page = canonical.collectBookingPage(msg.payload, ctx.bookingPages, ctx.actorClientId, Date.now());
-  if (page.error) {
-    lkDiagnostic({ eventKind: 'audit', code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE',
-      operationStage: ctx.step, firstFailure: 'list_incomplete_or_unrecognized',
-      upstreamStatus: Number(msg.statusCode), httpStatus: 503, outcome: 'refused' });
-    return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+// Collect pages before the preserved single-page guard; old canonical generations remain fail-closed.
+if ((ctx.step === 'activeBookings' || ctx.step === 'historyBookings')
+  && typeof canonical.collectVivaBookingPage === 'function' && ok()
+  && (!canonical.hasCompleteBookingList(msg.payload) || ctx.bookingPages
+    || ctx.bookingsPagesDeadlineAt !== undefined && (!Number.isSafeInteger(ctx.bookingsPagesDeadlineAt) || Date.now() >= ctx.bookingsPagesDeadlineAt))) {
+    const baseUrl = `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/bookings`
+      + (ctx.step === 'historyBookings' ? '/history?includeCanceled=true&size=1000' : '?size=1000');
+    const now = Date.now();
+    const deadlineAt = ctx.bookingsPagesDeadlineAt ?? Math.min(ctx.startedAt + 28000, now + 25000);
+    const page = canonical.collectVivaBookingPage(msg.payload, ctx.bookingPages, {
+      actorId: ctx.actorClientId, binding: JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.step]),
+      baseUrl, method: msg.method, requestUrl: msg.url, responseUrl: msg.responseUrl, now, deadlineAt,
+    });
+    const restoreTimeout = () => {
+      const previous = ctx.bookingPagesRequestTimeout;
+      if (!previous) return;
+      if (previous.present) msg.requestTimeout = previous.value;
+      else delete msg.requestTimeout;
+      delete ctx.bookingPagesRequestTimeout;
+    };
+    if (page.error) {
+      restoreTimeout();
+      delete ctx.bookingPages; delete ctx.bookingsPagesDeadlineAt;
+      try {
+        const raw = Object.getOwnPropertyDescriptor(msg, 'statusCode')?.value;
+        const status = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : null;
+        lkDiagnostic({ eventKind: 'audit', code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE',
+          operationStage: ctx.step, firstFailure: page.error,
+          upstreamStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
+          httpStatus: 503, outcome: 'refused' });
+      } catch { /* Diagnostics cannot alter a refusal. */ }
+      return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+    }
+    ctx.bookingsPagesDeadlineAt = deadlineAt;
+    if (ctx.step === 'activeBookings') ctx.activeObservedAt = page.state.observedAt;
+    if (!page.complete) {
+      ctx.bookingPages = page.state;
+      ctx.bookingPagesRequestTimeout ??= { present: Object.prototype.hasOwnProperty.call(msg, "requestTimeout"), value: msg.requestTimeout };
+      const next = http(ctx.step, baseUrl.slice('https://api.vivacrm.ru'.length) + `&page=${page.state.nextPage}`);
+      msg.requestTimeout = Math.min(10000, Math.max(1, deadlineAt - Date.now()));
+      return next;
+    }
+    restoreTimeout();
+    msg.payload = page.rows;
+    delete ctx.bookingPages;
   }
-  if (!page.done) {
-    ctx.bookingPages = page.state;
-    const path = ctx.step === 'activeBookings' ? 'bookings?' : 'bookings/history?includeCanceled=true&';
-    const output = http(ctx.step, `/end-user/api/v2/${ctx.tenantKey}/${path}size=1000&page=${page.nextPage}`);
-    msg.requestTimeout = Math.max(1, Math.min(msg.requestTimeout,
-      20000 - (Date.now() - page.state.startedAt), 28000 - (Date.now() - ctx.startedAt)));
-    return output;
-  }
-  delete ctx.bookingPages;
-  msg.payload = page.payload;
-}
 if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
   const refuseBookings = firstFailure => {
     try {
@@ -535,6 +558,7 @@ if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
     ctx.activeObservedAt ||= new Date().toISOString();
     return http('historyBookings', `/end-user/api/v2/${ctx.tenantKey}/bookings/history?includeCanceled=true&size=1000`);
   }
+  delete ctx.bookingsPagesDeadlineAt;
   ctx.cancellationSnapshot = { observedAt: ctx.activeObservedAt,
     active: canonical.extractItems(ctx.activePayload), history: canonical.extractItems(msg.payload) };
   ctx.bookings = canonical.mergeBookings(ctx.activePayload, msg.payload);

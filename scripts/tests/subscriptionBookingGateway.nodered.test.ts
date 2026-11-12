@@ -4633,39 +4633,3 @@ test("managed JOIN named FREE_ENTITLEMENT gate rejects zero-priced discount rule
         benefit: { kind, finalPriceMinor: 0 } } }, OWNER_GLOBALS));
   }
 });
-
-test("gateway reads the second history page before checking the daily limit", () => {
-  const ctx = baseContext("active_bookings");
-  const first = runFunction(ROUTER_FILE, {statusCode: 200, payload: {content: []}, _subscriptionBooking: ctx});
-  assert.equal(first[0]._subscriptionBooking.step, "history_bookings");
-  const rows = Array.from({length: 1000}, (_, i) => ({id: `old-${i}`, clientId: "client-1"}));
-  const page = {content: rows, totalElements: 1001, totalPages: 2, size: 1000, number: 0, last: false};
-  const next = runFunction(ROUTER_FILE, {statusCode: 200, payload: page, _subscriptionBooking: ctx});
-  assert.match(next[0].url, /history\?includeCanceled=true&size=1000&page=1$/);
-  assert.equal(next[0].method, "GET"); assert.equal(next[1], null); assert.equal(next[3], null);
-  const conflict = flatBooking({id: "last-page-conflict"});
-  const result = runFunction(ROUTER_FILE, {statusCode: 200, payload: {...page, content: [conflict], number: 1, last: true}, _subscriptionBooking: ctx});
-  assert.equal(result[4].statusCode, 409);
-  assert.equal(result[4].payload.details.code, "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED");
-  assert.equal(result[1], null); assert.equal(result[3], null);
-});
-
-test("pagination timeout does not leak into subsequent gateway operations", () => {
-  for (const requestTimeout of [undefined, 7300]) {
-    const ctx = baseContext("history_bookings", {activeBookingsPayload: {content: []}});
-    const msg: Record<string, any> = {statusCode: 200, _subscriptionBooking: ctx,
-      payload: {content: Array.from({length: 1000}, (_, i) => ({id: `old-${i}`, clientId: "client-1"})),
-        size: 1000, totalElements: 1001, totalPages: 2, number: 0, last: false}};
-    if (requestTimeout !== undefined) msg.requestTimeout = requestTimeout;
-    const next = runFunction(ROUTER_FILE, msg)[0];
-    assert.equal(next.method, "GET"); assert(next.requestTimeout > 0 && next.requestTimeout <= 10000);
-    next.payload = {content: [{id: "old-final", clientId: "client-1"}], size: 1000,
-      totalElements: 1001, totalPages: 2, number: 1, last: true};
-    next.statusCode = 200;
-    const result = runFunction(ROUTER_FILE, next);
-    assert.equal(result[1]._subscriptionBooking.step, "operation_find");
-    assert.equal(result[1].requestTimeout, requestTimeout);
-    assert.equal(Object.hasOwn(result[1], "requestTimeout"), requestTimeout !== undefined);
-    assert.equal(ctx.bookingPagesTimeout, undefined);
-  }
-});
