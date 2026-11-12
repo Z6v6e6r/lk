@@ -99,7 +99,7 @@ export function buildPaymentOptions(service: ServiceKind, privileges: Privileges
   const residencyExcluded = excluded || (service !== 'game' && context.proDirection === true);
   const residency: PaymentOption = { kind: 'residency', mode: residencyExcluded ? 'unavailable' : privileges.residency ? 'book' : 'offer',
     amount: residencyExcluded ? null : price.residentPrice, ...(residencyExcluded ? { reason: excluded ? 'excluded-group' as const : 'pro-direction' as const } : {}) };
-  const pass: PaymentOption = { kind: 'pass', mode: !fits.pass ? 'unavailable' : privileges.pass ? 'book' : 'offer', amount: null };
+  const pass: PaymentOption = { kind: 'pass', mode: privileges.pass && fits.pass ? 'book' : 'unavailable', amount: null };
   const boost = currentBenefit(service, privileges, context, true);
   const hasApplicablePrivilege = [subscription, residency, pass, boost].some(option => option?.mode === 'book');
   const options: Record<Exclude<PaymentKind, 'boost'>, PaymentOption> = {
@@ -145,16 +145,15 @@ export function energyPassApplies(service: ServiceKind, fits: boolean, context: 
   return (service === 'tournament' && !context.proDirection) || fits;
 }
 
-// A missing product can be purchased for this event. Applicability toggles
-// describe existing products; for games pass applicability also controls
-// whether Energy 5 is offered at all. Excluded groups reject subscriptions.
+// Only subscriptions can be purchased with a booking. Energy 5 is an owned
+// visit pack, never a purchase offer. Excluded groups reject subscriptions.
 export function buildBookingPaymentOptions(service: ServiceKind, privileges: Privileges, fits: Applicability, context: Partial<PaymentContext> = {}, gameScope?: GamePaymentScope, courtAmount: number | null = null): PaymentOption[] {
   const purchaseFits = { subscription: !privileges.subscription || fits.subscription,
-    pass: service === 'game' ? fits.pass : !privileges.pass || energyPassApplies(service, fits.pass, context) };
+    pass: energyPassApplies(service, fits.pass, context) };
   const options = service === 'game' && gameScope
     ? buildGamePaymentOptions(courtAmount, gameScope, privileges, purchaseFits, context)
     : buildPaymentOptions(service, privileges, purchaseFits, context);
-  return options.filter(option => !(service === 'game' && option.kind === 'pass' && option.mode === 'unavailable'))
+  return options.filter(option => option.kind !== 'pass' || option.mode === 'book')
     .map(option => !privileges.subscription && option.reason === 'training-only'
     ? { ...option, mode: 'offer' } : option);
 }

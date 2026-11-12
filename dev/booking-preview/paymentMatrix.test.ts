@@ -49,7 +49,7 @@ test('inapplicable subscriptions and passes never authorize free booking or a vi
     for (const subscription of [false, true]) for (const pass of [false, true]) {
       const options = buildPaymentOptions('game', profile, { subscription, pass }, freeHour);
       assert.equal(options.find(option => option.kind === 'subscription')?.mode, !subscription ? 'unavailable' : profile.subscription ? 'book' : 'offer');
-      assert.equal(options.find(option => option.kind === 'pass')?.mode, !pass ? 'unavailable' : profile.pass ? 'book' : 'offer');
+      assert.equal(options.find(option => option.kind === 'pass')?.mode, pass && profile.pass ? 'book' : 'unavailable');
       assert.ok(options.some(option => option.mode === 'book'), 'A paid fallback must stay available');
     }
   }
@@ -103,7 +103,7 @@ test('an excluded group category rejects residency and subscription, including p
         assert.equal(option.reason, 'excluded-group');
         assert.equal(option.amount, null);
       }
-      assert.equal(options.find(option => option.kind === 'pass')?.mode, !pass ? 'unavailable' : profile.pass ? 'book' : 'offer');
+      assert.equal(options.find(option => option.kind === 'pass')?.mode, pass && profile.pass ? 'book' : 'unavailable');
       assert.equal(options[0].mode, profile.pass && pass ? 'reference' : 'book');
     }
   }

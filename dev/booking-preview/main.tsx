@@ -134,7 +134,7 @@ function Preview() {
             <label className="preview-field">Стоимость Резидентства, ₽<input type="number" min="0.01" step="0.01" value={residencyPrice} onChange={event => setResidencyPrice(event.target.value)} /></label>
           </fieldset>
           <fieldset className="preview-product"><legend>3. Абонемент Энергия 5</legend>
-            <label className="preview-check"><input type="checkbox" checked={pass} onChange={event => setPass(event.target.checked)} />Есть Энергия 5</label>
+            <label className="preview-check"><input type="checkbox" checked={pass} onChange={event => setPass(event.target.checked)} />Есть действующая Энергия 5</label>
             <label className="preview-field">Остаток тренировок<input type="number" min="0" max="5" step="1" value={passRemaining} onChange={event => setPassRemaining(event.target.value)} /></label>
             <label className="preview-check"><input type="checkbox" checked={standardTournament || passFits} disabled={standardTournament} onChange={event => setPassFits(event.target.checked)} />Энергия 5 подходит к событию</label>
             {standardTournament && <small>Обычные турниры доступны по Энергии 5.</small>}

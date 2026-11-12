@@ -225,7 +225,7 @@ test('all paid and free methods keep their quoted amounts without stacking', () 
   assert.equal(createPreviewOrder({ kind: 'subscription', mode: 'book', amount: 500, benefit: 'partial-hour' })?.total, 500);
   assert.equal(createPreviewOrder({ kind: 'subscription', mode: 'book', amount: 0 })?.total, 0);
   assert.equal(createPreviewOrder({ kind: 'subscription', mode: 'offer', amount: 0 }), null, 'Missing subscriptions must go through purchase first');
-  assert.equal(createPreviewOrder({ kind: 'pass', mode: 'offer', amount: null })?.total, 19800);
+  assert.equal(createPreviewOrder({ kind: 'pass', mode: 'offer', amount: null }), null);
   assert.equal(createPreviewOrder({ kind: 'pass', mode: 'book', amount: null })?.total, 0);
 });
 test('invalid prices and unavailable methods cannot create a payable order', () => {
@@ -262,9 +262,9 @@ test('Energy 5 balance is validated and displayed as remaining training sessions
   assert.equal(passBalanceText(1), 'Осталась 1 тренировка');
   assert.equal(trainingCount(5), '5 тренировок');
 });
-test('an exhausted owned pack offers a replacement and keeps the paid fallback selectable', () => {
+test('an exhausted owned pack is hidden and keeps the paid fallback selectable', () => {
   const options = buildBookingPaymentOptions('training', PRIVILEGE_PROFILES[4], { subscription: false, pass: true });
-  assert.equal(withPassBalance(options, 0).find(option => option.kind === 'pass')?.mode, 'offer');
+  assert.equal(withPassBalance(options, 0).find(option => option.kind === 'pass'), undefined);
   assert.equal(withPassBalance(options, 0).find(option => option.kind === 'full')?.mode, 'book');
   assert.equal(withPassBalance(options, 3).find(option => option.kind === 'pass')?.mode, 'book');
   assert.equal(bookingButtonText(options.find(option => option.kind === 'pass')), 'Списать 1 тренировку и записаться');
@@ -313,4 +313,16 @@ test('the reported RA preview URL selects a free personal share despite a stale 
   assert.equal(bookingButtonText(choice), 'Записаться бесплатно');
   assert.equal(createPreviewOrder(choice)?.product, null);
   assert.deepEqual(buildBookingPaymentOptions('game', settings.profile, settings.applicability, context, 'court', 4000), [{ kind: 'full', mode: 'book', amount: 4000 }]);
+});
+
+test('legacy Energy purchase offers and invalid balances cannot authorize a purchase or visit', () => {
+  const legacy = { kind: 'pass', mode: 'offer', amount: null } as const;
+  assert.equal(isSelectableMethod(legacy), false);
+  assert.equal(createPreviewOrder(legacy), null);
+  assert.equal(bookingButtonText(legacy), 'Запись по абонементу недоступна');
+  const owned = { ...legacy, mode: 'book' as const };
+  for (const remaining of [NaN, Infinity, -1, 0, 0.5, 6]) {
+    assert.deepEqual(withPassBalance([legacy, owned], remaining), []);
+  }
+  assert.deepEqual(withPassBalance([legacy, owned], 1), [owned]);
 });

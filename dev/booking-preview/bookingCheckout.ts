@@ -1,10 +1,10 @@
 import { formatRubles, type PaymentKind, type PaymentOption, type Privileges } from './paymentMatrix.ts';
 
-export const ENERGY_PASS_PRICE = 19800;
 export const PREVIEW_RESIDENCY_PRICE = 790;
-export type PreviewOrder = { method: PaymentKind; bookingAmount: number; product: 'residency' | 'pass' | 'subscription' | null; productAmount: number; total: number };
+export type PreviewOrder = { method: PaymentKind; bookingAmount: number; product: 'residency' | 'subscription' | null; productAmount: number; total: number };
 
 export function isSelectableMethod(option: PaymentOption) {
+  if (option.kind === 'pass') return option.mode === 'book';
   return option.mode === 'book' || option.mode === 'offer';
 }
 
@@ -61,7 +61,7 @@ export function withPersonalSubscription(options: PaymentOption[], hasSubscripti
 
 export function bookingButtonText(option: PaymentOption | undefined) {
   if (!option) return 'Стоимость уточняется';
-  if (option.kind === 'pass') return option.mode === 'offer' ? `Записаться за ${formatRubles(ENERGY_PASS_PRICE)}` : 'Списать 1 тренировку и записаться';
+  if (option.kind === 'pass') return option.mode === 'book' ? 'Списать 1 тренировку и записаться' : 'Запись по абонементу недоступна';
   if (option.amount == null) return option.kind === 'subscription' ? 'Выбрать подписку для записи' : 'Стоимость уточняется';
   return option.amount === 0 ? 'Записаться бесплатно' : `Записаться за ${formatRubles(option.amount)}`;
 }
@@ -69,8 +69,7 @@ export function bookingButtonText(option: PaymentOption | undefined) {
 // Synthetic order only. No booking, payment link or entitlement API is called.
 export function createPreviewOrder(option: PaymentOption, residencyPrice: number | null = null, subscriptionPrice: number | null = null): PreviewOrder | null {
   if (!isSelectableMethod(option)) return null;
-  if (option.kind === 'pass') return { method: 'pass', bookingAmount: 0, product: option.mode === 'offer' ? 'pass' : null,
-    productAmount: option.mode === 'offer' ? ENERGY_PASS_PRICE : 0, total: option.mode === 'offer' ? ENERGY_PASS_PRICE : 0 };
+  if (option.kind === 'pass') return { method: 'pass', bookingAmount: 0, product: null, productAmount: 0, total: 0 };
   if (option.amount == null || !Number.isFinite(option.amount) || option.amount < 0) return null;
   const product = option.mode === 'offer' && (option.kind === 'residency' || option.kind === 'subscription') ? option.kind : null;
   const productPrice = product === 'residency' ? residencyPrice : product === 'subscription' ? subscriptionPrice : 0;
@@ -96,8 +95,8 @@ export function trainingCount(count: number) {
 export function passBalanceText(count: number) { return `${count === 1 ? 'Осталась' : 'Осталось'} ${trainingCount(count)}`; }
 
 export function withPassBalance(options: PaymentOption[], remaining: number): PaymentOption[] {
-  if (remaining > 0) return options;
-  const adjusted = options.map(option => option.kind === 'pass' && option.mode === 'book' ? { ...option, mode: 'offer' as const } : option);
+  const usable = Number.isInteger(remaining) && remaining > 0 && remaining <= 5;
+  const adjusted = options.filter(option => option.kind !== 'pass' || (usable && option.mode === 'book'));
   const hasBenefit = adjusted.some(option => option.kind !== 'full' && option.mode === 'book');
   return adjusted.map(option => option.kind === 'full' && option.mode === 'reference' && !hasBenefit ? { ...option, mode: 'book' } : option);
 }
