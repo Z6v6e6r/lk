@@ -195,6 +195,62 @@ if (ctx.step === 'groupExercise') {
   if (canonical.resolveCategory(exercise) !== eventRoute?.category) return targetUnresolved('target_category');
   if (!Number.isFinite(start)) return targetUnresolved('target_start_invalid');
   if (start <= Date.now()) {
+    // A dedicated info event also works with older, code-filtered observers.
+    // No payload, target identity, date, clock value or error text may leave here.
+    try {
+      const event = { event: 'subscription_price_preview_target_not_future', schemaVersion: 1,
+        code: 'TARGET_NOT_FUTURE', step: 'groupExercise', reason: 'target_not_future',
+        startRelation: 'UNKNOWN', startAlias: 'UNKNOWN', startFormat: 'UNKNOWN',
+        elapsedBucket: 'UNKNOWN', factsFailed: true };
+      try {
+        const own = (object, key) => {
+          const prototype = Object.getPrototypeOf(object);
+          // Plain Node-RED messages can originate outside this function's VM.
+          if (prototype !== null && Object.getPrototypeOf(prototype) !== null) throw 0;
+          const descriptor = Object.getOwnPropertyDescriptor(object, key);
+          if (!descriptor) return undefined;
+          if (!Object.hasOwn(descriptor, 'value')) throw 0;
+          const value = descriptor.value;
+          if (value != null && !['string', 'number', 'boolean'].includes(typeof value)) throw 0;
+          if (typeof value === 'string' && value.length > 128) throw 0;
+          return value;
+        };
+        const aliases = [['timeFrom', 'TIME_FROM'], ['startsAt', 'STARTS_AT'],
+          ['startAt', 'START_AT'], ['fromTime', 'FROM_TIME']];
+        const parsed = aliases.map(([key, alias]) => {
+          const raw = String(own(exercise, key) || '');
+          return { raw, alias, instant: new Date(raw).getTime() };
+        }).filter(value => Number.isFinite(value.instant));
+        const selected = parsed[0];
+        // The observer must agree with the owning parser; never invent an alias.
+        if (!selected || selected.instant !== start) throw 0;
+        const now = Date.now();
+        const entered = own(ctx, 'startedAt');
+        const age = now - entered;
+        const clockKnown = Number.isFinite(now) && Number.isFinite(entered) && age >= 0;
+        const raw = selected.raw;
+        const iso = raw.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):?(\d{2}))$/i);
+        let explicitOffsetValid = false;
+        if (iso && Number(iso[5] || 0) <= 23 && Number(iso[6] || 0) <= 59) {
+          const offset = iso[3].toUpperCase() === 'Z' ? 0
+            : (iso[4] === '-' ? -1 : 1) * (Number(iso[5]) * 60 + Number(iso[6]));
+          explicitOffsetValid = new Date(start + offset * 60000).toISOString().slice(0, 23)
+            === `${iso[1]}.${(iso[2] || '').padEnd(3, '0')}`;
+        }
+        Object.assign(event, {
+          startRelation: !clockKnown ? 'UNKNOWN' : start < entered ? 'PAST_AT_ENTRY'
+            : start === entered ? 'NOW_AT_ENTRY' : start <= now ? 'CROSSED_DURING_REQUEST' : 'UNKNOWN',
+          startAlias: selected.alias,
+          startFormat: /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? 'ISO_OFFSET'
+            : /^\d{4}-\d{2}-\d{2}T/.test(raw) ? 'ISO_OFFSETLESS'
+              : /^\d{4}-\d{2}-\d{2}$/.test(raw) ? 'DATE_ONLY' : 'OTHER',
+          elapsedBucket: !clockKnown ? 'UNKNOWN' : age < 1000 ? 'LT1S' : age < 5000 ? 'LT5S'
+            : age < 15000 ? 'LT15S' : age <= 28000 ? 'LE28S' : 'OVER28S',
+          explicitOffsetValid, aliasConflict: parsed.some(value => value.instant !== start), factsFailed: false,
+        });
+      } catch { /* Unsafe or unrecognized data yields only the fixed UNKNOWN shape. */ }
+      if (typeof node !== 'undefined' && typeof node?.log === 'function') node.log(JSON.stringify(event));
+    } catch { /* Diagnostics cannot change the guard, response or continuation. */ }
     lkDiagnostic({ code: "TARGET_NOT_FUTURE", targetFuture: false, targetTimeValid: Number.isFinite(start), sourceTimeValid: true,
       deltaBucket: start < Date.now() ? "past" : "now", branch: eventRoute ? "schedule" : ctx.existingGame ? "game" : "UNKNOWN", targetType: eventRoute ? "schedule" : ctx.existingGame ? "game" : "UNKNOWN" });
     return targetUnresolved('target_not_future');
