@@ -600,6 +600,7 @@ jobs:
         run: >-
           node --test
           scripts/tests/resultLifecycle.nodered.test.ts
+          scripts/tests/resultAuthTransport.test.mjs
           scripts/tests/resultSession.nodered.test.ts
           scripts/tests/resultSubmitP0.regression.test.ts
           scripts/tests/matchResult.playerSelection.test.ts
