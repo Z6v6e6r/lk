@@ -9,7 +9,7 @@ import { buildSync } from 'esbuild';
 import { verifyWorkspace } from './verify_nodered_source_origin.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 const root = path.dirname(fileURLToPath(import.meta.url));
-export const PREVIEW_RELEASE_SOURCE = '35eade1be234c192df58780a415dfdb9b1d060784ba35ea1b7be301dc4544b5e';
+export const PREVIEW_RELEASE_SOURCE = '311763d489a8c03464f6ef73a676aa5e1184e599f58edffa8941a63bfb1560de';
 export const PREVIEW_RELEASE_ROUTER = '1139b85ce9bfe126a87cb2b705e92bd64d57a7f81d5af5708ebcd504446f42a3';
 const id = 'lk_subscription_price_preview_20260908_router';
 const owner = 'preview-cross-day-v1';
