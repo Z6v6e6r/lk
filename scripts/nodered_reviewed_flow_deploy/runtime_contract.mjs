@@ -579,7 +579,8 @@ export function writeFileExclusiveAtomicDurable(
   }
 }
 
-export function atomicWrite(destination, bytes, { uid = 0, gid = 0 } = {}) {
+export function atomicWrite(destination, bytes, { uid = 0, gid = 0, mode = 0o600 } = {}) {
+  if (![0o600, 0o640, 0o644].includes(mode)) throw new Error("Protected atomic write mode is invalid");
   const directory = path.dirname(destination);
   const temporary = path.join(
     directory,
@@ -593,8 +594,8 @@ export function atomicWrite(destination, bytes, { uid = 0, gid = 0 } = {}) {
       0o600,
     );
     fs.fchownSync(descriptor, uid, gid);
-    fs.fchmodSync(descriptor, 0o600);
     fs.writeFileSync(descriptor, bytes);
+    fs.fchmodSync(descriptor, mode);
     fs.fsyncSync(descriptor);
     fs.closeSync(descriptor);
     descriptor = undefined;

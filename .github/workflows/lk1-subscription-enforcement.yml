@@ -422,6 +422,7 @@ jobs:
           scripts/tests/friendshipSpecialResidencyPreview.test.mjs
           scripts/tests/productionErrorCauses.test.mjs
           scripts/tests/subscriptionBookingConflictDiagnostics.test.mjs
+          scripts/tests/subscription409Installer.test.mjs
           scripts/tests/subscriptionBookingFailureDiagnostics.test.mjs
           scripts/tests/subscriptionBookingScope.test.mjs
           scripts/tests/subscriptionBookingBootstrap.test.mjs

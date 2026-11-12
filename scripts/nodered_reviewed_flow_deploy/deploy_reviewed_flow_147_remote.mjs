@@ -211,6 +211,17 @@ export function createReviewedFlowRuntime({
   const readDeploymentLease = ({ includeExpired = false } = {}) => {
     assertRoot();
     if (!fs.existsSync(deploymentLeasePath)) return null;
+    // A settings/runtime transaction owns its publication aliases too. Do not
+    // recover, expire, reconcile or delete its lease through the flow deployer.
+    const admissionStat = fs.lstatSync(deploymentLeasePath);
+    if (!admissionStat.isFile() || admissionStat.isSymbolicLink() || ![1, 2].includes(admissionStat.nlink)
+      || admissionStat.uid !== uid || admissionStat.gid !== gid || (admissionStat.mode & 0o777) !== 0o600) {
+      throw new Error("Protected file contract mismatch: deployment lease");
+    }
+    let admission;
+    try { admission = JSON.parse(fs.readFileSync(deploymentLeasePath, "utf8")); }
+    catch { throw new Error("Reviewed-flow deployment lease is invalid"); }
+    if (admission?.formatVersion === 4) throw new Error("Reviewed-flow deployment lease contract mismatch: foreign v4 requires its owning operation");
     recoverAtomicExclusivePublication(deploymentLeasePath, protectedFileOptions);
     assertProtectedFile(deploymentLeasePath, protectedFileOptions);
     let lease;
