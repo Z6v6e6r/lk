@@ -5,6 +5,7 @@ import { readMatrixSettings, type SubscriptionPlan } from './paymentMatrix';
 import { PREVIEW_RESIDENCY_PRICE } from './bookingCheckout';
 import { DAILY_USAGE, SUBSCRIPTION_PLANS, type DailyUsage } from './privilegeRules';
 import { readPreviewStage, type PreviewStage } from './previewStage';
+import { settingsSummary } from './settingsSummary';
 
 const screens = [
   ['game-booking', 'Игра', 'Выбор станции, корта и времени'],
@@ -54,6 +55,7 @@ function Preview() {
     groupCategory, friendsTournament: friendsTournament ? '1' : '0', residencyPrice, raFits: '1', passRemaining });
   const frameUrl = `${import.meta.env.BASE_URL}dev/booking-preview/frame.html?${query}&reset=${revision}`;
   const serialized = query.toString();
+  const summary = settingsSummary(query);
   useEffect(() => { history.replaceState(null, '', `?${serialized}`); }, [serialized]);
   const changeDailyUsage = (value: DailyUsage) => { setDailyUsage(value); setDailyQuota(value === 'none' ? 'available' : 'used'); };
   const changeDailyQuota = (used: boolean) => {
@@ -105,17 +107,22 @@ function Preview() {
             <button aria-pressed={width === 'mobile'} onClick={() => setWidth('mobile')}>390 px</button>
           </div>
           <button className="preview-reset" onClick={() => setRevision(value => value + 1)}>Сбросить</button>
+          <button className="preview-reset" onClick={copyScenario}>Скопировать ссылку на сценарий</button>
           <a href={frameUrl} target="_blank" rel="noreferrer">Открыть экран ↗</a>
+          <span role="status">{copyStatus}</span>
         </div>
       </header>
+      <details className="preview-settings">
+        <summary className="preview-settings-summary">
+          <span className="preview-settings-title"><strong>Настройки сценария</strong><span className="preview-settings-action" aria-hidden="true"><span className="preview-settings-expand">Развернуть</span><span className="preview-settings-collapse">Свернуть</span><svg viewBox="0 0 16 16" fill="none"><path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg></span></span>
+          <span className="preview-settings-values">{summary.map(item => <span key={item}>{item}</span>)}</span>
+        </summary>
       <section className="preview-release" aria-label="Этап внедрения">
         <div className="preview-release-options" role="group" aria-label="Версия интерфейса">
           <button aria-pressed={stage === 'current'} onClick={() => changeStage('current')}>Сейчас · без РАбуста</button>
           <button aria-pressed={stage === 'full'} onClick={() => changeStage('full')}>Полный вариант · с РАбуста</button>
         </div>
         <p>{stage === 'current' ? 'Этап до внедрения РАбуста: подписки, Резидентство и Энергия 5.' : 'Будущие условия с РАбуста. Включите Буст в настройках профиля для проверки сочетаний.'} Запись и оплата тестовые.</p>
-        <button className="preview-reset" onClick={copyScenario}>Скопировать ссылку на сценарий</button>
-        <span role="status">{copyStatus}</span>
       </section>
       <section className="preview-privileges" aria-label="Условия матрицы">
         <div className="preview-products">
@@ -150,6 +157,7 @@ function Preview() {
         </select></label><label className="preview-check"><input type="checkbox" checked={friendsTournament} onChange={event => setFriendsTournament(event.target.checked)} />Турнир «Время на друзей»</label></div>
         <span>Корт 4 000 ₽/ч · моя ¼ — 1 000 ₽/ч · тренировка 5 500 ₽ · турнир 8 000 ₽</span>
       </section>
+      </details>
       <div className={`preview-stage preview-stage--${width}`}>
         <iframe key={`${serialized}-${revision}`} src={frameUrl} title="Интерфейс записи PadlHub"
           sandbox="allow-scripts allow-same-origin" />

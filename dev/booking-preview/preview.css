@@ -18,6 +18,21 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .preview-sidebar button span { display: block; margin-top: 3px; color: #788174; font-size: 11px; }
 .preview-sidebar small { display: block; margin: 38px 10px 0; color: #828b7d; font-size: 11px; }
 .preview-main { min-width: 0; }
+.preview-settings { border-bottom: 1px solid #e4dcef; background: #faf8fe; }
+.preview-settings-summary { padding: 14px 24px; cursor: pointer; list-style: none; }
+.preview-settings-summary::-webkit-details-marker { display: none; }
+.preview-settings-summary:focus-visible { outline: 3px solid #6f9c69; outline-offset: -3px; }
+.preview-settings-summary:hover { background: #f3eff9; }
+.preview-settings-title { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 13px; color: #42374e; }
+.preview-settings-action { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 400; color: #69459a; white-space: nowrap; }
+.preview-settings-action svg { width: 16px; height: 16px; }
+.preview-settings-collapse { display: none; }
+.preview-settings[open] .preview-settings-expand { display: none; }
+.preview-settings[open] .preview-settings-collapse { display: inline; }
+.preview-settings[open] .preview-settings-action svg { transform: rotate(180deg); }
+.preview-settings-values { display: flex; flex-wrap: wrap; gap: 4px 0; margin-top: 6px; color: #786b86; font-size: 11px; line-height: 1.5; }
+.preview-settings-values > span + span::before { content: '·'; padding: 0 7px; color: #b3a8bd; }
+@media(max-width: 700px) { .preview-settings-summary { padding: 12px 16px; } }
 .preview-release { padding: 16px 24px; background: #fff; border-bottom: 1px solid #dce2dc; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: #625674; font-size: 12px; }
 .preview-release-options { display: flex; flex-wrap: wrap; gap: 6px; }
 .preview-release-options button { padding: 9px 12px; border: 1px solid #d9dfd4; border-radius: 7px; background: #fff; color: #344b35; }
@@ -28,6 +43,7 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .preview-toolbar > div:first-child strong, .preview-toolbar > div:first-child span { display: block; }
 .preview-toolbar > div:first-child span { font-size: 11px; color: #828b7d; margin-top: 3px; }
 .preview-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; }
+.preview-controls [role=status]:empty { display: none; }
 .preview-controls label { display: flex; align-items: center; gap: 8px; color: #6c786a; }
 .preview-controls select { padding: 7px 9px; border: 1px solid #d9dfd4; border-radius: 6px; background: #fff; color: #344b35; }
 .preview-size { display: flex; background: #e9ede5; padding: 3px; border-radius: 7px; }
