@@ -1,3 +1,4 @@
+import { isRequestTimeoutError, runWithAbortTimeout } from "../../utils/requestTimeout";
 import { BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence } from "./bookingConversionEvidence";
 import { observeGameLeave } from "./observeGameLeave";
 import { GameBookingCancellation } from "./GameBookingCancellation";
@@ -4911,6 +4912,8 @@ export default function GamesPage({
   const [loadingSlotPrice, setLoadingSlotPrice] = useState(false);
   const [loadingPay, setLoadingPay] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
+  const [gamePreparationStage, setGamePreparationStage] = useState<"profile" | "slot" | null>(null);
+  const gamePreparationRef = useRef<AbortController | null>(null);
   const [paymentMode, setPaymentMode] = useState<GamePaymentMode>("self");
   const [splitCheckoutMode, setSplitCheckoutMode] = useState<SplitCheckoutMode>("one_time");
   const [selectedSplitSubscriptionId, setSelectedSplitSubscriptionId] = useState<string | null>(null);
@@ -6423,7 +6426,8 @@ export default function GamesPage({
         : activeModeSubServiceIds,
     [selectedSlotSubServiceIds, activeModeSubServiceIds],
   );
-  const revalidateSelectedSlotForPayment = useCallback(async (): Promise<boolean> => {
+  const revalidateSelectedSlotForPayment = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
+    signal?.throwIfAborted();
     if (!studioId || !selectedDate || !courtId || !time) return false;
     const selectedDateKey = formatDateLocalIso(selectedDate);
     const leadTimeError = `Бронирование доступно минимум за ${GAME_BOOKING_MIN_LEAD_MINUTES} минут до начала. Выберите другое время.`;
@@ -6434,12 +6438,14 @@ export default function GamesPage({
 
     try {
       const result = await apiFetchMasterServiceTimeslots(selectedDateKey, {
+        signal,
         studioId,
         masterServiceId: studioMasterServiceId,
         preferredSubServiceId: activeModePreferredSubServiceId,
         preferredSubServiceIds: activeModeSubServiceIds,
         preferredRoomIds: activeModePreferredRoomIds,
       });
+      signal?.throwIfAborted();
       if (result.error) {
         setPayError("Не удалось перепроверить доступность слота. Обновите расписание и попробуйте снова.");
         return false;
@@ -6466,6 +6472,7 @@ export default function GamesPage({
       }
       return true;
     } catch {
+      signal?.throwIfAborted();
       setPayError("Не удалось перепроверить доступность слота. Обновите расписание и попробуйте снова.");
       return false;
     }
@@ -6490,6 +6497,8 @@ export default function GamesPage({
     selectedSlotId ?? "",
     [...resolvedSelectedSubServiceIds].sort().join(","),
   ].join("|");
+  // A changed selection or closed overlay must not finish an old preparation.
+  useEffect(() => () => gamePreparationRef.current?.abort(), [promoSelectionKey]);
   const bookingPreset = useMemo(() => {
     const bookingId = normalizeBookingId(createFromBooking?.bookingId);
     const date = toDateKey(createFromBooking?.date ?? null);
@@ -7256,7 +7265,13 @@ export default function GamesPage({
   const publicCreateSubscriptionSubmitTitle = publicCreateSurchargeMinor != null
     ? `Создать игру по подписке с доплатой ${formatPrice(publicCreateSurchargeMinor / 100)} ₽`
     : "Создать игру по подписке";
-  const publicCreateFinalSubmitTitle = publicCreateNeedsSplitSubscriptionSelection
+  const publicCreateFinalSubmitTitle = loadingPay
+    ? gamePreparationStage === "profile"
+      ? "Проверяем профиль…"
+      : gamePreparationStage === "slot"
+        ? "Проверяем доступность корта…"
+        : "Создаём игру…"
+    : publicCreateNeedsSplitSubscriptionSelection
     ? "Выберите абонемент для списания"
     : splitPaymentSelected
     ? (
@@ -9890,7 +9905,8 @@ export default function GamesPage({
     splitSubscriptionRequestRef.current += 1;
   }, []);
 
-  const resolveCurrentClientProfile = useCallback(async () => {
+  const resolveCurrentClientProfile = useCallback(async (signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     if (profileId && profilePhone) {
       return {
         clientId: profileId,
@@ -9898,7 +9914,8 @@ export default function GamesPage({
       };
     }
 
-    const profileResult = await apiFetchProfile();
+    const profileResult = await apiFetchProfile(signal);
+    signal?.throwIfAborted();
     const nextClientId = profileResult.data?.id ?? profileId ?? null;
     const nextClientPhone = profileResult.data?.phone ?? profilePhone ?? null;
     if (nextClientId) setProfileId(nextClientId);
@@ -9909,6 +9926,36 @@ export default function GamesPage({
       clientPhone: nextClientPhone,
     };
   }, [profileId, profilePhone]);
+
+  const prepareGamePayment = useCallback(async () => {
+    const controller = new AbortController();
+    gamePreparationRef.current = controller;
+    try {
+      // Only reads belong inside this deadline. CREATE/pay must stay outside so
+      // a read that ignores abort cannot create anything after the timeout.
+      return await runWithAbortTimeout(20_000, async (signal) => {
+        setGamePreparationStage("profile");
+        const profile = await resolveCurrentClientProfile(signal);
+        signal.throwIfAborted();
+        setGamePreparationStage("slot");
+        const available = await revalidateSelectedSlotForPayment(signal);
+        signal.throwIfAborted();
+        return available ? profile : null;
+      }, controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setPayError(isRequestTimeoutError(error)
+          ? "Проверка заняла слишком много времени. Игра не создана. Попробуйте ещё раз."
+          : "Не удалось подготовить игру. Проверьте подключение и попробуйте ещё раз.");
+      }
+      return null;
+    } finally {
+      if (gamePreparationRef.current === controller) {
+        gamePreparationRef.current = null;
+        setGamePreparationStage(null);
+      }
+    }
+  }, [resolveCurrentClientProfile, revalidateSelectedSlotForPayment]);
 
   const fetchCommunityAutopublishTargets = useCallback(async (): Promise<CommunityAutopublishTargetsBundle> => {
     if (!ENABLE_GAME_COMMUNITY_AUTOPUBLISH) {
@@ -10836,7 +10883,11 @@ export default function GamesPage({
       splitPayment: "organizer",
     });
 
-    const profile = await resolveCurrentClientProfile();
+    const profile = await prepareGamePayment();
+    if (!profile) {
+      setLoadingPay(false);
+      return;
+    }
     const clientId = profile.clientId;
     const clientPhone = profile.clientPhone;
 
@@ -10865,10 +10916,6 @@ export default function GamesPage({
     const resolvedTotalAmount = paymentAmount != null && Number.isFinite(paymentAmount)
       ? Math.max(0, Math.round(paymentAmount))
       : null;
-    if (!await revalidateSelectedSlotForPayment()) {
-      setLoadingPay(false);
-      return;
-    }
 
     const paymentResult = await apiCreatePadelSplitGamePayment({
       date: fromDate,
@@ -11212,8 +11259,7 @@ export default function GamesPage({
     publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
     validateGamePublicationFields,
-    revalidateSelectedSlotForPayment,
-    resolveCurrentClientProfile,
+    prepareGamePayment,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
     previewSubscriptionUsageShadow,
@@ -11270,14 +11316,13 @@ export default function GamesPage({
       [PAYMENT_REF_QUERY_KEY]: paymentRef,
     });
 
-    const profile = await resolveCurrentClientProfile();
-    const clientId = profile.clientId;
-    const clientPhone = profile.clientPhone;
-
-    if (!await revalidateSelectedSlotForPayment()) {
+    const profile = await prepareGamePayment();
+    if (!profile) {
       setLoadingPay(false);
       return;
     }
+    const clientId = profile.clientId;
+    const clientPhone = profile.clientPhone;
 
     const paymentResult = await apiPayMasterService({
       date: fromDate,
@@ -11601,8 +11646,7 @@ export default function GamesPage({
     publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
     validateGamePublicationFields,
-    revalidateSelectedSlotForPayment,
-    resolveCurrentClientProfile,
+    prepareGamePayment,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
     previewSubscriptionUsageShadow,
@@ -18031,12 +18075,13 @@ export default function GamesPage({
                 }
               }}
               type="button"
+              aria-busy={loadingPay}
               disabled={!canProceedToPayment
                 || loadingPay
                 || subscriptionUsageShadow.busy
                 || (!subscriptionUsageShadowEnabled && publicCreateNeedsSplitSubscriptionSelection)}
             >
-              <span className="game-submit-main">
+              <span className="game-submit-main" aria-live="polite">
                 {subscriptionUsageShadowEnabled
                   ? subscriptionUsageShadow.busy
                     ? "Проверяем ограничения..."
@@ -18085,7 +18130,7 @@ export default function GamesPage({
                 )}
               </>
             )}
-            {payError && <div className="game-empty game-pay-error">{payError}</div>}
+            {payError && <div className="game-empty game-pay-error" role="alert">{payError}</div>}
           </div>
         )}
 
