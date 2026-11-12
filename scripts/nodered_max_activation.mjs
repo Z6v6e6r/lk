@@ -116,7 +116,7 @@ export function createActivation({ root = '/root/.node-red', pm2 = createPm2(), 
   };
   const writeExclusive = (p, b, mode = 0o600) => {
     const fd = fs.openSync(p, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, mode);
-    try { fs.writeFileSync(fd, b); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    try { fs.fchmodSync(fd, mode); fs.writeFileSync(fd, b); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     syncDir(path.dirname(p));
   };
   const atomic = (p, b, mode = 0o600) => {
@@ -170,7 +170,7 @@ export function createActivation({ root = '/root/.node-red', pm2 = createPm2(), 
   const currentHashes = () => Object.fromEntries(FILES.map(([p]) => [p, exists(path.join(sdk, p)) ? hash(read(path.join(sdk, p))) : null]));
   const assetBytes = stage => {
     regular(stage, true); check((fs.statSync(stage).mode & 0o777) === 0o700, 'MAX_STAGE_MODE');
-    return FILES.map(([, name,, h]) => { const b = read(path.join(stage, name)); check(hash(b) === h, 'MAX_ASSET_DRIFT'); return b; });
+    return FILES.map(([, name,, h]) => { check((fs.statSync(path.join(stage, name)).mode & 0o777) === 0o600, 'MAX_ASSET_MODE'); const b = read(path.join(stage, name)); check(hash(b) === h, 'MAX_ASSET_DRIFT'); return b; });
   };
   const noLease = () => {
     if (!exists(leasePath)) return;

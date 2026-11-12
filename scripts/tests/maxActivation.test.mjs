@@ -27,7 +27,7 @@ function scenario(t, options = {}) {
   } }; walk(path.join(sdk, 'dist')); return items.sort((a, b) => a[0].localeCompare(b[0])); };
   const before = entries(), preClosure = hash(JSON.stringify(before));
   const postClosure = hash(JSON.stringify(before.map(([p, h]) => [p, candidates[p] ? hash(candidates[p]) : h])));
-  for (const [file, name] of FILES) put(path.join(stage, name), candidates[file]);
+  for (const [file, name] of FILES) { put(path.join(stage, name), candidates[file]); fs.chmodSync(path.join(stage, name), 0o600); }
   const types = ['maxbot-receive', 'maxbot-receive', 'maxbot-send', 'maxbot-send', 'inject', 'inject', 'function', 'function'];
   const flow = types.map((type, i) => ({ id: 'synthetic-' + i, type, wires: [], d: false }));
   const directPins = new Map();
@@ -211,4 +211,15 @@ test('pinned formatter cannot authorize extra direct-provider initializer or URL
   flow[6].initialize = "fetch('https://platform-api.max.ru/messages')";
   fs.writeFileSync(p, JSON.stringify(flow)); assert.throws(() => s.runtime.prepare(s.stage), /MAX_PAUSE_COVERAGE/);
   assert.equal(s.stopCalls(), 0);
+});
+
+test('explicit target modes survive restrictive production umask', t => {
+  const s = scenario(t), targets = [path.join(s.root, 'flows.json'), path.join(s.sdk, client), path.join(s.sdk, messages)];
+  for (const p of targets) fs.chmodSync(p, 0o644);
+  const previous = process.umask(0o077);
+  try {
+    s.activate();
+    for (const p of targets) assert.equal(fs.statSync(p).mode & 0o777, 0o644);
+    assert.equal(fs.statSync(path.join(s.stage, 'transaction/journal.json')).mode & 0o777, 0o600);
+  } finally { process.umask(previous); }
 });
