@@ -12,7 +12,11 @@ if (!ctx) return null;
 msg.statusCode = ctx.statusCode || 200;
 if (ctx.done && ctx.error) {
   lkDiagnostic({ code: ctx.error, reason: ctx.errorDetails?.reason, tariffCount: ctx.tariffCount,
-    upstreamStatus: ctx.errorDetails?.upstreamStatus, httpStatus: msg.statusCode, outcome: "refused" });
+    upstreamStatus: ctx.errorDetails?.upstreamStatus, httpStatus: msg.statusCode, outcome: "refused",
+    ...(ctx.error === 'PRICE_PREVIEW_REQUEST_INVALID' ? {
+      firstFailedValidationPredicate: ctx.firstFailedValidationPredicate,
+      validationFieldShape: ctx.validationFieldShape,
+    } : {}) });
 }
 msg.headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'X-Correlation-ID': msg._msgid, 'Access-Control-Expose-Headers': 'X-Correlation-ID' };
 msg.payload = ctx.done && ctx.error

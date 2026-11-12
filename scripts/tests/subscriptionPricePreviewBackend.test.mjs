@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { createHash } from 'node:crypto';
+import ts from 'typescript';
 import { createDiagnostics } from '../diagnostics/runtime.mjs';
 import { previewEmptyTariffFacts } from '../diagnostics/preview-empty-tariffs.mjs';
 import { sanitizeEvent } from '../../src/utils/errorDiagnosticsCore.mjs';
@@ -1371,4 +1372,172 @@ test('flow-contained observer initializes once per VM, survives failures and is 
   initialize.runInContext(sandbox); assert.equal(sandbox.__lkPreview350Observer, undefined);
   assert.equal(JSON.parse(logs.at(-1).slice(logs.at(-1).indexOf('{'))).event, 'preview_cross_day_observer_unavailable');
   assert.throws(() => composePreviewCrossDayRelease(Buffer.from('[]'), 'b'.repeat(40)), /FLOW_DRIFT/);
+});
+
+// Preserve the pre-diagnostics boolean guards, including evaluation order and UUID/ID grammars.
+function validationGuardFingerprint(source) {
+  const sf = ts.createSourceFile('entry.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  function normalize(n) {
+    if (ts.isParenthesizedExpression(n)) return normalize(n.expression);
+    if (ts.isCallExpression(n) && n.expression.getText(sf) === 'invalid') return normalize(n.arguments[0]);
+    if (ts.isBinaryExpression(n) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken].includes(n.operatorToken.kind)) {
+      const op = n.operatorToken.kind;
+      const flatten = x => Array.isArray(x) && x[0] === op ? x.slice(1) : [x];
+      return [op, ...flatten(normalize(n.left)), ...flatten(normalize(n.right))];
+    }
+    const children = [];
+    ts.forEachChild(n, child => { children.push(normalize(child)); });
+    return children.length ? [n.kind, ...children] : [n.kind, n.getText(sf)];
+  }
+  const guards = [], dependencies = {};
+  function walk(n) {
+    if (ts.isIfStatement(n) && ts.isReturnStatement(n.thenStatement)
+      && n.thenStatement.expression && ts.isCallExpression(n.thenStatement.expression) && n.thenStatement.expression.expression.getText(sf) === 'bad') guards.push(normalize(n.expression));
+    if (ts.isVariableDeclaration(n) && ['uuid', 'existing', 'allowedTarget', 'eventCategory'].includes(n.name.getText(sf))) dependencies[n.name.getText(sf)] = normalize(n.initializer);
+    ts.forEachChild(n, walk);
+  }
+  walk(sf);
+  assert.equal(guards.length, 4);
+  return createHash('sha256').update(JSON.stringify({ guards, dependencies })).digest('hex');
+}
+const validationEntry = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/entry.js', import.meta.url), 'utf8');
+const validationFinal = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/final.js', import.meta.url), 'utf8');
+const validationUuid = n => `${String(n).padStart(8, '0')}-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const validationBody = () => ({target: {targetKind:'NEW_GAME', slotId:'slot:fixture', stationId:validationUuid(1),
+  roomId:validationUuid(2), masterServiceId:validationUuid(3), subServiceIds:[validationUuid(4)],
+  startsAt:'2099-09-21T07:00:00+03:00', durationMinutes:90, shareCount:4}, subscriptionIds:[validationUuid(5)]});
+const validationEventBody = kind => ({target:{targetKind:kind,exerciseId:validationUuid(6)}});
+function validationExecute(body, {mode='shared', authorization='Bearer fixture', finalContext} = {}) {
+  const events=[];
+  const observer = mode === 'shared' ? createDiagnostics({sink:e=>events.push(e)})
+    : mode === 'throwing' ? {observe(){throw Error('SYNTHETIC_PRIVATE');}}
+    : mode === 'sink_throwing' ? createDiagnostics({sink(){throw Error('SYNTHETIC_PRIVATE');}}) : undefined;
+  const globals={get(){if(mode==='get_throwing')throw Error('SYNTHETIC_PRIVATE');return observer;}};
+  const msg={payload:structuredClone(body),req:{path:PATH,method:'POST',headers:{authorization},
+    query:{private:'SYNTHETIC_PRIVATE'},body:{private:'SYNTHETIC_PRIVATE'}}};
+  const entry = new Function('msg','global',validationEntry)(msg,globals);
+  const ctx=entry._subscriptionPricePreview;
+  if(finalContext)Object.assign(ctx,finalContext);
+  if(ctx.done)new Function('msg','global',validationFinal)(msg,globals);
+  return {msg,ctx,events,refusals:events.filter(e=>e.stage==='preview_final'&&e.httpStatus===400)};
+}
+test('input validation guard AST and grammar match the pre-diagnostics source',()=>{
+  assert.equal(validationGuardFingerprint(validationEntry), '7b8649e3d39dbfdb26e49906fb31f1267b1169df23f5e2624d5f389a69bb1499');
+});
+test('request-invalid diagnostics cover each first failed predicate with only its field shape',()=>{
+  const cases=[
+    ['BODY_EXTRA_KEYS','OBJECT',b=>b.SYNTHETIC_PRIVATE=true],
+    ['TARGET_SHAPE','MISSING',b=>delete b.target],
+    ['TARGET_SHAPE','NULL',b=>b.target=null],
+    ['TARGET_SHAPE','ARRAY',b=>b.target=[]],
+    ['TARGET_SHAPE','NUMBER',b=>b.target=1],
+    ['TARGET_EXTRA_KEYS','OBJECT',b=>b.target.SYNTHETIC_PRIVATE=true],
+    ['TARGET_KIND','STRING',b=>b.target.targetKind='SYNTHETIC_PRIVATE'],
+    ['SLOT_ID_SHAPE','STRING',b=>b.target.slotId='/SYNTHETIC_PRIVATE'],
+    ['STATION_ID_SHAPE','STRING',b=>b.target.stationId='SYNTHETIC_PRIVATE'],
+    ['ROOM_ID_SHAPE','NULL',b=>b.target.roomId=null],
+    ['MASTER_ID_SHAPE','BOOLEAN',b=>b.target.masterServiceId=true],
+    ['SERVICES_SHAPE','OBJECT',b=>b.target.subServiceIds={}],
+    ['SERVICES_COUNT','ARRAY',b=>b.target.subServiceIds=[]],
+    ['SERVICES_COUNT','ARRAY',b=>b.target.subServiceIds=Array.from({length:21},(_,i)=>validationUuid(i+10))],
+    ['SERVICES_DUPLICATE','ARRAY',b=>b.target.subServiceIds.push(validationUuid(4))],
+    ['SERVICE_ID_SHAPE','NUMBER',b=>b.target.subServiceIds=[validationUuid(4),123]],
+    ['SHARE_ENUM','STRING',b=>b.target.shareCount='4'],
+    ['START_FORMAT','STRING',b=>b.target.startsAt='2099-09-21T04:00:00Z'],
+    ['START_PARSE','STRING',b=>b.target.startsAt='2099-99-21T07:00:00+03:00'],
+    ['START_NOT_FUTURE','STRING',b=>b.target.startsAt='2000-01-01T07:00:00+03:00'],
+    ['START_CALENDAR','STRING',b=>b.target.startsAt='2099-02-30T07:00:00+03:00'],
+    ['DURATION_ENUM','STRING',b=>b.target.durationMinutes='90'],
+    ['SUBSCRIPTIONS_SHAPE','MISSING',b=>delete b.subscriptionIds],
+    ['SUBSCRIPTIONS_SHAPE','NULL',b=>b.subscriptionIds=null],
+    ['SUBSCRIPTIONS_COUNT','ARRAY',b=>b.subscriptionIds=[]],
+    ['SUBSCRIPTIONS_COUNT','ARRAY',b=>b.subscriptionIds=Array.from({length:21},(_,i)=>validationUuid(i+10))],
+    ['SUBSCRIPTIONS_DUPLICATE','ARRAY',b=>b.subscriptionIds.push(validationUuid(5))],
+    ['SUBSCRIPTION_ID_SHAPE','OBJECT',b=>b.subscriptionIds=[validationUuid(5),{}]],
+  ];
+  for(const [predicate,shape,mutate] of cases){
+    const body=validationBody();mutate(body);
+    const {msg,ctx,refusals}=validationExecute(body);
+    assert.equal(ctx.firstFailedValidationPredicate,predicate);
+    assert.equal(ctx.validationFieldShape,shape);
+    assert.equal(refusals.length,1);
+    const [event]=refusals;
+    assert.equal(event.code,'PRICE_PREVIEW_REQUEST_INVALID');
+    assert.equal(event.firstFailedValidationPredicate,predicate);
+    assert.equal(event.validationFieldShape,shape);
+    assert.equal(msg.statusCode,400);
+    assert.deepEqual(msg.payload,{error:{code:'PRICE_PREVIEW_REQUEST_INVALID'}});
+    assert.equal(ctx.auth,undefined);assert.equal(ctx.target,undefined);
+    assert(!JSON.stringify(event).includes('SYNTHETIC_PRIVATE'));
+    assert(!JSON.stringify(event).includes('2099-'));
+    assert(!JSON.stringify(event).includes(validationUuid(1)));
+    assert.deepEqual(sanitizeEvent(event),event);
+  }
+});
+test('event and existing-game routes retain their own ID and optional-subscription guards',()=>{
+  for(const kind of ['GROUP_TRAINING','TOURNAMENT']){
+    const valid=validationExecute(validationEventBody(kind));
+    assert.equal(valid.ctx.done,false);assert.equal(valid.ctx.firstFailedValidationPredicate,undefined);
+    const body=validationEventBody(kind);body.target.exerciseId='SYNTHETIC_PRIVATE';body.subscriptionIds=[];
+    assert.equal(validationExecute(body).ctx.firstFailedValidationPredicate,'EVENT_ID_SHAPE');
+    body.target.exerciseId=validationUuid(6);
+    assert.equal(validationExecute(body).ctx.firstFailedValidationPredicate,'SUBSCRIPTIONS_COUNT');
+    body.subscriptionIds=[validationUuid(5),validationUuid(5)];
+    assert.equal(validationExecute(body).ctx.firstFailedValidationPredicate,'SUBSCRIPTIONS_DUPLICATE');
+  }
+  const body={target:{targetKind:'EXISTING_GAME',gameId:'/SYNTHETIC_PRIVATE',startsAt:validationBody().target.startsAt,durationMinutes:90},subscriptionIds:[validationUuid(5)]};
+  assert.equal(validationExecute(body).ctx.firstFailedValidationPredicate,'GAME_ID_SHAPE');
+  body.target.gameId='game:fixture';assert.equal(validationExecute(body).ctx.done,false);
+});
+test('first failure and pre-auth ordering remain deterministic with several invalid fields',()=>{
+  const body=validationBody();body.target.stationId=null;body.target.roomId=null;body.target.startsAt='bad';body.subscriptionIds=[];
+  assert.equal(validationExecute(body).ctx.firstFailedValidationPredicate,'STATION_ID_SHAPE');
+  body.extra=true;
+  assert.equal(validationExecute(body,{authorization:''}).ctx.firstFailedValidationPredicate,'BODY_EXTRA_KEYS');
+  delete body.extra;
+  const auth=validationExecute(body,{authorization:''});
+  assert.deepEqual(auth.msg.payload,{error:{code:'PRICE_PREVIEW_AUTH_REQUIRED'}});
+  assert.equal(auth.refusals[0].firstFailedValidationPredicate,undefined);
+  assert.equal(auth.refusals[0].validationFieldShape,undefined);
+  assert.equal(validationExecute([{}],{authorization:''}).ctx.firstFailedValidationPredicate,'BODY_EXTRA_KEYS');
+  assert.equal(validationExecute([]).ctx.error,'PRICE_PREVIEW_AUTH_REQUIRED');
+});
+test('first failed validation does not replay the clock or evaluate later guarded fields',()=>{
+  const body=validationBody();body.target.durationMinutes='90';
+  let clockReads=0;
+  const start=Date.parse(body.target.startsAt);
+  class MovingDate extends Date { static now(){return ++clockReads===1?start-1:start+1;} }
+  const msg={payload:body,req:{headers:{authorization:'Bearer fixture'}}};
+  new Function('msg','Date',validationEntry)(msg,MovingDate);
+  assert.equal(clockReads,1);
+  assert.equal(msg._subscriptionPricePreview.firstFailedValidationPredicate,'DURATION_ENUM');
+  // The first missing station stops before later room/date fields can be read.
+  const short=validationBody();short.target.stationId=null;
+  Object.defineProperty(short.target,'roomId',{get(){return assert.fail('Later guard was evaluated');}});
+  const early={payload:short,req:{headers:{authorization:'Bearer fixture'}}};
+  new Function('msg',validationEntry)(early);
+  assert.equal(early._subscriptionPricePreview.firstFailedValidationPredicate,'STATION_ID_SHAPE');
+});
+test('absent and failing observers cannot change validation or the refusal response',()=>{
+  for(const mode of ['shared','missing','throwing','sink_throwing','get_throwing']){
+    const body=validationBody();body.target.subServiceIds=[];
+    const result=validationExecute(body,{mode});
+    assert.equal(result.ctx.firstFailedValidationPredicate,'SERVICES_COUNT');
+    assert.equal(result.msg.statusCode,400);
+    assert.deepEqual(result.msg.payload,{error:{code:'PRICE_PREVIEW_REQUEST_INVALID'}});
+    assert.equal(validationExecute(validationBody(),{mode}).ctx.done,false);
+  }
+});
+test('validation diagnostic enums are rejected outside the exact server refusal and unknown values are bounded',()=>{
+  const body=validationBody();body.target.roomId=null;
+  const [base]=validationExecute(body).refusals;
+  for(const patch of [{source:'browser'},{routeTemplate:'/lk/subscription-bookings'},{method:'GET'},
+    {stage:'preview_entry'},{httpStatus:503},{code:'PRICE_PREVIEW_AUTH_REQUIRED'}]){
+    const safe=sanitizeEvent({...base,...patch});
+    assert.equal(safe.firstFailedValidationPredicate,undefined);assert.equal(safe.validationFieldShape,undefined);
+  }
+  const safe=sanitizeEvent({...base,firstFailedValidationPredicate:'SYNTHETIC_PRIVATE',validationFieldShape:'SYNTHETIC_PRIVATE'});
+  assert.equal(safe.firstFailedValidationPredicate,'UNKNOWN');assert.equal(safe.validationFieldShape,'UNKNOWN');
+  const old={...base};delete old.firstFailedValidationPredicate;delete old.validationFieldShape;
+  assert.deepEqual(sanitizeEvent(old),old);
 });
