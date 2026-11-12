@@ -7166,7 +7166,10 @@ export async function apiFetchPadelAvailableGames(options: PadelAvailableGamesQu
   };
 }
 
-export async function apiFetchPadelGameRecord(gameId: string) {
+export async function apiFetchPadelGameRecord(
+  gameId: string,
+  options: Pick<RequestOptions, "retries" | "cache"> = {},
+) {
   const normalizedGameId = gameId.trim();
   if (!normalizedGameId) {
     return {
@@ -7187,6 +7190,7 @@ export async function apiFetchPadelGameRecord(gameId: string) {
       method: "GET",
       baseUrl,
       retries: 1,
+      ...options,
     });
     if (response.error) {
       if (!firstError) {
@@ -8390,10 +8394,15 @@ export async function apiFetchPadelGameByPaymentRef(
   };
 }
 
+export interface PadelGameRecordUpdateResult extends ApiResult<PadelGameRecord> {
+  // A conflict refresh is for replacing local state, never evidence of a successful PATCH.
+  conflictRecord?: PadelGameRecord | null;
+}
+
 export async function apiUpdatePadelGameRecord(
   gameId: string,
   payload: Partial<PadelGameRecordPayload>,
-) {
+): Promise<PadelGameRecordUpdateResult> {
   const normalizedGameId = gameId.trim();
   if (!normalizedGameId) {
     return {
@@ -8408,7 +8417,21 @@ export async function apiUpdatePadelGameRecord(
     payload as unknown as Record<string, unknown>,
     normalizedGameId,
     payload.invite?.inviteUrl?.trim() || null,
+    // Replaying a mutation cannot resolve a stale version or an ambiguous network outcome.
+    { retries: 0 },
   );
+  if (writeResult.status === 409 && writeResult.error) {
+    let conflictRecord: PadelGameRecord | null = null;
+    try {
+      const refreshed = await apiFetchPadelGameRecord(normalizedGameId, { retries: 0, cache: "no-store" });
+      if (!refreshed.error && refreshed.data?.id === normalizedGameId) {
+        conflictRecord = refreshed.data;
+      }
+    } catch {
+      // Preserve the original conflict even when the readback is unavailable.
+    }
+    return { ...writeResult, data: null, conflictRecord };
+  }
   return hydratePadelGameRecordAfterWrite(writeResult);
 }
 
