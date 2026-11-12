@@ -7476,6 +7476,7 @@ export default function GamesPage({
     options?: {
       communityMode?: "upsert" | "if_exists" | "skip";
       recordMode?: "merge" | "replace";
+      activeMode?: "if_exists";
     },
   ) => {
     const communityMode = options?.communityMode ?? "if_exists";
@@ -7497,6 +7498,8 @@ export default function GamesPage({
       });
     }
     setActiveGameRecordStore((prev) => {
+      // A delayed conflict for another game may refresh its list entry, not switch this view.
+      if (options?.activeMode === "if_exists" && prev?.id !== incoming.id) return prev;
       const activeId = (gameRecordId || "").trim();
       if (activeId && incoming.id === activeId) {
         return replaceRecord
@@ -8935,7 +8938,9 @@ export default function GamesPage({
             });
             return;
           }
-          const authoritative = await apiFetchPadelGameRecord(activeGameRecord.id);
+          const authoritative = patchResult.status === 409
+            ? { data: patchResult.conflictRecord ?? null }
+            : await apiFetchPadelGameRecord(activeGameRecord.id);
           if (!alive) return;
           if (authoritative.data?.id) {
             upsertGameRecordInStores(
@@ -9045,6 +9050,9 @@ export default function GamesPage({
       },
     }).then((result) => {
       if (!alive) return;
+      if (result.conflictRecord) {
+        upsertGameRecordInStores(result.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+      }
       if (result.data?.id) {
         upsertGameRecordInStores(result.data as PadelGameRecord, { communityMode: "if_exists" });
       } else {
@@ -10251,6 +10259,10 @@ export default function GamesPage({
       expectedUpdatedAt: game.updatedAt ?? null,
       metadata: nextMetadata,
     });
+
+    if (updateResult.conflictRecord) {
+      upsertGameRecordInStores(updateResult.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+    }
 
     const updatedRecord = updateResult.data;
     if (updatedRecord?.id) {
@@ -12369,6 +12381,10 @@ export default function GamesPage({
         metadata: nextMetadata,
       });
 
+      if (updateResult.conflictRecord) {
+        upsertGameRecordInStores(updateResult.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+      }
+
       if (updateResult.data?.id) {
         upsertGameRecordInStores(updateResult.data as PadelGameRecord, { communityMode: "if_exists" });
         setDetailsSelectedCommunityUnpublishIds((current) => current.filter((communityId) => (
@@ -12424,6 +12440,10 @@ export default function GamesPage({
       }
 
       const updateResult = await apiUpdatePadelGameRecord(gameRecordId, payload);
+
+      if (updateResult.conflictRecord) {
+        upsertGameRecordInStores(updateResult.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+      }
 
       if (updateResult.data?.id) {
         upsertGameRecordInStores(updateResult.data as PadelGameRecord, { communityMode: "if_exists" });
@@ -12650,6 +12670,10 @@ export default function GamesPage({
       }
 
       const updateResult = await apiUpdatePadelGameRecord(gameRecordId, payload);
+
+      if (updateResult.conflictRecord) {
+        upsertGameRecordInStores(updateResult.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+      }
 
       if (updateResult.data?.id) {
         const normalizedRecord = updateResult.data as PadelGameRecord;

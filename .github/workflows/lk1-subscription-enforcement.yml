@@ -470,6 +470,7 @@ jobs:
           scripts/tests/splitOrdinaryPriceHook.test.mjs
           scripts/tests/splitJoinOrdinaryPriceSource.test.mjs
           scripts/tests/splitPayment.apiClient.test.ts
+          scripts/tests/gamePatchConflict.apiClient.test.mjs
           scripts/tests/subscriptionCriticalMatrix.test.ts
           scripts/tests/subscriptionRejoin.test.ts
           scripts/tests/subscriptionRejoinGateway.test.mjs

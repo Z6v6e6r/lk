@@ -312,3 +312,63 @@ test("default disk source loader derives only the pinned coalescing business byt
   assert.equal(cache.includes("lkDiagnostic("), false);
   assert.deepEqual(flow, before);
 });
+
+
+// Exact negative fixtures: no sourceHash claim or observer/body edit may bypass
+// the separately pinned diagnostic candidate and the approved business digest.
+function cacheGateDriftCandidates(current) {
+  const business = cacheGateBusinessSource(current);
+  assert.equal(sha256(business), 'c3ee07fdcbdad0afa7b3258b4cf51f0f65b78086fe8a70f102ee153b4890568c');
+  const busyKeyPayload = `    : {
+      error: errorMessage,
+      retryAfterMs: boundedRetryAfterMs,
+      // Cross-origin Tilda cannot rely on access to the cache response header.
+      ...(!isManualRefresh && cacheState === "busy-key" ? { code: "PARTICIPANTS_BUSY_KEY" } : {}),
+    };`;
+  assert.equal(business.split(busyKeyPayload).length, 2);
+  // This predecessor is a negative fixture only, never a release fallback.
+  const historical = business.replace(busyKeyPayload, '    : { error: errorMessage, retryAfterMs: boundedRetryAfterMs };');
+  assert.equal(sha256(historical), '9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785');
+  const candidates = [
+    current.replace('sourceHash: "f0c8047536198ba74b7718296ad5498365a20dbc1852233de4114b3aaf057200"',
+      'sourceHash: "c3ee07fdcbdad0afa7b3258b4cf51f0f65b78086fe8a70f102ee153b4890568c"'),
+    current.replace('PARTICIPANTS_BUSY_KEY', 'ARBITRARY_CODE'),
+    current.replace('const MAX_INFLIGHT_KEYS = 8;', 'const MAX_INFLIGHT_KEYS = 9;'),
+    current.replace('lkDiagnostic({ code: "STAGE_ENTER" });', ''),
+    current + '\n// diagnostic drift',
+    business + '\n// business drift',
+    historical,
+  ];
+  for (const source of candidates) {
+    assert.notEqual(source, current);
+    assert.notEqual(sha256(source), TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate.sha256);
+  }
+  return candidates;
+}
+
+test("cache fixture extraction rejects forged sourceHash, observer/business drift and the historical predecessor", () => {
+  const current = fs.readFileSync(path.join(REAL_SOURCE_DIR, 'fn_cache_gate_v2.js'), 'utf8');
+  for (const drifted of cacheGateDriftCandidates(current)) {
+    assert.throws(() => cacheGateBusinessSource(drifted));
+  }
+});
+
+test("actual disk loader refuses every unapproved cache source before mutating the flow", (t) => {
+  const file = path.join(REAL_SOURCE_DIR, 'fn_cache_gate_v2.js');
+  const current = fs.readFileSync(file, 'utf8');
+  const candidates = cacheGateDriftCandidates(current);
+  const readFileSync = fs.readFileSync;
+  let observed = current;
+  t.mock.method(fs, 'readFileSync', (target, ...args) => (
+    target === file ? observed : readFileSync(target, ...args)
+  ));
+  for (const source of candidates) {
+    observed = source;
+    const { flow, contract } = fixture();
+    contract.sources = TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources;
+    const before = structuredClone(flow);
+    assert.throws(() => buildTournamentParticipantRefreshCandidate(flow, contract.wholeFlowSha256, contract),
+      /Source contract mismatch for fn_cache_gate_v2.js/);
+    assert.deepEqual(flow, before);
+  }
+});
