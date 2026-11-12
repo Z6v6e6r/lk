@@ -45,6 +45,16 @@
       "type": "string",
       "pattern": "^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
     },
+    "firstFailure": {
+      "enum": [
+        "upstream_status",
+        "list_incomplete_or_unrecognized",
+        "row_not_object",
+        "row_id_missing",
+        "row_owner_mismatch",
+        "UNKNOWN"
+      ]
+    },
     "patchConflictStage": {
       "enum": [
         "binding",
@@ -363,6 +373,8 @@
         "vivacrm_token_refresh_owner",
         "vivacrm_token_request_body",
         "year",
+        "activeBookings",
+        "historyBookings",
         "UNKNOWN"
       ]
     },
