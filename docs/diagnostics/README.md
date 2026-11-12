@@ -244,3 +244,39 @@ Tests: `node --test scripts/tests/subscriptionPricePreviewBackend.test.mjs
 scripts/tests/correlatedErrorDiagnostics.test.mjs`. Local fixtures mock the
 subservices response and prior existing-game confirmation; they make no external
 requests and are not production acceptance.
+
+### Scoped activation on the installed November 12 generation
+
+The live generation has no shared `lkDiagnostics` observer. Its safe activation
+adapter is `scripts/prepare_preview_cross_day_release.mjs`. It pins the freshly
+verified full-flow and router hashes; unknown drift is rejected. It surgically
+copies the reviewed cross-day branch, preserving the rest of the live router.
+It does not regenerate the older live business helpers from current main.
+
+Only the router's `func`, `initialize`, `finalize` and `libs` change. Setup embeds
+the matching sanitizer/runtime and `preview-cross-day-observer.mjs` bundle in the
+node-local VM. The two function libs are native `crypto` and `perf_hooks`; verify
+them through the installed Node-RED importer before apply. No npm install,
+settings/middleware/routing/shared-global change or secret is required. A lexical
+require shim admits only those two native modules and is not exposed globally.
+The local observer admits only this guard before consuming budget, selects the
+11 fields explicitly, and never receives the original payload, headers or
+correlation context. Its random requestId is observation-local: it does not prove
+HTTP linkage. The legacy live final warning remains separate and unchanged.
+
+A fixed safe startup marker carries schema/bundle/source/release hashes and field
+count. A different fixed envelope names guard observations, preventing accidental
+double counting as legacy final warnings. Both use server timestamps, never the
+target date or time. Finalize disposes/deletes only the owned VM observer.
+Standard exact-graph backup/rollback covers all four node fields and all observer
+state; there are no extra installed settings/module files to roll back.
+
+Preparation: `node scripts/prepare_preview_cross_day_release.mjs
+/absolute/fresh/private/workspace /absolute/new/private/output FULL_SOURCE_COMMIT`.
+The output directory must already exist with mode0700; all files are new/private.
+Apply and rollback use the existing reviewed-flow lock, lease and exact-graph
+contract. Stop on source drift, failed native imports/startup marker, unexpected
+error growth or hash mismatch. Postcheck uses disk hashes, PM2/listener/flow-ready
+logs, safe aggregates and an isolated synthetic replay; it sends no business API,
+provider, booking or payment requests. Activation has explicit authority only
+when separately requested by the owner.

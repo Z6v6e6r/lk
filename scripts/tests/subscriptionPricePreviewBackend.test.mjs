@@ -575,3 +575,49 @@ test('cross-day events never include dates, clock times, identifiers, auth, quer
     'previewSubservicesMatched', 'previewSubservices2xx', 'previewElapsedBucket',
   ].sort());
 });
+
+test('scoped deployment observer filters before budget and cannot inherit raw message context', async () => {
+  const { createPreviewCrossDayObserver } = await import('../diagnostics/preview-cross-day-observer.mjs');
+  const events = [];
+  const observer = createPreviewCrossDayObserver({ sourceHash: 'a'.repeat(64), release: 'b'.repeat(40), detailLimit: 1, sink: e => events.push(e) });
+  const msg = { _subscriptionPricePreview: { step: 'subservices' },
+    get payload() { throw Error('must not read payload'); }, get req() { throw Error('must not read headers'); },
+    get _lkDiagnosticContext() { throw Error('must not inherit correlation'); } };
+  for (let i = 0; i < 1000; i++) observer.observe(msg, 'preview_router', { code: 'STAGE_ENTER' });
+  assert.equal(observer.snapshot().observed, 0);
+  observer.observe(msg, 'preview_router', { code: 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED', previewDuration: 'MINUTES_90',
+    serverRequestId: uuid(99), body: 'synthetic-private', previewEndAtMidnight: false });
+  assert.equal(events.length, 1); assert.equal(events[0].previewDuration, 'MINUTES_90');
+  assert.equal(events[0].serverRequestId, undefined); assert.equal(events[0].entityRef, undefined);
+  assert(!JSON.stringify(events).includes('synthetic-private')); assert(!JSON.stringify(events).includes(uuid(99)));
+  observer.dispose();
+});
+
+test('flow-contained observer initializes once per VM, survives failures and is fully disposed', async () => {
+  const { previewCrossDayLifecycle, composePreviewCrossDayRelease } = await import('../prepare_preview_cross_day_release.mjs');
+  const crypto = await import('node:crypto'); const perf = await import('node:perf_hooks');
+  const lifecycle = previewCrossDayLifecycle('b'.repeat(40));
+  const logs = []; const sandbox = vm.createContext({ preview350Crypto: crypto, preview350Performance: perf,
+    node: { warn: line => logs.push(line) }, Buffer, setTimeout, clearTimeout });
+  const initialize = new vm.Script(lifecycle.initialize), finalize = new vm.Script(lifecycle.finalize);
+  initialize.runInContext(sandbox);
+  const first = sandbox.__lkPreview350Observer;
+  assert.equal(first.owner, 'preview-cross-day-v1');
+  assert.equal(sandbox.require, undefined); assert.equal(sandbox.process, undefined);
+  const marker = JSON.parse(logs[0].slice(logs[0].indexOf('{')));
+  assert.deepEqual(marker, lifecycle.marker);
+  const fields = { code: 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED', previewDuration: 'MINUTES_90', previewEndAtMidnight: true };
+  first.observe({ _subscriptionPricePreview: { step: 'subservices' } }, 'preview_router', fields);
+  assert.equal(JSON.parse(logs[1].slice(logs[1].indexOf('{'))).previewEndAtMidnight, true);
+  initialize.runInContext(sandbox);
+  assert.notEqual(sandbox.__lkPreview350Observer, first);
+  finalize.runInContext(sandbox); assert.equal(sandbox.__lkPreview350Observer, undefined);
+  finalize.runInContext(sandbox);
+  const foreign = { owner: 'foreign' }; sandbox.__lkPreview350Observer = foreign;
+  initialize.runInContext(sandbox); assert.equal(sandbox.__lkPreview350Observer, foreign);
+  finalize.runInContext(sandbox); assert.equal(sandbox.__lkPreview350Observer, foreign);
+  delete sandbox.__lkPreview350Observer; sandbox.preview350Crypto = {};
+  initialize.runInContext(sandbox); assert.equal(sandbox.__lkPreview350Observer, undefined);
+  assert.equal(JSON.parse(logs.at(-1).slice(logs.at(-1).indexOf('{'))).event, 'preview_cross_day_observer_unavailable');
+  assert.throws(() => composePreviewCrossDayRelease(Buffer.from('[]'), 'b'.repeat(40)), /FLOW_DRIFT/);
+});
