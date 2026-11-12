@@ -221,7 +221,7 @@ const CACHE_GATE_DIAGNOSTIC_BINDINGS = new Map([
   ['e1455ea45a58706cb217d1000442f51ec3c7506caef922f50146e3111b18ba89',
     '9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785'],
   ['062c7dc5068fa64e84dd49ed3d2d39d7d5e3df6b345c52de66ed09f0925fa878',
-    'f0c8047536198ba74b7718296ad5498365a20dbc1852233de4114b3aaf057200'],
+    'c3ee07fdcbdad0afa7b3258b4cf51f0f65b78086fe8a70f102ee153b4890568c'],
 ]);
 const LEGACY_CACHE_GATE_BUSINESS_SHA256 = '9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785';
 function cacheGateBusinessSource(observed) {
@@ -281,4 +281,19 @@ test('current explicitly reviewed cache contract accepts only its exact register
   assert.equal(result.candidate.find(node => node.id === contract.ids.cacheGate).func, current);
   assert.throws(() => buildTournamentParticipantRefreshCandidate(flow, contract.wholeFlowSha256, contract,
     { ...sources, cacheGate: current + '\n// drift' }), /Approved source missing or drifted: cacheGate/);
+});
+
+
+test('registered marker successor changes only the reviewed busy-key response in business bytes', () => {
+  const legacy = execFileSync('git', ['show', '91b016eb84be8269abc2b21d05a791dbfb87f4c3:scripts/nodered_tournament_participants_nodes/fn_cache_gate_v2.js'], { encoding: 'utf8' });
+  const before = '    : { error: errorMessage, retryAfterMs: boundedRetryAfterMs };';
+  const after = `    : {
+      error: errorMessage,
+      retryAfterMs: boundedRetryAfterMs,
+      // Cross-origin Tilda cannot rely on access to the cache response header.
+      ...(!isManualRefresh && cacheState === "busy-key" ? { code: "PARTICIPANTS_BUSY_KEY" } : {}),
+    };`;
+  assert.equal(legacy.split(before).length, 2);
+  const current = fs.readFileSync(path.join(REAL_SOURCE_DIR, 'fn_cache_gate_v2.js'), 'utf8');
+  assert.equal(cacheGateBusinessSource(current), legacy.replace(before, after));
 });
