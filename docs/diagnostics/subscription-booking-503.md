@@ -75,3 +75,37 @@ Stop on unexpected diagnostic data or business-output differences; restore only 
 reviewed diagnostic runtime and hook preimages to disable this change. Source rollback
 cannot undo any provider booking or payment. Existing 409 events and normal 202
 pending behavior are unchanged. This remains a Draft extension of the existing 409 PR.
+
+## Scoped settings registration
+
+`subscription-booking-scope.mjs` is the deployment facade for both409 and503.
+It forwards only the own-operation reads needed by409, known HTTP-result phases,
+final409/503, and the explicit direct503 hooks. Its sink accepts only those safe
+failure events and stage-suppression aggregates. All unrelated observer methods
+are no-ops; middleware remains unattached. Suppression counts forwarded stages,
+not requests or failed bookings.
+
+`subscription-booking-bootstrap.mjs` preserves existing settings/globals and
+registers this facade only when no observer is already configured. Startup first
+checks409,503 and a direct projection503 with an isolated in-memory sink; these
+synthetic events never reach production logs. A private readiness receipt records
+`scope=SUBSCRIPTION_BOOKING_409_503_V1` and `selfTestPassed=true` only after registration.
+The receipt retains the existing installer's `SUBSCRIPTION409_SETTINGS_REGISTERED`
+kind for compatibility; activation must independently check the exact scope,
+generation, bundle hash and current process identity. Receipt failure before publication restores the
+previous global context. A directory-fsync error after a matching ready receipt
+is atomically published retains the registered observer as committed and emits
+only the fixed startup enum `OBSERVER_READY_DURABILITY_UNKNOWN`; it never leaves
+a false-ready file paired with a removed observer. If receipt readback itself is
+unavailable, registration is kept until the guarded installer resolves the
+unknown outcome. Normal successful publication fsyncs both file and directory. Missing/throwing diagnostics cannot authorize or replay
+business operations. Actual installation, shared-lock coordination, fresh preimages,
+restart and rollback remain the guarded installer's responsibility.
+
+The startup enum `OBSERVER_READY_DURABILITY_UNKNOWN` is a degraded/stop signal,
+not durable readiness proof: do not finish the install soak after observing it.
+If runtime/settings and flow hooks require separate installers, serialize them:
+validate/finish the runtime transaction first, then use a fresh guarded flow
+contract. Phase-2 recovery restores its hooks to the independently validated
+phase-1 runtime/settings. That is last-known-good partial activation, not a full
+preactivation rollback; never reuse a stale phase-1 process/flow contract.
