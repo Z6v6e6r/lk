@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import vm from "node:vm";
 import {
   ATLANTY_CATEGORY_PRESETS,
   ATLANTY_CORPORATE_DIRECTION_IDS,
@@ -70,6 +71,34 @@ const corporateExercise = {
   trainers: [],
   customFields: [],
 };
+
+test("лента ВСК включает корпоративный турнир и друзей, исключая чужие клубы", () => {
+  const settings = fs.readFileSync(new URL("../../docs/vsk-tilda/1-settings.html", import.meta.url), "utf8");
+  const window = { PHVSK_CONFIG: { schedule: { categories: [] } } };
+  vm.runInNewContext(settings.match(/<script>([\s\S]*?)<\/script>/)![1], { window });
+  const categories = normalizeAtlantyCategories(window.PHVSK_CONFIG.schedule.categories);
+  assert.deepEqual(resolveAtlantyDirectionsParam(categories), [6975, 6977, 5278]);
+
+  const exercise = (id: string, directionId: number, name: string, typeId = 2349) => ({
+    ...corporateExercise, id, direction: { id: directionId, name }, type: { id: typeId },
+    timeFrom: "2026-11-26T19:00:00+03:00", timeTo: "2026-11-26T21:00:00+03:00",
+  });
+  const events = normalizeAtlantyEventList([
+    exercise("vsk-tournament", 6977, "ВСК турнир"),
+    exercise("vsk-game", 6975, "ВСК игра"),
+    exercise("friends", 5278, "Время на друзей", 839),
+    exercise("atlanty", 6152, "Атланты"),
+    exercise("topocraty", 6233, "Топократы тренировка + игра"),
+    exercise("patriots", 6306, "Предприниматели-патриоты турнир"),
+  ], { categories, now: Date.parse("2026-11-12T12:00:00+03:00") });
+  assert.deepEqual(events.map(event => event.id), ["vsk-tournament", "vsk-game", "friends"]);
+  assert.equal(events[0].title, "ВСК турнир");
+  assert.equal(events[0].dateTimeLabel, "26 ноя, 19:00–21:00");
+
+  const controller = fs.readFileSync(new URL("../../docs/vsk-tilda/2-controller.html", import.meta.url), "utf8");
+  const disabledKeys = vm.runInNewContext(controller.match(/bookingDisabledCategoryKeys:\s*(\[[^\]]*\])/ )![1]);
+  assert.ok(disabledKeys.includes(events[0].categoryKey));
+});
 
 test("по умолчанию витрина берёт корпоративное направление 6152 и тип 2349", () => {
   assert.deepEqual([...ATLANTY_CORPORATE_TYPE_IDS], [2349]);
