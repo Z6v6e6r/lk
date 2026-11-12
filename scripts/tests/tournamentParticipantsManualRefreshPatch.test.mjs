@@ -216,7 +216,7 @@ test("guarded participant refresh builder rejects an existing manual refresh rou
 // The historical builder consumes business bytes, while correlated diagnostics
 // add a separately attested observer candidate. Never widen the release pin to
 // accept that candidate merely because its declared sourceHash matches.
-const CACHE_GATE_DIAGNOSTIC_SHA256 = "e1455ea45a58706cb217d1000442f51ec3c7506caef922f50146e3111b18ba89";
+const CACHE_GATE_DIAGNOSTIC_SHA256 = "062c7dc5068fa64e84dd49ed3d2d39d7d5e3df6b345c52de66ed09f0925fa878";
 function cacheGateBusinessSource(observed) {
   assert.equal(sha256(observed), CACHE_GATE_DIAGNOSTIC_SHA256);
   const start = observed.indexOf('const CACHE_KEY =');
@@ -233,7 +233,7 @@ test("default builder contract pins business sources separately from the exact c
     assert.equal(sha256(business), sourceContract.sha256, sourceContract.file);
   }
   assert.equal(TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources.cacheGate.sha256,
-    '9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785');
+    'c3ee07fdcbdad0afa7b3258b4cf51f0f65b78086fe8a70f102ee153b4890568c');
 });
 
 test("participant refresh builder accepts the pinned business source and rejects diagnostic or arbitrary source drift", () => {
@@ -252,4 +252,16 @@ test("participant refresh builder accepts the pinned business source and rejects
     assert.deepEqual(flow, before);
   }
   assert.throws(() => cacheGateBusinessSource(current + '\n// diagnostic drift'));
+});
+
+test("default disk source loader derives only the pinned coalescing business bytes", () => {
+  const { flow, contract } = fixture();
+  contract.sources = TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT.sources;
+  const before = structuredClone(flow);
+  // No providedSources override: exercise the same disk-loading path as the CLI publisher.
+  const result = buildTournamentParticipantRefreshCandidate(structuredClone(flow), contract.wholeFlowSha256, contract);
+  const cache = result.candidate.find(node => node.id === contract.ids.cacheGate).func;
+  assert.equal(sha256(cache), "c3ee07fdcbdad0afa7b3258b4cf51f0f65b78086fe8a70f102ee153b4890568c");
+  assert.equal(cache.includes("lkDiagnostic("), false);
+  assert.deepEqual(flow, before);
 });
