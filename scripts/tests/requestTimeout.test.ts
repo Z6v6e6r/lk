@@ -30,3 +30,34 @@ test("completed subscription requests are not aborted", async () => {
   assert.equal(value, "confirmed");
   assert.equal(signal?.aborted, false);
 });
+
+test("owner cancellation aborts the read and releases a caller even if the read ignores abort", async () => {
+  const owner = new AbortController();
+  let readSignal: AbortSignal | undefined;
+  const pending = runWithAbortTimeout(1000, async (signal) => {
+    readSignal = signal;
+    return new Promise<never>(() => undefined);
+  }, owner.signal);
+  owner.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.equal(readSignal?.aborted, true);
+});
+
+test("an already cancelled owner never starts a read", async () => {
+  const owner = new AbortController();
+  owner.abort();
+  let calls = 0;
+  await assert.rejects(runWithAbortTimeout(1000, async () => ++calls, owner.signal), { name: "AbortError" });
+  assert.equal(calls, 0);
+});
+
+test("completed requests detach owner cancellation", async () => {
+  const owner = new AbortController();
+  let readSignal: AbortSignal | undefined;
+  await runWithAbortTimeout(1000, async (signal) => {
+    readSignal = signal;
+    return "done";
+  }, owner.signal);
+  owner.abort();
+  assert.equal(readSignal?.aborted, false);
+});

@@ -16,10 +16,12 @@ export function isRequestTimeoutError(value: unknown): value is RequestTimeoutEr
 export async function runWithAbortTimeout<T>(
   timeoutMs: number,
   operation: (signal: AbortSignal) => Promise<T>,
+  parentSignal?: AbortSignal,
 ): Promise<T> {
   const normalizedTimeoutMs = Math.max(1, Math.floor(timeoutMs));
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let onAbort: (() => void) | undefined;
 
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
@@ -28,9 +30,21 @@ export async function runWithAbortTimeout<T>(
     }, normalizedTimeoutMs);
   });
 
+  const cancelled = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      controller.abort();
+      reject(parentSignal?.reason ?? new DOMException("Request cancelled", "AbortError"));
+    };
+    parentSignal?.addEventListener("abort", onAbort, { once: true });
+    if (parentSignal?.aborted) onAbort();
+  });
+
   try {
-    return await Promise.race([operation(controller.signal), timeout]);
+    // Do not start an operation whose owner has already cancelled it.
+    if (parentSignal?.aborted) return await cancelled;
+    return await Promise.race([operation(controller.signal), timeout, cancelled]);
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
+    if (onAbort) parentSignal?.removeEventListener("abort", onAbort);
   }
 }
