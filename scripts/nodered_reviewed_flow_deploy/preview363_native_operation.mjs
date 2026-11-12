@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { patchPreview363Flow, buildPreview363Artifact, sha256, PREVIEW363_FLOW_SHA } from '../lib/preview363_activation.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract, writeFileExclusiveDurable,
   writeFileExclusiveAtomicDurable, recoverAtomicExclusivePublication, atomicWrite, syncDirectory } from './runtime_contract.mjs';
-import { preview363GraphHash } from './preview363_body_preserver.mjs';
+import { preview363GraphHash, preview363OrderedGraphHash } from './preview363_body_preserver.mjs';
 import { buildPreview363BrowserGuard } from './preview363_browser_guard.mjs';
 
 const ROOT = '/root/.node-red', LEASE = '.padlhub-reviewed-flow-deploy.lease.json';
@@ -81,10 +81,15 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
   const target = expected => {
     const actual = readTarget(); check(hex(actual) && (!expected || actual === expected), 'P363_TARGET_DRIFT'); return actual;
   };
-  const evidence = (value, expectedGraph, revision) => {
-    check(value && Object.keys(value).sort().join(',') === 'graphSha256,observedAt,origin,revisionSha256'
+  const evidence = (value, expectedGraph, revision, orderedGraph, editorOrderedGraph) => {
+    check(value && Object.keys(value).sort().join(',') === 'editorOrderedGraphSha256,graphSha256,observedAt,orderedGraphSha256,origin,requestedAt,revisionSha256'
       && value.origin === 'http://127.0.0.1:18801' && hex(value.graphSha256) && hex(value.revisionSha256)
       && value.graphSha256 === expectedGraph && (!revision || value.revisionSha256 === revision)
+      && hex(value.orderedGraphSha256) && hex(value.editorOrderedGraphSha256)
+      && (!orderedGraph || value.orderedGraphSha256 === orderedGraph)
+      && (!editorOrderedGraph || value.editorOrderedGraphSha256 === editorOrderedGraph)
+      && typeof value.requestedAt === 'string' && new Date(Date.parse(value.requestedAt)).toISOString() === value.requestedAt
+      && Date.parse(value.requestedAt) <= Date.parse(value.observedAt) && now() - Date.parse(value.requestedAt) <= 30000
       && typeof value.observedAt === 'string' && new Date(Date.parse(value.observedAt)).toISOString() === value.observedAt
       && Date.parse(value.observedAt) <= now() && now() - Date.parse(value.observedAt) <= 30000, 'P363_NATIVE_EVIDENCE');
     return value;
@@ -92,13 +97,15 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
   const plan = async expected => {
     const raw = read(file('plan.json')); check(hex(expected) && sha256(raw) === expected, 'P363_PLAN_HASH');
     const p = JSON.parse(raw);
-    check(p.kind === KIND && p.formatVersion === 1 && p.codeSha256 === codeHash()
+    check(p.kind === KIND && p.formatVersion === 2 && p.codeSha256 === codeHash()
       && /^[a-f0-9]{40}$/.test(p.sourceCommit), 'P363_PLAN_IDENTITY');
     const source = read(file('source.flow.json')), candidate = read(file('candidate.flow.json'));
     check(sha256(source) === p.sourceSha256 && sha256(candidate) === p.candidateSha256, 'P363_BACKUP_DRIFT');
     const built = patchPreview363Flow(JSON.parse(source), { ...patchOptions, sourceCommit: p.sourceCommit });
     check(await preview363GraphHash(built.candidate) === p.candidateGraphSha256
-      && await preview363GraphHash(JSON.parse(candidate)) === p.candidateGraphSha256, 'P363_CANDIDATE_DRIFT');
+      && await preview363GraphHash(JSON.parse(candidate)) === p.candidateGraphSha256
+      && await preview363OrderedGraphHash(JSON.parse(source)) === p.sourceOrderedGraphSha256
+      && await preview363OrderedGraphHash(JSON.parse(candidate)) === p.candidateOrderedGraphSha256, 'P363_CANDIDATE_DRIFT');
     validateReviewedFlowContract({ liveBytes: source, candidateBytes: candidate, contract: p.contract });
     check(p.contract.allowedChanges.length === 1 && p.contract.allowedChanges[0].id === built.targetId
       && p.contract.allowedChanges[0].fields.join(',') === 'func', 'P363_CONTRACT_SCOPE');
@@ -114,11 +121,12 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
   };
   const pre = async (p, native) => {
     target(p.targetSha256); check(sha256(live()) === p.sourceSha256, 'P363_SOURCE_DRIFT');
-    evidence(native, p.sourceGraphSha256, p.preRevisionSha256);
+    evidence(native, p.sourceGraphSha256, p.preRevisionSha256, p.sourceOrderedGraphSha256, p.editorOrderedGraphSha256);
   };
   const post = async (p, native) => {
-    target(p.targetSha256); check(await preview363GraphHash(JSON.parse(live())) === p.candidateGraphSha256, 'P363_POST_GRAPH');
-    evidence(native, p.candidateGraphSha256); check(native.revisionSha256 !== p.preRevisionSha256, 'P363_REVISION_UNCHANGED');
+    target(p.targetSha256); check(await preview363GraphHash(JSON.parse(live())) === p.candidateGraphSha256
+      && await preview363OrderedGraphHash(JSON.parse(live())) === p.candidateOrderedGraphSha256, 'P363_POST_GRAPH');
+    evidence(native, p.candidateGraphSha256, undefined, p.candidateOrderedGraphSha256); check(native.revisionSha256 !== p.preRevisionSha256, 'P363_REVISION_UNCHANGED');
   };
   const confirm = async (p, native, ackMode, ackAt) => {
     const lease = owns(p); check(['reserved', 'owner-decision'].includes(lease.phase), 'P363_CONFIRM_PHASE');
@@ -140,14 +148,16 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
         && codeHash() === expectedCodeSha256 && /^[a-f0-9]{40}$/.test(sourceCommit), 'P363_PREPARE_PINS');
       target(expectedTargetSha256); const source = live(); check(sha256(source) === expectedSourceSha256, 'P363_SOURCE_DRIFT');
       check(sha256(source) === (patchOptions.expectedFlowSha256 || PREVIEW363_FLOW_SHA), 'P363_WHOLE_SOURCE_PIN');
-      const flow = JSON.parse(source); evidence(native, await preview363GraphHash(flow));
+      const flow = JSON.parse(source); evidence(native, await preview363GraphHash(flow), undefined, await preview363OrderedGraphHash(flow));
       const built = patchPreview363Flow(flow, { ...patchOptions, sourceCommit }), candidate = bytes(built.candidate);
       const contract = buildExactGraphContract({ liveBytes: source, candidateBytes: candidate, deploymentId: 'preview363-native-diagnostic',
         allowedChanges: [{ id: built.targetId, fields: ['func'] }], allowedAdditionIds: [] });
       validateReviewedFlowContract({ liveBytes: source, candidateBytes: candidate, contract });
-      const p = { kind: KIND, formatVersion: 1, sourceCommit, codeSha256: expectedCodeSha256, targetSha256: expectedTargetSha256,
+      const p = { kind: KIND, formatVersion: 2, sourceCommit, codeSha256: expectedCodeSha256, targetSha256: expectedTargetSha256,
         sourceSha256: sha256(source), candidateSha256: sha256(candidate), sourceGraphSha256: await preview363GraphHash(flow),
-        candidateGraphSha256: await preview363GraphHash(built.candidate), preRevisionSha256: native.revisionSha256,
+        candidateGraphSha256: await preview363GraphHash(built.candidate),
+        sourceOrderedGraphSha256: await preview363OrderedGraphHash(flow), candidateOrderedGraphSha256: await preview363OrderedGraphHash(built.candidate),
+        editorOrderedGraphSha256: native.editorOrderedGraphSha256, preRevisionSha256: native.revisionSha256,
         beforeFunctionSha256: built.beforeFunctionSha256, afterFunctionSha256: built.afterFunctionSha256,
         preparedAtMs: now(), contract, browserGuardSha256: sha256(buildPreview363BrowserGuard(buildPreview363Artifact(sourceCommit, patchOptions.bundle))) };
       await pre(p, native);
@@ -183,17 +193,21 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
       write('attempt.json', attempt);
       const guard = buildPreview363BrowserGuard(buildPreview363Artifact(p.sourceCommit, patchOptions.bundle)); check(sha256(guard) === p.browserGuardSha256, 'P363_BROWSER_CODE_DRIFT');
       writeFileExclusiveDurable(file('browser-guard.js'), Buffer.from(guard), protection);
-      return { status: 'ONE_ATTEMPT_RESERVED', seal: { planSha256: expectedPlanSha256, attemptSha256: sha256(read(file('attempt.json'))),
+      return { status: 'ONE_ATTEMPT_RESERVED', seal: { protocol: 'source-preserving-v2', planSha256: expectedPlanSha256, attemptSha256: sha256(read(file('attempt.json'))),
         sourceGraphSha256: p.sourceGraphSha256, candidateGraphSha256: p.candidateGraphSha256,
+        sourceOrderedGraphSha256: p.sourceOrderedGraphSha256, candidateOrderedGraphSha256: p.candidateOrderedGraphSha256,
+        editorOrderedGraphSha256: p.editorOrderedGraphSha256,
         preRevisionSha256: p.preRevisionSha256, beforeFunctionSha256: p.beforeFunctionSha256,
         afterFunctionSha256: p.afterFunctionSha256, notAfter: new Date(attempt.notAfterMs).toISOString() }, browserGuardSha256: p.browserGuardSha256 };
     },
     async confirm({ expectedPlanSha256, native, audit, httpStatus, ackAt }) {
       const p = await plan(expectedPlanSha256); owns(p);
-      check(audit && Object.keys(audit).sort().join(',') === 'attemptSha256,candidateGraphSha256,forwarded,forwardedBodySha256,notAfter,planSha256,preRevisionSha256,rejected,status'
+      check(audit && Object.keys(audit).sort().join(',') === 'attemptSha256,candidateGraphSha256,candidateOrderedGraphSha256,editorOrderedGraphSha256,forwarded,forwardedBodySha256,notAfter,planSha256,preRevisionSha256,rejected,sourceOrderedGraphSha256,status'
         && audit.status === 'FORWARDED_AWAITING_READBACK' && audit.forwarded === 1 && audit.rejected === 0
         && audit.planSha256 === expectedPlanSha256 && audit.attemptSha256 === sha256(read(file('attempt.json')))
         && audit.candidateGraphSha256 === p.candidateGraphSha256 && audit.preRevisionSha256 === p.preRevisionSha256
+        && audit.sourceOrderedGraphSha256 === p.sourceOrderedGraphSha256 && audit.candidateOrderedGraphSha256 === p.candidateOrderedGraphSha256
+        && audit.editorOrderedGraphSha256 === p.editorOrderedGraphSha256
         && Date.parse(audit.notAfter) === json('attempt.json').notAfterMs && hex(audit.forwardedBodySha256)
         && httpStatus === 200 && Number.isSafeInteger(ackAt) && ackAt <= now(), 'P363_ACK_INPUT');
       return confirm(p, native, 'native-http-200', ackAt);
@@ -229,7 +243,7 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
         && fs.existsSync(file('attempt.json')), 'P363_ROLLBACK_PHASE');
       await post(p, native);
       write('rollback-reserve.json', { kind: KIND, planSha256: expectedPlanSha256,
-        preRevisionSha256: native.revisionSha256, requestedAtMs: now(), notAfterMs: now() + 300000 });
+        preRevisionSha256: native.revisionSha256, editorOrderedGraphSha256: native.editorOrderedGraphSha256, requestedAtMs: now(), notAfterMs: now() + 300000 });
       writeLease({ ...lease, phase: 'rollback-reserved', acquiredAtMs: now(), expiresAtMs: now() + SOAK });
       return { status: 'ROLLBACK_RESERVED', liveFlowWritten: false, nodeRedRestarted: false };
     },
@@ -237,15 +251,18 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
       const p = await plan(expectedPlanSha256), lease = owns(p), reserve = json('rollback-reserve.json');
       check(lease.phase === 'rollback-reserved' && reserve.planSha256 === expectedPlanSha256
         && now() <= reserve.notAfterMs, 'P363_ROLLBACK_PHASE');
-      await post(p, native); check(native.revisionSha256 === reserve.preRevisionSha256, 'P363_ROLLBACK_REVISION_DRIFT');
+      await post(p, native); check(native.revisionSha256 === reserve.preRevisionSha256
+        && native.editorOrderedGraphSha256 === reserve.editorOrderedGraphSha256, 'P363_ROLLBACK_REVISION_DRIFT');
       const attempt = { kind: KIND, planSha256: expectedPlanSha256, preRevisionSha256: native.revisionSha256,
         requestedAtMs: now(), notAfterMs: now() + 300000 };
       write('rollback-attempt.json', attempt);
       const guard = buildPreview363BrowserGuard(buildPreview363Artifact(p.sourceCommit, patchOptions.bundle));
       check(sha256(guard) === p.browserGuardSha256, 'P363_BROWSER_CODE_DRIFT');
-      return { status: 'ONE_ROLLBACK_ATTEMPT_RESERVED', seal: { planSha256: expectedPlanSha256,
+      return { status: 'ONE_ROLLBACK_ATTEMPT_RESERVED', seal: { protocol: 'source-preserving-v2', planSha256: expectedPlanSha256,
         attemptSha256: sha256(read(file('rollback-attempt.json'))), sourceGraphSha256: p.candidateGraphSha256,
         candidateGraphSha256: p.sourceGraphSha256, preRevisionSha256: native.revisionSha256,
+        sourceOrderedGraphSha256: p.candidateOrderedGraphSha256, candidateOrderedGraphSha256: p.sourceOrderedGraphSha256,
+        editorOrderedGraphSha256: reserve.editorOrderedGraphSha256,
         beforeFunctionSha256: p.afterFunctionSha256, afterFunctionSha256: p.beforeFunctionSha256,
         reverse: true, notAfter: new Date(attempt.notAfterMs).toISOString() }, browserGuardSha256: p.browserGuardSha256 };
     },
@@ -253,15 +270,18 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
       const p = await plan(expectedPlanSha256), lease = owns(p), attempt = json('rollback-attempt.json');
       check(lease.phase === 'rollback-reserved' && attempt.planSha256 === expectedPlanSha256
         && now() <= attempt.notAfterMs, 'P363_ROLLBACK_PHASE');
-      check(audit && Object.keys(audit).sort().join(',') === 'attemptSha256,candidateGraphSha256,forwarded,forwardedBodySha256,notAfter,planSha256,preRevisionSha256,rejected,status'
+      check(audit && Object.keys(audit).sort().join(',') === 'attemptSha256,candidateGraphSha256,candidateOrderedGraphSha256,editorOrderedGraphSha256,forwarded,forwardedBodySha256,notAfter,planSha256,preRevisionSha256,rejected,sourceOrderedGraphSha256,status'
         && audit.status === 'FORWARDED_AWAITING_READBACK' && audit.forwarded === 1 && audit.rejected === 0
         && audit.planSha256 === expectedPlanSha256 && audit.attemptSha256 === sha256(read(file('rollback-attempt.json')))
         && audit.candidateGraphSha256 === p.sourceGraphSha256 && audit.preRevisionSha256 === attempt.preRevisionSha256
+        && audit.sourceOrderedGraphSha256 === p.candidateOrderedGraphSha256 && audit.candidateOrderedGraphSha256 === p.sourceOrderedGraphSha256
+        && audit.editorOrderedGraphSha256 === json('rollback-reserve.json').editorOrderedGraphSha256
         && Date.parse(audit.notAfter) === attempt.notAfterMs && hex(audit.forwardedBodySha256)
         && httpStatus === 200 && Number.isSafeInteger(ackAt) && ackAt <= now()
         && ackAt >= attempt.requestedAtMs && Date.parse(native.observedAt) >= ackAt, 'P363_ROLLBACK_ACK_INPUT');
-      target(p.targetSha256); check(await preview363GraphHash(JSON.parse(live())) === p.sourceGraphSha256, 'P363_ROLLBACK_GRAPH');
-      evidence(native, p.sourceGraphSha256); check(native.revisionSha256 !== attempt.preRevisionSha256, 'P363_REVISION_UNCHANGED');
+      target(p.targetSha256); check(await preview363GraphHash(JSON.parse(live())) === p.sourceGraphSha256
+        && await preview363OrderedGraphHash(JSON.parse(live())) === p.sourceOrderedGraphSha256, 'P363_ROLLBACK_GRAPH');
+      evidence(native, p.sourceGraphSha256, undefined, p.sourceOrderedGraphSha256); check(native.revisionSha256 !== attempt.preRevisionSha256, 'P363_REVISION_UNCHANGED');
       const ack = { kind: KIND, planSha256: expectedPlanSha256, attemptSha256: sha256(read(file('rollback-attempt.json'))),
         ackMode: 'native-http-200', diskSha256: sha256(live()), revisionSha256: native.revisionSha256 };
       if (fs.existsSync(file('rollback-ack.json'))) check(JSON.stringify(json('rollback-ack.json')) === JSON.stringify(ack), 'P363_ROLLBACK_ACK_DRIFT');
@@ -275,8 +295,9 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
       const p = await plan(expectedPlanSha256), lease = owns(p), attempt = json('rollback-attempt.json');
       check(['rollback-reserved', 'owner-decision'].includes(lease.phase)
         && attempt.planSha256 === expectedPlanSha256, 'P363_ROLLBACK_PHASE');
-      target(p.targetSha256); check(await preview363GraphHash(JSON.parse(live())) === p.sourceGraphSha256, 'P363_ROLLBACK_GRAPH');
-      evidence(native, p.sourceGraphSha256, expectedRevisionSha256);
+      target(p.targetSha256); check(await preview363GraphHash(JSON.parse(live())) === p.sourceGraphSha256
+        && await preview363OrderedGraphHash(JSON.parse(live())) === p.sourceOrderedGraphSha256, 'P363_ROLLBACK_GRAPH');
+      evidence(native, p.sourceGraphSha256, expectedRevisionSha256, p.sourceOrderedGraphSha256);
       check(native.revisionSha256 !== attempt.preRevisionSha256
         && Date.parse(native.observedAt) >= attempt.requestedAtMs, 'P363_ROLLBACK_REVISION_DRIFT');
       const ack = { kind: KIND, planSha256: expectedPlanSha256, attemptSha256: sha256(read(file('rollback-attempt.json'))),
@@ -303,8 +324,9 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
           && Date.parse(native.observedAt) >= own.expiresAtMs, 'P363_SOAK_INCOMPLETE');
       } else check(exists, 'P363_LEASE_ABSENT');
       target(p.targetSha256); check(await preview363GraphHash(JSON.parse(live())) === p.sourceGraphSha256
+        && await preview363OrderedGraphHash(JSON.parse(live())) === p.sourceOrderedGraphSha256
         && sha256(live()) === ack.diskSha256, 'P363_ROLLBACK_FINISH_DRIFT');
-      evidence(native, p.sourceGraphSha256, ack.revisionSha256);
+      evidence(native, p.sourceGraphSha256, ack.revisionSha256, p.sourceOrderedGraphSha256);
       const receipt = { kind: KIND, planSha256: expectedPlanSha256, ackSha256: sha256(ackRaw),
         diskSha256: ack.diskSha256, targetSha256: p.targetSha256, revisionSha256: ack.revisionSha256 };
       if (exists) check(JSON.stringify(json('rollback-finish.json')) === JSON.stringify(receipt), 'P363_ROLLBACK_RECEIPT_DRIFT');

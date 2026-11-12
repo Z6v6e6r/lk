@@ -44,7 +44,11 @@ output or screenshots. Only booleans/enums/counts/hashes/timestamps leave147.
 
 The canonical root-owned stage is0700 under `/root/.node-red`, named
 `.padlhub-preview363-stage-YYYYMMDDTHHMMSSZ-<digits>`. Subdirectories0700 and
-files0600 are required. Stage public assets preserving their relative paths.
+files0600 are required. Stage the seven `scripts/` code assets and
+`public-assets.json`, preserving their relative paths and excluding archive
+metadata sidecars. Keep `browser-guard.js` and `editor-readback.js` local:
+`begin` creates the former exclusively on147. Compare its computed hash before
+`begin` and the created file afterward against the same public manifest.
 The root CLI is `node <stage>/scripts/nodered_reviewed_flow_deploy/preview363_native_operation.mjs ACTION STAGE`.
 
 All CLI actions use the existing deployment flock and shared lease path. The
@@ -61,8 +65,10 @@ the admin API, copies tokens, changes auth/settings, or restarts a process.
    existing `http://127.0.0.1:18801` tunnel. Do not use the user's working tab.
    Evaluate the generated `editor-readback.js` using the editor's existing AJAX
    setup; call `__preview363Readback()`. This issues only native admin GET/flows
-   and returns four safe origin/time/revision/graph facts. A dirty editor,
-   serialization mismatch,401, missing auth, wrong origin or unexpected shape
+   and returns seven safe origin/time/revision/graph facts. The exact native
+   snapshot stays private in the reader closure; the editor ordered
+   serialization is pinned independently. A dirty editor, stale editor
+   revision,401, missing auth, wrong origin or unexpected shape
    stops before any reservation or native attempt. No auth bypass/fallback.
 2. `inspect`, then `prepare` with exact source/identity/code hashes, source
    commit and fresh native evidence (at most30seconds old). The controller
@@ -70,22 +76,30 @@ the admin API, copies tokens, changes auth/settings, or restarts a process.
 3. `reserve` with fresh PRE evidence and
    `RESERVE_PREVIEW363_NATIVE_NO_RESTART_147`; save the plan hash. Then `begin`
    with fresh PRE evidence creates the exclusive one-attempt marker and a
-   five-minute seal. Compare the staged browser-guard hash before arming it.
+   five-minute `source-preserving-v2` seal. Compare the staged browser-guard
+   hash, then use `__preview363Readback.install(seal)` from the same reader
+   after its latest fresh read. Its captured snapshot must be at most30seconds
+   old. Never install a standalone guard without the private native snapshot.
 4. In that tab only, mark the editor dirty without editing graph/configuration
    (`RED.nodes.dirty(true)`) and use native **Deploy modified nodes** once.
-   The guard permits only the original authenticated XHR with complete exact
-   source/candidate graph, original revision and nodes deployment type. It
-   substitutes only the pinned func. Every other write, changed field,
-   serialization delta, expired/duplicate seal or fetch mutation is rejected.
+   The guard permits only the original authenticated XHR with the independently
+   pinned editor serialization, original revision and nodes deployment type.
+   The forwarded graph comes entirely from the sealed native snapshot, with
+   every field and the original node order preserved and only the pinned func
+   substituted. Editor-only coordinates and fields dropped by the serializer
+   cannot enter or disappear from the forwarded graph. Every other write,
+   editor delta, expired/duplicate seal or fetch mutation is rejected.
    It never replaces the HTTP client or copies Authorization/cookie values.
 5. After native HTTP200 ACK, obtain safe guard audit and fresh admin readback.
-   Because substitution occurs on the wire, the editor can still hold the
-   exact original graph: pass its sealed source-graph hash to
-   `__preview363Readback(SOURCE_GRAPH_HASH)`. No other editor mismatch is
-   accepted. `confirm` binds plan/attempt/body/revision/identity and disk graph,
+   Because substitution occurs on the wire, the editor can still hold its
+   original serialization. `__preview363Readback()` reads the native API again
+   without replacing the armed snapshot. `confirm` binds plan/attempt/body/
+   revision/identity, editor hash, ordered source/candidate hashes and disk graph,
    writes the ACK receipt, then starts a full900-second soak. Native ACK alone
    is not proof of running code. Observe fixed ready marker and normal logs;
-   test nothing through a business endpoint.
+   test nothing through a business endpoint. A namespaced no-throw listener on
+   the existing `ajaxSuccess` may record only count/status/time for exact
+   same-origin POST `/flows`; never read response, body or auth headers.
 6. `finish` requires fresh POST evidence, unchanged identity/revision/disk and
    the full soak. It writes a durable success receipt before releasing only
    its own lease. Close the dedicated tab rather than removing guard markers.
@@ -108,8 +122,9 @@ arming; the forward tab's guard is intentionally consumed. Never clear its
 Symbol/storage marker or reuse its seal. `rollbackReserve` requires
 `ROLLBACK_PREVIEW363_NATIVE_SOURCE_NO_RESTART_147`; `rollbackBegin` creates a
 different exclusive inverse attempt/seal. Native modified-nodes sends exactly
-the original func, with lifecycle and other nodes unchanged. Pass the sealed
-candidate editor-graph hash to readback after wire substitution. `rollbackConfirm`
+the original func, with lifecycle and other nodes unchanged. The fresh reader
+privately captures the native candidate and independently pins that tab's
+editor serialization; arm through its own `install(inverseSeal)`. `rollbackConfirm`
 records actual HTTP ACK and starts a full soak. A durable ACK can be safely
 reused if lease publication was interrupted. Lost inverse ACK permits only
 explicit `rollbackAdopt` with

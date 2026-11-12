@@ -34,7 +34,7 @@ export async function buildPreview363Assets(output, release) {
   write('scripts/diagnostics/preview-empty-tariff-observer.bundle.cjs', bundle);
   const guard = buildPreview363BrowserGuard(buildPreview363Artifact(release, bundle));
   write('browser-guard.js', guard);
-  write('editor-readback.js', `window.__preview363Readback = ${buildPreview363EditorReadback()};\nconsole.log('PREVIEW363_READBACK_READY');\n`);
+  write('editor-readback.js', `window.__preview363Readback = ${buildPreview363EditorReadback(buildPreview363Artifact(release, bundle))};\nconsole.log('PREVIEW363_READBACK_READY');\n`);
   const module = await import(pathToFileURL(path.join(output, 'scripts/nodered_reviewed_flow_deploy/preview363_native_operation.mjs')));
   manifest.codeSha256 = module.preview363OperationCodeHash();
   manifest.bundleSha256 = sha256(bundle); manifest.browserGuardSha256 = sha256(guard);

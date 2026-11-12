@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createPreview363NativeOperation } from '../nodered_reviewed_flow_deploy/preview363_native_operation.mjs';
 import { createReviewedFlowRuntime } from '../nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs';
-import { preview363GraphHash, createPreview363BodyPreserver } from '../nodered_reviewed_flow_deploy/preview363_body_preserver.mjs';
+import { preview363GraphHash, preview363OrderedGraphHash, createPreview363BodyPreserver } from '../nodered_reviewed_flow_deploy/preview363_body_preserver.mjs';
 import { sha256, buildPreview363Artifact } from '../lib/preview363_activation.mjs';
 
 export const sourceBody = `const ctx=msg.ctx;
@@ -31,7 +31,8 @@ async function fixture(t) {
   fs.writeFileSync(live, JSON.stringify(graph), { mode: 0o600 });
   let now = Date.parse('2026-11-12T11:00:00.000Z'), target = identity;
   const readback = async (g = graph, revision = 'synthetic-pre-revision') => ({ origin: 'http://127.0.0.1:18801',
-    observedAt: new Date(now).toISOString(), graphSha256: await preview363GraphHash(g), revisionSha256: sha256(revision) });
+    requestedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(),
+    orderedGraphSha256: await preview363OrderedGraphHash(g), editorOrderedGraphSha256: await preview363OrderedGraphHash(g), graphSha256: await preview363GraphHash(g), revisionSha256: sha256(revision) });
   const options = { stage, root, uid: process.getuid(), gid: process.getgid(), getUid: () => process.getuid(),
     now: () => now, readTarget: () => target, codeHash: () => code, patchOptions: { bundle, expectedNodeCount: 5, expectedFlowSha256: sha256(fs.readFileSync(live)), expectedFunctionSha256: sha256(sourceBody), expectedInitializeSha256: sha256(''), expectedFinalizeSha256: sha256('') } };
   const op = createPreview363NativeOperation(options);
@@ -42,7 +43,7 @@ async function fixture(t) {
   const begin = async () => op.begin({ expectedPlanSha256, native: await readback() });
   const candidate = JSON.parse(fs.readFileSync(path.join(stage, 'candidate.flow.json')));
   const applyFixture = async seal => {
-    const preserver = await createPreview363BodyPreserver(seal, buildPreview363Artifact(commit, bundle));
+    const preserver = await createPreview363BodyPreserver(seal, buildPreview363Artifact(commit, bundle), { rev: 'synthetic-pre-revision', flows: graph });
     const result = await preserver({ request: { url: 'http://127.0.0.1:18801/flows', method: 'POST', apiVersion: 'v2', deploymentType: 'nodes' },
       postBody: { rev: 'synthetic-pre-revision', flows: graph } });
     fs.writeFileSync(live, JSON.stringify(JSON.parse(result.postDataText).flows));
@@ -117,6 +118,10 @@ test('own interrupted atomic lease publication is recovered; foreign or arbitrar
 for (const [name, mutate] of [
   ['HTTP conflict', x => { x.httpStatus = 409; }], ['extra credential', x => { x.audit.Authorization = 'synthetic'; }],
   ['second forward', x => { x.audit.forwarded = 2; }], ['wrong body', x => { x.audit.candidateGraphSha256 = '0'.repeat(64); }],
+  ['source order', x => { x.audit.sourceOrderedGraphSha256 = '0'.repeat(64); }],
+  ['candidate order', x => { x.audit.candidateOrderedGraphSha256 = '0'.repeat(64); }],
+  ['editor order', x => { x.audit.editorOrderedGraphSha256 = '0'.repeat(64); }],
+  ['stale request start', x => { x.native.requestedAt = '2026-11-11T11:00:00.000Z'; }],
   ['same revision', x => { x.native.revisionSha256 = sha256('synthetic-pre-revision'); }],
   ['foreign origin', x => { x.native.origin = 'http://example.invalid'; }],
   ['stale observation', x => { x.native.observedAt = '2026-11-11T11:00:00.000Z'; }],
@@ -157,7 +162,7 @@ test('inverse native recovery has a new attempt and restores only the original f
   assert.notEqual(rb.seal.attemptSha256, begin.seal.attemptSha256);
   assert.equal(rb.seal.reverse, true);
   await assert.rejects(f.op.rollbackBegin(input), /EEXIST/);
-  const preserver = await createPreview363BodyPreserver(rb.seal, buildPreview363Artifact(commit, bundle));
+  const preserver = await createPreview363BodyPreserver(rb.seal, buildPreview363Artifact(commit, bundle), { rev: 'synthetic-post-revision', flows: f.candidate });
   const result = await preserver({ request: { url: 'http://127.0.0.1:18801/flows', method: 'POST', apiVersion: 'v2', deploymentType: 'nodes' },
     postBody: { rev: 'synthetic-post-revision', flows: f.candidate } });
   const restored = JSON.parse(result.postDataText).flows;
@@ -195,7 +200,7 @@ test('lost inverse ACK is adopted from exact observed source without replay and 
   await f.op.rollbackReserve({ expectedPlanSha256: f.expectedPlanSha256, native: post,
     confirmation: 'ROLLBACK_PREVIEW363_NATIVE_SOURCE_NO_RESTART_147' });
   const rb = await f.op.rollbackBegin({ expectedPlanSha256: f.expectedPlanSha256, native: post });
-  const preserver = await createPreview363BodyPreserver(rb.seal, buildPreview363Artifact(commit, bundle));
+  const preserver = await createPreview363BodyPreserver(rb.seal, buildPreview363Artifact(commit, bundle), { rev: 'synthetic-post-revision', flows: f.candidate });
   const result = await preserver({ request: { url: 'http://127.0.0.1:18801/flows', method: 'POST', apiVersion: 'v2', deploymentType: 'nodes' },
     postBody: { rev: 'synthetic-post-revision', flows: f.candidate } });
   fs.writeFileSync(f.live, JSON.stringify(JSON.parse(result.postDataText).flows));

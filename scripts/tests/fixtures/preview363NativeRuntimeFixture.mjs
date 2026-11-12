@@ -5,7 +5,8 @@ import path from 'node:path';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import { buildSync } from 'esbuild';
-import { patchPreview363Flow, sha256 } from '../../lib/preview363_activation.mjs';
+import { patchPreview363Flow, sha256, buildPreview363Artifact } from '../../lib/preview363_activation.mjs';
+import { createPreview363BodyPreserver, preview363GraphHash, preview363OrderedGraphHash } from '../../nodered_reviewed_flow_deploy/preview363_body_preserver.mjs';
 const runtimeRoot = process.env.NODERED_RUNTIME_ROOT;
 export async function runPreview363Rehearsal() {
     const require = createRequire(path.join(runtimeRoot, 'package.json'));
@@ -56,8 +57,8 @@ ctx.error='LK1_EVENT_TARIFF_AMBIGUOUS';msg.statusCode=503;return msg;`;
       const libs = [{ var: 'preview350Crypto', module: 'crypto' }, { var: 'preview350Performance', module: 'perf_hooks' }];
       const flow = [{ id: 'tab', type: 'tab', label: 'synthetic isolated preview fixture' },
         { id: 'inject', type: 'inject', z: 'tab', once: false, crontab: '0 0 1 1 *', wires: [[]] },
-        { id: 'http', type: 'http request', z: 'tab', method: 'GET', ret: 'txt', url: `http://127.0.0.1:${provider.address().port}`, wires: [[]] },
-        { id: 'db', type: 'fixture-db', z: 'tab', wires: [] },
+        { id: 'http', type: 'http request', z: 'tab', method: 'GET', ret: 'txt', requestTimeout: '25000', url: `http://127.0.0.1:${provider.address().port}`, wires: [[]] },
+        { id: 'db', nativeOnly: true, type: 'fixture-db', z: 'tab', wires: [] },
         { id: 'sink', type: 'fixture-sink', z: 'tab', wires: [] },
         { id: 'lk_subscription_price_preview_20260908_router', type: 'function', name: 'Subscription price preview router',
           z: 'tab', func: source, initialize, finalize, libs, outputs: 1, wires: [['sink']] }];
@@ -68,9 +69,26 @@ ctx.error='LK1_EVENT_TARIFF_AMBIGUOUS';msg.statusCode=503;return msg;`;
       untouched.inject.on('input', () => injectInputs++);
       const bundle = buildSync({ entryPoints: ['scripts/diagnostics/preview-empty-tariff-scoped.mjs'], bundle: true,
         platform: 'node', format: 'cjs', target: 'node22', write: false, legalComments: 'none', external: ['node:crypto', 'node:perf_hooks'] }).outputFiles[0].text;
-      const built = patchPreview363Flow(flow, { sourceCommit: 'a'.repeat(40), bundle, expectedNodeCount: flow.length,
+      const pre = await admin('GET');
+      const built = patchPreview363Flow(pre.flows, { sourceCommit: 'a'.repeat(40), bundle, expectedNodeCount: flow.length,
         expectedFunctionSha256: sha256(source), expectedInitializeSha256: sha256(initialize), expectedFinalizeSha256: sha256(finalize) });
-      await admin('POST', { rev: (await admin('GET')).rev, flows: built.candidate });
+      const guarded = async (snapshot, candidate, reverse = false) => {
+        const editor = structuredClone(snapshot.flows).reverse();
+        for (const n of editor) { delete n.requestTimeout; delete n.nativeOnly; }
+        const before = snapshot.flows.find(n => n.id === 'lk_subscription_price_preview_20260908_router').func;
+        const after = candidate.find(n => n.id === 'lk_subscription_price_preview_20260908_router').func;
+        const seal = { protocol: 'source-preserving-v2', planSha256: 'b'.repeat(64), attemptSha256: 'c'.repeat(64),
+          sourceGraphSha256: await preview363GraphHash(snapshot.flows), candidateGraphSha256: await preview363GraphHash(candidate),
+          sourceOrderedGraphSha256: await preview363OrderedGraphHash(snapshot.flows), candidateOrderedGraphSha256: await preview363OrderedGraphHash(candidate),
+          editorOrderedGraphSha256: await preview363OrderedGraphHash(editor), preRevisionSha256: sha256(snapshot.rev),
+          beforeFunctionSha256: sha256(before), afterFunctionSha256: sha256(after), reverse };
+        const preserve = await createPreview363BodyPreserver(seal, buildPreview363Artifact('a'.repeat(40), bundle), snapshot);
+        const result = await preserve({ request: { url: 'http://127.0.0.1:18801/flows', method: 'POST', apiVersion: 'v2', deploymentType: 'nodes' },
+          postBody: { rev: snapshot.rev, flows: editor } });
+        assert.deepEqual(JSON.parse(result.postDataText).flows, candidate);
+        return JSON.parse(result.postDataText);
+      };
+      await admin('POST', await guarded(pre, built.candidate));
       for (const [id, original] of Object.entries(untouched)) assert.strictEqual(RED.nodes.getNode(id), original, id);
       assert.equal(providerCalls, 0); assert.equal(dbCalls, 0); assert.equal(injectInputs, 0);
       const url = 'https://api.vivacrm.ru/end-user/api/v2/synthetic/products/one-times?exerciseId=synthetic';
@@ -84,7 +102,7 @@ ctx.error='LK1_EVENT_TARIFF_AMBIGUOUS';msg.statusCode=503;return msg;`;
       assert.equal(event.tariffRequestScopeMatch, true); assert.equal(event.tariffTenantScopeMatch, true);
       assert.equal(event.tariffExerciseScopeMatch, true); assert.equal(event.tariffCount, 0);
       assert.equal(providerCalls, 0); assert.equal(dbCalls, 0); assert.equal(injectInputs, 0);
-      await admin('POST', { rev: (await admin('GET')).rev, flows: flow });
+      await admin('POST', await guarded(await admin('GET'), pre.flows, true));
       const restored = await admin('GET');
       assert.equal(restored.flows.find(n => n.id === 'lk_subscription_price_preview_20260908_router').func, source);
       for (const [id, original] of Object.entries(untouched)) assert.strictEqual(RED.nodes.getNode(id), original, id);

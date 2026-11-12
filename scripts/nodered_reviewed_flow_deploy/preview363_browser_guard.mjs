@@ -12,9 +12,11 @@ export function buildPreview363BrowserGuard(artifact) {
   once("const digest = async value => createHash('sha256').update(value).digest('hex');",
     "const digest = async value => [...new Uint8Array(await view.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].map(v => v.toString(16).padStart(2,'0')).join('');");
   once('export const preview363GraphHash', 'const preview363GraphHash');
+  once('export const preview363OrderedGraphHash', 'const preview363OrderedGraphHash');
   once('export async function createPreview363BodyPreserver', 'async function createPreview363BodyPreserver');
-  return `(async function installPreview363Guard(seal) {
+  return `(async function installPreview363Guard(seal, sourceSnapshot) {
     'use strict';
+    seal = structuredClone(seal);
     const view = window;
     if (view.top !== view || view.location.origin !== 'http://127.0.0.1:18801') throw new Error('P363_GUARD_ORIGIN');
     const started = performance.now(), remaining = Date.parse(seal.notAfter) - Date.now();
@@ -23,7 +25,7 @@ export function buildPreview363BrowserGuard(artifact) {
     ${patchCore}
     ${core}
     const artifact = ${JSON.stringify(artifact)};
-    const run = await createPreview363BodyPreserver(seal, artifact), proto = view.XMLHttpRequest.prototype;
+    const run = await createPreview363BodyPreserver(seal, artifact, sourceSnapshot), proto = view.XMLHttpRequest.prototype;
     const marker = Symbol.for('padlhub.preview363.native.v1');
     if (Object.hasOwn(proto, marker)) throw new Error('P363_GUARD_INSTALLED');
     // Same-origin storage survives a reload; Web Locks makes the check-and-mark
@@ -82,32 +84,46 @@ export function buildPreview363BrowserGuard(artifact) {
       if(!['GET','HEAD'].includes(method.toUpperCase())){used=true;reject();return Promise.reject(new Error('P363_GUARD_FETCH_FORBIDDEN'));}
       return Reflect.apply(nativeFetch,this,[input,options]);
     };
-    return Object.freeze({status:()=>structuredClone({...audit,notAfter:seal.notAfter}),
-      readback:async nativeResponse=>{
-        if(!nativeResponse||typeof nativeResponse.rev!=='string'||!Array.isArray(nativeResponse.flows))throw new Error('P363_READBACK');
-        return{origin:view.location.origin,observedAt:new Date().toISOString(),revisionSha256:await digest(nativeResponse.rev),graphSha256:await preview363GraphHash(nativeResponse.flows)};
-      }});
+    return Object.freeze({status:()=>structuredClone({...audit,notAfter:seal.notAfter})});
   })`;
 }
 
 // Uses the editor's own jQuery AJAX setup (and existing auth hooks). Returns no
 // native graph/revision/token. No fetch client or copied Authorization header.
-export function buildPreview363EditorReadback() {
-  return `(async function readPreview363Editor(expectedEditorGraphSha256) {
+export function buildPreview363EditorReadback(artifact) {
+  return `(function createPreview363EditorReader() {
     const view=window;
-    if(view.top!==view||view.location.origin!=='http://127.0.0.1:18801'||typeof view.jQuery?.ajax!=='function')throw new Error('P363_READBACK_ORIGIN');
-    const result=await new Promise((resolve,reject)=>view.jQuery.ajax({url:'flows',method:'GET',headers:{'Node-RED-API-Version':'v2'},dataType:'json',timeout:10000,success:resolve,error:()=>reject(new Error('P363_READBACK_REFUSED'))}));
-    if(!result||Object.keys(result).sort().join(',')!=='flows,rev'||!Array.isArray(result.flows)||typeof result.rev!=='string'||!result.rev||result.rev.length>512)throw new Error('P363_READBACK_SHAPE');
+    if(view.top!==view||view.location.origin!=='http://127.0.0.1:18801'||typeof view.jQuery?.ajax!=='function'
+      ||typeof view.RED?.nodes?.createCompleteNodeSet!=='function'||typeof view.RED.nodes.version!=='function')throw new Error('P363_READBACK_ORIGIN');
+    let captured=null, capturedHashes=null, capturedAt=0, busy=false, armed=false;
     const digest=async value=>[...new Uint8Array(await view.crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(v=>v.toString(16).padStart(2,'0')).join('');
     const compare=(a,b)=>a<b?-1:a>b?1:0;
     const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort(compare).map(k=>[k,canonical(value[k])])):value;
-    const graph=JSON.stringify([...result.flows].sort((a,b)=>compare(a.id,b.id)).map(canonical));
-    if(typeof view.RED?.nodes?.createCompleteNodeSet!=='function'||typeof view.RED.nodes.dirty!=='function'||view.RED.nodes.dirty())throw new Error('P363_EDITOR_NOT_CLEAN');
-    const editor=view.RED.nodes.createCompleteNodeSet();
-    if(expectedEditorGraphSha256!==undefined&&(typeof expectedEditorGraphSha256!=='string'||!/^[a-f0-9]{64}$/.test(expectedEditorGraphSha256)))throw new Error('P363_EDITOR_GRAPH_PIN');
-    if(!Array.isArray(editor))throw new Error('P363_EDITOR_SERIALIZATION_DRIFT');
-    const editorHash=await digest(JSON.stringify([...editor].sort((a,b)=>compare(a.id,b.id)).map(canonical)));
-    if(editorHash!==await digest(graph)&&editorHash!==expectedEditorGraphSha256)throw new Error('P363_EDITOR_SERIALIZATION_DRIFT');
-    return{origin:view.location.origin,observedAt:new Date().toISOString(),revisionSha256:await digest(result.rev),graphSha256:await digest(graph)};
-  })`;
+    const read=async function readPreview363Editor(){
+      if(busy)throw new Error('P363_READBACK_BUSY');busy=true;
+      try{
+        if(view.RED.nodes.dirty())throw new Error('P363_EDITOR_NOT_CLEAN');
+        const requestedAt=new Date().toISOString();
+        const result=await new Promise((resolve,reject)=>view.jQuery.ajax({url:'flows',method:'GET',headers:{'Node-RED-API-Version':'v2'},dataType:'json',timeout:10000,success:resolve,error:()=>reject(new Error('P363_READBACK_REFUSED'))}));
+        if(!result||Object.keys(result).sort().join(',')!=='flows,rev'||!Array.isArray(result.flows)||typeof result.rev!=='string'||!result.rev||result.rev.length>512)throw new Error('P363_READBACK_SHAPE');
+        const snapshot=structuredClone(result), editor=structuredClone(view.RED.nodes.createCompleteNodeSet());
+        const hashes={revisionSha256:await digest(snapshot.rev),
+          graphSha256:await digest(JSON.stringify([...snapshot.flows].sort((a,b)=>compare(a.id,b.id)).map(canonical))),
+          orderedGraphSha256:await digest(JSON.stringify(snapshot.flows.map(canonical))),
+          editorOrderedGraphSha256:await digest(JSON.stringify(editor.map(canonical)))};
+        if(view.RED.nodes.dirty())throw new Error('P363_EDITOR_NOT_CLEAN');
+        if(await digest(view.RED.nodes.version())!==hashes.revisionSha256)throw new Error('P363_EDITOR_REVISION_DRIFT');
+        const metadata={origin:view.location.origin,requestedAt,observedAt:new Date().toISOString(),...hashes};
+        if(!armed){captured=snapshot;capturedHashes=hashes;capturedAt=performance.now();}
+        return Object.freeze(metadata);
+      }finally{busy=false;}
+    };
+    Object.defineProperty(read,'install',{value:async seal=>{
+      if(armed||busy||!captured||performance.now()-capturedAt>30000)throw new Error('P363_CAPTURE_NOT_FRESH');
+      armed=true;
+      if(seal.editorOrderedGraphSha256!==capturedHashes.editorOrderedGraphSha256)throw new Error('P363_CAPTURE_EDITOR_DRIFT');
+      return (${buildPreview363BrowserGuard(artifact)})(seal,captured);
+    }});
+    return Object.freeze(read);
+  })()`;
 }
