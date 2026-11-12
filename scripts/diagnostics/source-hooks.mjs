@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { ROUTES } from "../../src/utils/errorDiagnosticsCore.mjs";
 import { createHash } from "node:crypto";
 import { referralObserverBindings, applyCurrentReferralObserver } from "./referral-observer-overlay.mjs";
+import { applyBookingPrepareFailureObserver } from "./booking-prepare-failure-overlay.mjs";
 export const hooks = {
   "scripts/nodered_games_nodes/fn_split_join_prepare.js": "join_prepare",
   "scripts/nodered_games_nodes/fn_split_router.js": "split_router",
@@ -33,6 +34,9 @@ export const hooks = {
   "scripts/nodered_max_nodes/fn_max_outbox_ack_prepare.js": "max_ack_prepare",
   "scripts/nodered_onboarding_nodes/fn_onboarding_level_capture_viva_result.js": "onboarding_put",
   "scripts/nodered_tournament_participants_nodes/fn_cache_gate_v2.js": "participants_cache",
+  "scripts/nodered_games_nodes/fn_legacy_roster_bridge_response.js": "roster_bridge_response",
+  "scripts/nodered_games_nodes/fn_legacy_roster_projection_build.js": "roster_projection_build",
+  "scripts/nodered_games_nodes/fn_legacy_roster_projection_ack.js": "roster_projection_ack",
 };
 export const sha = text => createHash("sha256").update(text).digest("hex");
 // No arbitrary node IDs and no executable code from the supplied flow. Exact scoped preimages only.
@@ -61,6 +65,11 @@ export function applySourceHooks(flow, attestations, root = process.cwd()) {
     if (Object.hasOwn(referralObserverBindings, path)) {
       if (matches.length !== 1) throw new Error("DIAGNOSTIC_SOURCE_DRIFT");
       matches[0].func = applyCurrentReferralObserver(candidate, attestation, matches[0].func);
+      continue;
+    }
+    if (path === "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js") {
+      if (route.url !== "/lk/subscription-bookings" || route.method !== "post" || matches.length !== 1) throw new Error("DIAGNOSTIC_SOURCE_DRIFT");
+      matches[0].func = applyBookingPrepareFailureObserver(matches[0].func, attestation);
       continue;
     }
     const source = fs.readFileSync(`${root}/${path}`, "utf8");
