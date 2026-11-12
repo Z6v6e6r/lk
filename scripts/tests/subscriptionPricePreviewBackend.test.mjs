@@ -114,6 +114,118 @@ const previewExercise = () => ({ id: exerciseId, studioId: studio, roomId: room,
   timeFrom: target.startsAt, timeTo: '2099-09-21T08:30:00+03:00', typeId: 1613, directionId: 4588,
   availableClientSubscriptions: [], privateProviderField: 'fixture-sensitive' });
 
+// Fixed-clock local groupExercise reads only; no provider/database graph runs.
+const futureClock = Date.parse('2099-09-21T04:00:00Z');
+function targetTimeDiagnostic(changes = {}, options = {}) {
+  class Clock extends Date { static now() { return options.now ?? futureClock; } }
+  const booking = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
+  const roots = ['isObj', 'unwrapRecord', 'resolveCategory', 'eventStartsAt', 'eventDurationMinutes', 'exerciseRoomId', 'managedExternalEventTypeId'];
+  const helpers = extractSubscriptionPricePreviewSource({ source: booking, roots }).source;
+  const canonical = new Function(`${helpers}; return {${roots.join(',')}};`)();
+  Object.assign(canonical, { identityMoneyOwned() {}, isSpanishTrainingExercise: () => false, isProTrainingExercise: () => false });
+  const payload = { id: exerciseId, studioId: studio, roomId: room, typeId: 605, directionId: 1,
+    timeFrom: new Date(futureClock - 1).toISOString(), durationMinutes: 60, ...changes };
+  const info = [], observed = [];
+  const observer = options.observer === 'shared' ? createDiagnostics({ sink: e => observed.push(e) }) : options.observer;
+  const globals = { get: () => observer };
+  const msg = { payload: options.payload === undefined ? payload : options.payload, statusCode: options.status ?? 200,
+    _msgid: 'fixture-sensitive', _subscriptionPricePreview: { step: 'groupExercise', tenantKey: 'fixture',
+      eventCategory: options.category ?? 'GROUP_TRAINING', exerciseId, target: {},
+      startedAt: options.entered ?? futureClock - 100, ...options.context } };
+  const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
+  const outputs = new Function('msg', 'canonical', 'global', 'node', 'Date', source('router'))(msg, canonical, globals,
+    { log: options.log ?? (text => info.push(JSON.parse(text))) }, Clock);
+  const ctx = msg._subscriptionPricePreview;
+  if (outputs[4]) new Function('msg', 'global', 'Date', source('final'))(msg, globals, Clock);
+  return { msg, ctx, outputs, info, observed };
+}
+const timeEvent = result => result.info.find(event => event.event === 'subscription_price_preview_target_not_future');
+test('target_not_future distinguishes an already started event from crossing during this request', () => {
+  for (const observer of [undefined, { observe() {} }, { observe() { throw Error('fixture-sensitive'); } }, 'shared']) {
+    for (const [delta, enteredDelta, relation] of [
+      [-101, -100, 'PAST_AT_ENTRY'], [-100, -100, 'NOW_AT_ENTRY'], [-1, -100, 'CROSSED_DURING_REQUEST'], [0, -100, 'CROSSED_DURING_REQUEST'],
+    ]) {
+      const result = targetTimeDiagnostic({ timeFrom: new Date(futureClock + delta).toISOString() }, { observer, entered: futureClock + enteredDelta });
+      assert.equal(result.msg.statusCode, 503);
+      assert.deepEqual(result.msg.payload, { error: { code: 'GROUP_DISCOUNT_TARGET_UNRESOLVED', details: { reason: 'target_not_future', upstreamStatus: 200 } } });
+      assert.equal(result.outputs[0], null);
+      assert.equal(result.info.length, 1, 'One info event, even with a code-filtered observer');
+      const event = timeEvent(result);
+      assert.deepEqual(event, { event: 'subscription_price_preview_target_not_future', schemaVersion: 1, code: 'TARGET_NOT_FUTURE',
+        step: 'groupExercise', reason: 'target_not_future', startRelation: relation, startAlias: 'TIME_FROM', startFormat: 'ISO_OFFSET',
+        elapsedBucket: 'LT1S', factsFailed: false, explicitOffsetValid: true, aliasConflict: false });
+    }
+  }
+});
+test('target_not_future preserves future and other refusal paths without extra diagnostics', () => {
+  const future = targetTimeDiagnostic({ timeFrom: new Date(futureClock + 1).toISOString() });
+  assert.equal(future.ctx.step, 'subscriptions'); assert.equal(future.info.length, 0);
+  for (const [changes, options, code, reason] of [
+    [{}, { status: 502 }, 'GROUP_DISCOUNT_TARGET_UNRESOLVED', 'target_upstream_error'],
+    [{ id: uuid(99) }, {}, 'GROUP_DISCOUNT_TARGET_UNRESOLVED', 'target_identity'],
+    [{ typeId: 1613 }, {}, 'GROUP_DISCOUNT_TARGET_UNRESOLVED', 'target_category'],
+    [{ timeFrom: 'fixture-sensitive' }, {}, 'GROUP_DISCOUNT_TARGET_UNRESOLVED', 'target_start_invalid'],
+    [{}, { entered: futureClock - 28001 }, 'PRICE_PREVIEW_TIMEOUT', undefined],
+  ]) {
+    const result = targetTimeDiagnostic(changes, options); assert.equal(result.info.length, 0);
+    assert.equal(result.msg.payload.error.code, code); assert.equal(result.msg.payload.error.details?.reason, reason);
+  }
+  const cancelledPast = targetTimeDiagnostic({ isCancelled: true, roomId: null, durationMinutes: 0 });
+  assert.equal(cancelledPast.msg.payload.error.details.reason, 'target_not_future', 'Original predicate order');
+  const tournament = targetTimeDiagnostic({ typeId: 839 }, { category: 'TOURNAMENT' });
+  assert.equal(tournament.msg.payload.error.code, 'TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED');
+});
+test('target_not_future exposes only coarse delay and unknown clock metadata', () => {
+  for (const [age, bucket] of [[0, 'LT1S'], [999, 'LT1S'], [1000, 'LT5S'], [4999, 'LT5S'],
+    [5000, 'LT15S'], [14999, 'LT15S'], [15000, 'LE28S'], [28000, 'LE28S']]) {
+    assert.equal(timeEvent(targetTimeDiagnostic({}, { entered: futureClock - age })).elapsedBucket, bucket);
+  }
+  for (const entered of [NaN, 'fixture-sensitive', futureClock + 1]) {
+    const event = timeEvent(targetTimeDiagnostic({}, { entered }));
+    assert.equal(event.startRelation, 'UNKNOWN'); assert.equal(event.elapsedBucket, 'UNKNOWN');
+  }
+});
+test('target_not_future identifies time aliases and suspicious shapes without reinterpreting the target', () => {
+  for (const [changes, alias, format, valid, conflict] of [
+    [{ timeFrom: '2099-09-21T06:59:59+03:00' }, 'TIME_FROM', 'ISO_OFFSET', true, false],
+    [{ timeFrom: '2099-09-20T23:59:59-0400' }, 'TIME_FROM', 'ISO_OFFSET', true, false],
+    [{ timeFrom: '2099-09-20T01:00:00' }, 'TIME_FROM', 'ISO_OFFSETLESS', false, false],
+    [{ timeFrom: '2099-09-20' }, 'TIME_FROM', 'DATE_ONLY', false, false],
+    [{ timeFrom: '2099-02-30T06:59:59+03:00' }, 'TIME_FROM', 'ISO_OFFSET', false, false],
+    [{ startsAt: new Date(futureClock + 1000).toISOString() }, 'TIME_FROM', 'ISO_OFFSET', true, true],
+    [{ timeFrom: 'fixture-sensitive', startsAt: new Date(futureClock - 1).toISOString() }, 'STARTS_AT', 'ISO_OFFSET', true, false],
+    [{ timeFrom: undefined, startAt: new Date(futureClock - 1).toISOString() }, 'START_AT', 'ISO_OFFSET', true, false],
+    [{ timeFrom: undefined, fromTime: new Date(futureClock - 1).toISOString() }, 'FROM_TIME', 'ISO_OFFSET', true, false],
+  ]) {
+    const result = targetTimeDiagnostic(changes), event = timeEvent(result);
+    assert.equal(event.startAlias, alias); assert.equal(event.startFormat, format);
+    assert.equal(event.explicitOffsetValid, valid); assert.equal(event.aliasConflict, conflict); assert.equal(event.factsFailed, false);
+    assert.equal(result.msg.payload.error.details.reason, 'target_not_future');
+    const serialized = JSON.stringify(result.info);
+    for (const value of [exerciseId, room, studio, 'fixture-sensitive', changes.timeFrom, changes.startsAt]) {
+      if (typeof value === 'string' && value) assert(!serialized.includes(value));
+    }
+    assert(!/https?:|Bearer|requestId|correlationId|exerciseId|startsAt|\d{4}-\d{2}-\d{2}|[a-f0-9]{8}-[a-f0-9-]{27}/i.test(serialized));
+  }
+});
+test('target_not_future diagnostic failures and unsafe aliases cannot change the refusal', () => {
+  for (const fromTime of [Symbol('fixture-sensitive'), 1n, 'fixture-sensitive'.repeat(30),
+    { toString() { assert.fail('Diagnostic must not coerce objects'); } }]) {
+    const result = targetTimeDiagnostic({ fromTime });
+    assert.equal(timeEvent(result).factsFailed, true); assert.equal(timeEvent(result).startAlias, 'UNKNOWN');
+    assert.equal(result.msg.statusCode, 503);
+  }
+  assert.equal(targetTimeDiagnostic({}, { log() { throw Error('fixture-sensitive'); } }).msg.statusCode, 503);
+  // Owning parser reads its aliases once; the diagnostic must not read a getter again.
+  const source = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js', import.meta.url), 'utf8');
+  const begin = source.indexOf('    // A dedicated info event');
+  const end = source.indexOf('    lkDiagnostic({ code: "TARGET_NOT_FUTURE"', begin);
+  let reads = 0; const logs = [];
+  const exercise = { timeFrom: new Date(futureClock - 1).toISOString(), get fromTime() { reads++; throw Error('fixture-sensitive'); } };
+  new Function('exercise', 'ctx', 'start', 'node', source.slice(begin, end))(exercise, { startedAt: futureClock - 100 }, futureClock - 1, { log: s => logs.push(JSON.parse(s)) });
+  assert.equal(reads, 0); assert.equal(logs[0].factsFailed, true);
+});
+
 test('exercise diagnostics identify the first failed guard without changing the 503 contract', () => {
   for (const [payload, overrides, reason] of [
     [previewExercise(), { statusCode: 503 }, 'target_upstream_error'],
