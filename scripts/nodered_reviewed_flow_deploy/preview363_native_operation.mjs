@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { patchPreview363Flow, buildPreview363Artifact, sha256, PREVIEW363_FLOW_SHA } from '../lib/preview363_activation.mjs';
+import { patchPreview363Flow, buildPreview363Artifact, sha256 } from '../lib/preview363_activation.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract, writeFileExclusiveDurable,
   writeFileExclusiveAtomicDurable, recoverAtomicExclusivePublication, atomicWrite, syncDirectory } from './runtime_contract.mjs';
 import { preview363GraphHash, preview363OrderedGraphHash } from './preview363_body_preserver.mjs';
@@ -147,7 +147,6 @@ export function createPreview363NativeOperation({ stage, root = ROOT, uid = 0, g
       check(hex(expectedSourceSha256) && hex(expectedTargetSha256) && hex(expectedCodeSha256)
         && codeHash() === expectedCodeSha256 && /^[a-f0-9]{40}$/.test(sourceCommit), 'P363_PREPARE_PINS');
       target(expectedTargetSha256); const source = live(); check(sha256(source) === expectedSourceSha256, 'P363_SOURCE_DRIFT');
-      check(sha256(source) === (patchOptions.expectedFlowSha256 || PREVIEW363_FLOW_SHA), 'P363_WHOLE_SOURCE_PIN');
       const flow = JSON.parse(source); evidence(native, await preview363GraphHash(flow), undefined, await preview363OrderedGraphHash(flow));
       const built = patchPreview363Flow(flow, { ...patchOptions, sourceCommit }), candidate = bytes(built.candidate);
       const contract = buildExactGraphContract({ liveBytes: source, candidateBytes: candidate, deploymentId: 'preview363-native-diagnostic',

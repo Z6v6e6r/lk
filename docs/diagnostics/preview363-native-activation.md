@@ -11,6 +11,15 @@ tariff hook is verbatim PR363. Removing the bootstrap prefix and hook restores
 the exact installed business function. Whole-source, function, initializer,
 finalizer, library list, node count and exact-graph hashes are pinned. Unknown
 drift stops preparation. Do not regenerate installed helpers from current main.
+The whole-source SHA is a mandatory explicit `expectedSourceSha256` in the
+reviewed execution manifest, not a helper default. Before `prepare`, review the
+safe delta from the coordinated predecessor and freeze that exact source SHA
+with source commit, code and runtime identity hashes. `inspect` alone does not
+approve a topology; never automatically copy its observed SHA into an expected
+pin. Compatible unrelated rollouts require a new reviewed execution manifest,
+private plan and fresh native snapshot. Target function/lifecycle/libs/count
+drift still requires a newly reviewed helper and CI; source drift after pinning
+refuses `prepare`, `reserve` or `begin` rather than accepting a new baseline.
 
 The installed cross-day observer remains in its owned VM slot. A lazy wrapper
 delegates its previous observations unchanged and disposes both observers via

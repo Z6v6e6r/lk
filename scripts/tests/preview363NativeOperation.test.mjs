@@ -34,7 +34,7 @@ async function fixture(t) {
     requestedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(),
     orderedGraphSha256: await preview363OrderedGraphHash(g), editorOrderedGraphSha256: await preview363OrderedGraphHash(g), graphSha256: await preview363GraphHash(g), revisionSha256: sha256(revision) });
   const options = { stage, root, uid: process.getuid(), gid: process.getgid(), getUid: () => process.getuid(),
-    now: () => now, readTarget: () => target, codeHash: () => code, patchOptions: { bundle, expectedNodeCount: 5, expectedFlowSha256: sha256(fs.readFileSync(live)), expectedFunctionSha256: sha256(sourceBody), expectedInitializeSha256: sha256(''), expectedFinalizeSha256: sha256('') } };
+    now: () => now, readTarget: () => target, codeHash: () => code, patchOptions: { bundle, expectedNodeCount: 5, expectedFunctionSha256: sha256(sourceBody), expectedInitializeSha256: sha256(''), expectedFinalizeSha256: sha256('') } };
   const op = createPreview363NativeOperation(options);
   const prepared = await op.prepare({ expectedSourceSha256: sha256(fs.readFileSync(live)), expectedTargetSha256: identity,
     expectedCodeSha256: code, sourceCommit: commit, native: await readback() });
@@ -213,4 +213,52 @@ test('lost inverse ACK is adopted from exact observed source without replay and 
   f.advance(900000);
   assert.equal((await f.op.rollbackFinish({ expectedPlanSha256: f.expectedPlanSha256,
     native: await f.readback(f.graph, 'synthetic-rollback-revision') })).status, 'ROLLED_BACK');
+});
+
+test('execution manifest requires an explicit exact source pin and preserves a reviewed unrelated delta', async t => {
+  const f = await fixture(t), oldSha = sha256(fs.readFileSync(f.live));
+  const changed = structuredClone(f.graph); changed[3].requestTimeout = '17000';
+  fs.writeFileSync(f.live, JSON.stringify(changed));
+  const stage = f.stage + '2'; fs.mkdirSync(stage, { mode: 0o700 });
+  const op = createPreview363NativeOperation({ ...f.options, stage });
+  const input = { expectedTargetSha256: identity, expectedCodeSha256: code, sourceCommit: commit, native: await f.readback(changed) };
+  await assert.rejects(op.prepare(input), /PREPARE_PINS/);
+  await assert.rejects(op.prepare({ ...input, expectedSourceSha256: 'not-a-sha' }), /PREPARE_PINS/);
+  await assert.rejects(op.prepare({ ...input, expectedSourceSha256: oldSha }), /SOURCE_DRIFT/);
+  assert.deepEqual(fs.readdirSync(stage), []); assert.equal(fs.existsSync(f.lease), false);
+  const manifest = Object.freeze({ ...input, expectedSourceSha256: sha256(fs.readFileSync(f.live)) });
+  const prepared = await op.prepare(manifest);
+  const candidate = JSON.parse(fs.readFileSync(path.join(stage, 'candidate.flow.json')));
+  assert.deepEqual(candidate[3], changed[3]);
+  const restored = structuredClone(candidate);
+  const target = restored.find(n => n.id === 'lk_subscription_price_preview_20260908_router');
+  const artifact = buildPreview363Artifact(commit, bundle);
+  target.func = target.func.slice(artifact.prefix.length).replace(artifact.hook, '');
+  assert.deepEqual(restored, changed);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(stage, 'plan.json'))).sourceSha256, manifest.expectedSourceSha256);
+  const drift = structuredClone(changed); drift[3].method = 'POST'; fs.writeFileSync(f.live, JSON.stringify(drift));
+  await assert.rejects(op.reserve({ expectedPlanSha256: prepared.planSha256, confirmation, native: await f.readback(changed) }), /SOURCE_DRIFT/);
+  assert.equal(fs.existsSync(f.lease), false);
+});
+
+test('source drift after reservation refuses begin and preserves custody without consuming an attempt', async t => {
+  const f = await fixture(t); await f.reserve();
+  const lease = fs.readFileSync(f.lease), changed = structuredClone(f.graph);
+  changed[3].requestTimeout = '18000'; fs.writeFileSync(f.live, JSON.stringify(changed));
+  await assert.rejects(f.begin(), /SOURCE_DRIFT/);
+  assert.deepEqual(fs.readFileSync(f.lease), lease);
+  assert.equal(fs.existsSync(path.join(f.stage, 'attempt.json')), false);
+});
+
+for (const field of ['func','initialize','finalize','libs','node-count']) test(`correct source SHA cannot bless target ${field} drift`, async t => {
+  const f = await fixture(t), changed = structuredClone(f.graph);
+  if (field === 'node-count') changed.push({ id: 'unexpected', type: 'debug', active: false });
+  else if (field === 'libs') changed[2].libs[0].module = 'fs';
+  else changed[2][field] += ' ';
+  fs.writeFileSync(f.live, JSON.stringify(changed));
+  const stage = f.stage + '2'; fs.mkdirSync(stage, { mode: 0o700 });
+  const op = createPreview363NativeOperation({ ...f.options, stage });
+  await assert.rejects(op.prepare({ expectedSourceSha256: sha256(fs.readFileSync(f.live)), expectedTargetSha256: identity,
+    expectedCodeSha256: code, sourceCommit: commit, native: await f.readback(changed) }), /NODE_DRIFT|GRAPH/);
+  assert.deepEqual(fs.readdirSync(stage), []); assert.equal(fs.existsSync(f.lease), false);
 });
