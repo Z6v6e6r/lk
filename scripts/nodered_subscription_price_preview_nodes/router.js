@@ -27,6 +27,20 @@ const lkDiagnostic = (fields = {}) => {
     if (['json', 'text', 'html', 'other', 'missing'].includes(fields.contentTypeClass)) {
       event.contentTypeClass = fields.contentTypeClass;
     }
+    if (fields.reason === 'target_duration') {
+      const enums = {
+        previewCanonicalDuration: ['NULL', 'DIFFERENT', 'UNKNOWN'],
+        previewExplicitDuration: ['ABSENT', 'VALID', 'INVALID', 'UNKNOWN'],
+        previewEndpointDuration: ['NULL', 'MATCH_TARGET', 'DIFFERENT', 'UNKNOWN'],
+      };
+      for (const [key, values] of Object.entries(enums)) {
+        if (values.includes(fields[key])) event[key] = fields[key];
+      }
+      for (const key of ['previewExplicitMatchesEndpoints', 'previewEndpointOffsetPairValid',
+        'previewEndpointStartMatch', 'previewDurationFactsFailed']) {
+        if (typeof fields[key] === 'boolean') event[key] = fields[key];
+      }
+    }
     node.log(JSON.stringify(event));
   } catch { /* The optional fallback cannot change a business verdict either. */ }
 };
@@ -226,7 +240,67 @@ if (ctx.step === 'game') {
 }
 if (ctx.step === 'exercise') {
   const exercise = canonical.unwrapRecord(msg.payload);
-  const unresolved = reason => {
+  const durationFacts = actual => {
+    const facts = { previewCanonicalDuration: actual === null ? 'NULL'
+      : Number.isInteger(actual) && actual > 0 && actual <= 1440 ? 'DIFFERENT' : 'UNKNOWN',
+      previewDurationFactsFailed: true };
+    try {
+      // Fixed own primitive fields only: never invoke getters/custom coercion,
+      // enumerate the provider record or retain raw values in diagnostics.
+      const own = (object, key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(object, key);
+        if (!descriptor) {
+          if (key in object) throw Error('inherited');
+          return undefined;
+        }
+        if (!Object.hasOwn(descriptor, 'value')) throw Error('accessor');
+        const value = descriptor.value;
+        if (value != null && !['string', 'number', 'boolean'].includes(typeof value)) throw Error('non_primitive');
+        if (typeof value === 'string' && value.length > 128) throw Error('oversized');
+        return value;
+      };
+      const endpoints = {};
+      for (const key of ['timeFrom', 'startsAt', 'startAt', 'fromTime', 'timeTo', 'endsAt', 'endAt']) {
+        endpoints[key] = own(exercise, key);
+      }
+      const rawExplicit = own(exercise, 'durationMinutes') ?? own(exercise, 'duration');
+      const explicit = Number(rawExplicit);
+      const explicitValid = Number.isInteger(explicit) && explicit > 0 && explicit <= 1440;
+      const expected = own(ctx.target, 'durationMinutes');
+      if (![60, 90, 120].includes(expected)) return facts;
+      // Use the owning parser without explicit duration, not a second duration parser.
+      const endpointDuration = canonical.eventDurationMinutes(endpoints);
+      const resolved = Number.isInteger(endpointDuration) && endpointDuration > 0 && endpointDuration <= 1440;
+      const details = {
+        previewExplicitDuration: rawExplicit == null ? 'ABSENT' : explicitValid ? 'VALID' : 'INVALID',
+        previewEndpointDuration: endpointDuration === null ? 'NULL' : !resolved ? 'UNKNOWN'
+          : endpointDuration === expected ? 'MATCH_TARGET' : 'DIFFERENT',
+      };
+      if (explicitValid && resolved) details.previewExplicitMatchesEndpoints = explicit === endpointDuration;
+      // A clock-fallback result is not proof of a valid provider interval. Mark
+      // only a strictly round-tripped, forward explicit-offset pair as such.
+      const offsetTimestamp = value => {
+        if (typeof value !== 'string') return null;
+        const match = value.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))$/);
+        if (!match || Number(match[5] || 0) > 23 || Number(match[6] || 0) > 59) return null;
+        const parsed = Date.parse(value);
+        if (!Number.isFinite(parsed)) return null;
+        const offset = match[3] === 'Z' ? 0 : (match[4] === '-' ? -1 : 1) * (Number(match[5]) * 60 + Number(match[6]));
+        const local = new Date(parsed + offset * 60000).toISOString();
+        return local.slice(0, 23) === `${match[1]}.${(match[2] || '').padEnd(3, '0')}` ? parsed : null;
+      };
+      const from = offsetTimestamp(endpoints.timeFrom || endpoints.startsAt || endpoints.startAt);
+      const to = offsetTimestamp(endpoints.timeTo || endpoints.endsAt || endpoints.endAt);
+      details.previewEndpointOffsetPairValid = from !== null && to !== null
+        && to > from && to - from <= 1440 * 60000 && resolved;
+      const start = Date.parse(canonical.eventStartsAt(endpoints));
+      const expectedStart = own(ctx.target, 'startsAt');
+      const targetStart = typeof expectedStart === 'string' ? Date.parse(expectedStart) : NaN;
+      if (Number.isFinite(start) && Number.isFinite(targetStart)) details.previewEndpointStartMatch = start === targetStart;
+      return { ...facts, ...details, previewDurationFactsFailed: false };
+    } catch { return facts; }
+  };
+  const unresolved = (reason, actualDuration) => {
     // Explain the first failed predicate without changing the HTTP error contract.
     // Observe only safe enums/status; never copy the provider record or headers.
     try {
@@ -235,6 +309,7 @@ if (ctx.step === 'exercise') {
         ? msg.headers['content-type'].split(';', 1)[0].trim().toLowerCase() : '';
       const status = Number(msg.statusCode);
       lkDiagnostic({ code: 'PRICE_PREVIEW_GAME_UNRESOLVED', reason,
+        ...(reason === 'target_duration' ? durationFacts(actualDuration) : {}),
         upstreamStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
         responseKind: payload === null ? 'null' : payload === undefined ? 'missing'
           : Array.isArray(payload) ? 'array' : typeof payload === 'string' ? 'text'
@@ -252,7 +327,8 @@ if (ctx.step === 'exercise') {
   if (canonical.resolveCategory(exercise) !== 'open_game') return unresolved('target_category');
   if (String(exercise.studio?.id || exercise.studioId || '') !== ctx.target.stationId) return unresolved('target_studio');
   if (canonical.exerciseRoomId(exercise) !== ctx.target.roomId) return unresolved('target_room');
-  if (canonical.eventDurationMinutes(exercise) !== ctx.target.durationMinutes) return unresolved('target_duration');
+  const exerciseDuration = canonical.eventDurationMinutes(exercise);
+  if (exerciseDuration !== ctx.target.durationMinutes) return unresolved('target_duration', exerciseDuration);
   if (Date.parse(canonical.eventStartsAt(exercise)) !== Date.parse(ctx.target.startsAt)) return unresolved('target_start_invalid');
   if (exercise.isCancelled === true || exercise.isCanceled === true) return unresolved('target_cancelled');
   if (['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return unresolved('target_lifecycle');

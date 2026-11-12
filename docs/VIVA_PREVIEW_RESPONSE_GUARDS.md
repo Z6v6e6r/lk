@@ -30,6 +30,34 @@ no IDs or arbitrary text, and emits only on exercise refusal. It uses info level
 and a separate event name, leaving the final node's legacy refusal warning/count
 unchanged. No global settings/runtime activation is needed for this fallback.
 
+For `target_duration` only, the same observer/fallback event includes these optional
+bounded facts; the HTTP response and legacy warning are unchanged:
+
+| Field | Meaning |
+| --- | --- |
+| `previewCanonicalDuration` | `NULL`, `DIFFERENT`, or `UNKNOWN` from the captured canonical result of the original guard. |
+| `previewExplicitDuration` | `ABSENT`, `VALID`, `INVALID`, or `UNKNOWN` for `durationMinutes ?? duration` under the owning numeric contract, including numeric strings and boolean coercion. |
+| `previewEndpointDuration` | `NULL`, `MATCH_TARGET`, `DIFFERENT`, or `UNKNOWN` from the same canonical helper with explicit duration fields omitted. |
+| `previewExplicitMatchesEndpoints` | Equality only when both explicit and endpoint-only durations resolve. `false` identifies a conflicting explicit field. |
+| `previewEndpointOffsetPairValid` | Strict calendar/offset roundtrip and a positive interval of at most one day; `false` includes clock fallback, offsetless inputs, invalid or non-forward intervals. |
+| `previewEndpointStartMatch` | Start-instant equality when the owning start helper and target both resolve. |
+| `previewDurationFactsFailed` | Additional facts could not be safely computed; the captured canonical class remains available. |
+
+The `game` step has already compared the target with the stored LK interval before
+the `exercise` step. `DIFFERENT` endpoint duration with a valid offset pair and matching
+start supports an LK/Viva interval discrepancy; it does not identify which side is
+stale or prove the absence of a concurrent update. A resolved clock fallback alone
+does not prove a valid interval. `NULL` must never be described as two different
+actual durations. Missing equality booleans mean unknown, not false.
+
+The canonical guard result is evaluated once, in its original predicate position.
+Additional parsing uses fixed own primitive data fields capped at 128 characters;
+accessors, inherited fields and custom-coercion objects are rejected without invoking
+them. No raw durations, timestamps, entity IDs, payloads or new correlation values are
+logged or returned. Diagnostic failures cannot change the strict comparison, predicate
+order, refusal response, price or subsequent business execution. Successful previews
+and other refusal reasons receive no duration facts.
+
 Touched source nodes: onboarding `Capture Viva level PUT result` and subscription
 preview `router`. The PUT builder, HTTP nodes, graph wiring, final response node,
 pricing rules and writes are unchanged. No flow JSON/import/export is generated.

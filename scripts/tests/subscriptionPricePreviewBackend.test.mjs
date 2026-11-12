@@ -214,6 +214,124 @@ test('exercise diagnostics do not mask explicit read errors or the overall timeo
   assert(!timeout.events.some(e => e.code === 'PRICE_PREVIEW_GAME_UNRESOLVED'));
 });
 
+const durationFactKeys = ['previewCanonicalDuration', 'previewExplicitDuration', 'previewEndpointDuration',
+  'previewExplicitMatchesEndpoints', 'previewEndpointOffsetPairValid', 'previewEndpointStartMatch', 'previewDurationFactsFailed'];
+const durationFacts = event => Object.fromEntries(durationFactKeys.filter(key => Object.hasOwn(event, key)).map(key => [key, event[key]]));
+test('target_duration separates null, explicit conflict and provider endpoint mismatch in observer and fallback', () => {
+  const expected = (canonical, explicit, endpoint, extra = {}) => ({ previewCanonicalDuration: canonical,
+    previewExplicitDuration: explicit, previewEndpointDuration: endpoint,
+    previewEndpointOffsetPairValid: false, previewEndpointStartMatch: true, previewDurationFactsFailed: false, ...extra });
+  for (const [changes, facts] of [
+    [{ timeTo: undefined }, expected('NULL', 'ABSENT', 'NULL')],
+    [{ duration: 'PT1H30M', timeTo: undefined }, expected('NULL', 'INVALID', 'NULL')],
+    [{ durationMinutes: 60 }, expected('DIFFERENT', 'VALID', 'MATCH_TARGET',
+      { previewExplicitMatchesEndpoints: false, previewEndpointOffsetPairValid: true })],
+    [{ duration: '60', timeTo: '2099-09-21T08:00:00+03:00' }, expected('DIFFERENT', 'VALID', 'DIFFERENT',
+      { previewExplicitMatchesEndpoints: true, previewEndpointOffsetPairValid: true })],
+    [{ timeTo: '2099-09-21T08:00:00+03:00' }, expected('DIFFERENT', 'ABSENT', 'DIFFERENT',
+      { previewEndpointOffsetPairValid: true })],
+    [{ durationMinutes: 60, timeTo: undefined }, expected('DIFFERENT', 'VALID', 'NULL')],
+    [{ duration: true }, expected('DIFFERENT', 'VALID', 'MATCH_TARGET',
+      { previewExplicitMatchesEndpoints: false, previewEndpointOffsetPairValid: true })],
+    [{ durationMinutes: null, duration: 60 }, expected('DIFFERENT', 'VALID', 'MATCH_TARGET',
+      { previewExplicitMatchesEndpoints: false, previewEndpointOffsetPairValid: true })],
+    [{ durationMinutes: 60, timeFrom: '2099-09-21T04:00:00Z', timeTo: '2099-09-21T05:30:00Z' },
+      expected('DIFFERENT', 'VALID', 'MATCH_TARGET', { previewExplicitMatchesEndpoints: false, previewEndpointOffsetPairValid: true })],
+  ]) {
+    for (const observer of [undefined, null, { observe() { throw Error('fixture-sensitive'); } }]) {
+      const info = [];
+      const result = exerciseDiagnostic({ ...previewExercise(), ...changes }, {}, observer, { log: text => info.push(JSON.parse(text)) });
+      const events = observer === undefined ? result.events : info;
+      const event = events.find(event => event.reason === 'target_duration');
+      assert.deepEqual(durationFacts(event), facts);
+      assert.equal(result.msg.statusCode, 503);
+      assert.deepEqual(result.msg.payload, { error: { code: 'PRICE_PREVIEW_GAME_UNRESOLVED' } });
+      assert.equal(result.outputs[0], null, 'Refusal cannot schedule another provider read');
+      assert.equal(events.filter(event => event.reason === 'target_duration').length, 1);
+      assert(!JSON.stringify(events).includes('fixture-sensitive'));
+      assert(!JSON.stringify(events).includes(exerciseId));
+      assert(!JSON.stringify(events).includes(target.startsAt));
+    }
+  }
+});
+test('duration evidence does not label permissive clock fallback or normalized calendar as a valid offset pair', () => {
+  for (const changes of [
+    { timeFrom: '07:00', timeTo: '08:00' },
+    { timeFrom: '2099-09-21T07:00:00', timeTo: '2099-09-21T08:00:00' },
+    { timeFrom: '2099-02-30T07:00:00+03:00', timeTo: '2099-02-30T08:00:00+03:00' },
+    { timeFrom: '2099-09-21T07:00:00+03:00', timeTo: '2099-09-21T07:00:00+03:00' },
+    { timeFrom: '2099-09-21T23:00:00+03:00', timeTo: '2099-09-21T00:00:00+03:00' },
+  ]) {
+    const result = exerciseDiagnostic({ ...previewExercise(), ...changes });
+    const event = result.events.find(event => event.reason === 'target_duration');
+    assert.equal(event.previewEndpointOffsetPairValid, false);
+    assert.equal(result.msg.statusCode, 503);
+  }
+  for (const [timeFrom, timeTo] of [
+    ['2099-09-21T23:00:00+03:00', '2099-09-22T00:30:00+03:00'],
+    ['2099-09-21T22:30:00+03:00', '2099-09-22T00:00:00+03:00'],
+    ['2099-09-21T07:00:00.250+03:00', '2099-09-21T08:30:00.250+03:00'],
+  ]) {
+    const result = exerciseDiagnostic({ ...previewExercise(), durationMinutes: 60, timeFrom, timeTo });
+    const event = result.events.find(event => event.reason === 'target_duration');
+    assert.equal(event.previewEndpointDuration, 'MATCH_TARGET');
+    assert.equal(event.previewEndpointOffsetPairValid, true);
+    assert.equal(event.previewExplicitMatchesEndpoints, false);
+  }
+});
+test('duration diagnostics reject unsafe fields without executing getters or custom coercion', () => {
+  for (const unsafe of [
+    payload => Object.defineProperty(payload, 'endsAt', { get() { return assert.fail('Must not call diagnostic getter'); } }),
+    payload => ({ ...payload, endsAt: { valueOf() { assert.fail('Must not coerce object'); }, toString() { assert.fail('Must not stringify object'); } } }),
+    payload => ({ ...payload, endsAt: 'fixture-sensitive'.repeat(30) }),
+    payload => ({ ...payload, endsAt: Symbol('fixture-sensitive') }),
+    payload => ({ ...payload, endsAt: 1n }),
+    payload => Object.assign(Object.create({ endsAt: 'fixture-sensitive' }), payload),
+  ]) {
+    const info = [];
+    const result = exerciseDiagnostic(unsafe({ ...previewExercise(), durationMinutes: 60 }), {}, null,
+      { log: text => info.push(JSON.parse(text)) });
+    assert.equal(result.msg.statusCode, 503);
+    assert.deepEqual(durationFacts(info[0]), { previewCanonicalDuration: 'DIFFERENT', previewDurationFactsFailed: true });
+    assert(!JSON.stringify(info).includes('fixture-sensitive'));
+  }
+  const result = exerciseDiagnostic({ ...previewExercise(), durationMinutes: 60 }, {}, null, { log() { throw Error('sink'); } });
+  assert.equal(result.msg.statusCode, 503);
+});
+test('duration evidence is absent from successful previews and other first failures; canonical guard reads once', () => {
+  for (const payload of [previewExercise(), { ...previewExercise(), studioId: uuid(99), durationMinutes: 60 },
+    { ...previewExercise(), isCancelled: true }]) {
+    const result = exerciseDiagnostic(payload);
+    assert(result.events.every(event => durationFactKeys.every(key => !Object.hasOwn(event, key))));
+  }
+  let reads = 0;
+  const payload = previewExercise();
+  Object.defineProperty(payload, 'durationMinutes', { get() { reads++; return 60; } });
+  const result = exerciseDiagnostic(payload);
+  assert.equal(reads, 1, 'Only the original canonical call may read a provider accessor');
+  const event = result.events.find(event => event.reason === 'target_duration');
+  assert.equal(event.previewCanonicalDuration, 'DIFFERENT');
+  assert.equal(event.previewDurationFactsFailed, true);
+  assert.equal(result.msg.statusCode, 503);
+});
+
+test('duration diagnostic allowlist drops arbitrary strings, numbers, objects and raw values', () => {
+  const base = { schemaVersion: 1, diagnosticEventId: uuid(81), requestId: uuid(82), eventKind: 'stage',
+    source: 'node_red', stage: 'preview_router', code: 'PRICE_PREVIEW_GAME_UNRESOLVED', reason: 'target_duration' };
+  for (const value of ['fixture-sensitive', 90, { token: 'fixture-sensitive' }, null]) {
+    const input = { ...base, ...Object.fromEntries(durationFactKeys.map(key => [key, value])),
+      durationMinutes: 90, timeFrom: target.startsAt, exerciseId, providerRecord: previewExercise() };
+    const safe = sanitizeEvent(input);
+    assert(!JSON.stringify(safe).includes('fixture-sensitive'));
+    assert(!JSON.stringify(safe).includes(exerciseId));
+    assert(!Object.hasOwn(safe, 'durationMinutes'));
+    assert(!Object.hasOwn(safe, 'timeFrom'));
+    assert(!Object.hasOwn(safe, 'providerRecord'));
+    for (const key of durationFactKeys.slice(0, 3)) assert.equal(safe[key], 'UNKNOWN');
+    for (const key of durationFactKeys.slice(3)) assert(!Object.hasOwn(safe, key));
+  }
+});
+
 // Run the actual router and final with the booking graph's list helpers, without
 // a private production flow or any provider/database access.
 function tariffDiagnostic(payload, overrides = {}, options = {}) {

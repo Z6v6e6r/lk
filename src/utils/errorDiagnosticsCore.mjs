@@ -25,6 +25,9 @@ const enums = {
   previewTargetKind: ['NEW_GAME', 'EXISTING_GAME', 'UNKNOWN'],
   previewTargetSource: ['CLIENT_INPUT', 'SERVER_CONFIRMED', 'UNKNOWN'],
   previewDuration: ['MINUTES_60', 'MINUTES_90', 'MINUTES_120', 'UNKNOWN'],
+  previewCanonicalDuration: ['NULL', 'DIFFERENT', 'UNKNOWN'],
+  previewExplicitDuration: ['ABSENT', 'VALID', 'INVALID', 'UNKNOWN'],
+  previewEndpointDuration: ['NULL', 'MATCH_TARGET', 'DIFFERENT', 'UNKNOWN'],
   previewDayRelation: ['NEXT_DAY', 'OTHER', 'UNKNOWN'],
   previewElapsedBucket: ['LT1S', 'LT5S', 'LT15S', 'LE28S', 'OVER28S', 'UNKNOWN'],
   tariffListShape: ['ROOT_ARRAY', 'DIRECT_ARRAY', 'NESTED_ARRAY', 'NO_RECOGNIZED_ARRAY', 'UNKNOWN'],
@@ -47,6 +50,8 @@ const enums = {
 const flags = ["operationReadValid", "operationFound", "sameOperationKey", "sameOperationTarget", "idempotencyKeyPresent", "pendingExpired", "reqPresent", "resPresent", "errorPresent", "contextPresent", "subjectPresent", "authorizedPartyPresent", "tenantPresent", "dtoIdPresent", "dtoPaymentUrlPresent", "dtoResultPresent", "expectedRevisionPresent", "actualRevisionPresent", "revisionEqual", "expectedUpdatedAtPresent", "actualUpdatedAtPresent", "updatedAtEqual", "bindingEqual", "bindingPresent", "preconditionPresent", "acknowledged", "cacheUsable", "inflightPresent", "targetFuture", "targetTimeValid", "sourceTimeValid", "dependencyPresent", "registrationPresent", "mountPresent", "originEqual", "hostEqual", "protocolEqual", "assetBuildEqual", "dataPresent", "fileFound", "parseOk", "admitted", "clientVerified", "botIdentityKnown", "accessEvidenceKnown", "targetPresent", "targetEqual", "leasePresent", "leaseExpired", "executionObserved", "suppressed", "refUnavailable", "topFramePresent", "deviceClockTrusted", "serverLinked", "legacyEvent", "sdkOutputPresent", "sdkErrorPresent", "diagnosticWarning", "routeValid", "framingValid", "clientBound", "logoUrlPresent", "logoThumbPresent", "logoLegacyPresent", "aggregate", "parseAttempted", "scriptLoadObserved"];
 const numbers = { httpStatus: [100, 599], upstreamStatus: [100, 599], durationMs: [0, 86400000], attempt: [1, 10000], leaseAttempt: [0, 10000], scopeGeneration: [0, 1000000], matchedCount: [0, 2], modifiedCount: [0, 2], lookupCount: [0, 2], tariffCount: [0, 1000], leaseAgeMs: [0, 86400000], markerAgeMs: [0, 86400000], deferredDeliveries: [0, Number.MAX_SAFE_INTEGER], queueEvictions: [0, Number.MAX_SAFE_INTEGER], suppressedCount: [0, Number.MAX_SAFE_INTEGER] };
 flags.push('previewOffsetValid', 'previewEndAtMidnight', 'previewSubservicesMatched', 'previewSubservices2xx');
+flags.push('previewExplicitMatchesEndpoints', 'previewEndpointOffsetPairValid',
+  'previewEndpointStartMatch', 'previewDurationFactsFailed');
 flags.push('tariffCompleteListGuardPassed', 'tariffExtractedEmpty', 'tariffTransportErrorPresent',
   'tariffBindingContextPresent', 'tariffMethodMatch', 'tariffRequestScopeMatch', 'tariffResponseUrlPresent',
   'tariffResponseScopeMatch', 'tariffTenantScopeMatch', 'tariffExerciseScopeMatch',
