@@ -56,6 +56,11 @@ npm run nodered:modular:verify -- --workspace /absolute/new/private/workspace
 применяться к свежему live pull, потому что способны затронуть параллельные изменения.
 Полный актуальный порядок зафиксирован в `docs/NODERED_MODULAR_WORKFLOW.md`.
 
+Readiness и безопасный restart общего Node-RED описаны в
+[NODERED_RELEASE_LIFECYCLE.md](NODERED_RELEASE_LIFECYCLE.md). Новый helper требует
+отдельно установленный persistent admission gateway и runtime observer; без них
+он отказывается публиковать flow. Эта документация не активирует инфраструктуру.
+
 Guarded reviewed-flow deploy дополнительно использует общий server-side `flock`
 и оставляет 15-минутный post-apply lease. Пока lease активен, следующий
 reviewed-flow preflight завершается fail-closed, а точный rollback владельца

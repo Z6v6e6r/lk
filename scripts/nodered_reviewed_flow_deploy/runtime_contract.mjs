@@ -2,6 +2,36 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { spawnSync } from "node:child_process";
+
+// Kept in the already-staged contract module: legacy wrappers upload exactly
+// this file and the remote helper. Installation is an explicit prerequisite.
+export function createReleaseLifecycleAdapter({
+  controlPath = "/var/lib/padlhub-nodered-release/lifecycle.cjs",
+  spawnCommand = spawnSync,
+} = {}) {
+  let generation;
+  const invoke = (action, binding) => {
+    assertProtectedFile(controlPath, { uid: 0, gid: 0, mode: 0o600 });
+    const result = spawnCommand(process.execPath, [controlPath, action], {
+      input: JSON.stringify({ ...binding, generation }), encoding: "utf8", timeout: 70_000,
+      maxBuffer: 32 * 1024, stdio: ["pipe", "pipe", "pipe"],
+    });
+    if (result.error || result.status !== 0) {
+      const code = String(result.stderr || "").trim();
+      throw new Error(`Release lifecycle ${action} failed (${/^LIFECYCLE_[A-Z_]+$/.test(code) ? code : "LIFECYCLE_UNVERIFIED"}); admission remains closed if acquired`);
+    }
+    let receipt;
+    try { receipt = JSON.parse(result.stdout); } catch { throw new Error("Release lifecycle receipt invalid"); }
+    if (receipt.ok !== true || receipt.action !== action) throw new Error("Release lifecycle receipt mismatch");
+    if (action === "begin") {
+      if (!/^[a-f0-9-]{36}$/.test(receipt.generation || "")) throw new Error("Release lifecycle generation missing");
+      generation = receipt.generation;
+    }
+  };
+  return { budgetMs: 100_000, preflight: b => invoke("preflight", b), begin: b => invoke("begin", b),
+    drain: b => invoke("drain", b), ready: b => invoke("ready", b), verify: b => invoke("verify", b), finish: b => invoke("finish", b) };
+}
 
 export const CONTRACT_FORMAT_VERSION = 1;
 export const EXACT_GRAPH_CONTRACT_FORMAT_VERSION = 2;

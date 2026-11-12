@@ -683,12 +683,24 @@ jobs:
         run: >-
           node --test --test-concurrency=1
           scripts/tests/reviewedFlowDeploy.test.mjs
+          scripts/tests/releaseLifecycle.test.mjs
           scripts/tests/editorPauseOperation.test.mjs
           scripts/tests/max-pause-body-preserver.test.mjs
           scripts/tests/max-pause-browser-guard.test.mjs
           scripts/tests/legacyGameCommandProductionRelease.test.mjs
           scripts/tests/legacyGameCommandH2IdentityAudit.test.mjs
           scripts/tests/legacyGameCommandRootAclBootstrap.test.mjs
+
+      - name: Rehearse Node-RED restart admission with real runtime and nginx
+        id: check_release_lifecycle
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        env:
+          DELIVERY_CATEGORY: business
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/release-lifecycle-runtime" --ignore-scripts --no-audit --no-fund node-red@4.0.9
+          RELEASE_LIFECYCLE_NODERED_RUNTIME="$RUNNER_TEMP/release-lifecycle-runtime/node_modules/node-red/red.js" \
+            node --test scripts/tests/releaseLifecycle.nodered.test.mjs
 
       - name: Validate isolated frontend static routing with real nginx
         id: check_static_nginx
