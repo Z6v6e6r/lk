@@ -408,3 +408,27 @@ test('operation/attempt units without actual references never become zero/succes
  const known = collector.ingest({ ...batch, source: 'attempts', records: [{ ...base(), logicalOperation: randomUUID(), attempt: 1 }] });
  assert.equal(known.distinctObservedAttemptContexts, 1); assert.equal(known.rate, 1 / 60);
 });
+
+test('cross-day shape contract preserves only bounded enums, booleans and capped counts', () => {
+  const fields = { previewTargetKind: 'NEW_GAME', previewTargetSource: 'CLIENT_INPUT', previewDuration: 'MINUTES_90',
+    previewDayRelation: 'NEXT_DAY', previewElapsedBucket: 'LT5S', previewOffsetValid: true,
+    previewEndAtMidnight: false, previewSubservicesMatched: true, previewSubservices2xx: true,
+    previewSelectedSubserviceCount: 20, previewSubserviceSetSize: 21 };
+  const safe = sanitizeEvent({ ...base(), ...fields });
+  for (const [key, value] of Object.entries(fields)) assert.equal(safe[key], value);
+  const privateText = 'synthetic-private@example.invalid ?secret=synthetic-private';
+  for (const value of [privateText, { body: privateText }, [privateText], null, Infinity, NaN]) {
+    const unsafe = Object.fromEntries(Object.keys(fields).map(key => [key, value]));
+    const event = sanitizeEvent({ ...base(), ...unsafe, startsAt: privateText, localEnd: privateText,
+      subServiceIds: [privateText], target: { raw: privateText }, correlationId: privateText });
+    for (const key of ['previewTargetKind', 'previewTargetSource', 'previewDuration', 'previewDayRelation', 'previewElapsedBucket']) assert.equal(event[key], 'UNKNOWN');
+    for (const key of ['previewOffsetValid', 'previewEndAtMidnight', 'previewSubservicesMatched', 'previewSubservices2xx',
+      'previewSelectedSubserviceCount', 'previewSubserviceSetSize']) assert.equal(event[key], undefined);
+    assert(!JSON.stringify(event).includes(privateText));
+  }
+  for (const [key, max] of [['previewSelectedSubserviceCount', 20], ['previewSubserviceSetSize', 21]]) {
+    for (const value of [-1, max + 1, '1', {}, Infinity, NaN]) assert.equal(sanitizeEvent({ ...base(), [key]: value })[key], undefined);
+    for (const value of [0, max]) assert.equal(sanitizeEvent({ ...base(), [key]: value })[key], value);
+  }
+  assert.equal(sanitizeEvent({ ...base(), get previewDuration() { throw Error(privateText); } }), null);
+});
