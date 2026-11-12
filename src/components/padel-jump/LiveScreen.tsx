@@ -4,6 +4,7 @@ import { createReadonlyRenderer } from './spectator/renderer';
 import logo from '../../assets/logo-hab-compact.svg';
 import { isExhibitionRoute, exhibitionApi } from './exhibition';
 import { racePageUrl } from './race-navigation';
+import { useLkTournamentSession } from '../../utils/useLkTournamentSession';
 import './spectator/spectator.css';
 import './spectator/spectator-ui-extra.css';
 import './spectator/scoreboard.css';
@@ -21,6 +22,9 @@ export function wantsTvStage(search: string, width: number, height: number, exhi
 
 export default function LiveScreen() {
   const root = useRef<HTMLDivElement>(null);
+  // An unattended TV wall must not hit the 5-minute LK idle pause ("Обновить" + blocked
+  // reads). Hold it like an open tournament for as long as this screen is mounted.
+  useLkTournamentSession(true);
   useEffect(() => {
     if (!root.current) return;
     const params = new URLSearchParams(window.location.search);
