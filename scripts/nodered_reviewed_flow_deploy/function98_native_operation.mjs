@@ -68,7 +68,14 @@ export function createFunction98NativeOperation({ stage, root = ROOT, uid = 0, g
       check(value.formatVersion === 4 && value.kind === KIND && value.stage === stage, 'F98_FOREIGN_PARTIAL_LEASE');
       recoverAtomicExclusivePublication(leasePath, protection);
     }
-    return JSON.parse(read(leasePath));
+    const value = JSON.parse(read(leasePath));
+    if (value.formatVersion === 2) check(typeof value.deploymentId === 'string'
+      && /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/.test(value.deploymentId)
+      && typeof value.token === 'string' && value.token.trim().length > 0
+      && ['applying', 'soaking', 'rollback-restart-required'].includes(value.phase)
+      && Number.isSafeInteger(value.acquiredAtMs) && Number.isSafeInteger(value.expiresAtMs)
+      && value.expiresAtMs > value.acquiredAtMs && hex(value.sourceSha256) && hex(value.candidateSha256), 'F98_FOREIGN_LEASE_INVALID');
+    return value;
   };
   const writeLease = value => atomicWrite(leasePath, bytes(value), { uid, gid });
   const target = expected => {

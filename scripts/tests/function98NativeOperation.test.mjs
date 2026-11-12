@@ -65,17 +65,19 @@ test('custody reserves exact source, forwards one candidate and releases only af
 });
 
 test('expired matching v2 handoff is durable; active, mismatched, MAX and unknown leases are retained', async t => {
-  for (const variant of ['active', 'mismatched', 'MAX', 'unknown', 'matching']) {
-    const f = await fixture(t), value = { formatVersion: 2, phase: 'soaking', acquiredAtMs: f.now() - 10000,
+  for (const variant of ['active', 'mismatched', 'MAX', 'unknown', 'malformed', 'matching']) {
+    const f = await fixture(t), value = { formatVersion: 2, deploymentId: 'completed-prior', token: 'synthetic-prior-token',
+      phase: 'soaking', acquiredAtMs: f.now() - 10000, sourceSha256: 'a'.repeat(64),
       expiresAtMs: f.now() - 1000, candidateSha256: sha256(fs.readFileSync(f.live)) };
     if (variant === 'active') value.expiresAtMs = f.now() + 1000;
     if (variant === 'mismatched') value.candidateSha256 = '0'.repeat(64);
     if (variant === 'MAX') Object.assign(value, { formatVersion: 3, kind: 'editor-modified-nodes' });
     if (variant === 'unknown') value.formatVersion = 99;
+    if (variant === 'malformed') delete value.token;
     const before = JSON.stringify(value); fs.writeFileSync(f.lease, before, { mode: 0o600 });
     if (variant === 'matching') {
       await f.reserve(); assert.equal(fs.readFileSync(path.join(f.stage, 'predecessor.lease.json'), 'utf8'), before);
-    } else { await assert.rejects(f.reserve(), /EXISTING_LEASE/); assert.equal(fs.readFileSync(f.lease, 'utf8'), before); }
+    } else { await assert.rejects(f.reserve(), /EXISTING_LEASE|FOREIGN_LEASE_INVALID/); assert.equal(fs.readFileSync(f.lease, 'utf8'), before); }
   }
 });
 
