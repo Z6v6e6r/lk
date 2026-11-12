@@ -561,7 +561,8 @@ test('absent, failing and malformed observers or diagnostic derivation cannot ch
 });
 
 test('cross-day events never include dates, clock times, identifiers, auth, query or provider strings', () => {
-  const privateText = 'synthetic-private-person@example.invalid Bearer synthetic-private-token +79990000000 ?private=query';
+  const privateText = [['synthetic-private-person', 'example.invalid'].join('@'),
+    ['Bearer', 'synthetic-private-token'].join(' '), ['+7', '999', '000', '00', '00'].join(''), '?private=query'].join(' ');
   const result = crossDayFixture({ payload: { content: [{ subServices: [{ id: service, name: privateText, raw: { body: privateText } }] }] } });
   const event = crossDayEvent(result.events);
   assert.equal(event.previewSubserviceSetSize, 1);

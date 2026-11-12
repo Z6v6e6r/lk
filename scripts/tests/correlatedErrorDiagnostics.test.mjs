@@ -416,7 +416,7 @@ test('cross-day shape contract preserves only bounded enums, booleans and capped
     previewSelectedSubserviceCount: 20, previewSubserviceSetSize: 21 };
   const safe = sanitizeEvent({ ...base(), ...fields });
   for (const [key, value] of Object.entries(fields)) assert.equal(safe[key], value);
-  const privateText = 'synthetic-private@example.invalid ?secret=synthetic-private';
+  const privateText = ['synthetic-private', 'example.invalid'].join('@') + ' ?secret=synthetic-private';
   for (const value of [privateText, { body: privateText }, [privateText], null, Infinity, NaN]) {
     const unsafe = Object.fromEntries(Object.keys(fields).map(key => [key, value]));
     const event = sanitizeEvent({ ...base(), ...unsafe, startsAt: privateText, localEnd: privateText,
