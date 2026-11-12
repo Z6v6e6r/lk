@@ -9,9 +9,10 @@ const read = name => fs.readFileSync(new URL('../nodered_games_nodes/fn_tourname
 // The source-only composer retains its reviewed preimage. Current annual-runtime
 // successors must not silently widen this independent monthly release contract.
 const frozenAtomic = execFileSync('git', ['show', '45a287a63c595ba86cf19a999e177f4780f80f49:scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js'], { encoding: 'utf8' });
+const frozenPurchaseRouter = execFileSync('git', ['show', 'f166b3cb74459e68dc0322304fab3c0b5f61f9c7:scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js'], { encoding: 'utf8' });
 const fixture = () => {
   const z = 'fixture-subscriptions', fn = (name, outputs, wires) => ({ id: ids[name], type: 'function', z, outputs, wires,
-    func: name === 'atomic' ? frozenAtomic : read(name), name: 'fixture-' + name });
+    func: name === 'atomic' ? frozenAtomic : name === 'purchase_router' ? frozenPurchaseRouter : read(name), name: 'fixture-' + name });
   return [
     { id: z, type: 'tab', label: 'Fixture subscriptions' },
     fn('status_response', 3, [[ids.response],[],[]]), fn('purchase_limit', 3, [[ids.http],[ids.response],[]]),
@@ -77,5 +78,13 @@ test('frozen monthly custody composer refuses the new annual release successor',
   flow.find(n => n.id === ids.atomic).func = read('piter_atomic_router');
   const before = structuredClone(flow);
   assert.throws(() => compose(flow), /MONTHLY_SOURCE_PREIMAGE_DRIFT:atomic/);
+  assert.deepEqual(flow, before);
+});
+
+test('frozen monthly custody composer refuses the unbound diagnostic successor', () => {
+  const flow = fixture();
+  flow.find(n => n.id === ids.purchase_router).func = read('purchase_router');
+  const before = structuredClone(flow);
+  assert.throws(() => compose(flow), /MONTHLY_SOURCE_PREIMAGE_DRIFT:purchase_router/);
   assert.deepEqual(flow, before);
 });
