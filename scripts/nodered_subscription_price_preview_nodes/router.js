@@ -192,7 +192,8 @@ if (ctx.step === 'groupExercise') {
       try {
         const own = (object, key) => {
           const prototype = Object.getPrototypeOf(object);
-          if (prototype !== Object.prototype && prototype !== null) throw 0;
+          // Plain Node-RED messages can originate outside this function's VM.
+          if (prototype !== null && Object.getPrototypeOf(prototype) !== null) throw 0;
           const descriptor = Object.getOwnPropertyDescriptor(object, key);
           if (!descriptor) return undefined;
           if (!Object.hasOwn(descriptor, 'value')) throw 0;

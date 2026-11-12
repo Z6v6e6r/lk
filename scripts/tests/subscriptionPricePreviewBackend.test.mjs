@@ -133,7 +133,10 @@ function targetTimeDiagnostic(changes = {}, options = {}) {
       eventCategory: options.category ?? 'GROUP_TRAINING', exerciseId, target: {},
       startedAt: options.entered ?? futureClock - 100, ...options.context } };
   const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
-  const outputs = new Function('msg', 'canonical', 'global', 'node', 'Date', source('router'))(msg, canonical, globals,
+  const args = ['msg', 'canonical', 'global', 'node', 'Date'];
+  const router = options.foreignRealm ? vm.compileFunction(source('router'), args, { parsingContext: vm.createContext({}) })
+    : new Function(...args, source('router'));
+  const outputs = router(msg, canonical, globals,
     { log: options.log ?? (text => info.push(JSON.parse(text))) }, Clock);
   const ctx = msg._subscriptionPricePreview;
   if (outputs[4]) new Function('msg', 'global', 'Date', source('final'))(msg, globals, Clock);
@@ -224,6 +227,13 @@ test('target_not_future diagnostic failures and unsafe aliases cannot change the
   const exercise = { timeFrom: new Date(futureClock - 1).toISOString(), get fromTime() { reads++; throw Error('fixture-sensitive'); } };
   new Function('exercise', 'ctx', 'start', 'node', source.slice(begin, end))(exercise, { startedAt: futureClock - 100 }, futureClock - 1, { log: s => logs.push(JSON.parse(s)) });
   assert.equal(reads, 0); assert.equal(logs[0].factsFailed, true);
+});
+test('target_not_future accepts plain provider and context objects from outside the function VM', () => {
+  const result = targetTimeDiagnostic({}, { foreignRealm: true });
+  assert.equal(result.msg.statusCode, 503);
+  assert.equal(timeEvent(result).factsFailed, false);
+  assert.equal(timeEvent(result).startRelation, 'CROSSED_DURING_REQUEST');
+  assert.equal(timeEvent(result).startAlias, 'TIME_FROM');
 });
 
 test('exercise diagnostics identify the first failed guard without changing the 503 contract', () => {
