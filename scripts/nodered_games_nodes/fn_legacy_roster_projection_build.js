@@ -1,3 +1,11 @@
+// Optional failure observer; its absence/failure cannot alter the roster operation.
+const lkDiagnosticFailure = (statusCode, code) => {
+  try {
+    if (statusCode !== 503 || msg.req?.method !== "POST" || msg.req.path !== "/lk/subscription-bookings") return;
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    global.get("lkDiagnostics")?.observe(msg, "roster_projection_build", { code, httpStatus: statusCode, sourceHash: "a55ba88590866f93e7ebc7b432a00435acf022f463a1c8b6bd007f374e0e13b0" });
+  } catch { /* Observability cannot alter business execution. */ }
+};
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const asArray = (value) => Array.isArray(value) ? value : [];
 const toStr = (value) => {
@@ -17,6 +25,7 @@ const ctx = isObj(msg._legacyRosterBridge) ? msg._legacyRosterBridge : null;
 const projection = isObj(msg._legacyRosterProjection) ? msg._legacyRosterProjection : null;
 const paymentEvidence = isObj(msg._legacyPaymentEvidence) ? msg._legacyPaymentEvidence : null;
 const fail = (statusCode, code, error) => {
+  lkDiagnosticFailure(statusCode, code);
   msg.statusCode = statusCode;
   msg.headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" };
   msg.payload = { code, error };
