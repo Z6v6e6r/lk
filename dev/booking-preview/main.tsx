@@ -2,7 +2,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useEffect, useState } from 'react';
 import './preview.css';
 import { readMatrixSettings, type SubscriptionPlan } from './paymentMatrix';
-import { PREVIEW_RESIDENCY_PRICE } from './bookingCheckout';
+import { PREVIEW_BOOST_PRICE, PREVIEW_RESIDENCY_PRICE } from './bookingCheckout';
 import { DAILY_USAGE, SUBSCRIPTION_PLANS, type DailyUsage } from './privilegeRules';
 import { readPreviewStage, type PreviewStage } from './previewStage';
 import { settingsSummary } from './settingsSummary';
@@ -46,6 +46,7 @@ function Preview() {
   const [passFits, setPassFits] = useState(matrix.applicability.pass);
   const [passRemaining, setPassRemaining] = useState(params.get('passRemaining') ?? '3');
   const [residencyPrice, setResidencyPrice] = useState(params.get('residencyPrice') ?? String(PREVIEW_RESIDENCY_PRICE));
+  const [boostPrice, setBoostPrice] = useState(params.get('boostPrice') ?? String(PREVIEW_BOOST_PRICE));
   const boostAllowed = stage === 'full' && (subscription || residency);
   const standardTournament = (screen === 'tournament-booking' || screen === 'tournament-join') && groupCategory !== 'pro';
   const hasPro = subscription && (subscriptionPlan === 'ra' || subscriptionPlan === 'friendship-2');
@@ -53,7 +54,7 @@ function Preview() {
   const query = new URLSearchParams({ stage, screen, state, width, subscription: subscription ? '1' : '0', residency: residency ? '1' : '0', pass: pass ? '1' : '0',
     boost: boost && boostAllowed ? '1' : '0', subscriptionFits: '1', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota,
     activeLimitExceeded: activeLimitExceeded ? '1' : '0', dailyUsage, proQuotaUsed: proQuotaUsed ? '1' : '0',
-    groupCategory, friendsTournament: friendsTournament ? '1' : '0', residencyPrice, raFits: '1', passRemaining });
+    groupCategory, friendsTournament: friendsTournament ? '1' : '0', residencyPrice, boostPrice, raFits: '1', passRemaining });
   const frameUrl = `${import.meta.env.BASE_URL}dev/booking-preview/frame.html?${query}&reset=${revision}`;
   const serialized = query.toString();
   const summary = settingsSummary(query);
@@ -154,6 +155,7 @@ function Preview() {
           </fieldset>
           {stage === 'full' && <fieldset className="preview-product preview-product--boost"><legend>4. РАбуста</legend>
             <label className="preview-check"><input type="checkbox" checked={boost && boostAllowed} disabled={!boostAllowed} onChange={event => setBoost(event.target.checked)} />Есть Буст</label>
+            <label className="preview-field">Стоимость РАбуста, ₽<input type="number" min="0" step="0.01" value={boostPrice} onChange={event => setBoostPrice(event.target.value)} /></label>
             <p>{!boostAllowed ? 'Нужны действующее Резидентство или любая подписка.' : !subscription ? 'С Резидентством — условия РА: 1 час игры или одно событие в день. ПРО не входит.' : subscriptionPlan === 'friendship-2' ? '2 часа игры + тренировка, турнир или ПРО. ПРО — не более 1 события в общем дневном лимите.' : subscriptionPlan === 'ra' ? '2 часа игры или два события, включая игру 1 час + тренировку / турнир. ПРО входит в общий лимит — не более 1 в день.' : '2 часа игры или две тренировки / турнира, либо игра 1 час + тренировка / турнир. ПРО не входит.'}</p>
             {boost && boostAllowed && <label className="preview-field">Уже использовано сегодня<select value={dailyUsage} onChange={event => changeDailyUsage(event.target.value as DailyUsage)}>{DAILY_USAGE.filter(usage => hasPro || !('pro' in usage) || usage.id === dailyUsage).map(usage => <option key={usage.id} value={usage.id}>{usage.name}</option>)}</select></label>}
           </fieldset>}

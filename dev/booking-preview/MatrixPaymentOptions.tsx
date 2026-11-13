@@ -3,11 +3,14 @@ import { Modal } from '../../src/components/UI/Modal';
 import { AuthForm } from '../../src/components/auth/AuthForm';
 import { useAuth } from './auth';
 import { buildBookingPaymentOptions, formatRubles, readMatrixSettings, SERVICES, type GamePaymentScope, type PaymentKind, type PaymentOption, type ServiceKind } from './paymentMatrix';
-import { bookingButtonText, combineResidencyBoost, combineSubscriptionBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutResidencyForSubscribers, type PreviewOrder } from './bookingCheckout';
+import { bookingButtonText, combineResidencyBoost, combineSubscriptionBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readBoostPrice, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutResidencyForSubscribers, type PreviewOrder } from './bookingCheckout';
 import { recommendedSubscriptionChoice, subscriptionPurchaseChoices, type SubscriptionOffer } from './subscriptionOffers';
 import { SUBSCRIPTION_PLANS } from './privilegeRules';
 import { SubscriptionPurchaseOffer } from './SubscriptionPurchaseOffer';
 import { ResidencyPurchaseOffer } from './ResidencyPurchaseOffer';
+import { BoostPurchaseOffer } from './BoostPurchaseOffer';
+import { boostPurchaseOption } from './boostOffers';
+import { readPreviewStage } from './previewStage';
 import './matrix.css';
 
 function PaymentIcon({ kind }: { kind: PaymentKind }) {
@@ -29,7 +32,9 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const params = new URLSearchParams(location.search);
   const settings = readMatrixSettings(params);
   const residencyPrice = readResidencyPrice(params);
+  const boostPrice = readBoostPrice(params);
   const [purchasedResidency, setPurchasedResidency] = useState(false);
+  const [purchasedBoost, setPurchasedBoost] = useState(false);
   const [purchasedSubscription, setPurchasedSubscription] = useState<SubscriptionOffer | null>(null);
   const [passRemaining, setPassRemaining] = useState(settings.profile.pass ? readPassRemaining(params) : 0);
   const [passVisitDebited, setPassVisitDebited] = useState(false);
@@ -38,7 +43,8 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const applicability = { subscription: purchasedSubscription ? true : settings.applicability.subscription, pass: settings.applicability.pass };
   const excludedGroup = service === 'training' && (excludesPrivileges || settings.excludedGroups);
   const duration = durationMinutes ?? SERVICES[service].durationMinutes;
-  const paymentContext = { ...settings, subscriptionPlan: purchasedSubscription?.plan || settings.subscriptionPlan, excludedGroups: excludedGroup, durationMinutes: duration };
+  const hasBoost = readPreviewStage(params) === 'full' && (settings.boost || purchasedBoost) && (profile.residency || profile.subscription);
+  const paymentContext = { ...settings, boost: hasBoost, subscriptionPlan: purchasedSubscription?.plan || settings.subscriptionPlan, excludedGroups: excludedGroup, durationMinutes: duration };
   const isWholeCourt = service === 'game' && gamePaymentScope === 'court';
   const isPersonalGame = service === 'game' && gamePaymentScope === 'quarter';
   const subscriptionChoices = subscriptionPurchaseChoices(service, paymentContext, gamePaymentScope, courtAmount);
@@ -50,7 +56,9 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const rawPaymentOptions = withPassBalance(buildBookingPaymentOptions(service, profile, applicability, paymentContext, gamePaymentScope, courtAmount), passRemaining)
     .flatMap(option => option.kind === 'subscription' && !profile.subscription ? subscriptionPurchaseOption ? [subscriptionPurchaseOption] : [] : [option]);
   const paymentOptions = withoutResidencyForSubscribers(combineResidencyBoost(combineSubscriptionBoost(rawPaymentOptions, profile), profile), profile);
-  const options = isPersonalGame ? withPersonalSubscription(paymentOptions, profile.subscription) : paymentOptions;
+  const boostOffer = boostPurchaseOption(service, profile, applicability, paymentContext, readPreviewStage(params), gamePaymentScope, courtAmount);
+  const allOptions = boostOffer ? [...paymentOptions, boostOffer] : paymentOptions;
+  const options = isPersonalGame ? withPersonalSubscription(allOptions, profile.subscription) : allOptions;
   const available = options.filter(isSelectableMethod);
   const defaultChoice = defaultPaymentOption(options);
   const [selected, setSelected] = useState<PaymentKind>(defaultChoice?.kind || 'full');
@@ -60,6 +68,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const [checkoutSubscription, setCheckoutSubscription] = useState<SubscriptionOffer | null>(null);
   const [paidOrder, setPaidOrder] = useState<PreviewOrder | null>(null);
   const [subscriptionOfferOpen, setSubscriptionOfferOpen] = useState(false);
+  const [boostOfferOpen, setBoostOfferOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [registered, setRegistered] = useState(params.get('state') === 'registered');
   const [busy, setBusy] = useState(false);
@@ -68,7 +77,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const groupId = useId();
   const price = SERVICES[service];
   const full = params.get('state') === 'full';
-  const combinedSubscription = available.find(option => option.withSubscription);
+  const combinedSubscription = available.find(option => option.withSubscription && option.mode === 'book');
   const selectedKind = (selected === 'boost' || selected === 'subscription') && combinedSubscription ? combinedSubscription.kind : selected;
   const choice = available.find(option => option.kind === selectedKind) || defaultChoice;
   const locked = disabled || full || busy;
@@ -101,6 +110,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     if (option.reason === 'unknown-price') return 'Стоимость корта уточняется';
     if (option.reason === 'unknown-duration') return 'Нужно уточнить длительность события';
     if (option.mode === 'unavailable') return option.kind === 'subscription' ? 'Тариф подписки не подходит к этому событию' : 'Нет подходящего абонемента с доступными посещениями';
+    if (option.kind === 'boost' && option.mode === 'offer') return `При оформлении РАбуста${boostPrice != null ? ` за ${formatRubles(boostPrice)}` : ' · цена уточняется'}. ${option.benefit === 'partial-hour' ? `${option.freeMinutes} мин бесплатно · доплата за ${option.paidMinutes} мин со скидкой 30%` : option.amount === 0 ? 'Участие бесплатно в пределах дневного лимита' : `Скидка ${price.discount}% на участие`}`;
     if (option.kind === 'full') return isWholeCourt ? 'Оплата всего корта без применения льгот' : isPersonalGame ? 'Оплачиваете только своё участие, остальные игроки — своё' : 'Разовая запись без привилегий';
     if (option.kind === 'residency') return option.mode === 'offer' ? `Скидка ${price.discount}% при оформлении Резидентства` : `Скидка ${price.discount}%`;
     if (option.withResidency && (option.benefit === 'free-hour' || option.benefit === 'free-event')) return 'Дневной лимит РАбуста доступен';
@@ -128,6 +138,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     if (choice.mode === 'offer') {
       if (choice.kind === 'residency') setResidencyOfferOpen(true);
       else if (choice.kind === 'subscription') setSubscriptionOfferOpen(true);
+      else if (choice.kind === 'boost') setBoostOfferOpen(true);
       return;
     }
     const order = createPreviewOrder(choice);
@@ -155,14 +166,23 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     setResidencyOfferOpen(false);
     startCheckout(order, choice);
   };
+  const addBoost = () => {
+    if (locked || registered || !isAuthenticated || hasBoost || !boostOffer || choice?.kind !== 'boost' || choice.mode !== 'offer') return;
+    const order = createPreviewOrder(boostOffer, null, null, boostPrice);
+    if (!order) return;
+    setBoostOfferOpen(false);
+    startCheckout(order, boostOffer);
+  };
   const completePayment = async () => {
     if (locked || !checkout || !checkoutOption || registered || !isAuthenticated || (checkout.product === 'subscription' && !checkoutSubscription)) return;
+    if (checkout.product === 'boost' && (hasBoost || (!profile.residency && !profile.subscription) || readPreviewStage(params) !== 'full')) return;
     setBusy(true);
     await new Promise(resolve => setTimeout(resolve, 300));
     setPaidOrder(checkout);
     setSubmittedOption(checkoutOption);
     if (checkout.product === 'subscription') setPurchasedSubscription(checkoutSubscription);
     if (checkout.product === 'residency') setPurchasedResidency(true);
+    if (checkout.product === 'boost') setPurchasedBoost(true);
     setCheckout(null);
     setRegistered(true);
     setBusy(false);
@@ -173,11 +193,11 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     </header>
     {registered ? <div className="matrix-success" role="status">
       <strong>Вы записаны</strong><p>{submittedOption?.kind === 'pass' ? `Энергия 5 · списана 1 тренировка · ${passBalanceText(passRemaining)}` : submittedOption ? `${title(submittedOption)}${submittedOption.amount != null ? ` · ${amount(submittedOption)}` : ''}` : 'Место за вами. Детали записи доступны в личном кабинете.'}</p>
-      {paidOrder && <p>Оплачено {formatRubles(paidOrder.total)}{paidOrder.product === 'residency' ? ` · запись ${formatRubles(paidOrder.bookingAmount)} + Резидентство ${formatRubles(paidOrder.productAmount)}` : ''}</p>}
+      {paidOrder && <p>Оплачено {formatRubles(paidOrder.total)}{paidOrder.product === 'residency' || paidOrder.product === 'boost' ? ` · запись ${formatRubles(paidOrder.bookingAmount)} + ${paidOrder.product === 'boost' ? 'РАбуста' : 'Резидентство'} ${formatRubles(paidOrder.productAmount)}` : ''}</p>}
       <button type="button" onClick={() => { if (passVisitDebited) setPassRemaining(value => Math.min(5, value + 1)); setPassVisitDebited(false); setRegistered(false); setSubmittedOption(null); setPaidOrder(null); }}>Отменить запись</button>
     </div> : checkout ? <div className="matrix-checkout" aria-label="Оплата выбранного варианта">
       <dl className="matrix-order-lines"><div><dt>{price.name}</dt><dd>{formatRubles(checkout.bookingAmount)}</dd></div>
-        {checkout.product && <div><dt>{checkout.product === 'residency' ? 'Резидентство' : `Подписка ${checkoutSubscription?.name || ''}`}</dt><dd>{formatRubles(checkout.productAmount)}</dd></div>}
+        {checkout.product && <div><dt>{checkout.product === 'residency' ? 'Резидентство' : checkout.product === 'boost' ? 'РАбуста' : `Подписка ${checkoutSubscription?.name || ''}`}</dt><dd>{formatRubles(checkout.productAmount)}</dd></div>}
         <div className="matrix-order-total"><dt>Итого к оплате</dt><dd>{formatRubles(checkout.total)}</dd></div></dl>
       <button type="button" className="matrix-confirm" disabled={locked} onClick={() => void completePayment()}>{busy ? 'Подтверждаем оплату…' : `Оплатить ${formatRubles(checkout.total)}`}</button>
       <button type="button" className="matrix-back" disabled={busy} onClick={() => setCheckout(null)}>Вернуться к выбору оплаты</button>
@@ -212,6 +232,10 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     <Modal isOpen={residencyOfferOpen} onClose={() => setResidencyOfferOpen(false)} title="Добавьте Резидентство" variant="fullscreen" bodyClassName="matrix-purchase-modal">
       <ResidencyPurchaseOffer option={choice} residencyPrice={residencyPrice} referenceAmount={referenceAmount}
         eventDescription={`${price.name} · ${duration} мин${isPersonalGame ? ' · моя доля ¼' : ''}`} disabled={locked} onContinue={addResidency} />
+    </Modal>
+    <Modal isOpen={boostOfferOpen} onClose={() => setBoostOfferOpen(false)} title="Добавьте РАбуста" variant="fullscreen" bodyClassName="matrix-purchase-modal">
+      <BoostPurchaseOffer option={boostOffer} boostPrice={boostPrice} profile={profile} plan={paymentContext.subscriptionPlan}
+        eventDescription={`${price.name} · ${duration} мин${isPersonalGame ? ' · моя доля ¼' : ''}`} disabled={locked || hasBoost || !boostOffer} onContinue={addBoost} />
     </Modal>
     <Modal isOpen={loginOpen && !isAuthenticated} onClose={() => setLoginOpen(false)} title="Вход для записи" variant="dialog"><AuthForm onLogin={() => setLoginOpen(false)} /></Modal>
   </section>;

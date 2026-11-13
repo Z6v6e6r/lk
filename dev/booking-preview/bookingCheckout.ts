@@ -1,7 +1,8 @@
 import { formatRubles, type PaymentKind, type PaymentOption, type Privileges } from './paymentMatrix.ts';
 
 export const PREVIEW_RESIDENCY_PRICE = 790;
-export type PreviewOrder = { method: PaymentKind; bookingAmount: number; product: 'residency' | 'subscription' | null; productAmount: number; total: number };
+export const PREVIEW_BOOST_PRICE = 8800;
+export type PreviewOrder = { method: PaymentKind; bookingAmount: number; product: 'residency' | 'subscription' | 'boost' | null; productAmount: number; total: number };
 
 export function isSelectableMethod(option: PaymentOption) {
   if (option.kind === 'pass') return option.mode === 'book';
@@ -79,12 +80,12 @@ export function bookingButtonText(option: PaymentOption | undefined) {
 }
 
 // Synthetic order only. No booking, payment link or entitlement API is called.
-export function createPreviewOrder(option: PaymentOption, residencyPrice: number | null = null, subscriptionPrice: number | null = null): PreviewOrder | null {
+export function createPreviewOrder(option: PaymentOption, residencyPrice: number | null = null, subscriptionPrice: number | null = null, boostPrice: number | null = null): PreviewOrder | null {
   if (!isSelectableMethod(option)) return null;
   if (option.kind === 'pass') return { method: 'pass', bookingAmount: 0, product: null, productAmount: 0, total: 0 };
   if (option.amount == null || !Number.isFinite(option.amount) || option.amount < 0) return null;
-  const product = option.mode === 'offer' && (option.kind === 'residency' || option.kind === 'subscription') ? option.kind : null;
-  const productPrice = product === 'residency' ? residencyPrice : product === 'subscription' ? subscriptionPrice : 0;
+  const product = option.mode === 'offer' && (option.kind === 'residency' || option.kind === 'subscription' || option.kind === 'boost') ? option.kind : null;
+  const productPrice = product === 'residency' ? residencyPrice : product === 'subscription' ? subscriptionPrice : product === 'boost' ? boostPrice : 0;
   if (product && (productPrice == null || !Number.isFinite(productPrice) || productPrice <= 0)) return null;
   const bookingAmount = Math.round(option.amount * 100) / 100;
   const productAmount = product ? Math.round(productPrice! * 100) / 100 : 0;
@@ -114,8 +115,16 @@ export function withPassBalance(options: PaymentOption[], remaining: number): Pa
 }
 
 export function readResidencyPrice(params: URLSearchParams): number | null {
-  const value = params.get('residencyPrice');
-  if (value === null) return PREVIEW_RESIDENCY_PRICE;
+  return readProductPrice(params, 'residencyPrice', PREVIEW_RESIDENCY_PRICE);
+}
+
+export function readBoostPrice(params: URLSearchParams): number | null {
+  return readProductPrice(params, 'boostPrice', PREVIEW_BOOST_PRICE);
+}
+
+function readProductPrice(params: URLSearchParams, key: string, fallback: number): number | null {
+  const value = params.get(key);
+  if (value === null) return fallback;
   if (!value?.trim()) return null;
   const amount = Number(value);
   const rounded = Math.round(amount * 100) / 100;
