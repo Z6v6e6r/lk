@@ -75,6 +75,10 @@ export async function createLk1LiveGatewayGuard({
   if (!/^[a-f0-9]{64}$/.test(expectedFlowSha) || !/^[a-f0-9]{64}$/.test(expectedBindingSha || '')) {
     throw new Lk1LiveGatewayError('LIVE_GATEWAY_BINDING_INVALID');
   }
+  // Native modified-nodes deployments can persist an approved flow after PM2
+  // started. Attest that exact generation through two authenticated active-flow
+  // reads below, then keep its disk timestamp fixed for this guard's lifetime.
+  let expectedMtimeMs = null;
   function snapshot() {
     let bytes, flow, stat;
     try {
@@ -82,7 +86,9 @@ export async function createLk1LiveGatewayGuard({
       flow = JSON.parse(bytes);
       stat = fs.statSync(flowPath);
     } catch { return { state: 'DRIFT' }; }
-    if (!Array.isArray(flow) || sha(bytes) !== expectedFlowSha) return { state: 'DRIFT' };
+    if (!Array.isArray(flow) || sha(bytes) !== expectedFlowSha
+      || !Number.isFinite(stat.mtimeMs) || stat.mtimeMs < 0 || stat.mtimeMs > Date.now()
+      || (expectedMtimeMs !== null && stat.mtimeMs !== expectedMtimeMs)) return { state: 'DRIFT' };
     const gateway = flow.filter(node => node?.id === 'lk_subscription_booking_router_20260804');
     if (gateway.length !== 1 || gateway[0].type !== 'function'
       || sha(gateway[0].func || '') !== expectedGatewaySha) return { state: 'DRIFT' };
@@ -96,15 +102,15 @@ export async function createLk1LiveGatewayGuard({
       || nodeRed.pid <= 0 || !Number.isSafeInteger(nodeRed.pm2_env.pm_uptime)
       || !Number.isSafeInteger(nodeRed.pm2_env.restart_time)
       || Date.now() - nodeRed.pm2_env.pm_uptime < 30_000) return { state: 'RESTART_PENDING' };
-    if (stat.mtimeMs > nodeRed.pm2_env.pm_uptime
-      || lk1VivaBinding(nodeRed)?.sha256 !== expectedBindingSha) return { state: 'DRIFT' };
+    if (lk1VivaBinding(nodeRed)?.sha256 !== expectedBindingSha) return { state: 'DRIFT' };
     return { state: 'ONLINE', pid: nodeRed.pid, uptime: nodeRed.pm2_env.pm_uptime,
-      restart: nodeRed.pm2_env.restart_time, flow };
+      restart: nodeRed.pm2_env.restart_time, mtimeMs: stat.mtimeMs, flow };
   }
 
   const initial = snapshot();
   if (initial.state !== 'ONLINE') throw new Lk1LiveGatewayError(
     initial.state === 'DRIFT' ? 'LIVE_GATEWAY_DRIFT' : 'LIVE_GATEWAY_RESTART_PENDING');
+  expectedMtimeMs = initial.mtimeMs;
   const token = await readAdminToken(adminTokenFile);
   const activeFlowFailure = () => {
     const current = snapshot();
