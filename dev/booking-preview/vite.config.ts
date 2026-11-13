@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import { transformPreviewNavigation, transformPreviewPayments } from './previewTransform';
+import { transformPreviewFriendlyLabel, transformPreviewNavigation, transformPreviewPayments } from './previewTransform';
 import { hostedPreviewConfig, writeHostedPreview } from './hostedPreview';
 
 const directory = dirname(fileURLToPath(import.meta.url));
@@ -35,7 +35,7 @@ function previewApis(): Plugin {
     transform(source, id) {
       const path = id.split('?')[0];
       if (!path.includes('/src/') || !/\.tsx?$/.test(path)) return null;
-      return transformPreviewNavigation(transformPreviewPayments(source, basename(path)) || source, basename(path));
+      return transformPreviewNavigation(transformPreviewFriendlyLabel(transformPreviewPayments(source, basename(path)) || source, basename(path)), basename(path));
     },
     load(id) {
       if (!id.startsWith('\0booking-preview:')) return null;

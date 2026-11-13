@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { transformPreviewPayments } from './previewTransform.ts';
+import { transformPreviewFriendlyLabel, transformPreviewPayments } from './previewTransform.ts';
 
 for (const [path, count] of [['games/GamesPage.tsx', 2], ['group-schedule/GroupSchedulePage.tsx', 1], ['tournament-signup/TournamentSignupPage.tsx', 1]] as const) {
   test(`preview replaces only the checkout regions in ${path}`, () => {
@@ -34,4 +34,20 @@ for (const [path, count] of [['games/GamesPage.tsx', 2], ['group-schedule/GroupS
 test('source drift fails the preview build instead of silently mixing two payment interfaces', () => {
   assert.throws(() => transformPreviewPayments('<div />', 'GamesPage.tsx'), /checkout regions changed/);
   assert.equal(transformPreviewPayments('<div />', 'Unrelated.tsx'), null);
+});
+
+test('preview changes only the friendly badge label, preserving source and navigation', () => {
+  const path = new URL('../../src/components/games/FindGamePage.tsx', import.meta.url);
+  const original = readFileSync(path, 'utf8');
+  const result = transformPreviewFriendlyLabel(original, 'FindGamePage.tsx');
+  assert.equal(result, original.replace('const FRIENDLY_TAG_LABEL = "Лето.Падел";', 'const FRIENDLY_TAG_LABEL = "РА";'));
+  assert.equal(transformPreviewFriendlyLabel(result, 'FindGamePage.tsx'), result);
+  assert.equal(readFileSync(path, 'utf8'), original);
+  assert.equal(transformPreviewFriendlyLabel(original, 'Unrelated.tsx'), original);
+});
+
+test('friendly label drift stops the preview build', () => {
+  for (const source of ['const label = "Лето.Падел";', 'const FRIENDLY_TAG_LABEL = "Другой продукт";', 'const FRIENDLY_TAG_LABEL = computeLabel();']) {
+    assert.throws(() => transformPreviewFriendlyLabel(source, 'FindGamePage.tsx'), /friendly label changed/);
+  }
 });

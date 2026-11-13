@@ -1,5 +1,24 @@
 import ts from 'typescript';
 
+export function transformPreviewFriendlyLabel(source: string, filename: string) {
+  if (filename !== 'FindGamePage.tsx') return source;
+  const file = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const labels: ts.StringLiteral[] = [];
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'FRIENDLY_TAG_LABEL') {
+      if (!node.initializer || !ts.isStringLiteral(node.initializer) || !['Лето.Падел', 'РА'].includes(node.initializer.text)) {
+        throw new Error('Booking preview friendly label changed in FindGamePage.tsx');
+      }
+      labels.push(node.initializer);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  if (labels.length !== 1) throw new Error('Booking preview friendly label changed in FindGamePage.tsx');
+  const label = labels[0];
+  return source.slice(0, label.getStart(file)) + JSON.stringify('РА') + source.slice(label.end);
+}
+
 export function transformPreviewNavigation(source: string, filename: string) {
   const file = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const replacements: Array<{ start: number; end: number; text: string }> = [];
