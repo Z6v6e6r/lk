@@ -12,6 +12,7 @@ import {
 import { PAYMENT_NODE_IDS } from "../patch_live_game_payment_confirmation.mjs";
 import { applyPaginationEdits, subscriptionBookingPaginationEdits } from "../prepare_subscription_booking_pagination.mjs";
 import { PATRIOTS_PREIMAGE } from "../patch_live_lk1_patriots_friendship.mjs";
+import { applyReconciledEdits, timeoutPreservationEdits } from "../prepare_reconciled_cancellation_recovery.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -23,6 +24,12 @@ const observerPins = {
 };
 function frozenBusinessHash(file) {
   let text = fs.readFileSync(file, 'utf8');
+  if (file.endsWith('fn_split_cleanup_router.js')) {
+    // Verify the preservation successor, then recover the frozen release source.
+    // A source-only amendment must never advance an unrecomposed release contract.
+    assert.equal(sha256(text), '3694faa9e4af631e354d485417833996f78fe772a39f71ef4dc6defcc09bc26f', file);
+    text = applyReconciledEdits(text, timeoutPreservationEdits().reverse().map(([before, after]) => [after, before]));
+  }
   if (file.endsWith('fn_subscription_booking_router.js')) {
     // Explicit pagination successor: prove its exact bytes and recover the frozen
     // source. Never advance a historical deployment/rebase contract to new code.

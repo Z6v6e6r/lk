@@ -390,7 +390,7 @@ test("cleanup cannot reuse transaction evidence claimed by another game", () => 
   assert.equal(summary?.blockReason, "payment_evidence_replay");
 });
 
-test("verified UNPAID is the only direct path from transaction readback to booking cancel", () => {
+test("verified UNPAID requires an exact booking read before cancellation options", () => {
   const out = runNodeRedFunction(cleanupRouter, {
     statusCode: 200,
     payload: transaction("UNPAID"),
@@ -398,8 +398,8 @@ test("verified UNPAID is the only direct path from transaction readback to booki
   }) as Array<Record<string, any> | null>;
 
   assert.equal(out[0]?.method, "GET");
-  assert.match(out[0]?.url || "", /\/clients\/client-1\/bookings\/booking-1\/cancel$/);
-  assert.equal(out[0]?._splitCleanupCtx?.step, "cancel_booking_probe");
+  assert.match(out[0]?.url || "", /\/clients\/client-1\/bookings\/booking-1$/);
+  assert.equal(out[0]?._splitCleanupCtx?.step, "preflight_actor_booking");
 });
 
 test("verified UNPAID accepts the real Viva payment booking binding shape", () => {
@@ -421,8 +421,8 @@ test("verified UNPAID accepts the real Viva payment booking binding shape", () =
   }) as Array<Record<string, any> | null>;
 
   assert.equal(out[0]?.method, "GET");
-  assert.match(out[0]?.url || "", /\/clients\/client-1\/bookings\/booking-1\/cancel$/);
-  assert.equal(out[0]?._splitCleanupCtx?.step, "cancel_booking_probe");
+  assert.match(out[0]?.url || "", /\/clients\/client-1\/bookings\/booking-1$/);
+  assert.equal(out[0]?._splitCleanupCtx?.step, "preflight_actor_booking");
 });
 
 test("real Viva binding keys still fail closed when they point to another booking", () => {
@@ -639,7 +639,7 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
     "https://api.vivacrm.ru/api/v1/transactions/transaction-1",
   );
 
-  const cancelProbe = runNodeRedFunction(cleanupRouter, {
+  const bookingRead = runNodeRedFunction(cleanupRouter, {
     ...transactionReadback[0],
     statusCode: 200,
     payload: {
@@ -655,6 +655,15 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
       }],
     },
   }, { globalValues }) as Array<Record<string, any> | null>;
+  assert.equal(bookingRead[0]?.method, "GET");
+  assert.equal(bookingRead[0]?.url,
+    "https://api.vivacrm.ru/api/v1/clients/client-1/bookings/booking-1");
+  assert.equal(bookingRead[0]?._splitCleanupCtx?.step, "preflight_actor_booking");
+  const cancelProbe = runNodeRedFunction(cleanupRouter, {
+    ...bookingRead[0], statusCode: 200,
+    payload: { id: "booking-1", clientId: "client-1", exerciseId: "exercise-real-shape",
+      paymentType: "ON_PLACE", isCancelled: false },
+  }, { globalValues }) as Array<Record<string, any> | null>;
   assert.equal(cancelProbe[0]?.method, "GET");
   assert.equal(
     cancelProbe[0]?.url,
@@ -667,7 +676,6 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
     statusCode: 200,
     payload: {
       cancellationOptions: {
-        money: { available: true },
         cancellationOnly: { available: true },
       },
     },
@@ -735,13 +743,14 @@ test("verified UNPAID fails closed when Viva offers only refund options", () => 
     _splitCleanupCtx: {
       ...cleanupContext("cancel_booking_probe"),
       currentTransactionUnpaidVerified: true,
+      currentTimeoutBookingChecked: true,
     },
   }) as Array<Record<string, any> | null>;
 
   assert.equal(out[0], null);
   const summary = out[2]?.payload || out[3]?.payload;
   assert.equal(summary?.blockLocalMutation, true);
-  assert.equal(summary?.blockReason, "verified_unpaid_cancellation_only_unavailable");
+  assert.equal(summary?.blockReason, "timeout_subscription_return_requires_owner");
   assert.equal(summary?.upstreamMutationsAttempted, 0);
 });
 
@@ -775,15 +784,21 @@ test("WAITING transaction is expired and then read back before cancellation", ()
     payload: transaction("UNPAID"),
   }) as Array<Record<string, any> | null>;
   assert.equal(cancel[0]?.method, "GET");
-  assert.match(cancel[0]?.url || "", /\/bookings\/booking-1\/cancel$/);
+  assert.match(cancel[0]?.url || "", /\/bookings\/booking-1$/);
+  assert.equal(cancel[0]?._splitCleanupCtx?.step, "preflight_actor_booking");
   assert.equal(cancel[0]?._splitCleanupCtx?.currentTransactionUnpaidVerified, true);
 
+  const probe = runNodeRedFunction(cleanupRouter, {
+    ...cancel[0], statusCode: 200,
+    payload: { id: "booking-1", clientId: "client-1", exerciseId: "exercise-1",
+      paymentType: "ON_PLACE", isCancelled: false },
+  }) as Array<Record<string, any> | null>;
+  assert.match(probe[0]?.url || "", /\/bookings\/booking-1\/cancel$/);
   const cancelRequest = runNodeRedFunction(cleanupRouter, {
-    ...cancel[0],
+    ...probe[0],
     statusCode: 200,
     payload: {
       cancellationOptions: {
-        money: { available: true },
         cancellationOnly: { available: true },
       },
     },

@@ -1,6 +1,12 @@
 // A server-owned marker is minted only after the durable no-provider-write
 // refusal. Public error codes alone cannot turn unknown/paid results into409.
-if (ctx?.lk1 && ctx.caller === 'http' && ctx.action === 'book'
+const lk1SplitVisitRefusal = ctx?.caller === 'split' && (ctx.action === undefined || ctx.action === 'book')
+  && ctx.managedAction === 'JOIN_GAME' && msg._splitCtx?.action === 'join'
+  && msg._splitCtx.operationId === ctx.operationId
+  && msg._splitCtx.exerciseId === ctx.exerciseId
+  && msg._splitCtx.clientId === ctx.actorClientId
+  && msg._splitCtx.clientSubscriptionId === ctx.clientSubscriptionId;
+if (ctx?.lk1 && ((ctx.caller === 'http' && ctx.action === 'book') || lk1SplitVisitRefusal)
   && ctx.step === 'lk1_daily_visit_conflict_saved' && responseStatus === 409
   && payload.details?.code === 'LK1_DAILY_VISIT_CHANGED'
   && payload.error === 'Дневное посещение уже занято. Обновите стоимость записи.'

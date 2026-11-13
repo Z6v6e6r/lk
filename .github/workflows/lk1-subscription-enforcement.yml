@@ -396,6 +396,10 @@ jobs:
         id: check_leave_generations
         run: npm run test:leave-generation-regressions
 
+      - name: Rehearse daily guard repair on isolated Mongo replica set
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        run: bash scripts/run_lk1_guard_repair_replica_tests.sh
+
       - name: Run critical subscription regression matrix
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:
@@ -475,6 +479,8 @@ jobs:
           scripts/tests/splitOrdinaryPriceHook.test.mjs
           scripts/tests/splitJoinOrdinaryPriceSource.test.mjs
           scripts/tests/splitPayment.apiClient.test.ts
+          scripts/tests/splitCreateRecovery.test.ts
+          scripts/tests/splitCreateResult.test.mjs
           scripts/tests/gameCreateButtonPreparation.test.mjs
           scripts/tests/gamesBookingLeadTimeSource.test.ts
           scripts/tests/requestTimeout.test.ts
@@ -515,6 +521,11 @@ jobs:
           scripts/tests/lk1FreeCancellation.test.mjs
           scripts/tests/lk1NativeDeployGuard.test.mjs
           scripts/tests/legacyCancellationRecovery.test.mjs
+          scripts/tests/reconciledCancellationRecovery.test.mjs
+          scripts/tests/cancelledVisitRepair.test.mjs
+          scripts/tests/dailyGuardRepair.test.mjs
+          scripts/tests/timeoutSubscriptionPreservation.test.mjs
+          scripts/tests/hungClaimRelease.test.mjs
           scripts/tests/lk1FreeCancellationRuntime.test.mjs
           scripts/tests/friendship2TdzRecovery.test.mjs
           scripts/tests/lk1FreeGateOrder.test.mjs
@@ -629,6 +640,7 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/function98-runtime" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund node-red@4.0.9
           NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/function98NativeRuntime.test.mjs
+          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/splitCreateResultRuntime.test.mjs
 
       - name: Run Partner membership R4 gates
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'

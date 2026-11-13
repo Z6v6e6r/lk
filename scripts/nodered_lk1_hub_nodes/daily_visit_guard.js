@@ -95,7 +95,9 @@ if (ctx.step === "lk1_daily_visit_owner") {
     && ((owner.bookingId && owner.releaseBookingId === owner.bookingId
       && owner.releasedBookingIds?.includes(owner.bookingId))
       || owner.reconciliation?.decision === "SAFE_TO_RELEASE");
-  if (!released) return lk1DailyVisitReject(ctx);
+  if (!released && !(typeof lk1ReconciledVerified === "function" && lk1ReconciledVerified(ctx, owner))) {
+    return lk1DailyVisitReject(ctx);
+  }
   // No timeout/FAILED takeover: a failed owner can still retry its own operation.
   // RELEASED is terminal for that operation ID; a rejoin uses a new ID and CAS.
   ctx.step = "lk1_daily_visit_takeover";
