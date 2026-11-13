@@ -5,18 +5,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import {MAX_OUTBOX_RESUME_TOPOLOGY,sha256} from '../nodered_max_outbox_resume.mjs';
+import {sha256} from '../nodered_max_outbox_resume.mjs';
 import {buildMaxOutboxOnlyInverse,inverseContract} from '../nodered_max_outbox_inverse.mjs';
 import {max_outboxOperationCodeHash} from './max_outbox_native_operation.mjs';
-import { buildExactGraphContract, validateReviewedFlowContract, writeFileExclusiveDurable,
+import { writeFileExclusiveDurable,
   writeFileExclusiveAtomicDurable, recoverAtomicExclusivePublication, atomicWrite, syncDirectory } from './runtime_contract.mjs';
 import { max_outbox_inverseGraphHash, max_outbox_inverseOrderedGraphHash } from './max_outbox_inverse_body_preserver.mjs';
 import { buildMaxOutboxInverseBrowserGuard } from './max_outbox_inverse_browser_guard.mjs';
 
 const ROOT = '/root/.node-red', LEASE = '.padlhub-reviewed-flow-deploy.lease.json';
 const KIND = 'max-outbox-inverse-native-nodes', SOAK = 900000;
-const ALLOWED = MAX_OUTBOX_RESUME_TOPOLOGY.flatMap(r => [{id:r.poller,fields:['d']},{id:r.dispatch,fields:['wires']}]);
-const ADDITIONS = MAX_OUTBOX_RESUME_TOPOLOGY.map(r => r.newSender);
 const hex = s => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s);
 const check = (ok, code) => { if (!ok) throw new Error(code); };
 const bytes = value => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
