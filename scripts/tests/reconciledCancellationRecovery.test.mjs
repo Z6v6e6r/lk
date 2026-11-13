@@ -12,6 +12,8 @@ test('reconciler marker alone is not proof: exact cancelled, closed money and ba
   const f = moneyFixture();
   assert.equal(lk1ReconciledCandidate(f.op), true);
   assert.ok(lk1ReconciledReadback(f.op, f.b, f.tx, f.subscriptions, now));
+  const draft = moneyFixture(); draft.tx.receipts=[{status:'new',type:'SERVICE_SELL',url:null,fnNumber:null,fiscalReceiptNumber:null,fiscalDocumentNumber:null,fiscalDocumentAttribute:null}];
+  assert.ok(lk1ReconciledReadback(draft.op,draft.b,draft.tx,draft.subscriptions,now),'an unissued fiscal draft is not proof of payment');
   const cases = [
     f => { f.op.reconciliation.source = 'other'; }, f => { f.op.reconciliation.observedState = 'PENDING_CONFIRMATION'; },
     f => { f.op.lk1.visitJob = {}; }, f => { f.op.lk1.createAttemptedAt = now; },
@@ -24,6 +26,9 @@ test('reconciler marker alone is not proof: exact cancelled, closed money and ba
     f => { f.b.amountDue = { paidKopecks: 70000 }; }, f => { f.b.receipts = [{}]; },
     f => { f.b.amountDue = { paidKopecks: 'unknown' }; }, f => { f.b.amountDue = 'unknown'; },
     f => { f.b.paid = 'true'; }, f => { f.tx.receipts = [{}]; }, f => { f.tx.deposit = 1; },
+    f => { f.tx.receipts = [{status:'done',type:'SERVICE_SELL'}]; },
+    f => { f.tx.receipts = [{status:'new',type:'SERVICE_SELL',fiscalDocumentNumber:1}]; },
+    f => { f.tx.receipts = [{status:'new',type:'SERVICE_SELL',url:'https://example.invalid/receipt'}]; },
     f => { f.tx.cardPaymentInfo.status = 'NEW'; }, f => { f.tx.cardPaymentInfo.declineOutcome = 'UNKNOWN'; },
     f => { f.tx.toPay++; }, f => { f.tx.products[0].paymentBookingIds = ['other']; },
     f => { f.tx.client.id = 'other'; }, f => { f.tx.possibleDoublePayment = true; },

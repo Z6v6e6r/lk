@@ -1,6 +1,13 @@
 import { classifyLk1Transaction as lk1ReconciledTransaction } from './lk1UnpaidBookingCancellation.mjs';
 import { lk1FreeBinding, lk1FreeBooking, lk1FreeSubscription, lk1FreeServiceDate } from './lk1FreeCancellation.mjs';
 
+export const lk1ReconciledDraftReceipts = receipts => receipts == null || Array.isArray(receipts)
+  && receipts.every(r => r && typeof r === 'object' && !Array.isArray(r)
+    && r.status === 'new' && r.type === 'SERVICE_SELL'
+    && ['url', 'fnNumber', 'fiscalReceiptNumber', 'fiscalDocumentNumber', 'fiscalDocumentAttribute',
+      'printedAt', 'closedAt', 'paymentDate', 'paidAt', 'errorCode', 'errorText']
+      .every(k => r[k] == null || r[k] === ''));
+
 // A historical reconciler release is not a refund receipt. This compatibility
 // path proves current non-consumption with fresh provider reads on every request.
 export function lk1ReconciledCandidate(op) {
@@ -56,7 +63,7 @@ export function lk1ReconciledReadback(op, booking, transaction, subscriptions, n
   const card = transaction.cardPaymentInfo;
   if (card?.status !== 'REJECTED' || !['EXPIRED', 'CANCELLED'].includes(card.declineOutcome)
     || transaction.possibleDoublePayment === true || (transaction.deposit != null && transaction.deposit !== 0)
-    || (transaction.receipts != null && (!Array.isArray(transaction.receipts) || transaction.receipts.length !== 0))
+    || !lk1ReconciledDraftReceipts(transaction.receipts)
     || (transaction.refundSum != null && transaction.refundSum !== 0)
     || (transaction.transactionRefunds != null && (!Array.isArray(transaction.transactionRefunds)
       || transaction.transactionRefunds.length !== 0))) return null;
