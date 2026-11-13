@@ -20,6 +20,13 @@ Publish and verify the immutable backend/game namespace before activating the
 cabinet reference. Pin the cabinet reference to the verified game source; unrelated
 future cabinet releases must not silently select an unpublished game namespace.
 The complete 16-file cabinet publication still uses its guarded pointer protocol.
+For the exhibition route (`jumpExhibition=1`, including `padelJumpLive=1`),
+`scripts/padel_jump_build.ts` pins the separately published exhibition source.
+An absent `PADLHUB_EXHIBITION_GAME_SOURCE` retains that pin; an explicit empty or
+malformed override fails the build. Updating the pin requires verifying the new
+immutable namespace first. The Vite output guard checks the actual `bundle.js`
+and `bundle-dev.js` for the selected URL, so a manifest claim cannot hide a missing
+module binding. Regression checks run in `npm run test:jump-live`.
 On failure retain the old cabinet set and permanent game receipts; never revert
 to a legacy pruning backend.
 

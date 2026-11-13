@@ -6,6 +6,7 @@ import cssInjectedByJsPlugin from 'vite-plugin-css-injected-by-js'
 import { visualizer } from 'rollup-plugin-visualizer'
 import { managedSubscriptionDevPlugin } from './scripts/managed_subscription_dev_runtime.ts'
 import { reactRuntimeSingletonGuard } from './scripts/react_runtime_singleton_guard.ts'
+import { exhibitionWidgetUrl, exhibitionModuleGuard } from './scripts/padel_jump_build.ts'
 
 const shouldAnalyze = process.env.ANALYZE === '1' || process.env.ANALYZE === 'true'
 
@@ -13,9 +14,7 @@ export default defineConfig(({ command, mode }) => {
   // Independent immutable game release; do not change on unrelated cabinet builds.
   const gameSource = '5c710a0edd0a0b2632310e57e0d2b71ee81b1de7'
   if (!/^[a-f0-9]{40}$/.test(gameSource)) throw new Error('Invalid game source identity')
-  // November pilot: unset stays closed and can never reuse the team's pinned module.
-  const exhibitionSource = process.env.PADLHUB_EXHIBITION_GAME_SOURCE ?? ''
-  if (exhibitionSource && !/^[a-f0-9]{40}$/.test(exhibitionSource)) throw new Error('Invalid exhibition source identity')
+  const exhibitionUrl = exhibitionWidgetUrl(process.env.PADLHUB_EXHIBITION_GAME_SOURCE)
   const isDevBundle = mode === 'dev'
   const managedSubscriptionsDevEnabled =
     command === 'serve' && process.env.MANAGED_SUBSCRIPTIONS_DEV_RUNTIME === '1'
@@ -40,6 +39,7 @@ export default defineConfig(({ command, mode }) => {
       }),
       cssInjectedByJsPlugin(), // вшивает CSS прямо в bundle.js
       reactRuntimeSingletonGuard(),
+      exhibitionModuleGuard(exhibitionUrl, isDevBundle ? 'bundle-dev.js' : 'bundle.js'),
       ...(shouldAnalyze
         ? [
             visualizer({
@@ -56,7 +56,7 @@ export default defineConfig(({ command, mode }) => {
       'import.meta.env.VITE_DIAGNOSTIC_BUILD': JSON.stringify(diagnosticBuildIdentity()),
       __PADLHUB_EXHIBITION_WIDGET_URL__: JSON.stringify(command === 'serve'
         ? '/src/padel-jump-widget.tsx'
-        : exhibitionSource ? `https://padlhub.su/lk/padel-jump-exhibition-${exhibitionSource.slice(0, 8)}/assets/cabinet.js` : ''),
+        : exhibitionUrl),
       __PADLHUB_JUMP_WIDGET_URL__: JSON.stringify(command === 'serve'
         ? '/src/padel-jump-widget.tsx'
         : `https://padlhub.su/lk/padel-jump-team-${gameSource.slice(0, 8)}/assets/cabinet.js`),
