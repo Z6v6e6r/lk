@@ -161,3 +161,54 @@ adding that sender cannot revive an unrelated pre-existing route. The release
 owner still verifies catch/status scopes against the complete pinned graph.
 Existing legacy FAILED rows remain terminal; no reset or retry is part of the
 new-only cutover.
+
+## Scoped native operation and inverse
+
+The `max_outbox_*` modules under `scripts/nodered_reviewed_flow_deploy/` prepare
+root custody and a source-preserving, one-attempt browser guard. They never call
+`/flows`, write the live flow, read a token, restart a process or send a message.
+They reuse the global reviewed-flow OS lock and protected v4 lease. Do not reuse
+the specialized function98/subscription/pause guards for this different delta.
+
+The reader uses the editor's existing authenticated AJAX GET and retains its raw
+snapshot in a private browser closure. Only graph/order/revision fingerprints and
+timestamps leave the closure. The guard forwards the editor's one native POST in
+modified-nodes mode, rebuilding the exact four edits and two clones from the full
+GET snapshot. Lossy editor serialization cannot replace opaque node/config fields.
+A stale revision, changed editor serialization, deadline, extra write or repeat
+attempt refuses the request. Lost ACK retains custody for fresh read-only
+reconciliation; no Deploy replay or automatic adoption is permitted. Finish needs
+a fresh GET beginning after the full 15-minute soak and the same PM2 identity.
+
+`nodered_max_outbox_inverse.mjs` and the `max_outbox_inverse_*` modules restore
+only the exact forward postimage to its protected original backup. The inverse
+rejects foreign nodes, config changes and node reordering, reverts the four fields
+and removes only the two dedicated sender IDs. It accepts only its matching
+forward lease, checking full source/candidate, attempt and phase-specific ACK
+bindings. A fresh dedicated/reloaded editor context is required. If the inverse
+is abandoned before its native attempt after taking forward custody, abort writes
+its receipt but retains the lease for explicit guarded handback; it must not
+silently discard an unfinished forward soak. It never replays delivery or resets
+any queue marker, lease, intent, cancellation job or scan cursor.
+
+These modules are not a complete paired live operator. Before issuing or using a
+seal, the outer operator under the same custody must prove the exact installed
+CUP and worker generations, worker PID0/drain and preserved jobs/cursor, complete
+old MAX queue retention, native active/disk/editor parity and the reviewed module
+hashes. Prepare both directions, immutable worker and preimages before stopping
+services. A changed source or unknown provider outcome stops the affected path.
+
+The new-only boundary is the successful final queue seal before starting the new
+process of the same CUP runtime. Keep MAX paused during CUP stop/drain, raw BSON
+snapshot, marker-only full-preimage CAS and both complete zero-unheld scans. Start
+CUP with the unchanged legacy mode and sync=0; commands durably accepted afterward
+form the new queue, including those accepted before the NR pollers are activated.
+Do not weaken the stopped-backend helper to attempt an online timestamp cutoff.
+
+Verification adds browser preservation/one-attempt cases, protected inverse lease
+cases and a real Node-RED 4.0.9 modified-nodes rehearsal using the public contrib
+constructors and synthetic transport. The runtime fixture waits for bootstrap
+`flows:started`: Node-RED's `start()` resolves before its credential load. It
+checks config credentials and unrelated instances across both directions, zero
+incoming/startup sends and two explicit synthetic new-message sends. No copied
+production graph or real provider is started.
