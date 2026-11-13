@@ -6,8 +6,8 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-export const LK1_UNPAID_FLOW_SHA256 = '35eade1be234c192df58780a415dfdb9b1d060784ba35ea1b7be301dc4544b5e';
-export const LK1_UNPAID_GATEWAY_SHA256 = '1884e6ad10674ba6e7ad4e23aab767ea129b1bedeeacf9138f7a20dc9584e3ab';
+export const LK1_UNPAID_FLOW_SHA256 = '8aace6578416cb38c17d78cec1b2129d6473ea5aedc13b628f3a6a08fcab3557';
+export const LK1_UNPAID_GATEWAY_SHA256 = '8d87efe8dc5c2f5a854c6d5e77d1fb11d4352e082e9d42733d0ea95c72441d85';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const bindingNames = ['VIVA_SERVICE_TOKEN_URL', 'VIVA_SERVICE_CLIENT_ID',
   'VIVA_SERVICE_USERNAME', 'VIVA_SERVICE_PASSWORD'];
@@ -75,6 +75,10 @@ export async function createLk1LiveGatewayGuard({
   if (!/^[a-f0-9]{64}$/.test(expectedFlowSha) || !/^[a-f0-9]{64}$/.test(expectedBindingSha || '')) {
     throw new Lk1LiveGatewayError('LIVE_GATEWAY_BINDING_INVALID');
   }
+  // Native modified-nodes deployments can persist an approved flow after PM2
+  // started. Attest that exact generation through two authenticated active-flow
+  // reads below, then keep its disk timestamp fixed for this guard's lifetime.
+  let expectedMtimeMs = null;
   function snapshot() {
     let bytes, flow, stat;
     try {
@@ -82,7 +86,9 @@ export async function createLk1LiveGatewayGuard({
       flow = JSON.parse(bytes);
       stat = fs.statSync(flowPath);
     } catch { return { state: 'DRIFT' }; }
-    if (!Array.isArray(flow) || sha(bytes) !== expectedFlowSha) return { state: 'DRIFT' };
+    if (!Array.isArray(flow) || sha(bytes) !== expectedFlowSha
+      || !Number.isFinite(stat.mtimeMs) || stat.mtimeMs < 0 || stat.mtimeMs > Date.now()
+      || (expectedMtimeMs !== null && stat.mtimeMs !== expectedMtimeMs)) return { state: 'DRIFT' };
     const gateway = flow.filter(node => node?.id === 'lk_subscription_booking_router_20260804');
     if (gateway.length !== 1 || gateway[0].type !== 'function'
       || sha(gateway[0].func || '') !== expectedGatewaySha) return { state: 'DRIFT' };
@@ -96,15 +102,15 @@ export async function createLk1LiveGatewayGuard({
       || nodeRed.pid <= 0 || !Number.isSafeInteger(nodeRed.pm2_env.pm_uptime)
       || !Number.isSafeInteger(nodeRed.pm2_env.restart_time)
       || Date.now() - nodeRed.pm2_env.pm_uptime < 30_000) return { state: 'RESTART_PENDING' };
-    if (stat.mtimeMs > nodeRed.pm2_env.pm_uptime
-      || lk1VivaBinding(nodeRed)?.sha256 !== expectedBindingSha) return { state: 'DRIFT' };
+    if (lk1VivaBinding(nodeRed)?.sha256 !== expectedBindingSha) return { state: 'DRIFT' };
     return { state: 'ONLINE', pid: nodeRed.pid, uptime: nodeRed.pm2_env.pm_uptime,
-      restart: nodeRed.pm2_env.restart_time, flow };
+      restart: nodeRed.pm2_env.restart_time, mtimeMs: stat.mtimeMs, flow };
   }
 
   const initial = snapshot();
   if (initial.state !== 'ONLINE') throw new Lk1LiveGatewayError(
     initial.state === 'DRIFT' ? 'LIVE_GATEWAY_DRIFT' : 'LIVE_GATEWAY_RESTART_PENDING');
+  expectedMtimeMs = initial.mtimeMs;
   const token = await readAdminToken(adminTokenFile);
   const activeFlowFailure = () => {
     const current = snapshot();
