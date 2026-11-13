@@ -396,6 +396,10 @@ jobs:
         id: check_leave_generations
         run: npm run test:leave-generation-regressions
 
+      - name: Rehearse daily guard repair on isolated Mongo replica set
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        run: bash scripts/run_lk1_guard_repair_replica_tests.sh
+
       - name: Run critical subscription regression matrix
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:
@@ -517,6 +521,11 @@ jobs:
           scripts/tests/lk1FreeCancellation.test.mjs
           scripts/tests/lk1NativeDeployGuard.test.mjs
           scripts/tests/legacyCancellationRecovery.test.mjs
+          scripts/tests/reconciledCancellationRecovery.test.mjs
+          scripts/tests/cancelledVisitRepair.test.mjs
+          scripts/tests/dailyGuardRepair.test.mjs
+          scripts/tests/timeoutSubscriptionPreservation.test.mjs
+          scripts/tests/hungClaimRelease.test.mjs
           scripts/tests/lk1FreeCancellationRuntime.test.mjs
           scripts/tests/friendship2TdzRecovery.test.mjs
           scripts/tests/lk1FreeGateOrder.test.mjs
