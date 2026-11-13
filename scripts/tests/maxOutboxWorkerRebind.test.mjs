@@ -6,7 +6,7 @@ import {
   MAX_OUTBOX_RESUME_REQUIRED_IDS, nodeSha256, sha256,
 } from '../nodered_max_outbox_resume.mjs';
 import {
-  buildMaxOutboxWorkerRebind, MAX_OUTBOX_WORKER_BASELINE_FILES as files,
+  buildMaxOutboxWorkerRebind, buildMaxOutboxWorkerInverse, MAX_OUTBOX_WORKER_BASELINE_FILES as files,
 } from '../nodered_max_outbox_worker_rebind.mjs';
 
 const GUARD = 'lib/lk1LiveGatewayGuard.mjs';
@@ -73,6 +73,38 @@ function changeFlow(input, mutate) {
   input.trustedNrPins = nrPins(input.beforeFlow);
   changeGuard(input, (text) => text.replace(oldSha, sha256(input.beforeFlow)));
 }
+
+test('native inverse worker binds the restored graph encoding rather than old installer bytes', () => {
+  const input = fixture(), originalHash = sha256(input.beforeFlow);
+  input.beforeFlow = Buffer.from(JSON.stringify(JSON.parse(input.beforeFlow), null, 2) + '\n');
+  input.trustedNrPins = nrPins(input.beforeFlow);
+  changeGuard(input, text => text.replace(originalHash, sha256(input.beforeFlow)));
+  const before = structuredClone(input);
+  const result = buildMaxOutboxWorkerInverse(input);
+  const nativeHash = sha256(JSON.stringify(JSON.parse(input.beforeFlow), null, 4));
+  assert.notEqual(nativeHash, sha256(input.beforeFlow));
+  assert.equal(result.provenance.nativeDiskSha256, nativeHash);
+  assert.equal(result.provenance.gatewayUnchanged, true);
+  assert.deepEqual(result.provenance.flowAddedIds, []);
+  assert.equal(result.provenance.flowRemovedIds.length, 2);
+  assert.deepEqual(result.provenance.changedFiles, [GUARD]);
+  for (const file of files) {
+    const expected = file === GUARD ? Buffer.from(input.baselineFiles.get(file).toString().replace(sha256(input.beforeFlow), nativeHash)) : input.baselineFiles.get(file);
+    assert.ok(result.candidateFiles.get(file).equals(expected));
+    assert.equal(result.candidateManifest.files[file], sha256(expected));
+    assert.ok(input.baselineFiles.get(file).equals(Buffer.from(before.baselineFiles.get(file))));
+  }
+  assert.equal(result.candidateManifestSha256, sha256(result.candidateManifestBytes));
+});
+
+test('already-native baseline inverse preserves all payload bytes and still rejects untrusted baselines', () => {
+  const input = fixture(), result = buildMaxOutboxWorkerInverse(input);
+  assert.equal(result.provenance.nativeDiskSha256, sha256(input.beforeFlow));
+  assert.deepEqual(result.provenance.changedFiles, []);
+  for (const file of files) assert.ok(result.candidateFiles.get(file).equals(input.baselineFiles.get(file)));
+  const bad = fixture(); bad.baselineFiles.set('package.json', Buffer.from('foreign'));
+  assert.throws(() => buildMaxOutboxWorkerInverse(bad), /BASELINE_FILE_DIGEST_MISMATCH/);
+});
 
 test('fixed baseline closure agrees with the standard bundle verifier and builder', () => {
   const verifier = readFileSync(new URL('../lk1_unpaid_cancel_service/verify_bundle.mjs', import.meta.url), 'utf8');
