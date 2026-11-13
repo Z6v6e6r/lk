@@ -60,26 +60,26 @@
 .matrix-subscription-plan-total { text-align: right; }
 .matrix-subscription-plan-total strong { font-size: 13px; white-space: nowrap; }
 .matrix-subscription-plan:has(input:focus-visible) { outline: 3px solid #ab88f5; outline-offset: 3px; }
-.modal-content--fullscreen .modal-body.matrix-subscription-modal { padding: 0; overflow: hidden; background: #f5f5f7; }
-.matrix-subscription-offer, .matrix-subscription-offer * { box-sizing: border-box; }
-.matrix-subscription-offer { height: 100%; display: flex; flex-direction: column; color: #282336; font: 14px/1.5 var(--ui-font, system-ui, sans-serif); }
-.matrix-subscription-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 20px max(16px, calc((100% - 520px)/2)); }
-.matrix-subscription-offer .matrix-subscription-plans { margin: 0 0 20px; }
-.matrix-subscription-benefits, .matrix-subscription-booking { background: #fff; border: 1px solid #e6e3ed; border-radius: 18px; padding: 20px; margin-bottom: 16px; }
-.matrix-subscription-benefits h2 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -.5px; }
-.matrix-subscription-benefits > p { margin: 8px 0 0; color: #787287; }
-.matrix-subscription-benefits ul { list-style: none; padding: 0; margin: 18px 0 0; }
-.matrix-subscription-benefits li { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-top: 1px solid #efedf2; }
-.matrix-subscription-benefit-icon { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 10px; background: #edf6df; color: #54872b; font-size: 12px; font-weight: 700; }
-.matrix-subscription-benefits > .matrix-subscription-limits { font-size: 12px; line-height: 1.5; padding-top: 12px; border-top: 1px solid #efedf2; }
-.matrix-subscription-booking h3 { margin: 0; font-size: 17px; }
-.matrix-subscription-booking p { margin: 6px 0 0; color: #787287; font-size: 12px; }
-.matrix-subscription-booking .matrix-subscription-explanation { margin-top: 12px; color: #44374e; }
-.matrix-subscription-booking .matrix-order-lines { margin-bottom: 0; }
-.matrix-subscription-footer { flex-shrink: 0; padding: 12px max(16px, calc((100% - 520px)/2)) calc(12px + env(safe-area-inset-bottom, 0px)); background: #fff; border-top: 1px solid #e6e3ed; }
-.matrix-subscription-footer .matrix-confirm { display: block; width: 100%; min-height: 54px; border: 0; border-radius: var(--radius, 16px); background: var(--purple, #7353d9); color: #fff; padding: 14px 10px; font: 650 14px/1.4 var(--btn-font, system-ui, sans-serif); cursor: pointer; }
-.matrix-subscription-footer .matrix-confirm:disabled { background: #dad6e2; color: #8d8499; cursor: default; }
-.matrix-subscription-footer p { margin: 8px 0 0; text-align: center; font-size: 11px; color: #82788e; }
+.modal-content--fullscreen .modal-body.matrix-purchase-modal { padding: 0; overflow: hidden; background: #f5f5f7; }
+.matrix-purchase-offer, .matrix-purchase-offer * { box-sizing: border-box; }
+.matrix-purchase-offer { height: 100%; display: flex; flex-direction: column; color: #282336; font: 14px/1.5 var(--ui-font, system-ui, sans-serif); }
+.matrix-purchase-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 20px max(16px, calc((100% - 520px)/2)); }
+.matrix-purchase-offer .matrix-subscription-plans { margin: 0 0 20px; }
+.matrix-purchase-benefits, .matrix-purchase-booking { background: #fff; border: 1px solid #e6e3ed; border-radius: 18px; padding: 20px; margin-bottom: 16px; }
+.matrix-purchase-benefits h2 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -.5px; }
+.matrix-purchase-benefits > p { margin: 8px 0 0; color: #787287; }
+.matrix-purchase-benefits ul { list-style: none; padding: 0; margin: 18px 0 0; }
+.matrix-purchase-benefits li { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-top: 1px solid #efedf2; }
+.matrix-purchase-benefit-icon { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 10px; background: #edf6df; color: #54872b; font-size: 12px; font-weight: 700; }
+.matrix-purchase-benefits > .matrix-purchase-limits { font-size: 12px; line-height: 1.5; padding-top: 12px; border-top: 1px solid #efedf2; }
+.matrix-purchase-booking h3 { margin: 0; font-size: 17px; }
+.matrix-purchase-booking p { margin: 6px 0 0; color: #787287; font-size: 12px; }
+.matrix-purchase-booking .matrix-purchase-explanation { margin-top: 12px; color: #44374e; }
+.matrix-purchase-booking .matrix-order-lines { margin-bottom: 0; }
+.matrix-purchase-footer { flex-shrink: 0; padding: 12px max(16px, calc((100% - 520px)/2)) calc(12px + env(safe-area-inset-bottom, 0px)); background: #fff; border-top: 1px solid #e6e3ed; }
+.matrix-purchase-footer .matrix-confirm { display: block; width: 100%; min-height: 54px; border: 0; border-radius: var(--radius, 16px); background: var(--purple, #7353d9); color: #fff; padding: 14px 10px; font: 650 14px/1.4 var(--btn-font, system-ui, sans-serif); cursor: pointer; }
+.matrix-purchase-footer .matrix-confirm:disabled { background: #dad6e2; color: #8d8499; cursor: default; }
+.matrix-purchase-footer p { margin: 8px 0 0; text-align: center; font-size: 11px; color: #82788e; }
 .matrix-order-lines { display: grid; gap: 12px; margin: 18px 0; }
 .matrix-order-lines > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .matrix-order-lines dt { min-width: 0; }

@@ -7,6 +7,7 @@ import { bookingButtonText, combineResidencyBoost, combineSubscriptionBoost, cre
 import { recommendedSubscriptionChoice, subscriptionPurchaseChoices, type SubscriptionOffer } from './subscriptionOffers';
 import { SUBSCRIPTION_PLANS } from './privilegeRules';
 import { SubscriptionPurchaseOffer } from './SubscriptionPurchaseOffer';
+import { ResidencyPurchaseOffer } from './ResidencyPurchaseOffer';
 import './matrix.css';
 
 function PaymentIcon({ kind }: { kind: PaymentKind }) {
@@ -71,8 +72,6 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const selectedKind = (selected === 'boost' || selected === 'subscription') && combinedSubscription ? combinedSubscription.kind : selected;
   const choice = available.find(option => option.kind === selectedKind) || defaultChoice;
   const locked = disabled || full || busy;
-  const displayBaseAmount = options.find(option => option.kind === 'full')?.amount ?? price.price;
-  const displayResidencyAmount = options.find(option => option.kind === 'residency')?.amount ?? price.residentPrice;
   const referenceAmount = options.find(option => option.kind === 'full')?.amount ?? null;
   const subscriptionOrder = subscriptionPurchaseOption && purchaseSubscription ? createPreviewOrder(subscriptionPurchaseOption, null, purchaseSubscription.price) : null;
   const startCheckout = (order: PreviewOrder, option: PaymentOption, subscription: SubscriptionOffer | null = null) => {
@@ -205,20 +204,14 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
       <button className="matrix-confirm" type="button" disabled={locked || !choice} onClick={() => void confirm()}>{busy ? 'Подтверждаем запись…' : full ? 'Мест нет' : !isAuthenticated ? 'Войти для записи' : confirmText}</button>
       <p className="matrix-payment-footnote">{isWholeCourt ? 'Стоимость оплачивается полностью за всех игроков. Льготы не расходуются.' : 'Выбран один способ записи. Скидки подписки и Резидентства не суммируются. Абонемент списывается только при выборе абонемента.'}</p>
     </>}
-    <Modal isOpen={subscriptionOfferOpen} onClose={() => { if (!busy) setSubscriptionOfferOpen(false); }} title="Добавьте подписку" variant="fullscreen" bodyClassName="matrix-subscription-modal">
+    <Modal isOpen={subscriptionOfferOpen} onClose={() => { if (!busy) setSubscriptionOfferOpen(false); }} title="Добавьте подписку" variant="fullscreen" bodyClassName="matrix-purchase-modal">
       <SubscriptionPurchaseOffer choices={subscriptionChoices} offer={purchaseSubscription} option={subscriptionPurchaseOption}
         eventDescription={`${price.name} · ${duration} мин${isPersonalGame ? ' · моя доля ¼' : ''}`} groupId={groupId} disabled={locked}
         onSelect={setPurchaseSubscriptionId} onContinue={confirmSubscriptionPurchase} />
     </Modal>
-    <Modal isOpen={residencyOfferOpen} onClose={() => setResidencyOfferOpen(false)} title="Добавьте Резидентство" variant="dialog">
-      <div className="matrix-information">
-        <h3>{formatRubles(displayResidencyAmount)} вместо <del>{formatRubles(displayBaseAmount)}</del></h3>
-        <p>Скидка 30% на игры и 50% на групповые тренировки и турниры.</p>
-        <dl className="matrix-order-lines"><div><dt>Запись с Резидентством</dt><dd>{formatRubles(displayResidencyAmount)}</dd></div>
-          <div><dt>Резидентство</dt><dd>{residencyPrice != null ? formatRubles(residencyPrice) : 'Цена уточняется'}</dd></div>
-          {choice && createPreviewOrder(choice, residencyPrice) && <div className="matrix-order-total"><dt>Итого</dt><dd>{formatRubles(createPreviewOrder(choice, residencyPrice)!.total)}</dd></div>}</dl>
-        <button type="button" className="matrix-confirm" disabled={locked || residencyPrice == null} onClick={addResidency}>{residencyPrice != null ? `Добавить Резидентство за ${formatRubles(residencyPrice)}` : 'Стоимость Резидентства уточняется'}</button>
-      </div>
+    <Modal isOpen={residencyOfferOpen} onClose={() => setResidencyOfferOpen(false)} title="Добавьте Резидентство" variant="fullscreen" bodyClassName="matrix-purchase-modal">
+      <ResidencyPurchaseOffer option={choice} residencyPrice={residencyPrice} referenceAmount={referenceAmount}
+        eventDescription={`${price.name} · ${duration} мин${isPersonalGame ? ' · моя доля ¼' : ''}`} disabled={locked} onContinue={addResidency} />
     </Modal>
     <Modal isOpen={loginOpen && !isAuthenticated} onClose={() => setLoginOpen(false)} title="Вход для записи" variant="dialog"><AuthForm onLogin={() => setLoginOpen(false)} /></Modal>
   </section>;
