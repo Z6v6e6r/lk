@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { applyFprCommand, fprProjection } from '../../src/components/tournaments/fpr6x25.ts';
-import { isAutoFinishProtocolClosed } from './tournamentAutoFinishNodes.mjs';
+import { isAutoFinishProtocolClosed, tournamentAutoFinishDurationMs } from './tournamentAutoFinishNodes.mjs';
 import { buildTournamentWriteSnapshot, tournamentWriteFilter } from './communityMonthlyFinalization.mjs';
 
 // Recalculation refreshes derived match.results and round.summary, never score facts.
@@ -26,8 +26,10 @@ export function planTournamentAutoFinish(tournament, nowTs, recalculateSource) {
   if (tournament.archived === true || tournament.cancelled === true || tournament.canceled === true) return skip('INACTIVE');
   const sessionStart = Date.parse(lifecycle.resumedAt || lifecycle.startedAt);
   const deadline = Date.parse(lifecycle.deadlineAt);
+  const durationMs = tournamentAutoFinishDurationMs(tournament);
   if (!Number.isInteger(lifecycle.session) || lifecycle.session < 1 || !Number.isFinite(sessionStart)
-      || deadline !== sessionStart + TOURNAMENT_AUTO_FINISH_MS) return skip('INVALID_SERVER_DEADLINE');
+      || (lifecycle.durationMs ?? TOURNAMENT_AUTO_FINISH_MS) !== durationMs
+      || deadline !== sessionStart + durationMs) return skip('INVALID_SERVER_DEADLINE');
   if (nowTs < deadline) return skip('NOT_DUE');
   const nowIso = new Date(nowTs).toISOString();
   const nextLifecycle = { ...lifecycle, reason: 'time_limit', processedAt: nowIso };
