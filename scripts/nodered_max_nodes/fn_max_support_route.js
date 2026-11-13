@@ -1,3 +1,17 @@
+// One bot scope for reservation, lookup, support event and direct service branches.
+let maxConnector = "MAX_BOT";
+try {
+  const generation = env.get("SUPPORT_MAX_GENERATION");
+  const after = env.get("SUPPORT_MAX_GENERATION_AFTER");
+  if (generation != null || after != null) {
+    maxConnector = env.get("MAX_CONNECTOR");
+    const admission = msg.maxIngressAdmission;
+    if (!["MAX_BOT", "MAX_ACADEMY_BOT"].includes(maxConnector)
+      || !admission || admission.connector !== maxConnector
+      || admission.generation !== generation || admission.after !== after
+      || typeof admission.admissionId !== "string" || !/^ingress:[a-f0-9]{64}$/.test(admission.admissionId)) return null;
+  }
+} catch { return null; }
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
@@ -133,13 +147,14 @@ const eventType = resolveEventType(update);
 
 const event = {
   channel: "MAX",
-  connector: "MAX_BOT",
+  connector: maxConnector,
   provider: "MAX",
   sourceChannel: "MAX",
-  sourceConnector: "MAX_BOT",
+  sourceConnector: maxConnector,
   externalUserId: senderUserId,
   externalChatId: chatId,
   externalMessageId: update.messageId || null,
+  timestamp: update.providerTimestampVerified ? new Date(update.timestamp).toISOString() : undefined,
   displayName: senderName,
   senderName,
   senderId: senderUserId,
@@ -172,7 +187,7 @@ const event = {
   attachments: Array.isArray(update.attachments) ? update.attachments : [],
   metadata: {
     provider: "max",
-    sourceConnector: "MAX_BOT",
+    sourceConnector: maxConnector,
     command: update.command || null,
     rawMessageKind: update.messageKind,
     currentStationId,
@@ -181,6 +196,7 @@ const event = {
     selectedStationName,
   },
   meta: {
+    maxIngressAdmission: msg.maxIngressAdmission?.admissionId,
     provider: "max",
     command: update.command || null,
     rawMessageKind: update.messageKind,
@@ -241,6 +257,16 @@ if (update.command === "/start") {
   ));
 }
 
+let generationHeader = {};
+try {
+  const generation = env.get("SUPPORT_MAX_GENERATION");
+  const after = env.get("SUPPORT_MAX_GENERATION_AFTER");
+  if (generation != null || after != null) {
+    const token = env.get("SUPPORT_MAX_GENERATION_TOKEN");
+    if (!token) return null;
+    generationHeader = { "x-max-generation-token": token };
+  }
+} catch { return null; }
 const integrationToken = getIntegrationToken();
 const supportEventMsg = Object.assign({}, msg, {
   method: "POST",
@@ -248,11 +274,12 @@ const supportEventMsg = Object.assign({}, msg, {
   headers: Object.assign(
     { "Content-Type": "application/json", Accept: "application/json" },
     integrationToken ? { "x-integration-token": integrationToken } : {},
+    generationHeader,
   ),
   payload: event,
 });
 
-const debugMsg = Object.assign({}, msg, {
+const debugMsg = Object.keys(generationHeader).length ? { payload: { code: "MAX_GENERATION_ROUTED" } } : Object.assign({}, msg, {
   payload: {
     maxUpdate: update,
     client,
