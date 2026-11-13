@@ -134,3 +134,31 @@ export function buildMaxOutboxWorkerRebind({
     },
   };
 }
+
+/** The native inverse restores the original graph using the native encoder;
+ * its disk bytes need not equal an earlier full-runtime installer's bytes. */
+export function buildMaxOutboxWorkerInverse(options) {
+  // Reuse every baseline/closure/gateway/MAX-delta guard before deriving either
+  // generation. No caller-supplied target digest or installed pin is accepted.
+  const forward = buildMaxOutboxWorkerRebind(options);
+  const nativeDiskSha256 = sha256(JSON.stringify(JSON.parse(options.beforeFlow.toString()), null, 4));
+  const guard = forward.candidateFiles.get(GUARD), text = guard.toString('utf8');
+  const bound = constant(text, 'LK1_UNPAID_FLOW_SHA256');
+  need(bound.hash === forward.provenance.nativeDiskSha256, 'INVERSE_FORWARD_BINDING_MISMATCH');
+  const offset = Buffer.byteLength(text.slice(0, bound.offset), 'utf8')
+    + Buffer.from(bound.line, 'utf8').indexOf(bound.hash);
+  const candidateFiles = new Map([...forward.candidateFiles].map(([file, bytes]) => [file, Buffer.from(bytes)]));
+  candidateFiles.set(GUARD, Buffer.concat([guard.subarray(0, offset),
+    Buffer.from(nativeDiskSha256, 'ascii'), guard.subarray(offset + 64)]));
+  const changedFiles = MAX_OUTBOX_WORKER_BASELINE_FILES.filter(file => !candidateFiles.get(file).equals(options.baselineFiles.get(file)));
+  need(changedFiles.every(file => file === GUARD), 'INVERSE_WORKER_FILE_DELTA_INVALID');
+  const candidateManifest = { schema: 1, sourceCommit: options.publishingSourceCommit,
+    files: Object.fromEntries([...candidateFiles].map(([file, bytes]) => [file, sha256(bytes)])) };
+  const candidateManifestBytes = Buffer.from(`${JSON.stringify(candidateManifest, null, 2)}\n`);
+  return { candidateFiles, candidateManifest, candidateManifestBytes,
+    candidateManifestSha256: sha256(candidateManifestBytes),
+    provenance: { ...forward.provenance, schema: 'PHAB_MAX_OUTBOX_WORKER_NATIVE_INVERSE_V1',
+      forwardNativeDiskSha256: forward.provenance.nativeDiskSha256, nativeDiskSha256,
+      changedFiles, unchangedFileCount: candidateFiles.size - changedFiles.length,
+      flowAddedIds: [], flowRemovedIds: [...forward.provenance.flowAddedIds] } };
+}

@@ -162,6 +162,16 @@ owner still verifies catch/status scopes against the complete pinned graph.
 Existing legacy FAILED rows remain terminal; no reset or retry is part of the
 new-only cutover.
 
+Prepare `buildMaxOutboxWorkerInverse(options)` as well as the forward worker
+before activation. It applies the same complete baseline and topology checks,
+then binds a separate immutable recovery bundle to the original graph encoded
+with four spaces and no newline. A previous full-runtime install can use different
+whitespace: restoring its graph through the native editor does not necessarily
+restore its old disk-byte hash. The inverse bundle preserves gateway and all
+business bytes; it changes only the whole-flow constant when native encoding
+requires that. Never start the old worker against a differently encoded inverse
+or edit its installed pin to force a match.
+
 ## Scoped native operation and inverse
 
 The `max_outbox_*` modules under `scripts/nodered_reviewed_flow_deploy/` prepare
