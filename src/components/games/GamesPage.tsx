@@ -205,7 +205,7 @@ export interface SelfLeavePreviewOptions {
   request: SelfLeaveRequest;
 }
 
-type Step = "create" | "place" | "time" | "details" | "chat";
+type Step = "create" | "place" | "time" | "details" | "chat" | "unavailable";
 type GamePaymentMode = "self" | "split";
 type SplitShareCount = 2 | 4;
 type SplitCheckoutMode = "subscription" | "one_time";
@@ -4893,6 +4893,7 @@ export default function GamesPage({
   );
   const leaveCurrentUserRequest = selfLeavePreview?.request ?? apiLeavePadelGameAsCurrentUser;
   const [step, setStep] = useState<Step>("create");
+  const isGameUnavailable = step === "unavailable";
   const [studios, setStudios] = useState<Studio[]>([]);
   const [timeslots, setTimeslots] = useState<GameTimeSlot[]>([]);
   const [loadingTimeslots, setLoadingTimeslots] = useState(false);
@@ -4971,6 +4972,10 @@ export default function GamesPage({
   const [cancellingUnpaidGame, setCancellingUnpaidGame] = useState(false);
   const [confirmCancelUnpaidGame, setConfirmCancelUnpaidGame] = useState(false);
   const [gameRecordError, setGameRecordError] = useState<string | null>(null);
+  const markGameUnavailable = useCallback(() => {
+    setGameRecordError("Игра недоступна");
+    setStep("unavailable");
+  }, []);
   const [gameRosterError, setGameRosterError] = useState<string | null>(null);
   const [detailsSplitJoinPending, setDetailsSplitJoinPending] = useState<{
     released?: boolean;
@@ -5570,7 +5575,7 @@ export default function GamesPage({
   }, []);
 
   useEffect(() => {
-    if (!profilePhoneNorm) return;
+    if (!profilePhoneNorm || isGameUnavailable) return;
     let cancelled = false;
 
     const run = async () => {
@@ -5588,7 +5593,7 @@ export default function GamesPage({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [profilePhoneNorm, refreshUnreadChats]);
+  }, [profilePhoneNorm, refreshUnreadChats, isGameUnavailable]);
 
   const filteredStudios = studios.filter((s) => {
     if (!studiosQuery.trim()) return true;
@@ -8808,7 +8813,12 @@ export default function GamesPage({
       if (!alive || cleanupResult.error) return;
 
       const refreshed = await apiFetchPadelGameRecord(activeGameRecord.id);
-      if (!alive || !refreshed.data?.id) return;
+      if (!alive) return;
+      if (refreshed.status === 404) {
+        markGameUnavailable();
+        return;
+      }
+      if (!refreshed.data?.id) return;
 
       const refreshedRecord = refreshed.data as PadelGameRecord;
       upsertGameRecordInStores(refreshedRecord, { communityMode: "if_exists" });
@@ -8830,6 +8840,7 @@ export default function GamesPage({
     detailsExpiredSplitPendingCleanupKeys,
     subscriptionUsageShadowEnabled,
     upsertGameRecordInStores,
+    markGameUnavailable,
   ]);
 
   useEffect(() => {
@@ -8955,9 +8966,13 @@ export default function GamesPage({
             return;
           }
           const authoritative = patchResult.status === 409
-            ? { data: patchResult.conflictRecord ?? null }
+            ? { data: patchResult.conflictRecord ?? null, status: 409 }
             : await apiFetchPadelGameRecord(activeGameRecord.id);
           if (!alive) return;
+          if (authoritative.status === 404) {
+            markGameUnavailable();
+            return;
+          }
           if (authoritative.data?.id) {
             upsertGameRecordInStores(
               authoritative.data as PadelGameRecord,
@@ -9024,6 +9039,7 @@ export default function GamesPage({
     detailsOrganizerPlayer,
     subscriptionUsageShadowEnabled,
     upsertGameRecordInStores,
+    markGameUnavailable,
   ]);
 
   useEffect(() => {
@@ -10490,6 +10506,10 @@ export default function GamesPage({
       try {
         const result = await apiFetchPadelGameRecord(gameRecordId);
         if (!alive) return;
+        if (result.status === 404) {
+          markGameUnavailable();
+          return;
+        }
 
         const fetchedRecord = result.data ?? null;
         if (fetchedRecord) {
@@ -10612,6 +10632,7 @@ export default function GamesPage({
     resolveGamePaymentByVivaBookings,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
+    markGameUnavailable,
   ]);
 
   const communityAutopublishSelectedIdsSet = useMemo(
@@ -12578,7 +12599,12 @@ export default function GamesPage({
 
     let cancelled = false;
     void apiFetchPadelGameResultState(gameRecordId, { phone: profilePhoneNorm }).then((result) => {
-      if (cancelled || result.error || !result.data) return;
+      if (cancelled) return;
+      if (result.status === 404) {
+        markGameUnavailable();
+        return;
+      }
+      if (result.error || !result.data) return;
       applyMatchResultActionResponse(result.data);
     }).catch(() => {
       // State endpoint is additive; existing game metadata remains the fallback.
@@ -12593,6 +12619,7 @@ export default function GamesPage({
     gameRecordId,
     profilePhoneNorm,
     step,
+    markGameUnavailable,
   ]);
 
   useEffect(() => {
@@ -12629,7 +12656,14 @@ export default function GamesPage({
       }
       requestInFlight = true;
       void apiFetchPadelGameResultState(gameRecordId, { phone: profilePhoneNorm }).then((result) => {
-        if (cancelled || result.error || !result.data) return;
+        if (cancelled) return;
+        if (result.status === 404) {
+          cancelled = true;
+          clearScheduledPoll();
+          markGameUnavailable();
+          return;
+        }
+        if (result.error || !result.data) return;
         applyMatchResultActionResponse(result.data);
       }).catch(() => {
         // Background status polling must not block result interaction.
@@ -12661,6 +12695,7 @@ export default function GamesPage({
     gameRecordId,
     profilePhoneNorm,
     step,
+    markGameUnavailable,
   ]);
 
   const patchGameRoster = useCallback(async (
@@ -15020,6 +15055,25 @@ export default function GamesPage({
     if (navigateToCabinetFromGamesDetails()) return;
     onBack();
   }, [onBack]);
+
+  if (step === "unavailable") {
+    return (
+      <div className="app-container game-container">
+        <div className="page-header">
+          <button className="back-btn" type="button" onClick={onBack}>← Назад</button>
+          <div className="page-title">Игра недоступна</div>
+        </div>
+        <div className="game-section">
+          <div className="game-empty" role="status">
+            Игра больше недоступна. Вернитесь в кабинет и обновите список игр.
+          </div>
+          <button className="section-cta" type="button" onClick={onBack}>
+            Вернуться в кабинет
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (step === "place") {
     return (
