@@ -10,7 +10,7 @@ export function PurchaseOfferLayout({ children, footer }: { children: ReactNode;
     root.current?.querySelector<HTMLElement>('input:checked, [data-purchase-title]')?.focus();
     const trapFocus = (event: Event) => {
       if (!(event instanceof KeyboardEvent) || event.key !== 'Tab') return;
-      const targets = dialog?.querySelectorAll<HTMLElement>('button:not(:disabled), input:checked:not(:disabled)');
+      const targets = dialog?.querySelectorAll<HTMLElement>('button:not(:disabled), input:checked:not(:disabled), .matrix-purchase-scroll');
       if (!targets?.length) return;
       const first = targets[0], last = targets[targets.length - 1];
       if (!Array.from(targets).some(target => target === document.activeElement)) {
@@ -26,7 +26,7 @@ export function PurchaseOfferLayout({ children, footer }: { children: ReactNode;
     };
   }, []);
   return <div className="matrix-purchase-offer" ref={root}>
-    <div className="matrix-purchase-scroll">{children}</div>
+    <div className="matrix-purchase-scroll" tabIndex={0} role="region" aria-label="Преимущества и стоимость записи">{children}</div>
     <footer className="matrix-purchase-footer">{footer}</footer>
   </div>;
 }
