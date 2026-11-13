@@ -839,6 +839,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     if (gameResult.data) {
       setGame(gameResult.data);
     } else {
+      if (gameResult.status === 404) setGame(null);
       setError(gameResult.error?.message || "Игра не найдена");
     }
 
