@@ -125,7 +125,7 @@ import {
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
 import { trackAnalyticsEvent } from "../../utils/analytics";
-import { createLocalMembershipId } from "./localMembershipGeneration";
+import { clearPreviousLeaveEventsForLocalJoin, createLocalMembershipId } from "./localMembershipGeneration";
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
@@ -14982,9 +14982,9 @@ export default function GamesPage({
         membershipId: localMembershipId,
       };
     }
-    const nextMetadata = buildDetailsRosterMetadata(nextParticipants, nextWaitlist, {
+    const nextMetadata = clearPreviousLeaveEventsForLocalJoin(buildDetailsRosterMetadata(nextParticipants, nextWaitlist, {
       extraMetadata: normalizedPhone ? { joinResponses } : undefined,
-    });
+    }), joinPlayerBase);
 
     await patchGameRoster(nextParticipants, nextWaitlist, {
       metadata: nextMetadata,
