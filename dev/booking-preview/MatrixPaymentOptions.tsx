@@ -223,7 +223,6 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
         })}
       </fieldset>
       {options.some(option => option.benefit === 'partial-hour' && option.mode === 'quote') && <p className="matrix-copay-note" role="status">Стоимость доплаты пока не определена. Запись с использованием бесплатного часа станет доступна после расчёта.</p>}
-      <div className="matrix-lk2-only matrix-selection-context" aria-live="polite">{choice && <><strong>{title(choice)}</strong>{choice.mode === 'offer' && <span>Оформление продукта — на следующем шаге</span>}</>}</div>
       <div className="matrix-booking-footer">
         <button className="matrix-confirm" type="button" disabled={locked || !choice} onClick={() => void confirm()}>{busy ? 'Подтверждаем запись…' : full ? 'Мест нет' : !isAuthenticated ? 'Войти для записи' : confirmText}</button>
         <p className="matrix-payment-footnote matrix-current-only">{paymentFootnote}</p>
