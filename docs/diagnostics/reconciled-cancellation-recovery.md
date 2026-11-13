@@ -15,10 +15,13 @@ release, while the split finalizer converted its durable pre-write refusal into
 workspace and composes only the `func` fields of:
 
 - `lk_subscription_booking_router_20260804`;
-- `lk_subscription_booking_finalize_20260804`.
+- `lk_subscription_booking_finalize_20260804`;
+- `bcc3dccf8d64f9bb` (legacy split cleanup).
 
 It preserves the complete graph, native order, existing legacy/native cancellation
-protocols, HTTP/Mongo wiring and unrelated node fields. Exact function preimages,
+protocols, HTTP/Mongo wiring and unrelated node fields. The local six-output cleanup implementation is never
+substituted for the installed four-output function; four exact deltas preserve
+its existing architecture. Exact function preimages,
 whole-source SHA, syntax and inverse reconstruction are required. Reapplication
 or source drift fails closed. Raw flows/candidates stay outside Git.
 
@@ -41,6 +44,22 @@ The out-of-band confirmed-claim reconciler now holds money/create/visit cases
 for their dedicated recovery rather than declaring them released from booking
 evidence alone. Its runtime installation is a separate release target from the
 two Node-RED functions; this change does not install or restart a service.
+
+## Preventing the original loss
+
+The timeout cleanup previously treated a verified unpaid **surcharge** as proof
+that the whole booking should be cancelled with `NONE`, even when the booking
+also consumed a subscription visit. The provider audit and cleanup trace can
+therefore show a visit debit followed by a no-return cancellation.
+
+The bounded prevention patch adds a fresh exact booking read for non-actor admin
+cleanup too. Only an explicitly ordinary ON_PLACE booking, consistent identity,
+state and absence of other payment/prepaid evidence may continue with NONE.
+Subscription, prepaid, foreign, unknown or conflicting financial evidence holds
+the cleanup before cancellation and before any whole-exercise fallback. It does
+not introduce SERVICE without a durable cancellation owner. The retained booking
+requires reconciliation; this patch prevents another lost visit and does not
+claim to implement automatic refund of paid subscription game visits.
 
 ## Explicit single-booking visit repair
 
@@ -89,6 +108,22 @@ bookings, the old booking still cancelled and the surcharge still closed/unpaid.
 A separate repair proof honestly records target absence before and after the
 repair. Do not manufacture a native before/after refund receipt, reset money
 fields, increase subscription limits, delete guards or replay a booking.
+
+## Provider refusal observed during the incident
+
+A positive exact cancellation option is not a guarantee that an already-cancelled
+booking can be returned again. The provider rejected the incident's single
+SERVICE request with HTTP400/BAD_REQUEST, “Запись уже отменена”, despite offering
+the subscription option. Subsequent full readback and subscription audit showed
+no visit return. Do not retry that request or transfer the daily guard while
+consumption remains inconsistent. A provider-side correction is required.
+
+The incident's own repair intent was separately classified DECLINED only after
+that direct refusal, unchanged fresh readback and full-document majority CAS.
+Its intent/baseline and receipt digests were preserved; the common lock was not
+deleted, and the original business guard was unchanged. This is an addressed
+operator resolution of a proven rejection, not a blanket “400 means no effect”
+rule and not a successful visit-return proof.
 
 ## Verification and activation
 

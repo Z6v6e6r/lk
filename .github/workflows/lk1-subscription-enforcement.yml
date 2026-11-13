@@ -522,6 +522,7 @@ jobs:
           scripts/tests/reconciledCancellationRecovery.test.mjs
           scripts/tests/cancelledVisitRepair.test.mjs
           scripts/tests/dailyGuardRepair.test.mjs
+          scripts/tests/timeoutSubscriptionPreservation.test.mjs
           scripts/tests/hungClaimRelease.test.mjs
           scripts/tests/lk1FreeCancellationRuntime.test.mjs
           scripts/tests/friendship2TdzRecovery.test.mjs

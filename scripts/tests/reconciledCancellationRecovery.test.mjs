@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { lk1ReconciledCandidate, lk1ReconciledReadback } from '../lib/lk1ReconciledCancellation.mjs';
 import { reconciledRuntimeSource, reconciledFinalizerEdits, applyReconciledEdits,
-  composeReconciledCancellationRecovery, reconciledSha, RECONCILED_IDS } from '../prepare_reconciled_cancellation_recovery.mjs';
+  composeReconciledCancellationRecovery, reconciledSha, RECONCILED_IDS, timeoutPreservationEdits } from '../prepare_reconciled_cancellation_recovery.mjs';
 import { moneyFixture } from './fixtures/lk1ReconciledCancellationFixtures.mjs';
 const read = p => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
 const now = '2099-11-12T12:00:00Z';
@@ -141,15 +141,15 @@ test('durable split JOIN refusal stays409 including the actual ingress with no a
     ...['upstreamAttemptedAt','confirmedBookingId','immediateBookingId','precreatedEntitlementReserved','managedEntitlementOperationId'].map(k=>m=>{m._subscriptionBooking[k]='present'})];
   for(const mutate of cases){const m=refusal();mutate(m);assert.equal(finalizer(m,{})[1].statusCode,202,mutate.toString())}
 });
-test('two-function composition rejects drift/reapply and preserves complete graph/order/inverse', () => {
+test('three-function composition rejects drift/reapply and preserves complete graph/order/inverse', () => {
   const [before, after]=reconciledFinalizerEdits()[0];
   assert.ok(after.includes('lk1SplitVisitRefusal')); assert.ok(!before.includes('lk1SplitVisitRefusal'));
-  const source=[{id:'tab',type:'tab'},...RECONCILED_IDS.map((id,i)=>({id,type:'function',z:'tab',outputs:i?2:8,wires:Array.from({length:i?2:8},()=>[]),func:i?'const ctx=msg._subscriptionBooking,payload=msg.payload,responseStatus=msg.statusCode;\n'+before:'const ctx=msg._subscriptionBooking;\nconst lk1DailyVisitKey = 1;\nfunction guard(){let released=false,owner={};\n  if (!released) return lk1DailyVisitReject(ctx);\n}\nreturn msg;'})),{id:'unrelated',type:'function',z:'tab',func:'return msg;',outputs:1,wires:[[]]}];
+  const source=[{id:'tab',type:'tab'},...RECONCILED_IDS.map((id,i)=>({id,type:'function',z:'tab',outputs:[8,2,4][i],wires:Array.from({length:[8,2,4][i]},()=>[]),func:i===2?'function cleanup(){\n'+timeoutPreservationEdits().map(([before])=>before+'\n'+(before.endsWith('{')?'}':'')).join('\n')+'\n}':i===1?'const ctx=msg._subscriptionBooking,payload=msg.payload,responseStatus=msg.statusCode;\n'+before:'const ctx=msg._subscriptionBooking;\nconst lk1DailyVisitKey = 1;\nfunction guard(){let released=false,owner={};\n  if (!released) return lk1DailyVisitReject(ctx);\n}\nreturn msg;'})),{id:'unrelated',type:'function',z:'tab',func:'return msg;',outputs:1,wires:[[]]}];
   // Synthetic router is only a topology/preimage fixture, with native helpers
   // supplied as declarations so the added protocol can be syntax checked.
-  const bytes=Buffer.from(JSON.stringify(source)),opts={expectedSourceSha256:reconciledSha(bytes),pins:source.slice(1,3).map(n=>reconciledSha(n.func))};
+  const bytes=Buffer.from(JSON.stringify(source)),opts={expectedSourceSha256:reconciledSha(bytes),pins:source.slice(1,4).map(n=>reconciledSha(n.func))};
   const built=composeReconciledCancellationRecovery(bytes,opts),out=JSON.parse(built.candidateBytes);
-  assert.deepEqual(out[3],source[3]); assert.equal(out.length,source.length);
+  assert.deepEqual(out[4],source[4]); assert.equal(out.length,source.length);
   assert.equal(built.contract.allowedAdditions.length,0);
   assert.equal(applyReconciledEdits(before,[[before,after]]),after);
   assert.throws(()=>composeReconciledCancellationRecovery(bytes,{...opts,expectedSourceSha256:'0'.repeat(64)}));

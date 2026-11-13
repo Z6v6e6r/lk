@@ -8,9 +8,10 @@ import { extractSubscriptionPricePreviewSource } from './lib/subscriptionPricePr
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 const read = file => fs.readFileSync(new URL(file, import.meta.url), 'utf8');
 export const reconciledSha = value => crypto.createHash('sha256').update(value).digest('hex');
-export const RECONCILED_IDS = ['lk_subscription_booking_router_20260804', 'lk_subscription_booking_finalize_20260804'];
+export const RECONCILED_IDS = ['lk_subscription_booking_router_20260804', 'lk_subscription_booking_finalize_20260804', 'bcc3dccf8d64f9bb'];
 export const RECONCILED_PINS = ['a35313a5888f721f96d19bf5cf43e92bad5dc41757809e5ea8b8e8f7e5c2066b',
-  'd3895c7bb1d10d91465e5e4052ce82a5a6ab656a153409f6fd6f17c234340edc'];
+  'd3895c7bb1d10d91465e5e4052ce82a5a6ab656a153409f6fd6f17c234340edc',
+  '676a2caff25cb948fb791e69c98dbdb58431f861957ef21fb9f481fc13bb3186'];
 const replace = (source, before, after) => {
   if (source.split(before).length !== 2) throw Error('RECONCILED_CANCELLATION_ANCHOR_DRIFT');
   return source.replace(before, () => after);
@@ -37,18 +38,35 @@ export function reconciledFinalizerEdits() {
   const header = current.slice(0, current.indexOf('const lk1SplitVisitRefusal'));
   return [[header + before, current]];
 }
+export function timeoutPreservationEdits() {
+  return [
+    ['  const actorClientId = isActorBooking(ctx, bookingId) ? toStr(ctx.actorClientId) : null;',
+      '  const actorClientId = isActorBooking(ctx, bookingId) ? toStr(ctx.actorClientId)\n    : ctx.currentTransactionUnpaidVerified === true ? toStr(clientId) : null;'],
+    ['  ctx.currentTransactionUnpaidVerified = false;',
+      '  ctx.currentTransactionUnpaidVerified = false;\n  delete ctx.currentTimeoutBookingChecked;'],
+    ['  if (ctx.currentTransactionUnpaidVerified === true) {',
+      `  if (ctx.currentTransactionUnpaidVerified === true) {
+    if (ctx.currentTimeoutBookingChecked !== true || options.subscription || options.exercise
+      || options.money || options.deposit || options.settlementAccount) {
+      return { unsupportedReason: "Subscription or prepaid visit return requires a durable cancellation owner",
+        unsupportedCode: "timeout_subscription_return_requires_owner" };
+    }`],
+    ['  if (isOk(statusCode) && isCancelledBookingRow(msg.payload)) {',
+      read('./nodered_lk1_hub_nodes/timeout_subscription_preservation.js') + '\n  if (isOk(statusCode) && isCancelledBookingRow(msg.payload)) {'],
+  ];
+}
 export const applyReconciledEdits = (source, edits) => edits.reduce((s, [a, b]) => replace(s, a, b), source);
 export function composeReconciledCancellationRecovery(liveBytes, options) {
   if (!/^[a-f0-9]{64}$/.test(options?.expectedSourceSha256 || '')
     || reconciledSha(liveBytes) !== options.expectedSourceSha256) throw Error('RECONCILED_CANCELLATION_SOURCE_DRIFT');
   const source = JSON.parse(liveBytes);
   if (!Array.isArray(source) || new Set(source.map(n => n.id)).size !== source.length) throw Error('RECONCILED_CANCELLATION_GRAPH_INVALID');
-  const candidate = structuredClone(source), edits = [reconciledRouterEdits(), reconciledFinalizerEdits()];
+  const candidate = structuredClone(source), edits = [reconciledRouterEdits(), reconciledFinalizerEdits(), timeoutPreservationEdits()];
   const pins = options.pins || RECONCILED_PINS;
   for (let i = 0; i < RECONCILED_IDS.length; i++) {
     const n = candidate.find(n => n.id === RECONCILED_IDS[i]), tab = candidate.find(t => t.id === n?.z);
     if (n?.type !== 'function' || n.d || n.disabled || tab?.type !== 'tab' || tab.disabled
-      || n.outputs !== (i === 0 ? 8 : 2) || reconciledSha(n.func) !== pins[i]) throw Error('RECONCILED_CANCELLATION_NODE_DRIFT');
+      || n.outputs !== [8, 2, 4][i] || reconciledSha(n.func) !== pins[i]) throw Error('RECONCILED_CANCELLATION_NODE_DRIFT');
     n.func = applyReconciledEdits(n.func, edits[i]);
     new Function('msg', 'node', 'global', 'env', 'flow', n.func);
     if (applyReconciledEdits(n.func, edits[i].slice().reverse().map(([a, b]) => [b, a])) !== source.find(x => x.id === n.id).func) {
