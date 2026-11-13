@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createMaxOutboxNativeOperation } from '../nodered_reviewed_flow_deploy/max_outbox_native_operation.mjs';
 import { createReviewedFlowRuntime } from '../nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs';
 import { max_outboxGraphHash, max_outboxOrderedGraphHash, createMaxOutboxBodyPreserver } from '../nodered_reviewed_flow_deploy/max_outbox_body_preserver.mjs';
-import { sha256, nodeSha256, MAX_OUTBOX_RESUME_TOPOLOGY as routes, MAX_OUTBOX_RESUME_REQUIRED_IDS } from '../nodered_max_outbox_resume.mjs';
+import { sha256, nodeSha256, MAX_OUTBOX_RESUME_REQUIRED_IDS } from '../nodered_max_outbox_resume.mjs';
 
 import {graphFixture} from './fixtures/max-outbox-native-fixture.mjs';
 const code = 'a'.repeat(64), identity = 'b'.repeat(64), commit = 'c'.repeat(40);
