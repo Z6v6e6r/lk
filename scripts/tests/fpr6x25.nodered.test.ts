@@ -72,6 +72,55 @@ test("FPR create rejects changed seeds, roster mismatch, legacy event IDs and al
   }
 });
 
+test("new FPR server inserts add 45 minutes once for cached clients and replace client policy metadata", () => {
+  const input = fixture(), before = structuredClone(input);
+  input.params.fprDeadlinePolicy = { version: 999, extensionMinutes: 999, baseEndsAt: '2099-01-01' };
+  const create = () => prepare({ payload: structuredClone(input) })[0];
+  const first = create(), retry = create();
+  const saved = first.payload.$setOnInsert;
+  assert.equal(Date.parse(saved.params.fpr6x25.endsAt), Date.parse(before.params.fpr6x25.endsAt) + 45 * 60_000);
+  assert.deepEqual(saved.params.fprDeadlinePolicy, { version: 1, extensionMinutes: 45, baseEndsAt: before.params.fpr6x25.endsAt });
+  assert.deepEqual(first.query, retry.query);
+  assert.deepEqual(saved.params, retry.payload.$setOnInsert.params);
+  assert.equal(first.payload.$set, undefined, 'retry cannot modify an existing ready, running or completed protocol');
+  assert.equal(saved.params.fpr6x25.revision, 0);
+  assert.deepEqual(saved.params.fpr6x25.attempts, before.params.fpr6x25.attempts);
+  assert.equal(input.params.fpr6x25.endsAt, before.params.fpr6x25.endsAt);
+  const started = update(saved, { action: 'start_round' });
+  assert.equal(started.params.fpr6x25.endsAt, saved.params.fpr6x25.endsAt);
+  assert.deepEqual(started.params.fprDeadlinePolicy, saved.params.fprDeadlinePolicy);
+});
+
+test("real Mongo: repeated new-policy create cannot extend a saved ready, running or finished FPR", {
+  skip: !process.env.COMMUNITY_MONTHLY_TEST_MONGO_URI,
+}, async t => {
+  const { MongoClient } = await import('mongodb');
+  const client = await MongoClient.connect(process.env.COMMUNITY_MONTHLY_TEST_MONGO_URI!);
+  const db = client.db(`fpr_deadline_test_${crypto.randomBytes(8).toString('hex')}`);
+  t.after(async () => { await db.dropDatabase(); await client.close(); });
+  const collection = db.collection('tournaments');
+  const input = fixture();
+  const create = () => prepare({ payload: structuredClone(input) })[0];
+  const first = create();
+  await collection.updateOne(first.query, first.payload, { upsert: true });
+  const initial = await collection.findOne({ _id: input._id });
+  assert.ok(initial);
+  const retry = create();
+  assert.equal((await collection.updateOne(retry.query, retry.payload, { upsert: true })).modifiedCount, 0);
+  assert.deepEqual(await collection.findOne({ _id: input._id }), initial);
+  let saved = initial;
+  for (const action of ['start_round', 'finish']) {
+    const next = update(saved, { action });
+    await collection.updateOne({ _id: input._id }, { $set: { params: next.params } });
+    saved = (await collection.findOne({ _id: input._id }))!;
+    const duplicate = create();
+    await assert.rejects(collection.updateOne(duplicate.query, duplicate.payload, { upsert: true }), { code: 11000 });
+    assert.deepEqual(await collection.findOne({ _id: input._id }), saved);
+    assert.equal(saved.params.fpr6x25.endsAt, initial.params.fpr6x25.endsAt);
+    assert.equal(await collection.countDocuments({}), 1);
+  }
+});
+
 test("FPR commands use CAS and idempotency; legacy result/finish payload cannot bypass the reducer", () => {
   let doc = fixture();
   const before = structuredClone(doc);

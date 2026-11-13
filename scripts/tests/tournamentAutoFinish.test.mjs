@@ -139,6 +139,46 @@ test('FPR first actual round start arms timer; creating a ready protocol does no
   const wrapped = buildAutoFinishNode(buildFprNodeFunction(source, 'recalculate'), 'write');
   const msg = invoke(wrapped, request(t, { params: { fprCommand: { action: 'start_round', id: 'first-round', expectedRevision: 0 } } }));
   assert.equal(msg.mongoUpdate.$set['params.autoFinish'].version, 1);
+  const oldTiming = msg.mongoUpdate.$set['params.autoFinish'];
+  assert.equal(Date.parse(oldTiming.deadlineAt) - Date.parse(oldTiming.startedAt), 180 * 60_000);
+  assert.equal(oldTiming.durationMs, undefined);
+});
+
+test('new-policy FPR timer lasts 225 minutes, preserves old sessions and rejects mismatched deadlines', () => {
+  const t = fprFixture();
+  const state = createFprState({ ...t.params.fpr6x25, now: start });
+  const baseEndsAt = state.endsAt;
+  state.endsAt = new Date(Date.parse(baseEndsAt) + 45 * 60_000).toISOString();
+  t.params = { ...fprProjection(state).params, fprDeadlinePolicy: { version: 1, extensionMinutes: 45, baseEndsAt } };
+  const wrapped = buildAutoFinishNode(buildFprNodeFunction(source, 'recalculate'), 'write');
+  const msg = invoke(wrapped, request(t, { params: { autoFinish: { durationMs: 999999999 }, fprCommand: { action: 'start_round', id: 'new-policy-start', expectedRevision: 0 } } }));
+  const timing = msg.mongoUpdate.$set['params.autoFinish'];
+  assert.equal(timing.durationMs, 225 * 60_000);
+  assert.equal(Date.parse(timing.deadlineAt) - Date.parse(timing.startedAt), 225 * 60_000);
+  const saved = structuredClone(t);
+  saved.params.fpr6x25 = msg.mongoUpdate.$set['params.fpr6x25'];
+  saved.params.autoFinish = timing;
+  const threeHours = Date.parse(timing.startedAt) + 180 * 60_000;
+  assert.equal(planTournamentAutoFinish(saved, threeHours, guarded).reason, 'NOT_DUE');
+  assert.equal(planTournamentAutoFinish(saved, Date.parse(timing.deadlineAt) - 1, guarded).reason, 'NOT_DUE');
+  const finish = planTournamentAutoFinish(saved, Date.parse(timing.deadlineAt), guarded);
+  assert.equal(finish.close, true);
+  assert.equal(finish.set['params.fpr6x25'].status, 'incomplete');
+  assert.match(tournamentAutoFinishNotice({ ...saved.params, autoFinish: { ...timing, reason: 'time_limit' } }), /3 часа 45 минут/);
+  for (const mutate of [
+    x => { x.params.autoFinish.durationMs = 226 * 60_000; },
+    x => { x.params.autoFinish.deadlineAt = new Date(Date.parse(timing.deadlineAt) + 1).toISOString(); },
+    x => { delete x.params.fprDeadlinePolicy; },
+    x => { x.params.fprDeadlinePolicy.extensionMinutes = 90; },
+    x => { x.params.fprDeadlinePolicy.baseEndsAt = 'invalid'; },
+    x => { x.params.fpr6x25.endsAt = baseEndsAt; },
+  ]) {
+    const invalid = structuredClone(saved); mutate(invalid);
+    assert.equal(planTournamentAutoFinish(invalid, Date.parse(timing.deadlineAt), guarded).reason, 'INVALID_SERVER_DEADLINE');
+  }
+  const generic = fixture();
+  generic.params.fprDeadlinePolicy = saved.params.fprDeadlinePolicy;
+  assert.equal(planTournamentAutoFinish(generic, now, guarded).close, true, 'generic tournaments retain their 3-hour deadline');
 });
 test('dry run has no database writes; apply rejects missing writer guards', async () => {
   const t = fixture();
