@@ -8666,6 +8666,10 @@ h6,
   to { transform: translateX(150%); }
 }
 
+.game-create-progress-track.is-paused::after {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .game-create-progress-track::after {
     animation: none;

@@ -475,6 +475,8 @@ jobs:
           scripts/tests/splitOrdinaryPriceHook.test.mjs
           scripts/tests/splitJoinOrdinaryPriceSource.test.mjs
           scripts/tests/splitPayment.apiClient.test.ts
+          scripts/tests/splitCreateRecovery.test.ts
+          scripts/tests/splitCreateResult.test.mjs
           scripts/tests/gameCreateButtonPreparation.test.mjs
           scripts/tests/gamesBookingLeadTimeSource.test.ts
           scripts/tests/requestTimeout.test.ts
@@ -629,6 +631,7 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/function98-runtime" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund node-red@4.0.9
           NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/function98NativeRuntime.test.mjs
+          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/splitCreateResultRuntime.test.mjs
 
       - name: Run Partner membership R4 gates
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
