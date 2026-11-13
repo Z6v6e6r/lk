@@ -64,13 +64,25 @@ matching edge entry must not be reported as a confirmed 499.
 
 `prepareGameReadDiagnostics(source, expectedSha256)` in
 `scripts/nginx/prepare_game_read_diagnostics.mjs` is a pure builder, with no apply/reload path.
-Input is the privately captured vhost source. It requires one reviewed nested games location,
-explicit existing canonical access_log and local proxy_set_header Host, one upstream and one
-literal CORS Allow-Headers. This preserves access_log/proxy_set_header inheritance. It retains all
-existing directives and logs, appends two CORS names and strips only the two new headers. Unsupported
-includes/nested locations, drift, duplicate targets or conflicting instrumentation are rejected.
-HTTP fragment installation and vhost candidate must be reviewed together; unknown locations are
-not rewritten. Reserve proxy topology needs its own reviewed adaptation if this builder refuses it.
+Input is the privately captured vhost source. Explicit `role: primary|reserve` selects the
+existing nested games location or the existing reserve API regex location. Existing proxy routing,
+Host/forwarded headers, timeouts and canonical/support logs are retained. When access_log is
+inherited, the full closest effective list is materialized locally before adding the diagnostic
+stream. If it comes from nginx.conf, pass its exact `httpSource` and `expectedHttpSha256` too.
+Ancestor literal includes require an exact hash-bound `includeSources` manifest (including recursively included files); unproven/glob/cyclic includes fail closed. Missing canonical log, unsupported target includes/nested locations, drift, duplicate targets, foreign or
+partial instrumentation are rejected. The builder also validates idempotent scope ownership.
+
+Primary strips the two headers before Node-RED. Reserve forwards only validated scoped claims to
+primary (UNKNOWN for invalid values), while non-target API requests get neither header. Both reserve
+CORS lists (OPTIONS and ordinary responses) are extended; the initial origin/method/access rules
+are preserved. Prepare/review the HTTP fragment and both vhosts together.
+
+Dedicated sink policy: install `lk-game-read-diagnostics.logrotate` at
+`/etc/lk-game-read-diagnostics.logrotate` and its cron entry at
+`/etc/cron.d/lk-game-read-diagnostics`. It uses its own state file and does not overlap the
+distribution's `*.log` policy. Hourly evaluation rotates at most 3 archives, maxage 1 day,
+maxsize 32MiB; these are rotation limits, not a hard disk quota between evaluations. Maxage cleanup runs on rotation, so idle files do not imply a strict erasure deadline. Both cron
+and logrotate must be available. Use restricted 0640 www-data:adm sink ownership and monitor disk.
 
 Future rollout requires separate approval:
 

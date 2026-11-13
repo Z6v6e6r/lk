@@ -37,6 +37,36 @@ test('candidate preserves existing upstream, log and header directives and rejec
  assert.throws(()=>prepareGameReadDiagnostics(source,'wrong'),/HASH_MISMATCH/);
  for(const bad of [source.replace('access_log /var/log/nginx/access.log;',''),source.replace('proxy_set_header Host $host;',''),source.replace('proxy_set_header Host $host;','include PRIVATE;'),source+source,source.replace('location ^~ /lk/games/ {','location ^~ /lk/games/ { location /nested { return 200; }')])assert.throws(()=>prepareGameReadDiagnostics(bad,sha256(bad)));
 });
+
+const reserveSource = source.replace('location ^~ /lk/games/', 'location ~ ^/lk/(analytics|advertising|chats|communities|games|media|onboarding|push|support|tournaments)(/|$)')
+ .replace('    access_log /var/log/nginx/access.log;\n    access_log SUPPORT combined;\n','')
+ .replace('    listen 127.0.0.1:PORT;','    listen 127.0.0.1:PORT;\n    access_log /var/log/nginx/access.log;\n    access_log SUPPORT combined;')
+ .replace('if ($request_method = OPTIONS) { return 204; }',`if ($request_method = OPTIONS) {
+    add_header Access-Control-Allow-Origin "https://page.invalid" always;
+    add_header Access-Control-Allow-Headers "Content-Type, Authorization, X-Correlation-ID" always;
+    return 204;
+    }`);
+test('reserve forwards only validated scoped claims and materializes inherited logs; http source is hash-bound',()=>{
+ const r=prepareGameReadDiagnostics(reserveSource,sha256(reserveSource),{role:'reserve'});
+ assert.match(r.candidate,/proxy_set_header X-LK-Client-Request-ID \$lk_game_read_forward_id/);
+ assert.equal((r.candidate.match(/X-Correlation-ID, X-LK-Client-Request-ID, X-LK-Client-Build/g)||[]).length,2);
+ assert.equal((r.candidate.match(/access_log SUPPORT combined/g)||[]).length,2);
+ assert.equal(prepareGameReadDiagnostics(r.candidate,r.candidateSha256,{role:'reserve'}).changed,false);
+ const inherited=source.replace('    access_log /var/log/nginx/access.log;\n    access_log SUPPORT combined;\n','');
+ const httpSource='http {\n access_log /var/log/nginx/access.log;\n access_log SUPPORT combined;\n}';
+ assert.throws(()=>prepareGameReadDiagnostics(inherited,sha256(inherited),{httpSource,expectedHttpSha256:'wrong'}),/HTTP_SOURCE_HASH_MISMATCH/);
+ const opts={httpSource,expectedHttpSha256:sha256(httpSource)};
+ const primary=prepareGameReadDiagnostics(inherited,sha256(inherited),opts);
+ assert.match(primary.candidate,/access_log SUPPORT combined/);
+ assert.equal(prepareGameReadDiagnostics(primary.candidate,primary.candidateSha256,opts).changed,false);
+ const withInclude=inherited.replace('    listen 127.0.0.1:PORT;','    listen 127.0.0.1:PORT;\n    access_log /var/log/nginx/access.log;\n    include /synthetic/support.conf;');
+ const support='access_log SUPPORT combined;';const includeOpts={includeSources:{'/synthetic/support.conf':{text:support,sha256:sha256(support)}}};
+ assert.throws(()=>prepareGameReadDiagnostics(withInclude,sha256(withInclude)),/INCLUDE_UNATTESTED/);
+ const copied=prepareGameReadDiagnostics(withInclude,sha256(withInclude),includeOpts);assert.match(copied.candidate,/access_log SUPPORT combined/);
+ assert.equal(prepareGameReadDiagnostics(copied.candidate,copied.candidateSha256,includeOpts).changed,false);
+ assert.throws(()=>prepareGameReadDiagnostics(withInclude,sha256(withInclude),{includeSources:{'/synthetic/support.conf':{text:support,sha256:'wrong'}}}),/INCLUDE_UNATTESTED/);
+});
+
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function port(){const s=net.createServer();s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p;}
 function request(p,url,headers={},method='GET') {return new Promise((resolve,reject)=>{const r=http.request({host:'127.0.0.1',port:p,path:url,method,headers},res=>{let body='';res.on('data',c=>body+=c);res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body}));});r.on('error',reject);r.end();});}
@@ -56,10 +86,20 @@ test('real isolated Nginx: 499 correlation, timings, CORS, header stripping, 304
   res.end('{}');
  });
  upstream.listen(0,'127.0.0.1');await once(upstream,'listening');t.after(()=>new Promise(r=>upstream.close(r)));
- const p=await port(),up=upstream.address().port;
- const candidate=prepareGameReadDiagnostics(source,sha256(source)).candidate.replace('PORT',String(p)).replace('UPSTREAM',String(up))
-  .replace('/var/log/nginx/access.log',`${dir}/canonical.log`).replace('SUPPORT',`${dir}/support.log`).replace('/var/log/nginx/lk-game-read-diagnostics.jsonl',`${dir}/diagnostics.jsonl`);
- const conf=`daemon off; master_process off; pid ${dir}/nginx.pid; error_log ${dir}/error.log notice; events { worker_connections 64; } http { ${HTTP_FRAGMENT}\n${candidate}\n}`;
+ const p=await port(),reservePort=await port(),up=upstream.address().port;
+ const sharedPath=`${dir}/included.conf`,sharedText=`access_log ${dir}/included-support.log combined;`;
+ fs.writeFileSync(sharedPath,sharedText);
+ const includeOpts={includeSources:{[sharedPath]:{text:sharedText,sha256:sha256(sharedText)}}};
+ const primarySource=source.replace('    access_log /var/log/nginx/access.log;\n    access_log SUPPORT combined;\n','')
+  .replace('    listen 127.0.0.1:PORT;',`    listen 127.0.0.1:PORT;\n    access_log /var/log/nginx/access.log;\n    include ${sharedPath};`);
+ const candidate=prepareGameReadDiagnostics(primarySource,sha256(primarySource),includeOpts).candidate.replace('PORT',String(p)).replace('UPSTREAM',String(up))
+  .replaceAll('/var/log/nginx/access.log',`${dir}/canonical.log`).replace('SUPPORT',`${dir}/support.log`).replace('/var/log/nginx/lk-game-read-diagnostics.jsonl',`${dir}/diagnostics.jsonl`);
+ const reserveWithInclude=reserveSource.replace('    access_log SUPPORT combined;',`    include ${sharedPath};`);
+ const reserveCandidate=prepareGameReadDiagnostics(reserveWithInclude,sha256(reserveWithInclude),{...includeOpts,role:'reserve'}).candidate
+  .replace('PORT',String(reservePort)).replace('UPSTREAM',String(p))
+  .replaceAll('/var/log/nginx/access.log',`${dir}/reserve-canonical.log`).replaceAll('SUPPORT',`${dir}/reserve-support.log`)
+  .replace('/var/log/nginx/lk-game-read-diagnostics.jsonl',`${dir}/reserve-diagnostics.jsonl`);
+ const conf=`daemon off; master_process off; pid ${dir}/nginx.pid; error_log ${dir}/error.log notice; events { worker_connections 64; } http { ${HTTP_FRAGMENT}\n${candidate}\n${reserveCandidate}\n}`;
  fs.writeFileSync(`${dir}/nginx.conf`,conf);fs.mkdirSync(`${dir}/logs`);
  const checked=spawnSync(binary,['-t','-p',dir+'/', '-c',`${dir}/nginx.conf`],{encoding:'utf8'});assert.equal(checked.status,0,checked.stderr);
  const child=spawn(binary,['-p',dir+'/', '-c',`${dir}/nginx.conf`],{stdio:'ignore'});t.after(async()=>{if(child.exitCode===null){child.kill('SIGTERM');await once(child,'exit');}});
@@ -91,5 +131,18 @@ test('real isolated Nginx: 499 correlation, timings, CORS, header stripping, 304
  assert.ok(!raw.includes('PRIVATE'));assert.ok(!raw.includes('127.0.0.1'));assert.ok(!raw.includes('page.invalid'));
  assert.ok(calls.every(r=>!r.headers['x-lk-client-request-id']&&!r.headers['x-lk-client-build']));
  assert.ok(calls.every(r=>r.headers['x-existing']==='existing-header'));assert.equal(calls[1].headers.authorization,'PRIVATE-AUTH');
- assert.ok(fs.readFileSync(`${dir}/canonical.log`,'utf8').includes('PRIVATE-GAME'));assert.ok(fs.readFileSync(`${dir}/support.log`,'utf8').includes('PRIVATE-GAME'));
+ const chainId='22222222-2222-4222-8222-222222222222';
+ const cors=await request(reservePort,'/lk/games/fixture',{Origin:'https://page.invalid'},'OPTIONS');assert.equal(cors.status,204);
+ assert.match(cors.headers['access-control-allow-headers'],/X-LK-Client-Request-ID, X-LK-Client-Build/);
+ assert.equal((await request(reservePort,'/lk/games/chain?phone=PRIVATE-PHONE',{...headers,'X-LK-Client-Request-ID':chainId})).status,200);
+ const readLog=file=>fs.readFileSync(file,'utf8').trim().split('\n').map(JSON.parse);
+ const reserveEvent=readLog(`${dir}/reserve-diagnostics.jsonl`).find(r=>r.clientRequestId===chainId);
+ const primaryEvent=readLog(`${dir}/diagnostics.jsonl`).find(r=>r.clientRequestId===chainId);
+ assert.ok(reserveEvent&&primaryEvent);assert.equal(primaryEvent.callerBuild,build);assert.equal(reserveEvent.callerBuild,build);
+ assert.notEqual(primaryEvent.edgeRequestId,reserveEvent.edgeRequestId);
+ assert.ok(!fs.readFileSync(`${dir}/reserve-diagnostics.jsonl`,'utf8').includes('PRIVATE'));
+ assert.ok(!calls.at(-1).headers['x-lk-client-request-id']);
+ assert.ok(fs.readFileSync(`${dir}/reserve-canonical.log`,'utf8').includes('PRIVATE-PHONE'));
+ assert.ok(fs.readFileSync(`${dir}/included-support.log`,'utf8').split('chain?').length>=3);
+ assert.ok(fs.readFileSync(`${dir}/canonical.log`,'utf8').includes('PRIVATE-GAME'));assert.ok(fs.readFileSync(`${dir}/included-support.log`,'utf8').includes('PRIVATE-GAME'));
 });
