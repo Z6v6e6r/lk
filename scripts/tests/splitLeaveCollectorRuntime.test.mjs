@@ -17,7 +17,7 @@ test('real isolated Node-RED native nodes deploy and exact inverse preserve unre
     const userDir = fs.mkdtempSync(path.join(os.tmpdir(), 'split-leave-runtime-'));
     const app = express(), server = http.createServer(app), stored = [];
     let sentinelStarts = 0, unexpectedInputs = 0;
-    RED.init(server, { userDir, flowFile: 'flows.json', httpAdminRoot: '/', httpNodeRoot: '/api', disableEditor: true,
+    RED.init(server, { userDir, flowFile: 'flows.json', flowFilePretty: true, httpAdminRoot: '/', httpNodeRoot: '/api', disableEditor: true,
       functionExternalModules: false, logging: { console: { level: 'off' } } });
     RED.nodes.registerType('mongodb4', function (config) {
       RED.nodes.createNode(this, config); this.on('input', msg => stored.push(msg));
@@ -47,6 +47,8 @@ test('real isolated Node-RED native nodes deploy and exact inverse preserve unre
         routeHash: createHash('sha256').update(JSON.stringify(source.flows.find(node => node.id === ROUTE_ID))).digest('hex') });
       await deploy({ rev: source.rev, flows: built.candidate });
       const active = await get(); assert.deepEqual(active.flows, built.candidate);
+      assert.deepEqual(fs.readFileSync(path.join(userDir, 'flows.json')), Buffer.from(JSON.stringify(built.candidate, null, 4)),
+        'Worker binding must use the exact native four-space disk encoding without a newline');
       assert.equal(RED.nodes.getNode('unrelated'), sentinel); assert.equal(sentinelStarts, 1); assert.equal(unexpectedInputs, 0);
       const secret = 'SENSITIVE_TEST_SENTINEL';
       const payload = { schemaVersion: 1, diagnosticEventId: randomUUID(), requestId: randomUUID(), eventKind: 'client_error',

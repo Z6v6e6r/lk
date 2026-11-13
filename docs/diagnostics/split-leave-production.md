@@ -2,9 +2,9 @@
 
 PR404 is merged as `33929d928cba110186ad1a3e058e18f4eb65b1fa`.
 The installed production frontend is a separately maintained composite source,
-`38f46de5c39cef1ab422b3dbfab634a19f635d1d`. This release builds from that exact
+`9e5bb624b2396b4012b1d3c5cec1564a35180daa`. This release builds from that exact
 baseline rather than replacing it with the accumulated frontend changes on main.
-All unrelated frontend and exhibition source is preserved.
+All unrelated frontend, exhibition source and the installed PR406 fix are preserved.
 
 The frontend backport carries PR404, the canonical private `client_error` transport
 that its emitter requires, and its closed schema/budget dependencies. Installed
@@ -67,3 +67,26 @@ POST after validating its envelope and lack of auth/cookies. Read Mongo by the e
 random `diagnosticEventId`, compare the full stored safe envelope and verify the
 trace, server ingest time and absence of private sentinels/arbitrary fields.
 No real customer join, leave, booking, payment or notification is needed.
+
+## Coupled cancellation worker
+
+If the cancellation worker is active, stop it gracefully and require PID0/drain
+before changing the graph. The user separately authorized this coupled service
+update after MAX made it active during this rollout. Its configuration, tenant,
+cohort, cursor, permanent auth and every pending intent/job remain untouched.
+
+The pure `collector-worker-rebind.mjs` follows the existing MAX worker preparation
+contract. It verifies the complete 13-file public bundle, trusted manifest/guard
+hashes, old full-flow pin and unchanged gateway. It derives the new native disk
+hash only from the same pinned collector candidate. Exactly 64 digest bytes in
+the guard change; the other 12 payload files stay byte-identical. Prepare forward
+and inverse artifacts before stopping, retain previous generations, and never
+edit an installed hash or accept an arbitrary observed replacement hash.
+
+Keep the worker stopped through the full 900-second backend observation. Before
+switching `current`, require actual disk/native graph equality and the prepared
+native byte hash; verify the immutable bundle/dependencies and unchanged unit,
+configuration and cursor scope. Perform the native generation readiness checks
+before starting with the original mode. Observe a complete 120-second cycle and
+15 minutes. Do not use SHADOW/once as a read-only probe, replay cancellations,
+rewind cursors, clear REVIEW, or change the retained auth module in settings.

@@ -632,6 +632,7 @@ jobs:
           scripts/tests/splitLeaveCollector.test.mjs
           scripts/tests/splitLeaveCollectorRuntime.test.mjs
           scripts/tests/collectorNativeBrowser.test.mjs
+          scripts/tests/collectorWorkerRebind.test.mjs
 
       - name: Fetch pinned legacy build image
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
