@@ -35,6 +35,7 @@ function client({ patchStatus = 409, readStatus = 200, readBody = fresh, throwRe
     isLkIdleRequestPausedError: () => false, resolveRequestCacheConfig: () => null,
     diagnosticId: () => { if (diagnosticUnavailable) throw Error("fixture crypto unavailable"); return randomUUID(); },
     callerBuild: () => "b".repeat(40), gamePatchDiagnosticUrl, abortCause: () => null, UUID,
+    captureSplitLeaveInitiator: () => {},
     trackClientError: (_source, _error, context) => diagnostics.push(context), isRecord: (value) => value !== null && typeof value === "object" && !Array.isArray(value),
     pickString: (record, keys) => keys.map((key) => record[key]).find((value) => typeof value === "string" && value) ?? null,
     isGameExerciseIdMissingGuard: () => false, normalizePadelGameRecord: (value) => value?.id ? value : null,
