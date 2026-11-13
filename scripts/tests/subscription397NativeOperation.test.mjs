@@ -112,8 +112,9 @@ test('ambiguous POST requires explicit observed-POST adoption without replay and
 
 test('complete slow post-ACK readback is accepted without retiming its request, stale completion refuses', async t => {
   const f=await fixture(t);await f.reserve();const b=await f.begin();
-  const input=await f.applyFixture(b.seal);f.advance(100000);
+  const input=await f.applyFixture(b.seal);f.advance(110000);
   input.native.observedAt=new Date(f.now()).toISOString();
+  f.advance(20000);
   assert.equal((await f.op.confirm(input)).status,'SOAKING');
   for(const variant of ['acquisition','completion','before-ack','extra-field']){
     const g=await fixture(t);await g.reserve();const c=await g.begin();

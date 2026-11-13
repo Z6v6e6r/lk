@@ -108,7 +108,8 @@ export function createSubscription397NativeOperation({ stage, root = ROOT, uid =
       && (!orderedGraph || value.orderedGraphSha256 === orderedGraph)
       && (!editorOrderedGraph || value.editorOrderedGraphSha256 === editorOrderedGraph)
       && typeof value.requestedAt === 'string' && new Date(Date.parse(value.requestedAt)).toISOString() === value.requestedAt
-      && Date.parse(value.requestedAt) <= Date.parse(value.observedAt) && now() - Date.parse(value.requestedAt) <= 120000
+      && Date.parse(value.requestedAt) <= Date.parse(value.observedAt)
+      && Date.parse(value.observedAt) - Date.parse(value.requestedAt) <= 120000
       && typeof value.observedAt === 'string' && new Date(Date.parse(value.observedAt)).toISOString() === value.observedAt
       && Date.parse(value.observedAt) <= now() && now() - Date.parse(value.observedAt) <= 30000, 'S397_NATIVE_EVIDENCE');
     return value;

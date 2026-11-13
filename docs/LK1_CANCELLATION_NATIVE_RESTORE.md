@@ -15,10 +15,14 @@ any later timestamp, bytes, binding or process change fails closed. The timestam
 is never refreshed by `check()`. This avoids restarting unrelated startup jobs.
 
 Keep the worker stopped through backend preparation, one scoped native deploy and
-the full15-minute observation. Obtain the actual post-deploy disk SHA and gateway
-SHA after active/disk verification; native serialization is not assumed to match
-the preparer's JSON bytes. Commit those exact pins in clean source, build and
-verify the immutable bundle, and preserve the old release referenced by settings.
+the full15-minute observation. The expected worker pins are prepared from the
+exact candidate graph using Node-RED4.0.9's configured pretty storage encoder
+(`JSON.stringify(flows,null,4)`, no trailing newline). The preparer's two-space
+JSON is not the disk-byte pin. After native deployment, require the ACTUAL disk
+SHA and gateway SHA to equal these committed expected pins, and independently
+verify active/disk equality. A mismatch stops activation; it never permits
+editing a pin on the host. Build and verify the immutable bundle from clean
+pushed source and preserve the old release referenced by settings.
 
 Before start, verify unchanged env/tenant/cohort/cursor scope, fresh INTENT/REVIEW
 and free-pending inventory, dependency inventory, installed unit and credential
