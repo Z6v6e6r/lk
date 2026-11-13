@@ -129,6 +129,8 @@ import {
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
 import { trackAnalyticsEvent } from "../../utils/analytics";
+import { readAuthToken } from "../../utils/authTokenStorage";
+import { applyGamePatchSnapshot, gamePatchSnapshotKind, GAME_PATCH_PENDING_MESSAGE, GAME_PATCH_SNAPSHOT_EVENT } from "../../utils/gamePatchSnapshot";
 import { createLocalMembershipId } from "./localMembershipGeneration";
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
@@ -2590,7 +2592,7 @@ function upsertPadelGameRecord(
   const normalizedIncomingInvite = normalizeInviteUrl(incoming.inviteUrl);
   const existingIndex = current.findIndex((item) => item.id === incoming.id);
   if (existingIndex < 0) {
-    return [{ ...mergedIncoming, inviteUrl: normalizedIncomingInvite }, ...current];
+    return [gamePatchSnapshotKind(mergedIncoming) ? mergedIncoming : { ...mergedIncoming, inviteUrl: normalizedIncomingInvite }, ...current];
   }
 
   const existing = current[existingIndex];
@@ -2642,6 +2644,8 @@ function mergePadelGameRecord(
   current: PadelGameRecord | null | undefined,
   incoming: PadelGameRecord,
 ): PadelGameRecord {
+  const snapshot = applyGamePatchSnapshot(current, incoming);
+  if (snapshot) return snapshot;
   const normalizedIncomingInvite = normalizeInviteUrl(incoming.inviteUrl);
   if (!current) {
     return {
@@ -7520,7 +7524,7 @@ export default function GamesPage({
     },
   ) => {
     const communityMode = options?.communityMode ?? "if_exists";
-    const replaceRecord = options?.recordMode === "replace";
+    const replaceRecord = options?.recordMode === "replace" || gamePatchSnapshotKind(incoming) === "canonical";
     const recordForStore = replaceRecord
       ? mergePadelGameRecord(null, incoming)
       : incoming;
@@ -7533,7 +7537,7 @@ export default function GamesPage({
         const existingIndex = prev.findIndex((item) => item.id === incoming.id);
         if (existingIndex < 0) return [recordForStore, ...prev];
         const next = [...prev];
-        next[existingIndex] = recordForStore;
+        next[existingIndex] = applyGamePatchSnapshot(prev[existingIndex], incoming) ?? recordForStore;
         return next;
       });
     }
@@ -7543,11 +7547,11 @@ export default function GamesPage({
       const activeId = (gameRecordId || "").trim();
       if (activeId && incoming.id === activeId) {
         return replaceRecord
-          ? recordForStore
+          ? (applyGamePatchSnapshot(prev, incoming) ?? recordForStore)
           : (prev ? mergePadelGameRecord(prev, incoming) : incoming);
       }
       if (prev && prev.id === incoming.id) {
-        return replaceRecord ? recordForStore : mergePadelGameRecord(prev, incoming);
+        return replaceRecord ? (applyGamePatchSnapshot(prev, incoming) ?? recordForStore) : mergePadelGameRecord(prev, incoming);
       }
       return prev;
     });
@@ -7596,6 +7600,21 @@ export default function GamesPage({
     },
     [activeGameRecordStore, communityGames, gameRecordId],
   );
+  const activeGameForPatchRef = useRef(activeGameRecord);
+  activeGameForPatchRef.current = activeGameRecord;
+  const patchSnapshotSession = readAuthToken();
+  useEffect(() => {
+    const token = patchSnapshotSession;
+    const onSnapshot = (event: Event) => {
+      if (readAuthToken() !== token) return;
+      const record = (event as CustomEvent<{ record?: PadelGameRecord }>).detail?.record;
+      if (!record?.id || !gamePatchSnapshotKind(record)) return;
+      upsertGameRecordInStores(record, { communityMode: "if_exists", activeMode: "if_exists" });
+    };
+    window.addEventListener(GAME_PATCH_SNAPSHOT_EVENT, onSnapshot);
+    return () => window.removeEventListener(GAME_PATCH_SNAPSHOT_EVENT, onSnapshot);
+  }, [profileId, profilePhone, patchSnapshotSession, upsertGameRecordInStores]);
+
   const subscriptionUsageShadowJoinPreview = useMemo<SubscriptionUsageShadowPreviewRequest | null>(() => (
     activeGameRecord?.id
       ? {
@@ -8889,6 +8908,8 @@ export default function GamesPage({
       return;
     }
 
+    if (gamePatchSnapshotKind(activeGameRecord) === "partial_ack") return;
+
     const syncStartedAt = Date.now();
     trackRosterSyncEvent("started", {
       gameId: activeGameRecord.id,
@@ -8961,8 +8982,10 @@ export default function GamesPage({
           };
         }
 
-        void apiUpdatePadelGameRecord(activeGameRecord.id, patchPayload).then(async (patchResult) => {
-          if (!alive) return;
+        void apiUpdatePadelGameRecord(activeGameRecord.id, patchPayload, {
+          background: { kind: "roster_sync", intent: { exerciseId, vivaPlayers, leaveEvents: detailsLeaveEvents, maxPlayers: detailsMaxPlayers } },
+        }).then(async (patchResult) => {
+          if (!alive || patchResult.backgroundSkipped) return;
           const durationMs = Date.now() - syncStartedAt;
           const restoredPlayersCount = Math.max(
             0,
@@ -9066,6 +9089,8 @@ export default function GamesPage({
     if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) return;
     if (!isDetailsSplitPaymentGame || !detailsSplitPaymentMetadata) return;
 
+    if (gamePatchSnapshotKind(activeGameRecord) === "partial_ack") return;
+
     const splitPhones = extractSplitPaymentPhones(detailsSplitPaymentMetadata);
     if (splitPhones.length === 0) return;
 
@@ -9099,8 +9124,9 @@ export default function GamesPage({
         ...detailsMetadata,
         allRelatedPhones: nextAllRelatedPhones,
       },
-    }).then((result) => {
+    }, { background: { kind: "related_phones", intent: nextAllRelatedPhones } }).then((result) => {
       if (!alive) return;
+      if (result.backgroundSkipped) { splitRelatedPhonesRepairAttemptRef.current = null; return; }
       if (result.conflictRecord) {
         upsertGameRecordInStores(result.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
       }
@@ -12571,6 +12597,7 @@ export default function GamesPage({
 
       if (updateResult.data?.id) {
         upsertGameRecordInStores(updateResult.data as PadelGameRecord, { communityMode: "if_exists" });
+        if (updateResult.snapshotKind === "partial_ack") setGameDetailsMetaError(GAME_PATCH_PENDING_MESSAGE);
         return true;
       }
 
@@ -12815,20 +12842,19 @@ export default function GamesPage({
 
       if (updateResult.data?.id) {
         const normalizedRecord = updateResult.data as PadelGameRecord;
-        const mergedRecord = mergePadelGameRecord(activeGameRecord, normalizedRecord);
-        const recordWithRoster: PadelGameRecord = {
-          ...mergedRecord,
-          participants: normalizedParticipants,
-          waitlist: normalizedWaitlist,
-        };
+        if (activeGameForPatchRef.current?.id !== gameRecordId) {
+          upsertGameRecordInStores(normalizedRecord, { communityMode: "if_exists", activeMode: "if_exists" });
+          return true;
+        }
+        const recordWithRoster = mergePadelGameRecord(activeGameForPatchRef.current, normalizedRecord);
         const stillRelevantToCurrentProfile = isPadelGameRecordRelevantToIdentity(
           recordWithRoster,
           profilePhone,
           profileId,
         );
-        setParticipants(normalizedParticipants);
-        setWaitlistPlayers(normalizedWaitlist);
-        setGameRosterError(null);
+        setParticipants(recordWithRoster.participants ?? []);
+        setWaitlistPlayers(recordWithRoster.waitlist ?? []);
+        setGameRosterError(updateResult.snapshotKind === "partial_ack" ? GAME_PATCH_PENDING_MESSAGE : null);
 
         if (!stillRelevantToCurrentProfile) {
           notifyGameRecordsUpdated([recordWithRoster], "games_roster_patch_irrelevant");
@@ -12839,12 +12865,6 @@ export default function GamesPage({
         }
 
         upsertGameRecordInStores(recordWithRoster, { communityMode: "if_exists" });
-        setActiveGameRecordStore((prev) => (
-          prev?.id === recordWithRoster.id ? recordWithRoster : prev
-        ));
-        setCommunityGames((prev) => prev.map((item) => (
-          item.id === recordWithRoster.id ? recordWithRoster : item
-        )));
         return true;
       } else {
         setGameRosterError(
