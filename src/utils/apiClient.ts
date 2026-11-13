@@ -4099,6 +4099,7 @@ export interface RequestOptions extends RequestInit {
   diagnosticContext?: { logicalOperation: string; attempt: number };
   auth?: boolean;
   retries?: number;
+  nonRetryableStatuses?: readonly number[];
   baseUrl?: string;
   signal?: AbortSignal;
   cacheTtlMs?: number;
@@ -4184,6 +4185,7 @@ async function rawRequest<T>(
     diagnosticContext,
     baseUrl = API_BASE,
     retries: _retries,
+    nonRetryableStatuses: _nonRetryableStatuses,
     cacheTtlMs: _cacheTtlMs,
     dedupe: _dedupe,
     fallbackBaseUrls: _fallbackBaseUrls,
@@ -4484,7 +4486,7 @@ async function requestWithBaseUrlFallback<T>(
   const runRequest = (baseUrl: string) => {
     const requestOptions = { ...options, baseUrl };
     return retries > 0
-      ? withRetry(() => rawRequest<T>(url, requestOptions), { retries })
+      ? withRetry(() => rawRequest<T>(url, requestOptions), { retries, nonRetryableStatuses: options.nonRetryableStatuses })
       : rawRequest<T>(url, requestOptions);
   };
 
@@ -4558,7 +4560,7 @@ async function executeRequestWithResolvedBaseUrls<T>(
   }
 
   return retries > 0
-    ? withRetry(() => rawRequest<T>(url, options), { retries })
+    ? withRetry(() => rawRequest<T>(url, options), { retries, nonRetryableStatuses: options.nonRetryableStatuses })
     : rawRequest<T>(url, options);
 }
 
@@ -4654,7 +4656,8 @@ async function withRetry<T>(
   {
     retries = 2,
     baseDelayMs = 300,
-  }: { retries?: number; baseDelayMs?: number } = {},
+    nonRetryableStatuses = [],
+  }: { retries?: number; baseDelayMs?: number; nonRetryableStatuses?: readonly number[] } = {},
 ): Promise<ApiResult<T>> {
   const isSuccessStatus = (status: ApiStatus) =>
     status === 304 || (typeof status === "number" && status >= 200 && status < 300);
@@ -4663,7 +4666,7 @@ async function withRetry<T>(
   while (true) {
     try {
       const res = await fn();
-      if (isLkIdleRequestPausedError(res.error?.raw)) {
+      if (isLkIdleRequestPausedError(res.error?.raw) || (res.status != null && nonRetryableStatuses.includes(res.status))) {
         return res;
       }
       if (!isSuccessStatus(res.status)) {
@@ -7224,10 +7227,13 @@ export async function apiFetchPadelGameRecord(
       baseUrl,
       retries: 1,
       ...options,
+      nonRetryableStatuses: [404],
     });
     if (response.error) {
       if (!firstError) {
-        firstError = response.error;
+        firstError = response.status === 404
+          ? { ...response.error, message: "Игра недоступна" }
+          : response.error;
         firstStatus = response.status;
       }
       continue;
@@ -8636,6 +8642,7 @@ async function requestPadelGameResultAction(
       baseUrl,
       auth: true,
       retries: action === "submit" ? 0 : 1,
+      ...(action === "state" ? { nonRetryableStatuses: [404] } : {}),
       ...(submitController ? { signal: submitController.signal } : {}),
       ...(method === "POST" ? { body: JSON.stringify(payload ?? {}) } : {}),
     });
@@ -8660,7 +8667,9 @@ async function requestPadelGameResultAction(
   if (response.error) {
     return {
       data: null,
-      error: response.error,
+      error: action === "state" && response.status === 404
+        ? { ...response.error, message: "Игра недоступна" }
+        : response.error,
       status: response.status,
     };
   }
