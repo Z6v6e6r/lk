@@ -14,3 +14,19 @@ RED.nodes.registerType('max-outbox-send', {
   <p>One MAX text send per fenced outbox lease. Output is a sanitized backend receipt.
   Transport uncertainty is quarantined. No automatic message retry.</p>
 </script>
+
+<script type="text/javascript">
+RED.nodes.registerType('max-outbox-receipt', {
+  category: 'network', color: '#b7d9a8', defaults: { name: { value: '' } },
+  inputs: 1, outputs: 1, icon: 'bridge.svg',
+  label: function () { return this.name || 'Persist MAX receipt'; }
+});
+</script>
+<script type="text/html" data-template-name="max-outbox-receipt">
+  <div class="form-row"><label for="node-input-name">Name</label><input id="node-input-name"></div>
+</script>
+<script type="text/html" data-help-name="max-outbox-receipt">
+  <p>Persists the same fenced CUP receipt across short backend outages. Reads the
+  existing SUPPORT_API_BASE_URL and SUPPORT_INTEGRATION_TOKEN from this flow's environment.
+  Bounded by the original lease; never sends a MAX message or requeues an unknown delivery.</p>
+</script>

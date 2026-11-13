@@ -1,6 +1,8 @@
 const command = msg.payload;
 if (!command || typeof command !== 'object' || Array.isArray(command)
-  || typeof command.id !== 'string') {
+  || typeof command.id !== 'string' || command.meta?.maxOutboxProtocol !== 'max-lease-v1'
+  || Object.prototype.hasOwnProperty.call(command.meta ?? {}, 'legacyMaxRestartCustody')
+  || Object.prototype.hasOwnProperty.call(command.meta ?? {}, 'legacyMaxArchive')) {
   return [null, { payload: { code: 'MAX_OUTBOX_INVALID_COMMAND' } }];
 }
 // The controlled sender owns validation and emits a fail receipt for bad target/text.
