@@ -51,6 +51,18 @@ test('using the daily quota retains the established subscription discount', () =
   assert.equal(subscriptionOfferQuote(SUBSCRIPTION_OFFERS[1], 'training', { ...context, dailyQuota: 'used' })?.amount, 2750);
 });
 
+test('purchasing RA for training after a used game hour includes subscription and discounted participation in one order', () => {
+  const choices = subscriptionPurchaseChoices('training', { ...context, subscriptionPlan: 'ra', dailyQuota: 'used', dailyUsage: 'game-hour' });
+  const selected = recommendedSubscriptionChoice(choices)!;
+  assert.equal(selected.offer.id, 'ra');
+  assert.equal(selected.option.mode, 'offer');
+  assert.equal(selected.option.reason, 'daily-limit');
+  assert.deepEqual(createPreviewOrder(selected.option, null, selected.offer.price), {
+    method: 'subscription', bookingAmount: 2750, product: 'subscription', productAmount: 23800, total: 26550,
+  });
+  assert.equal(createPreviewOrder(selected.option), null, 'An unowned subscription cannot bypass its purchase screen');
+});
+
 test('a 90-minute game recommends Friendship 2.0 for free participation, keeping paid alternatives explicit', () => {
   const choices = subscriptionPurchaseChoices('game', context, 'quarter', 6000);
   const selected = recommendedSubscriptionChoice(choices)!;
