@@ -49,7 +49,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
             <span className="matrix-quarter-price"><strong>{personalBase != null ? formatRubles(personalBase) : 'Цена уточняется'}</strong></span>
           </span>
           <span className={`matrix-quarter-row matrix-quarter-row--subscription ${subscriptionPrice?.mode === 'unavailable' ? 'is-unavailable' : ''}`}>
-            <span><b>{subscriptionBoost ? `По подписке и РАбуста${subscriptionBoost.amount === 0 ? ' — бесплатно' : ''}` : 'По подписке'}</b><small>{personalBase == null ? 'Дождитесь расчёта стоимости корта' : subscriptionBoost?.kind === 'boost' ? boostNote : subscriptionNote}</small></span>
+            <span><b>{subscriptionBoost ? `С подпиской и РАбуста${subscriptionBoost.amount === 0 ? ' — бесплатно' : ''}` : 'По подписке'}</b><small>{personalBase == null ? 'Дождитесь расчёта стоимости корта' : subscriptionBoost?.kind === 'boost' ? boostNote : subscriptionNote}</small></span>
             <span className="matrix-quarter-price">{(discount(subscriptionPrice) || (personalBase != null && subscriptionBoost?.amount === 0)) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(subscriptionPrice)}</strong></span>
           </span>
           {!settings.profile.subscription && <span className="matrix-quarter-row matrix-quarter-row--residency">

@@ -90,7 +90,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
 
   const title = (option: PaymentOption) => {
     if (option.withResidency) return `С Резидентством и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
-    if (option.withSubscription) return `По подписке и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
+    if (option.withSubscription) return `С подпиской и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
     if (option.kind === 'boost') return option.amount === 0 ? 'С Бустом — бесплатно' : option.benefit === 'partial-hour' ? `С Бустом · ${option.freeMinutes} минут бесплатно` : `С Бустом · скидка ${price.discount}%`;
     if (isWholeCourt && option.kind === 'full') return 'Полная оплата за 4 игроков';
     if (isPersonalGame && option.kind === 'full') return 'Моя доля · ¼ стоимости';
