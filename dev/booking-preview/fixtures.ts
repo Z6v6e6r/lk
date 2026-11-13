@@ -100,9 +100,9 @@ function checkout(id: string): TournamentVivaCheckout {
 const input = (value: unknown): Record<string, unknown> => typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
 // Comparison uses the same events as the individual fixture screens.
 export const comparisonEventDetails = {
-  game: { date: game.booking?.date, time: [game.booking?.timeFrom, game.booking?.timeTo].join('–'), location: [game.booking?.studioName, studios[0].address, game.booking?.roomName].join(' · ') },
-  training: { date: trainings()[0].date, time: trainings()[0].timeLabel, location: [trainings()[0].studioName, trainings()[0].studioAddress, trainings()[0].roomName].join(' · ') },
-  tournament: { date: tournaments()[0].date, time: tournaments()[0].timeLabel, location: [tournaments()[0].studioName, tournaments()[0].address].join(' · ') },
+  game: { date: game.booking?.date, time: [game.booking?.timeFrom, game.booking?.timeTo].join('–'), station: game.booking?.studioName, location: [game.booking?.studioName, studios[0].address, game.booking?.roomName].join(' · ') },
+  training: { date: trainings()[0].date, time: trainings()[0].timeLabel, station: trainings()[0].studioName, location: [trainings()[0].studioName, trainings()[0].studioAddress, trainings()[0].roomName].join(' · ') },
+  tournament: { date: tournaments()[0].date, time: tournaments()[0].timeLabel, station: tournaments()[0].studioName, location: [tournaments()[0].studioName, tournaments()[0].address].join(' · ') },
 };
 
 const slots = (date: string): GameTimeSlot[] => [1, 2, 3].flatMap(court => ['09:00', '11:00', '14:00', '18:00', '19:00', '20:30', '22:00'].map(time => ({

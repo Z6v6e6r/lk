@@ -16,13 +16,17 @@ for (const [path, count] of [['games/GamesPage.tsx', 2], ['group-schedule/GroupS
       assert.ok(!transformed?.includes('На следующем шаге выберите способ записи'));
       assert.ok(transformed?.includes('date: dateLabel, time: publicCreateSummaryTimeLabel'));
       assert.ok(transformed?.includes('[studio?.name, studio?.address, selectedCourt?.name]'));
+      assert.ok(transformed?.includes('station: studio?.name'));
+      assert.ok(transformed?.includes('station: detailsStudioName'));
       assert.ok(transformed?.includes('date: detailsDateLabel, time: [detailsTimeFrom, detailsTimeTo]'));
     } else if (path === 'group-schedule/GroupSchedulePage.tsx') {
       assert.ok(transformed?.includes('date: selectedTraining.date, time: selectedTraining.timeLabel'));
       assert.ok(transformed?.includes('selectedTraining.roomName'));
+      assert.ok(transformed?.includes('station: selectedTraining.studioName'));
     } else {
       assert.ok(transformed?.includes('date: selectedTournament?.date, time: detailTimeLabel'));
       assert.ok(transformed?.includes('[detailStationLabel, selectedTournament?.address]'));
+      assert.ok(transformed?.includes('station: detailStationLabel'));
     }
     assert.equal(readFileSync(new URL(`../../src/components/${path}`, import.meta.url), 'utf8'), original);
   });

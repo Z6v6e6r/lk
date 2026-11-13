@@ -1,6 +1,6 @@
 import type { GamePaymentScope, ServiceKind } from './paymentMatrix';
 
-export type BookingEventDetails = { date?: string | null; time?: string | null; location?: string | null };
+export type BookingEventDetails = { date?: string | null; time?: string | null; location?: string | null; station?: string | null };
 
 // Date-only values stay in the event's calendar day, regardless of browser timezone.
 export function bookingEventLines(details: BookingEventDetails | undefined, service: ServiceKind, scope?: GamePaymentScope) {
@@ -13,6 +13,7 @@ export function bookingEventLines(details: BookingEventDetails | undefined, serv
   return {
     when: [dateLabel, details?.time?.trim()].filter(Boolean).join(' · ') || 'Дата и время уточняются',
     where: details?.location?.trim() || 'Место уточняется',
+    station: details?.station?.trim() || 'Станция уточняется',
     scope: service === 'game' ? scope === 'court' ? 'Оплата всего корта' : scope === 'quarter' ? 'Моё участие · ¼ стоимости корта' : 'Формат оплаты уточняется' : 'Моё участие',
   };
 }

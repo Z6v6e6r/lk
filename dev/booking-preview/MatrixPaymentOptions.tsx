@@ -236,7 +236,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     </Modal>
     <Modal isOpen={residencyOfferOpen} onClose={() => setResidencyOfferOpen(false)} title={`Добавь Резидентство ${service === 'training' ? 'к своей тренировке' : service === 'tournament' ? 'к своему турниру' : 'к своей игре'}`} variant="fullscreen" bodyClassName="matrix-purchase-modal">
       <ResidencyPurchaseOffer option={choice} residencyPrice={residencyPrice} referenceAmount={referenceAmount}
-        eventName={price.name} durationMinutes={duration} eventDetails={eventDetails} service={service} gamePaymentScope={gamePaymentScope} disabled={locked} onContinue={addResidency} />
+        eventName={price.name} eventDetails={eventDetails} service={service} gamePaymentScope={gamePaymentScope} disabled={locked} onContinue={addResidency} />
     </Modal>
     <Modal isOpen={boostOfferOpen} onClose={() => setBoostOfferOpen(false)} title="Добавьте РАбуста" variant="fullscreen" bodyClassName="matrix-purchase-modal">
       <BoostPurchaseOffer option={boostOffer} boostPrice={boostPrice} profile={profile} plan={paymentContext.subscriptionPlan}
