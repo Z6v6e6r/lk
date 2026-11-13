@@ -1,3 +1,5 @@
+// Keep terminal game-read regressions in the existing API client CI suite.
+import "./gameReadUnavailable.test.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
