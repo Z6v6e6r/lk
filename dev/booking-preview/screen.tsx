@@ -13,6 +13,7 @@ import { eventDate } from './fixtures';
 import { navigatePreview } from './previewNavigation';
 import '../../src/index.css';
 import '../../src/MyApp.css';
+import './lk2-skin.css';
 
 const params = new URLSearchParams(location.search);
 const screen = params.get('screen') || 'game-booking';

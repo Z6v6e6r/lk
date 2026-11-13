@@ -1,0 +1,90 @@
+/* Visual reference: PadlHub_LK2_Booking_Interface.html supplied by the owner.
+ * The original skin and all booking/price rules stay independent of this file.
+ * Reuse project fonts; three match the reference bytes and the fourth is the
+ * existing RF Dewi Semibold face in WOFF format.
+ */
+@font-face { font-family: 'Booking LK2 Inter'; src: url('../../src/fonts/InterDisplay-Regular.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Booking LK2 Inter'; src: url('../../src/fonts/InterDisplay-Medium.woff2') format('woff2'); font-weight: 500 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Booking LK2 Dewi'; src: url('../../src/components/subscription-storefront/assets/fonts/RFDewi-Semibold.woff') format('woff'); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Booking LK2 Dewi'; src: url('../../src/fonts/rf-dewi-ultrabold.woff2') format('woff2'); font-weight: 800; font-style: normal; font-display: swap; }
+
+html[data-preview-skin='lk2'] {
+  --ui-font: 'Booking LK2 Inter', Arial, sans-serif;
+  --btn-font: 'Booking LK2 Dewi', 'Booking LK2 Inter', sans-serif;
+  --text: #1f1e20;
+  --text-secondary: #777579;
+  --border: #e2e0e5;
+  --bg: #f7f7f8;
+  --purple: #7253d8;
+  --radius: 12px;
+  color-scheme: light;
+  font-synthesis: style;
+  text-rendering: optimizeLegibility;
+}
+html[data-preview-skin='lk2'] body { background: #f7f7f8; color: #1f1e20; font-family: var(--ui-font); }
+html[data-preview-skin='lk2'] #root :is(.game-container, .group-schedule-page, .matrix-comparison) { background: #f7f7f8; font-family: var(--ui-font); }
+html[data-preview-skin='lk2'] #root :is(h1, h2, h3, h4) { font-family: var(--btn-font); font-style: normal; letter-spacing: -.5px; }
+html[data-preview-skin='lk2'] #root :is(input, textarea, select) { font-family: var(--ui-font); }
+html[data-preview-skin='lk2'] .matrix-current-only { display: none; }
+html[data-preview-skin='lk2'] .matrix-lk2-only { display: block; }
+html[data-preview-skin='lk2'] .matrix-payment { border-color: #e9e7ed; border-radius: 24px; padding: 20px; background: #fff; color: #1f1e20; font: 14px/1.5 var(--ui-font); box-shadow: 0 12px 40px #1f1e2006; }
+html[data-preview-skin='lk2'] .matrix-payment-heading { display: block; margin-bottom: 20px; }
+html[data-preview-skin='lk2'] .matrix-payment h2 { font: 800 22px/1.25 var(--btn-font); letter-spacing: -.55px; margin: 0 0 22px; }
+html[data-preview-skin='lk2'] .matrix-payment-heading p { position: relative; display: flex; align-items: center; gap: 10px; min-height: 36px; margin: 0; padding: 0 0 21px; border-bottom: 1px solid #eeedf0; font-size: 12px; line-height: 1.5; color: #777579; }
+html[data-preview-skin='lk2'] .matrix-payment-heading p::before { content: ''; width: 36px; height: 36px; flex: 0 0 36px; border-radius: 12px; background: #8766eb url('./assets/lk2-game.svg') center/16px no-repeat; }
+html[data-preview-skin='lk2'] .matrix-event-copy > strong { display: block; color: #1f1e20; font: 500 14px/1.3 var(--ui-font); }
+html[data-preview-skin='lk2'] .matrix-event-copy > span { display: block; margin-top: 5px; }
+html[data-preview-skin='lk2'] .matrix-options { gap: 8px; }
+html[data-preview-skin='lk2'] .matrix-options > legend { position: static; width: auto; height: auto; clip: auto; overflow: visible; padding: 0 0 12px; margin: 0; font: 500 13px/1.4 var(--ui-font); }
+html[data-preview-skin='lk2'] .matrix-option { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; gap: 10px; min-height: 84px; padding: 15px 12px; border: 1px solid #e2e0e5; border-radius: 14px; background: #fff; color: #1f1e20; box-shadow: none; }
+html[data-preview-skin='lk2'] .matrix-option:hover { border-color: #b9aacb; }
+html[data-preview-skin='lk2'] .matrix-option.is-selected { background: #f8f6fe; border-color: #7253d8; box-shadow: inset 0 0 0 .5px #7253d8; }
+html[data-preview-skin='lk2'] .matrix-option .matrix-icon { display: none; }
+html[data-preview-skin='lk2'] .matrix-option input { width: 18px; height: 18px; accent-color: #7253d8; }
+html[data-preview-skin='lk2'] .matrix-option-copy { grid-column: 2; gap: 5px; }
+html[data-preview-skin='lk2'] .matrix-option-copy strong { font: 500 14px/1.28 var(--ui-font); letter-spacing: -.1px; }
+html[data-preview-skin='lk2'] .matrix-option-copy > span { color: #777579; font-size: 12px; line-height: 1.4; }
+html[data-preview-skin='lk2'] .matrix-option-value { grid-column: 3; min-width: 68px; max-width: none; gap: 5px; }
+html[data-preview-skin='lk2'] .matrix-option-value strong { font: 600 15px/1.2 var(--ui-font); letter-spacing: -.2px; font-variant-numeric: tabular-nums; }
+html[data-preview-skin='lk2'] .matrix-option-value .matrix-option-base-price { color: #99959e; }
+html[data-preview-skin='lk2'] .matrix-option-value .matrix-option-base-price > span { font-size: 9px; }
+html[data-preview-skin='lk2'] .matrix-option-value .matrix-option-base-price del { font: 400 11px/1.2 var(--ui-font); }
+html[data-preview-skin='lk2'] .matrix-selection-context { min-height: 56px; padding: 13px 2px 15px; color: #777579; font-size: 12px; line-height: 1.5; }
+html[data-preview-skin='lk2'] .matrix-selection-context strong { font-weight: 500; color: #1f1e20; }
+html[data-preview-skin='lk2'] .matrix-selection-context > span { display: block; margin-top: 4px; }
+html[data-preview-skin='lk2'] .matrix-booking-footer { border-top: 1px solid #eeedf0; padding-top: 18px; }
+html[data-preview-skin='lk2'] .matrix-total-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 17px; min-height: 28px; }
+html[data-preview-skin='lk2'] .matrix-total-row > span { color: #777579; font-size: 13px; max-width: 160px; line-height: 1.3; }
+html[data-preview-skin='lk2'] .matrix-total-row strong { font: 600 22px/1.25 var(--btn-font); letter-spacing: -.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+html[data-preview-skin='lk2'] :is(.matrix-payment, .matrix-information, .matrix-purchase-footer) .matrix-confirm { min-height: 46px; padding: 12px 14px; border-radius: 12px; background: #7253d8; font: italic 800 12px/1.4 var(--btn-font); }
+html[data-preview-skin='lk2'] :is(.matrix-payment, .matrix-information, .matrix-purchase-footer) .matrix-confirm { font-weight: 800 !important; }
+html[data-preview-skin='lk2'] .matrix-booking-footer .matrix-confirm { margin-top: 0; }
+html[data-preview-skin='lk2'] .matrix-confirm:hover:not(:disabled) { background: #6548c6; }
+html[data-preview-skin='lk2'] .matrix-confirm:disabled { background: #dad6e2; color: #827d8b; cursor: not-allowed; }
+html[data-preview-skin='lk2'] .matrix-booking-terms { margin-top: 5px; font-size: 11px; color: #777579; line-height: 1.6; }
+html[data-preview-skin='lk2'] .matrix-booking-terms summary { min-height: 40px; display: flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; list-style: none; }
+html[data-preview-skin='lk2'] .matrix-booking-terms summary::-webkit-details-marker { display: none; }
+html[data-preview-skin='lk2'] .matrix-booking-terms p { margin: 0; padding: 3px 0 8px; }
+html[data-preview-skin='lk2'] :is(.matrix-option:has(input:focus-visible), .matrix-confirm:focus-visible, .matrix-booking-terms summary:focus-visible) { outline: 3px solid #bcaaf0; outline-offset: 3px; }
+
+html[data-preview-skin='lk2'] :is(.matrix-payer, .matrix-subscription-plan) { background: #fff; border-color: #e2e0e5; border-radius: 14px; box-shadow: none; font-family: var(--ui-font); }
+html[data-preview-skin='lk2'] :is(.matrix-payer, .matrix-subscription-plan).is-selected { background: #f8f6fe; border-color: #7253d8; box-shadow: inset 0 0 0 .5px #7253d8; }
+html[data-preview-skin='lk2'] .matrix-quarter-row { background: #f7f7f8; border-radius: 10px; }
+html[data-preview-skin='lk2'] :is(.matrix-payer-copy strong, .matrix-quarter-row b) { font-weight: 500; color: #1f1e20; }
+html[data-preview-skin='lk2'] :is(.matrix-payer-copy span, .matrix-payer-copy em, .matrix-quarter-row small) { color: #777579; }
+html[data-preview-skin='lk2'] :is(.matrix-quarter-price strong, .matrix-payer-price strong) { font-family: var(--ui-font); font-style: normal; color: #1f1e20; }
+html[data-preview-skin='lk2'] .matrix-purchase-offer { color: #1f1e20; font-family: var(--ui-font); }
+html[data-preview-skin='lk2'] .matrix-purchase-benefits, html[data-preview-skin='lk2'] .matrix-purchase-booking { border-color: #e9e7ed; border-radius: 20px; }
+html[data-preview-skin='lk2'] .matrix-purchase-benefits h2 { font-family: var(--btn-font); font-weight: 800; }
+html[data-preview-skin='lk2'] .matrix-purchase-benefit-icon { background: #f1edfc; color: #7253d8; }
+html[data-preview-skin='lk2'] .matrix-purchase-footer { border-color: #eeedf0; }
+html[data-preview-skin='lk2'] .matrix-order-total dd { font: 600 20px/1.3 var(--btn-font); }
+html[data-preview-skin='lk2'] .modal-content { color: #1f1e20; font-family: var(--ui-font); }
+html[data-preview-skin='lk2'] .modal-title { font-family: var(--btn-font); font-style: normal; font-weight: 800; }
+html[data-preview-skin='lk2'] .matrix-success { background: #f8f6fe; color: #1f1e20; border: 1px solid #e2e0e5; }
+@media(max-width: 350px) {
+  html[data-preview-skin='lk2'] .matrix-payment { padding: 14px; }
+  html[data-preview-skin='lk2'] .matrix-option { gap: 8px; padding: 12px 10px; }
+  html[data-preview-skin='lk2'] .matrix-option-copy strong { font-size: 13px; }
+  html[data-preview-skin='lk2'] .matrix-option-value strong { font-size: 14px; }
+}

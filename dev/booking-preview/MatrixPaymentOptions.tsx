@@ -188,8 +188,9 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     setBusy(false);
   };
 
+  const paymentFootnote = isWholeCourt ? 'Стоимость оплачивается полностью за всех игроков. Льготы не расходуются.' : 'Выбран один способ записи. Скидки подписки и Резидентства не суммируются. Абонемент списывается только при выборе абонемента.';
   return <section className="matrix-payment" aria-label={`Способы записи: ${price.name}`} data-service={service} data-event={eventKey}>
-    <header className="matrix-payment-heading"><div><h2>{registered ? 'Ваша запись' : checkout ? 'Оплата записи' : 'Выберите способ записи'}</h2><p>{price.name}{isPersonalGame ? ' · моя доля ¼' : isWholeCourt ? ' · плачу за всех' : ''}{Number.isFinite(duration) && duration > 0 ? ` · ${duration} мин` : ''}{service !== 'game' && paymentContext.proDirection ? ' · ПРО' : ''}{service === 'tournament' && paymentContext.friendsTournament ? ' · Время на друзей' : ''}</p></div>
+    <header className="matrix-payment-heading"><div><h2><span className="matrix-current-only">{registered ? 'Ваша запись' : checkout ? 'Оплата записи' : 'Выберите способ записи'}</span><span className="matrix-lk2-only">{registered ? 'Ваша запись' : checkout ? 'Оплата записи' : service === 'game' ? 'Запись на игру' : service === 'training' ? 'Запись на тренировку' : 'Запись на турнир'}</span></h2><p><span className="matrix-event-copy"><strong>{price.name}</strong><span>{isPersonalGame ? ' · моя доля ¼' : isWholeCourt ? ' · плачу за всех' : ''}{Number.isFinite(duration) && duration > 0 ? ` · ${duration} мин` : ''}{service !== 'game' && paymentContext.proDirection ? ' · ПРО' : ''}{service === 'tournament' && paymentContext.friendsTournament ? ' · Время на друзей' : ''}</span></span></p></div>
     </header>
     {registered ? <div className="matrix-success" role="status">
       <strong>Вы записаны</strong><p>{submittedOption?.kind === 'pass' ? `Энергия 5 · списана 1 тренировка · ${passBalanceText(passRemaining)}` : submittedOption ? `${title(submittedOption)}${submittedOption.amount != null ? ` · ${amount(submittedOption)}` : ''}` : 'Место за вами. Детали записи доступны в личном кабинете.'}</p>
@@ -205,7 +206,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
       {isWholeCourt && <p className="matrix-notice">Полная оплата корта: подписка, Резидентство и абонементы не применяются.</p>}
       {full && <p className="matrix-notice" role="status">Все места заняты. Запись на это событие недоступна.</p>}
       <fieldset className="matrix-options" disabled={busy}>
-        <legend className="matrix-sr-only">Способы записи</legend>
+        <legend className="matrix-sr-only"><span className="matrix-current-only">Способы записи</span><span className="matrix-lk2-only">Выберите способ записи</span></legend>
         {options.filter(option => option.mode !== 'reference' && option.mode !== 'unavailable').map(option => {
           const displayKind = option.withResidency ? 'residency' : option.withSubscription ? 'subscription' : option.kind;
           const showBasePrice = (option.kind === 'residency' || option.kind === 'subscription' || option.kind === 'boost')
@@ -221,8 +222,13 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
         })}
       </fieldset>
       {options.some(option => option.benefit === 'partial-hour' && option.mode === 'quote') && <p className="matrix-copay-note" role="status">Стоимость доплаты пока не определена. Запись с использованием бесплатного часа станет доступна после расчёта.</p>}
-      <button className="matrix-confirm" type="button" disabled={locked || !choice} onClick={() => void confirm()}>{busy ? 'Подтверждаем запись…' : full ? 'Мест нет' : !isAuthenticated ? 'Войти для записи' : confirmText}</button>
-      <p className="matrix-payment-footnote">{isWholeCourt ? 'Стоимость оплачивается полностью за всех игроков. Льготы не расходуются.' : 'Выбран один способ записи. Скидки подписки и Резидентства не суммируются. Абонемент списывается только при выборе абонемента.'}</p>
+      <div className="matrix-lk2-only matrix-selection-context" aria-live="polite">{choice && <><strong>{title(choice)}</strong>{choice.mode === 'offer' && <span>Оформление продукта — на следующем шаге</span>}</>}</div>
+      <div className="matrix-booking-footer">
+        <div className="matrix-lk2-only matrix-total-row"><span>{choice?.kind === 'pass' ? 'Списание с абонемента' : isWholeCourt ? 'За весь корт' : 'За ваше участие'}</span><strong>{choice?.kind === 'pass' ? '1 тренировка' : choice ? amount(choice) : 'Нужен расчёт'}</strong></div>
+        <button className="matrix-confirm" type="button" disabled={locked || !choice} onClick={() => void confirm()}>{busy ? 'Подтверждаем запись…' : full ? 'Мест нет' : !isAuthenticated ? 'Войти для записи' : confirmText}</button>
+        <p className="matrix-payment-footnote matrix-current-only">{paymentFootnote}</p>
+        <details className="matrix-lk2-only matrix-booking-terms"><summary>Условия записи<span aria-hidden="true">⌄</span></summary><p>{paymentFootnote}</p></details>
+      </div>
     </>}
     <Modal isOpen={subscriptionOfferOpen} onClose={() => { if (!busy) setSubscriptionOfferOpen(false); }} title="Добавьте подписку" variant="fullscreen" bodyClassName="matrix-purchase-modal">
       <SubscriptionPurchaseOffer choices={subscriptionChoices} offer={purchaseSubscription} option={subscriptionPurchaseOption}

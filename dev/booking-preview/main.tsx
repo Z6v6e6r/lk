@@ -1,11 +1,12 @@
 import { createRoot, type Root } from 'react-dom/client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './preview.css';
 import { readMatrixSettings, type SubscriptionPlan } from './paymentMatrix';
 import { PREVIEW_BOOST_PRICE, PREVIEW_RESIDENCY_PRICE } from './bookingCheckout';
 import { DAILY_USAGE, SUBSCRIPTION_PLANS, type DailyUsage } from './privilegeRules';
 import { readPreviewStage, type PreviewStage } from './previewStage';
 import { settingsSummary } from './settingsSummary';
+import { previewFrameQuery, readPreviewSkin, type PreviewSkin } from './previewSkin';
 import officialLogo from '../../src/assets/logo hab black.svg';
 
 const screens = [
@@ -31,6 +32,8 @@ function Preview() {
   const [width, setWidth] = useState(params.get('width') === 'desktop' ? 'desktop' : 'mobile');
   const [revision, setRevision] = useState(0);
   const [stage, setStage] = useState<PreviewStage>(readPreviewStage(params));
+  const [skin, setSkin] = useState<PreviewSkin>(readPreviewSkin(params));
+  const frameRef = useRef<HTMLIFrameElement>(null);
   const [copyStatus, setCopyStatus] = useState('');
   const matrix = readMatrixSettings(params);
   const [subscription, setSubscription] = useState(matrix.profile.subscription);
@@ -51,14 +54,20 @@ function Preview() {
   const standardTournament = (screen === 'tournament-booking' || screen === 'tournament-join') && groupCategory !== 'pro';
   const hasPro = subscription && (subscriptionPlan === 'ra' || subscriptionPlan === 'friendship-2');
   const proQuotaUsed = DAILY_USAGE.some(usage => usage.id === dailyUsage && 'pro' in usage && usage.pro);
-  const query = new URLSearchParams({ stage, screen, state, width, subscription: subscription ? '1' : '0', residency: residency ? '1' : '0', pass: pass ? '1' : '0',
+  const query = new URLSearchParams({ stage, skin, screen, state, width, subscription: subscription ? '1' : '0', residency: residency ? '1' : '0', pass: pass ? '1' : '0',
     boost: boost && boostAllowed ? '1' : '0', subscriptionFits: '1', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota,
     activeLimitExceeded: activeLimitExceeded ? '1' : '0', dailyUsage, proQuotaUsed: proQuotaUsed ? '1' : '0',
     groupCategory, friendsTournament: friendsTournament ? '1' : '0', residencyPrice, boostPrice, raFits: '1', passRemaining });
   const frameUrl = `${import.meta.env.BASE_URL}dev/booking-preview/frame.html?${query}&reset=${revision}`;
+  const embeddedQuery = previewFrameQuery(query);
+  const embeddedUrl = `${import.meta.env.BASE_URL}dev/booking-preview/frame.html?${embeddedQuery}&reset=${revision}`;
   const serialized = query.toString();
   const summary = settingsSummary(query);
   useEffect(() => { history.replaceState(null, '', `?${serialized}`); }, [serialized]);
+  useEffect(() => {
+    const root = frameRef.current?.contentDocument?.documentElement;
+    root?.setAttribute('data-preview-skin', skin);
+  }, [skin]);
   const changeDailyUsage = (value: DailyUsage) => { setDailyUsage(value); setDailyQuota(value === 'none' ? 'available' : 'used'); };
   const changeDailyQuota = (used: boolean) => {
     setDailyQuota(used ? 'used' : 'available');
@@ -106,6 +115,9 @@ function Preview() {
       <header className="preview-toolbar">
         <div><strong>{screens.find(([key]) => key === screen)?.[1]}</strong><span>Тестирование интерфейса</span></div>
         <div className="preview-controls">
+          <label>Скин <select aria-label="Скин" value={skin} onChange={event => setSkin(event.target.value as PreviewSkin)}>
+            <option value="current">Текущий</option><option value="lk2">LK2</option>
+          </select></label>
           <label>Состояние <select value={state} onChange={event => setState(event.target.value)}>
             {states.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select></label>
@@ -167,7 +179,8 @@ function Preview() {
       </section>
       </details>
       <div className={`preview-stage preview-stage--${width}`}>
-        <iframe key={`${serialized}-${revision}`} src={frameUrl} title="Интерфейс записи PadlHub"
+        <iframe key={`${embeddedQuery}-${revision}`} ref={frameRef} src={embeddedUrl} title="Интерфейс записи PadlHub"
+          onLoad={() => frameRef.current?.contentDocument?.documentElement.setAttribute('data-preview-skin', skin)}
           sandbox="allow-scripts allow-same-origin" />
       </div>
     </main>

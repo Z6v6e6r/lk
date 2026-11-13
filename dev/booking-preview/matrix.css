@@ -1,9 +1,12 @@
+.matrix-lk2-only { display: none; }
 .matrix-payment { margin: 16px 0; padding: 20px; background: #fff; color: var(--text, #1a1a1a); border: 1px solid var(--border, #e5e7eb); border-radius: 18px; font: 14px/1.45 var(--ui-font, system-ui, sans-serif); min-width: 0; }
 .matrix-payment *, .matrix-information * { box-sizing: border-box; }
 .matrix-payment button, .matrix-payment input, .matrix-information button { font: inherit; }
 .matrix-payment-heading { display: flex; justify-content: space-between; align-items: start; gap: 14px; margin-bottom: 18px; }
 .matrix-payment h2 { font-family: "RF Dewi UltraBold", var(--ui-font, system-ui, sans-serif); font-size: 18px; font-weight: 700; margin: 0; color: var(--text, #1a1a1a); letter-spacing: -.3px; }
+.matrix-payment .matrix-payment-heading h2 > span { font: inherit; letter-spacing: inherit; }
 .matrix-payment-heading p { font-size: 12px; color: #787287; margin: 5px 0 0; }
+.matrix-event-copy > strong { font-weight: inherit; }
 .matrix-base-price { flex-shrink: 0; text-align: right; color: #8e8998; }
 .matrix-base-price span { display: block; font-size: 10px; margin-bottom: 4px; }
 .matrix-base-price del { font-size: 16px; }

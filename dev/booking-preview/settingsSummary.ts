@@ -2,12 +2,14 @@ import { readMatrixSettings, energyPassApplies } from './paymentMatrix.ts';
 import { readPassRemaining } from './bookingCheckout.ts';
 import { DAILY_USAGE, SUBSCRIPTION_PLANS } from './privilegeRules.ts';
 import { readPreviewStage } from './previewStage.ts';
+import { readPreviewSkin } from './previewSkin.ts';
 
 export function settingsSummary(params: URLSearchParams): string[] {
   const settings = readMatrixSettings(params);
   const stage = readPreviewStage(params);
   const plan = SUBSCRIPTION_PLANS.find(plan => plan.id === settings.subscriptionPlan)?.name || 'Дружба';
   const items = [stage === 'current' ? 'Сейчас · без РАбуста' : 'Полный вариант'];
+  items.push(readPreviewSkin(params) === 'lk2' ? 'Скин LK2' : 'Текущий скин');
   items.push(settings.profile.subscription ? `Подписка ${plan}` : `Без подписки · тариф ${plan}`);
   if (settings.profile.residency) items.push('Резидентство');
   if (settings.profile.pass) {
