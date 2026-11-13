@@ -70,6 +70,7 @@ export async function runSubscription397Rehearsal() {
     await admin('POST',await guarded(await admin('GET'),pre.flows,true));
     const restored=await admin('GET');for(const id of SUBSCRIPTION397_IDS)assert.equal(restored.flows.find(n=>n.id===id).func,before);
     for(const[id,original]of Object.entries(untouched))assert.strictEqual(RED.nodes.getNode(id),original,id);
+    for(let i=0;i<500&&logs.filter(l=>l.msg==='S397_FIXTURE_START').length<6;i++)await new Promise(resolve=>setTimeout(resolve,10));
     assert.equal(logs.filter(l=>l.msg==='S397_FIXTURE_START').length,6);assert.equal(logs.filter(l=>l.msg==='S397_FIXTURE_STOP').length,4);
     assert.equal(providerCalls,0);assert.equal(dbCalls,0);assert.equal(injectInputs,0);
     return{protocol:'subscription397-rehearsal-v1',runtimeVersion:'4.0.9',providerCalls,dbCalls,injectInputs,outputs,unchangedNodeInstances:4,sourceRestored:true};

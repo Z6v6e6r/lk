@@ -17,7 +17,7 @@ test('real4.0.9 native func-only activation preserves other instances and has ze
         const timeout = setTimeout(() => { cleanup(); reject(Error('ISOLATED_REHEARSAL_TIMEOUT')); }, 30000);
         let grace = null;
         child.on('message', value => {
-          if (value?.protocol === 'subscription397-rehearsal-failure-v1') failure = value.error;
+          if (value?.protocol === 'subscription397-rehearsal-failure-v1') { failure = value.error; cleanup(); }
           else if (value?.protocol === 'subscription397-rehearsal-v1' && !result) {
             result = value;
             // Assertions, RED.stop and HTTP close callbacks already completed.
