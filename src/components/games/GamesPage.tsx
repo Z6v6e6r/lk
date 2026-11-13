@@ -1,3 +1,4 @@
+import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
 import { moscowBookingEndIso } from "../../utils/bookingEndTime";
 import { isRequestTimeoutError, runWithAbortTimeout } from "../../utils/requestTimeout";
 import { BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence } from "./bookingConversionEvidence";
@@ -14158,6 +14159,7 @@ export default function GamesPage({
 
     if (typeof window !== "undefined" && !isSelfLeavePreviewMode) {
       const accepted = window.confirm("Покинуть игру? Вы потеряете место в составе.");
+      recordSplitLeaveConfirmation(accepted);
       if (!accepted) return;
     }
 
@@ -16230,6 +16232,7 @@ export default function GamesPage({
                 <span className="details-roster-join-status-reason">{detailsSplitJoinPending.reason}</span>
               )}
               <button
+                data-lk-leave-action="GAME_JOIN"
                 type="button"
                 className="details-roster-action"
                 disabled={joiningSplitPayment}
@@ -16313,6 +16316,7 @@ export default function GamesPage({
                         shouldShowCurrentUserLeaveActionInDetails && isCurrentUserPlayer(player) && (
                           <button
                             type="button"
+                            data-lk-leave-action="GAME_LEAVE"
                             className="details-roster-action details-roster-leave"
                             onClick={() => {
                               void handleLeaveCurrentUserFromDetails();
@@ -16402,6 +16406,7 @@ export default function GamesPage({
                         shouldShowCurrentUserLeaveActionInDetails && isCurrentUserPlayer(player) && (
                           <button
                             type="button"
+                            data-lk-leave-action="GAME_LEAVE"
                             className="details-roster-action details-roster-leave"
                             onClick={() => {
                               void handleLeaveCurrentUserFromDetails();
@@ -16691,7 +16696,7 @@ export default function GamesPage({
     return (
       <div className="app-container game-container">
         <div className="page-header">
-          <button className="page-back" onClick={onBack} type="button">
+          <button data-lk-leave-action="GAME_BACK" className="page-back" onClick={onBack} type="button">
             ← Назад
           </button>
           <div className="page-title">Детали матча</div>
@@ -17237,6 +17242,7 @@ export default function GamesPage({
                       Оплатить
                     </button>
                     <button
+                      data-lk-leave-action="GAME_LEAVE"
                       className="game-join-split-pay-option"
                       type="button"
                       disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
@@ -17249,6 +17255,7 @@ export default function GamesPage({
                   </div>
                 ) : detailsCurrentUserLeavePayment ? (
                   <button
+                    data-lk-leave-action="GAME_LEAVE"
                     className="game-join-split-pay-option"
                     type="button"
                     disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
@@ -17289,6 +17296,7 @@ export default function GamesPage({
                         onJoin={id => { void handleSplitJoinCurrentUserFromDetails("subscription", id); }} />
                     )}
                     <button
+                      data-lk-leave-action="GAME_JOIN"
                       className="game-join-split-pay-option game-join-split-pay-option-primary"
                       type="button"
                       disabled={!canCurrentUserJoinSplitGameInDetails}
@@ -17302,6 +17310,7 @@ export default function GamesPage({
                 )
               ) : (
                 <button
+                  data-lk-leave-action="GAME_JOIN"
                   className="section-cta"
                   type="button"
                   onClick={() => {
@@ -17323,6 +17332,7 @@ export default function GamesPage({
               <button
                 className="section-cta section-cta-secondary"
                 type="button"
+                data-lk-leave-action="GAME_BACK"
                 onClick={handleOpenCabinetFromDetails}
               >
                 Вернуться в личный кабинет
@@ -17459,7 +17469,7 @@ export default function GamesPage({
   return (
     <div className="app-container game-container">
       <div className="page-header">
-        <button className="page-back" onClick={onBack} type="button">
+        <button data-lk-leave-action="GAME_BACK" className="page-back" onClick={onBack} type="button">
           Закрыть
         </button>
         <div className="page-title">Создание игры</div>

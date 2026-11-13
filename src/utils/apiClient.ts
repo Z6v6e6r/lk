@@ -20,6 +20,7 @@ import { invalidateSubscriptionSnapshot, readSubscriptionSnapshot, requestChange
 import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscriptionSnapshotData";
 import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
+import { captureSplitLeaveInitiator } from "./splitLeaveDiagnostics";
 import { UUID } from "./errorDiagnosticsCore.mjs";
 import { gamePatchDiagnosticUrl } from "./gamePatchDiagnostics.mjs";
 import { abortCause, callerBuild, diagnosticId, routeTemplate } from "./errorDiagnostics";
@@ -4320,6 +4321,7 @@ export async function request<T>(
       ? { logicalOperation: supplied.logicalOperation, attempt: supplied.attempt }
       : { logicalOperation: diagnosticId(), attempt: 0 };
   } catch { /* Missing crypto or malformed diagnostic claims cannot stop the request. */ }
+  captureSplitLeaveInitiator(url, options.method ?? "GET", diagnosticContext?.logicalOperation);
   options = { ...options, diagnosticContext };
   const cacheConfig = resolveRequestCacheConfig(url, options);
 

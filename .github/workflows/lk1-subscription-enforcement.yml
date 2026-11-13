@@ -626,6 +626,12 @@ jobs:
           scripts/tests/referralAttribution.test.ts
           scripts/tests/referralSubscription.nodered.test.ts
           scripts/tests/referralAttributionReleaseCandidate.test.mjs
+          scripts/tests/clientErrorDiagnostics.test.mjs
+          scripts/tests/splitLeaveDiagnostics.test.mjs
+          scripts/tests/collectorNativeOperation.test.mjs
+          scripts/tests/splitLeaveCollector.test.mjs
+          scripts/tests/splitLeaveCollectorRuntime.test.mjs
+          scripts/tests/collectorNativeBrowser.test.mjs
 
       - name: Fetch pinned legacy build image
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
