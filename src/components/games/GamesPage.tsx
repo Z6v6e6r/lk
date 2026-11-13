@@ -10982,10 +10982,14 @@ export default function GamesPage({
     });
 
     if (paymentResult.error || !paymentResult.data) {
+      const creationTimedOut = isRecordObject(paymentResult.error?.raw)
+        && paymentResult.error.raw.code === "REQUEST_TIMEOUT";
       const dailyLimitMessage = resolvedPaymentMode === "subscription"
         ? resolveSubscriptionCategoryDailyLimitErrorMessage(paymentResult.error)
         : null;
-      if (dailyLimitMessage) {
+      if (creationTimedOut) {
+        setPayError("Не получили подтверждение создания игры. Игра могла уже создаться. Проверьте бронирования в личном кабинете перед повторной попыткой.");
+      } else if (dailyLimitMessage) {
         setPayError(dailyLimitMessage);
       } else if (resolvedPaymentMode === "subscription") {
         setPayError(formatSubscriptionDecisionPresentation(
@@ -18121,6 +18125,19 @@ export default function GamesPage({
                     Не удалось определить доступный абонемент. Обновите список и попробуйте снова.
                   </div>
                 )
+            )}
+            {loadingPay && !subscriptionUsageShadowEnabled && (
+              <div className="game-create-progress" role="status" aria-live="polite" aria-atomic="true">
+                <strong>
+                  {gamePreparationStage === "profile"
+                    ? "Проверяем профиль…"
+                    : gamePreparationStage === "slot"
+                      ? "Проверяем доступность корта…"
+                      : "Создаём игру…"}
+                </strong>
+                <span>Ожидаем подтверждение. Это может занять некоторое время.</span>
+                <div className="game-create-progress-track" aria-hidden="true" />
+              </div>
             )}
             <button
               className={`game-submit game-submit-booking game-submit-inline ${canProceedToPayment && !subscriptionUsageShadow.busy ? "active" : ""}`}

@@ -8621,6 +8621,57 @@ h6,
   color: #b42318;
 }
 
+.game-create-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 16px;
+  border: 1px solid #ddd3f8;
+  border-radius: 16px;
+  background: #f6f2ff;
+  color: #382268;
+  overflow-wrap: anywhere;
+}
+
+.game-create-progress strong {
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.game-create-progress > span {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.game-create-progress-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e4dbf8;
+}
+
+.game-create-progress-track::after {
+  content: "";
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: inherit;
+  background: #7654d7;
+  animation: game-create-progress-slide 1.4s ease-in-out infinite alternate;
+}
+
+@keyframes game-create-progress-slide {
+  from { transform: translateX(0); }
+  to { transform: translateX(150%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-create-progress-track::after {
+    animation: none;
+  }
+}
+
 .game-chat-container {
   padding-bottom: 92px;
 }

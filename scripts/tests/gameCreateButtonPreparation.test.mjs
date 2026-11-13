@@ -54,6 +54,7 @@ function harness(stage) {
     apiCreatePadelSplitGamePayment: async () => { state.writes++; return { error: { message: 'test stop' } }; },
     apiPayMasterService: async () => { state.writes++; return { error: { message: 'test stop' } }; },
     resolveSubscriptionCategoryDailyLimitErrorMessage: () => null,
+    isRecordObject: value => value !== null && typeof value === 'object' && !Array.isArray(value),
     resolveSubscriptionDecisionPresentation: () => ({}), formatSubscriptionDecisionPresentation: () => 'test stop',
     canProceedToPayment: true, loadingPay: false, gamePreparationStage: null,
     subscriptionUsageShadow: { busy: false }, publicCreateNeedsSplitSubscriptionSelection: false,
@@ -155,6 +156,29 @@ test('a normal submission reaches CREATE once after successful revalidation', as
   await pending;
   assert.equal(h.state.writes, 1);
   assert.equal(h.visual().busy, false);
+});
+
+test('pending CREATE stays busy; a creation timeout reports an unknown outcome without another CREATE', async () => {
+  const h = harness('slot');
+  const create = deferred();
+  h.context.apiCreatePadelSplitGamePayment = () => { h.state.writes++; return create.promise; };
+  const pending = h.submit();
+  await flush();
+  h.read.resolve({ data: [] });
+  await flush();
+  assert.equal(h.state.writes, 1);
+  assert.equal(h.visual().label, 'Создаём игру…');
+  assert.equal(h.visual().busy, true);
+  assert.equal(h.visual().disabled, true);
+  await h.submit();
+  assert.equal(h.state.writes, 1);
+  create.resolve({ data: null, error: { status: null, raw: { code: 'REQUEST_TIMEOUT' } } });
+  await pending;
+  assert.equal(h.visual().busy, false);
+  assert.equal(h.state.writes, 1);
+  assert.match(h.state.error, /Игра могла уже создаться/);
+  assert.match(h.state.error, /Проверьте бронирования/);
+  assert.doesNotMatch(h.state.error, /Игра не создана|неизвестное состояние не даёт скидку/);
 });
 
 const apiSource = fs.readFileSync('src/utils/apiClient.ts', 'utf8');
