@@ -1,7 +1,7 @@
 name: MAX outbox adapter
 on:
   pull_request:
-    paths: ['scripts/nodered_max_activation.mjs', 'scripts/tests/maxActivation.test.mjs', 'scripts/max-response-guard.cjs', 'scripts/prepare_max_response_guard.mjs', 'scripts/tests/maxResponseGuard.test.mjs', 'scripts/tests/fixtures/max-response-guard/**', 'node-red/max-outbox-adapter/**', 'scripts/nodered_max_nodes/fn_max_outbox*', 'scripts/prepare_max_outbox_receipts.mjs', 'scripts/tests/maxOutboxReceipts.test.mjs', 'scripts/tests/maxOutboxRateLimit.test.mjs', 'scripts/tests/maxOutboxEditorLoader.test.mjs', 'scripts/tests/fixtures/max-outbox/**', '.github/workflows/max-outbox-receipts.yml']
+    paths: ['scripts/nodered_max_outbox_resume.mjs', 'scripts/nodered_max_outbox_inverse.mjs', 'scripts/tests/maxOutboxInverse.test.mjs', 'scripts/tests/maxOutboxInverseBrowserGuard.test.mjs', 'scripts/nodered_reviewed_flow_deploy/max_outbox_*.mjs', 'scripts/tests/maxOutboxNativeOperation.test.mjs', 'scripts/tests/maxOutboxBrowserGuard.test.mjs', 'scripts/tests/maxOutboxNativeRuntime.test.mjs', 'scripts/tests/fixtures/max-outbox-native-fixture.mjs', 'scripts/nodered_max_outbox_worker_rebind.mjs', 'scripts/tests/maxOutboxResume.test.mjs', 'scripts/tests/maxOutboxWorkerRebind.test.mjs', 'scripts/tests/maxOutboxSenderLifecycle.test.mjs', 'scripts/nodered_max_activation.mjs', 'scripts/tests/maxActivation.test.mjs', 'scripts/max-response-guard.cjs', 'scripts/prepare_max_response_guard.mjs', 'scripts/tests/maxResponseGuard.test.mjs', 'scripts/tests/fixtures/max-response-guard/**', 'node-red/max-outbox-adapter/**', 'scripts/nodered_max_nodes/fn_max_outbox*', 'scripts/prepare_max_outbox_receipts.mjs', 'scripts/tests/maxOutboxReceipts.test.mjs', 'scripts/tests/maxOutboxRateLimit.test.mjs', 'scripts/tests/maxOutboxEditorLoader.test.mjs', 'scripts/tests/fixtures/max-outbox/**', '.github/workflows/max-outbox-receipts.yml']
   push:
     branches: ['codex/max-retry-receipts']
 permissions:
@@ -17,9 +17,15 @@ jobs:
       - run: node --experimental-strip-types --test scripts/tests/maxOutboxReceipts.test.mjs scripts/tests/maxOutboxRateLimit.test.mjs scripts/tests/maxSupportBridge.nodered.test.ts
       - name: Test legacy MAX response handling and no-send-retry contract
         run: node --test scripts/tests/maxResponseGuard.test.mjs scripts/tests/maxActivation.test.mjs
+      - name: Test new-only MAX topology and worker binding preparation
+        run: node --test scripts/tests/maxOutboxResume.test.mjs scripts/tests/maxOutboxWorkerRebind.test.mjs scripts/tests/maxOutboxSenderLifecycle.test.mjs scripts/tests/maxOutboxNativeOperation.test.mjs scripts/tests/maxOutboxBrowserGuard.test.mjs scripts/tests/maxOutboxInverse.test.mjs scripts/tests/maxOutboxInverseBrowserGuard.test.mjs
       - name: Install isolated Node-RED editor test runtime
         run: npm install --prefix "$RUNNER_TEMP/max-editor-runtime" --ignore-scripts --no-audit --no-fund node-red@4.0.9
       - name: Load runtime and HTML through actual Node-RED editor registry
         env:
           NODE_RED_TEST_PACKAGE: ${{ runner.temp }}/max-editor-runtime/node_modules/node-red
         run: node --test scripts/tests/maxOutboxEditorLoader.test.mjs
+      - name: Rehearse native outgoing-only deploy and inverse with synthetic transport
+        env:
+          NODERED_RUNTIME_ROOT: ${{ runner.temp }}/max-editor-runtime
+        run: node --test scripts/tests/maxOutboxNativeRuntime.test.mjs
