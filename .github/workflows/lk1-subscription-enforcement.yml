@@ -691,6 +691,7 @@ jobs:
           scripts/tests/referralAttributionReleaseCandidate.test.mjs
           scripts/tests/correlatedErrorDiagnostics.test.mjs
           scripts/tests/clientErrorDiagnostics.test.mjs
+          scripts/tests/splitLeaveDiagnostics.test.mjs
           scripts/tests/subscriptionRouterBackgroundDiagnostic.test.mjs
 
       - name: Fetch pinned legacy build image

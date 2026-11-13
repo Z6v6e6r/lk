@@ -104,7 +104,7 @@ export function GameBookingCancellation({ gameId, organizer, onGameChanged }: {
   return (
     <div>
       <div className="booking-cancel-row">
-        <button className="btn-cancel danger" type="button" disabled={loading}
+        <button data-lk-leave-action="BOOKING_CANCEL_OPEN" className="btn-cancel danger" type="button" disabled={loading}
           onClick={() => { void openCancellation(); }}>
           {loading ? "Проверяем запись..." : "Отменить запись"}
         </button>
