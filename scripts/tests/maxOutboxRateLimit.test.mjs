@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const register = require('../../node-red/max-outbox-adapter/max-outbox-send.js');
 const { deliver, createRateScheduler } = register;
-const command = target => ({ id: randomUUID(), leaseToken: randomUUID(), connector: 'MAX_BOT',
+const command = target => ({ id: randomUUID(), meta: { maxOutboxProtocol: 'max-lease-v1' }, leaseToken: randomUUID(), connector: 'MAX_BOT',
   text: 'synthetic', targetExternalChatId: target, leasedUntil: new Date(Date.now() + 60000).toISOString() });
 const accepted = () => new Response(JSON.stringify({ message: { body: { mid: 'synthetic' } } }), { status: 200 });
 

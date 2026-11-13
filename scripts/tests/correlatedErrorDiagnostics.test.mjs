@@ -390,7 +390,7 @@ test('MAX controlled dispatch context survives clones; lease attempts share only
     const events = [], observer = createDiagnostics({ key: Buffer.alloc(32, 17), sink: e => events.push(e) });
     const operations = [], attempts = [];
     for (const attempt of [1, 2]) {
-      const command = { id: 'private-command', connector, attempts: attempt, leaseToken: randomUUID(), leasedUntil: '2030-01-01T00:00:00.000Z', targetExternalChatId: 'private-target', text: 'private-text' };
+      const command = { id: 'private-command', connector, meta: { maxOutboxProtocol: 'max-lease-v1' }, attempts: attempt, leaseToken: randomUUID(), leasedUntil: '2030-01-01T00:00:00.000Z', targetExternalChatId: 'private-target', text: 'private-text' };
       const before = events.length;
       const result = run('scripts/nodered_max_nodes/fn_max_outbox_dispatch_prepare.js', { payload: command }, observer).result;
       const send = result[0];

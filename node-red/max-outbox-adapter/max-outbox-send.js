@@ -82,7 +82,10 @@ async function responseJson(response) {
 
 async function deliver(command, token, { fetchImpl = globalThis.fetch, timeoutMs = 20000,
   signal, now = Date.now, scheduler = rateScheduler } = {}) {
-  if (!command || typeof command.id !== 'string'
+  if (!command || command.meta?.maxOutboxProtocol !== 'max-lease-v1'
+    || Object.prototype.hasOwnProperty.call(command.meta ?? {}, 'legacyMaxRestartCustody')
+    || Object.prototype.hasOwnProperty.call(command.meta ?? {}, 'legacyMaxArchive')
+    || typeof command.id !== 'string'
     || typeof command.leaseToken !== 'string' || !/^[0-9a-f-]{36}$/.test(command.leaseToken)) return null;
   const receipt = { id: command.id, leaseToken: command.leaseToken, kind: 'fail',
     failure: { status: null, code: 'invalid_input' } };
@@ -138,10 +141,15 @@ async function deliver(command, token, { fetchImpl = globalThis.fetch, timeoutMs
 }
 
 function register(RED) {
+  require('./max-integration-config.js').loadIntegrationConfig({ file: RED.settings?.padlhubMaxOutboxTokenFile });
+  require('./max-outbox-receipt.js')(RED);
   function MaxOutboxSend(config) {
     RED.nodes.createNode(this, config);
     const active = new Set();
     const attempts = new Map();
+    // Bounded refusal tombstone: any unremembered lease at/below this expiry
+    // has potentially already been released by CUP. Never send it later.
+    let refusedLeaseUpperBound = -Infinity;
     let closing = false;
     this.on('input', async (msg, send, done) => {
       const controller = new AbortController();
@@ -149,19 +157,32 @@ function register(RED) {
       try {
         const bot = RED.nodes.getNode(config.bot);
         const command = msg.supportOutbox;
-        const key = typeof command?.id === 'string' && typeof command?.leaseToken === 'string'
+        const key = command?.meta?.maxOutboxProtocol === 'max-lease-v1'
+          && !Object.prototype.hasOwnProperty.call(command.meta, 'legacyMaxRestartCustody')
+          && !Object.prototype.hasOwnProperty.call(command.meta, 'legacyMaxArchive')
+          && typeof command?.id === 'string' && typeof command?.leaseToken === 'string'
           ? command.id + ':' + command.leaseToken : null;
         const now = Date.now();
-        for (const [k, value] of attempts) if (now - value.at > 600000) attempts.delete(k);
+        for (const [k, value] of attempts) if (value.finished && now >= value.until) attempts.delete(k);
         let receipt = null;
         if (!closing && key) {
           if (!attempts.has(key)) {
-            if (attempts.size >= 1000) { this.warn('MAX_OUTBOX_ATTEMPT_CACHE_FULL'); return; }
-            attempts.set(key, { at: now, result: deliver(command, bot?.token, { signal: controller.signal }) });
+            const until = Date.parse(command.leasedUntil);
+            if (attempts.size >= 1000 || until <= refusedLeaseUpperBound) {
+              // This claim has not reached transport. Tell CUP it may retry admission safely.
+              if (Number.isFinite(until)) refusedLeaseUpperBound = Math.max(refusedLeaseUpperBound, until);
+              this.warn('MAX_OUTBOX_ATTEMPT_CACHE_FULL');
+              send({ maxOutboxReceipt: { id: command.id, leaseToken: command.leaseToken, kind: 'fail',
+                failure: { status: null, code: 'local_deferred' } }, maxOutboxLeaseUntil: command.leasedUntil });
+              return;
+            }
+            const job = { until: Date.parse(command.leasedUntil), finished: false };
+            job.result = deliver(command, bot?.token, { signal: controller.signal }).finally(() => { job.finished = true; });
+            attempts.set(key, job);
           }
           receipt = await attempts.get(key).result;
         }
-        if (receipt) send({ maxOutboxReceipt: receipt });
+        if (receipt) send({ maxOutboxReceipt: receipt, maxOutboxLeaseUntil: command.leasedUntil });
         else this.warn('MAX_OUTBOX_INVALID_LEASE');
       } catch { this.warn('MAX_OUTBOX_RECEIPT_OUTPUT_FAILED'); }
       finally { active.delete(controller); done(); }
