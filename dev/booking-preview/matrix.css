@@ -141,22 +141,6 @@
 .matrix-quarter-row.is-unavailable b, .matrix-quarter-row.is-unavailable strong { color: #a39aa8; }
 @media(max-width: 450px) { .matrix-quarter-row { padding: 9px 8px; gap: 7px; } .matrix-quarter-price strong { font-size: 12px; } }
 
-/* Residency product card follows the supplied membership artwork. */
-.matrix-purchase-benefits.matrix-residency-card { padding: 24px 20px; }
 .matrix-product-badge { display: block; width: auto; height: 40px; max-width: 100%; object-fit: contain; object-position: left center; }
-.matrix-residency-card h2.matrix-residency-badge { margin: 0 0 20px; }
-.matrix-residency-card > p.matrix-residency-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 0; padding-bottom: 24px; border-bottom: 1px solid #b78af5; }
-.matrix-residency-price strong { color: #151515; font-size: clamp(36px, 12vw, 54px); font-weight: 800; line-height: 1.1; letter-spacing: -1.5px; }
-.matrix-residency-price > span { color: #999; font-size: 18px; }
-.matrix-residency-card ul.matrix-residency-discounts { margin: 22px 0; }
-.matrix-residency-card .matrix-residency-discounts li { align-items: flex-start; border: 0; padding: 8px 0; gap: 10px; font-size: 15px; line-height: 1.5; }
-.matrix-residency-discounts li > strong { flex-shrink: 0; color: #7024bc; background: #f0e5ff; border-radius: 30px; padding: 0 8px; font-size: 17px; line-height: 1.5; }
-.matrix-residency-equipment { margin: 26px 0; }
-.matrix-residency-equipment h3 { margin: 0; text-transform: uppercase; font-size: 14px; letter-spacing: .6px; }
-.matrix-residency-equipment > p { margin: 4px 0 12px; color: #787287; font-size: 12px; }
-.matrix-residency-equipment > div { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; font-size: 18px; }
-.matrix-residency-included { display: grid; place-items: center; width: 42px; height: 26px; border-radius: 30px; background: #802cbe; color: #fff; font-size: 16px; }
-.matrix-residency-card ul.matrix-residency-limits { margin: 0; padding: 15px 0 0 17px; border-top: 1px solid #efedf2; list-style: disc; color: #787287; font-size: 12px; line-height: 1.5; }
-.matrix-residency-card .matrix-residency-limits li { display: list-item; border: 0; padding: 3px 0; }
 .matrix-purchase-event { display: grid; gap: 6px; margin: 14px 0 20px; font-size: 14px; line-height: 1.5; }
 .matrix-purchase-event > span { color: #787287; }

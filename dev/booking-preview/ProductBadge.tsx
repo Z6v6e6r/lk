@@ -4,7 +4,7 @@ import friendship2 from './assets/product-badges/friendship-2.svg';
 import ra from '../../src/components/subscription-storefront/assets/plan-art/ра.svg';
 
 const badges: Record<string, { src: string; width: number; height: number }> = {
-  residency: { src: residency, width: 1331, height: 128 },
+  residency: { src: residency, width: 391, height: 55 },
   friendship: { src: friendship, width: 826, height: 128 },
   'friendship-2': { src: friendship2, width: 1033, height: 128 },
   ra: { src: ra, width: 72, height: 22 },

@@ -3,6 +3,7 @@ import { formatRubles, type GamePaymentScope, type ServiceKind, type PaymentOpti
 import { PurchaseOfferLayout } from './PurchaseOfferLayout';
 import { ProductBadge } from './ProductBadge';
 import { bookingEventLines, type BookingEventDetails } from './bookingEventDetails';
+import './residency-offer.css';
 
 export function ResidencyPurchaseOffer({ option, residencyPrice, referenceAmount, eventName, durationMinutes, eventDetails, service, gamePaymentScope, disabled, onContinue }: {
   option?: PaymentOption;
@@ -31,9 +32,9 @@ export function ResidencyPurchaseOffer({ option, residencyPrice, referenceAmount
         <li><strong>50%</strong><span>Скидка на форматы: игра + тренер, групповые тренировки, лига «Время на друзей», турниры ПадлхАБ</span></li>
       </ul>
       <div className="matrix-residency-equipment">
-        <h3>На время игры</h3>
+        <h3>На время игры:</h3>
         <p>Без оплаты при наличии</p>
-        {['Ракетка', 'Полотенце'].map(item => <div key={item}><span>{item}</span><span className="matrix-residency-included" aria-label="Включено при наличии"><span aria-hidden="true">✓</span></span></div>)}
+        {['Ракетка', 'Полотенце'].map(item => <div key={item}><span>{item}</span><span className="matrix-residency-included" role="img" aria-label="Включено при наличии" /></div>)}
       </div>
       <ul className="matrix-residency-limits" aria-label="Условия скидок">
         <li>Скидки не действуют на ПРО.</li>
