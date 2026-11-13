@@ -27,7 +27,8 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
 // Execute the production callbacks, not a copy of their control flow. No network.
 function harness(stage) {
   const read = deferred();
-  const state = { error: null, profileReads: 0, slotReads: 0, writes: 0, profileUpdates: 0, slotUpdates: 0, signal: null };
+  const state = { error: null, profileReads: 0, slotReads: 0, writes: 0, profileUpdates: 0, slotUpdates: 0, signal: null,
+    cardPayloads: [], completed: [], step: null };
   const context = {
     AbortController, Promise, Date, Math, Set, isRequestTimeoutError, runWithAbortTimeout,
     subscriptionUsageShadowEnabled: false, studioId: 'studio', selectedDate: new Date('2030-01-01'),
@@ -46,6 +47,10 @@ function harness(stage) {
     setLoadingPay: value => { context.loadingPay = value; }, setPayError: value => { state.error = value; },
     setGameRecordError: () => {}, setGamePreparationStage: value => { context.gamePreparationStage = value; },
     gamePreparationRef: { current: null }, splitSubscriptionSubmitInFlightRef: { current: false },
+    gameCreationRef: { current: null }, gameCreationPending: false,
+    setGameCreationPending: value => { context.gameCreationPending = value; },
+    hasPendingPadelSplitCreate: () => false,
+    readAuthToken: () => 'synthetic-session',
     formatDateLocalIso: () => '2030-01-01', addMinutesToTime: () => '21:00', generatePaymentRef: () => 'ref',
     buildBaseRedirectUrl: () => 'synthetic-url', PAYMENT_REF_QUERY_KEY: 'ref', activeSplitPaymentPromoConfig: { enabled: false },
     paymentAmount: 8000, splitShareCount: 4, DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG: { baseShareAmount: 2000 },
@@ -54,11 +59,26 @@ function harness(stage) {
     apiCreatePadelSplitGamePayment: async () => { state.writes++; return { error: { message: 'test stop' } }; },
     apiPayMasterService: async () => { state.writes++; return { error: { message: 'test stop' } }; },
     resolveSubscriptionCategoryDailyLimitErrorMessage: () => null,
+    isRecordObject: value => value !== null && typeof value === 'object' && !Array.isArray(value),
     resolveSubscriptionDecisionPresentation: () => ({}), formatSubscriptionDecisionPresentation: () => 'test stop',
     canProceedToPayment: true, loadingPay: false, gamePreparationStage: null,
     subscriptionUsageShadow: { busy: false }, publicCreateNeedsSplitSubscriptionSelection: false,
     splitPaymentSelected: true, splitCheckoutMode: 'subscription', splitHasSubscriptionPaymentOptions: true,
     publicCreateSurchargeMinor: null, selectedSplitSubscriptionId: 'subscription', formatPrice: String,
+    participants: [], waitlistPlayers: [], profileName: 'Synthetic player', profileGrade: null, profileRatingNumeric: null,
+    profilePhoto: null, SPLIT_PAYMENT_DEADLINE_MINUTES: 25, normalizePhoneForGame: value => value,
+    buildGameAllRelatedPhones: () => [], moscowBookingEndIso: () => '2030-01-01T21:00:00+03:00',
+    effectiveRatingGame: false, isPrivate: false, gameTitleDraft: 'Synthetic game', gameParticipantCommentDraft: 'Synthetic comment',
+    gameJoinPriceDraft: '', publicCreatePreciseRatingMetadata: {}, buildCommunityAutopublishMetadata: () => ({}),
+    buildCommunityAutopublishMetadataFields: () => ({}), buildGameOptionalMetadataFields: value => value,
+    completePadelSplitCreate: id => state.completed.push(id),
+    apiCreatePadelGameRecord: async payload => { state.cardPayloads.push(payload); return { data: { id: 'pay_original', status: 'PAID' } }; },
+    buildInviteFallbackUrl: () => '/synthetic-invite', resolveGameInviteUrl: () => '/synthetic-invite',
+    upsertGameRecordInStores: () => {}, runPaidGameCommunityMembershipAndPublication: async () => {},
+    setGameRecordId: () => {}, setGameRecordStatus: () => {}, setInviteLink: () => {}, setGamePaymentUrl: () => {},
+    setGamePaid: () => {}, setGameSnapshot: () => {}, setConfirmCancelUnpaidGame: () => {},
+    mergeMatchSnapshots: () => ({}), buildMatchSnapshotFromPayload: () => ({}), buildMatchSnapshotFromRecord: () => ({}),
+    pushCabinetFlashNotice: () => {}, setStep: value => { state.step = value; },
   };
   vm.createContext(context);
   for (const name of ['resolveCurrentClientProfile', 'revalidateSelectedSlotForPayment', 'prepareGamePayment',
@@ -90,7 +110,8 @@ for (const stage of ['profile', 'slot']) {
     assert.equal(h.state.profileReads + h.state.slotReads, 1);
     t.mock.timers.tick(20_000);
     await first;
-    assert.match(h.state.error, /Проверка заняла слишком много времени.*Игра не создана/);
+    assert.match(h.state.error, /Проверка данных заняла слишком много времени/);
+    assert.doesNotMatch(h.state.error, /Игра не создана/);
     assert.equal(h.visual().disabled, false);
     assert.equal(h.visual().busy, false);
     assert.equal(h.state.signal.aborted, true);
@@ -101,7 +122,7 @@ for (const stage of ['profile', 'slot']) {
     assert.equal(h.state.writes, 0);
     assert.equal(h.state.profileUpdates, 0);
     assert.equal(h.state.slotUpdates, 0);
-    assert.match(h.state.error, /Проверка заняла слишком много времени/);
+    assert.match(h.state.error, /Проверка данных заняла слишком много времени/);
   });
 }
 
@@ -155,6 +176,84 @@ test('a normal submission reaches CREATE once after successful revalidation', as
   await pending;
   assert.equal(h.state.writes, 1);
   assert.equal(h.visual().busy, false);
+});
+
+test('pending CREATE stays busy; unresolved recovery shows a neutral check action without another CREATE', async () => {
+  const h = harness('slot');
+  const create = deferred();
+  h.context.apiCreatePadelSplitGamePayment = () => { h.state.writes++; return create.promise; };
+  const pending = h.submit();
+  await flush();
+  h.read.resolve({ data: [] });
+  await flush();
+  assert.equal(h.state.writes, 1);
+  assert.equal(h.visual().label, 'Создаём игру…');
+  assert.equal(h.visual().busy, true);
+  assert.equal(h.visual().disabled, true);
+  await h.submit();
+  assert.equal(h.state.writes, 1);
+  create.resolve({ data: null, status: 202, error: { status: 202, raw: { state: 'PENDING_CONFIRMATION' } } });
+  await pending;
+  assert.equal(h.visual().busy, false);
+  assert.equal(h.state.writes, 1);
+  assert.equal(h.state.error, null);
+  assert.equal(h.context.gameCreationPending, true);
+  assert.equal(h.visual().label, 'Проверить создание игры');
+});
+
+test('late confirmed result completes one LK card with original paymentRef and draft metadata', async () => {
+  const h = harness('slot');
+  h.context.apiCreatePadelSplitGamePayment = async (_params, options) => {
+    h.state.writes++; options.onRecovery();
+    assert.equal(h.context.gamePreparationStage, 'confirmation');
+    return { data: { paymentRef: 'original-ref', operationId: 'original-operation', exerciseId: 'exercise', bookingId: 'booking',
+      toPay: 0, shareAmount: 750, shareAmountMinor: 75000 } };
+  };
+  const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await pending;
+  assert.equal(h.state.writes, 1);
+  assert.equal(h.state.cardPayloads.length, 1);
+  assert.equal(h.state.cardPayloads[0].paymentRef, 'original-ref');
+  assert.equal(h.state.cardPayloads[0].metadata.gameTitle, 'Synthetic game');
+  assert.equal(h.state.cardPayloads[0].metadata.participantComment, 'Synthetic comment');
+  assert.equal(h.state.cardPayloads[0].metadata.splitPayment.shareAmount, 750);
+  assert.deepEqual(h.state.completed, ['original-operation']);
+  assert.equal(h.state.step, 'details');
+  assert.equal(h.state.error, null);
+});
+
+test('auth change during LK card persistence prevents publication, completion and navigation', async () => {
+  const h = harness('slot'); const card = deferred();
+  let upserts = 0;
+  h.context.apiCreatePadelSplitGamePayment = async () => ({ data: {
+    paymentRef: 'original-ref', operationId: 'original-operation', exerciseId: 'exercise', bookingId: 'booking', toPay: 0 } });
+  h.context.apiCreatePadelGameRecord = () => card.promise;
+  h.context.upsertGameRecordInStores = () => upserts++;
+  const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await flush();
+  h.context.readAuthToken = () => 'new-session';
+  card.resolve({ data: { id: 'pay_original' } }); await pending;
+  assert.equal(upserts, 0); assert.equal(h.state.completed.length, 0); assert.equal(h.state.step, null);
+});
+
+test('unmount or changed selection discards a late confirmation before LK publication', async () => {
+  const h = harness('slot'); const create = deferred();
+  h.context.apiCreatePadelSplitGamePayment = () => create.promise;
+  const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await flush();
+  h.context.gameCreationRef.current.abort(); h.context.gameCreationRef.current = null;
+  create.resolve({ data: { paymentRef: 'original-ref', exerciseId: 'exercise', bookingId: 'booking', toPay: 0 } });
+  await pending;
+  assert.equal(h.state.cardPayloads.length, 0);
+  assert.equal(h.state.completed.length, 0);
+});
+
+test('checking an existing pending attempt skips fresh-slot admission and remains in recovery', async () => {
+  const h = harness('slot');
+  h.context.hasPendingPadelSplitCreate = () => true;
+  h.context.apiCreatePadelSplitGamePayment = async () => ({ data: null, status: 202,
+    error: { status: 202, raw: { state: 'PENDING_CONFIRMATION' } } });
+  await h.submit();
+  assert.equal(h.state.slotReads, 0);
+  assert.equal(h.state.cardPayloads.length, 0);
+  assert.equal(h.context.gameCreationPending, true);
 });
 
 const apiSource = fs.readFileSync('src/utils/apiClient.ts', 'utf8');
