@@ -2,6 +2,7 @@ import { createPreviewOrder } from './bookingCheckout';
 import { formatRubles, type PaymentOption } from './paymentMatrix';
 import type { subscriptionPurchaseChoices, SubscriptionOffer } from './subscriptionOffers';
 import { PurchaseOfferLayout } from './PurchaseOfferLayout';
+import { ProductBadge } from './ProductBadge';
 
 const planBenefits = {
   friendship: ['До 1 часа игры в день — ваша ¼ корта бесплатно', 'Скидка 30% на время игры сверх часа и после дневного лимита', 'Скидка 50% на групповые тренировки и турниры, кроме ПРО'],
@@ -34,7 +35,7 @@ export function SubscriptionPurchaseOffer({ choices, offer, option, eventDescrip
         </label>)}
       </fieldset>
       {offer && <section className="matrix-purchase-benefits" aria-label={`Преимущества подписки ${offer.name}`}>
-        <h2>{offer.name}</h2>
+        <h2><ProductBadge product={offer.plan} name={offer.name} /></h2>
         <p>{formatRubles(offer.price)} за 30 дней</p>
         <ul>{benefits.map((benefit, index) => <li key={benefit}><span className="matrix-purchase-benefit-icon" aria-hidden="true">{index === 0 ? '01' : index === 1 ? '02' : '03'}</span><span>{benefit}</span></li>)}</ul>
         <p className="matrix-purchase-limits">До 8 активных записей. После лимита сохраняются скидки 30% на игры и 50% на групповые и турниры, кроме ПРО.</p>

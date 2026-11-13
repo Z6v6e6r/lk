@@ -143,8 +143,8 @@
 
 /* Residency product card follows the supplied membership artwork. */
 .matrix-purchase-benefits.matrix-residency-card { padding: 24px 20px; }
-.matrix-residency-card h2.matrix-residency-badge { display: inline-block; padding: 5px 12px; margin: 0 0 20px; border-radius: 5px; background: #ad6af5; color: #fff; font-size: clamp(22px, 7vw, 30px); font-weight: 800; line-height: 1.15; text-transform: uppercase; letter-spacing: .5px; transform: skew(-12deg); }
-.matrix-residency-badge > span { font-size: 1.3em; line-height: .8; vertical-align: -.04em; }
+.matrix-product-badge { display: block; width: auto; height: 40px; max-width: 100%; object-fit: contain; object-position: left center; }
+.matrix-residency-card h2.matrix-residency-badge { margin: 0 0 20px; }
 .matrix-residency-card > p.matrix-residency-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 0; padding-bottom: 24px; border-bottom: 1px solid #b78af5; }
 .matrix-residency-price strong { color: #151515; font-size: clamp(36px, 12vw, 54px); font-weight: 800; line-height: 1.1; letter-spacing: -1.5px; }
 .matrix-residency-price > span { color: #999; font-size: 18px; }

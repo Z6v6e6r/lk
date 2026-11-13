@@ -1,6 +1,7 @@
 import { createPreviewOrder } from './bookingCheckout';
 import { formatRubles, type GamePaymentScope, type ServiceKind, type PaymentOption } from './paymentMatrix';
 import { PurchaseOfferLayout } from './PurchaseOfferLayout';
+import { ProductBadge } from './ProductBadge';
 import { bookingEventLines, type BookingEventDetails } from './bookingEventDetails';
 
 export function ResidencyPurchaseOffer({ option, residencyPrice, referenceAmount, eventName, durationMinutes, eventDetails, service, gamePaymentScope, disabled, onContinue }: {
@@ -23,7 +24,7 @@ export function ResidencyPurchaseOffer({ option, residencyPrice, referenceAmount
     <p>{order ? `Участие ${formatRubles(order.bookingAmount)} + Резидентство ${formatRubles(order.productAmount)}` : 'Резидентство и запись — одной оплатой'}</p>
   </>}>
     <section className="matrix-purchase-benefits matrix-residency-card" aria-label="Преимущества Резидентства">
-      <h2 className="matrix-residency-badge" data-purchase-title tabIndex={-1}><span aria-hidden="true">+</span> Резидент</h2>
+      <h2 className="matrix-residency-badge" data-purchase-title tabIndex={-1}><ProductBadge product="residency" name="Резидентство" /></h2>
       <p className="matrix-residency-price">{residencyPrice != null ? <><strong>{formatRubles(residencyPrice)}</strong><span> / 30 дней</span></> : 'Стоимость Резидентства уточняется'}</p>
       <ul className="matrix-residency-discounts">
         <li><strong>30%</strong><span>Скидка на создание и участие в игре — на вашу ¼ стоимости корта</span></li>
