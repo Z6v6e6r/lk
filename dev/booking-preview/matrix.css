@@ -1,0 +1,146 @@
+.matrix-lk2-only { display: none; }
+.matrix-payment { margin: 16px 0; padding: 20px; background: #fff; color: var(--text, #1a1a1a); border: 1px solid var(--border, #e5e7eb); border-radius: 18px; font: 14px/1.45 var(--ui-font, system-ui, sans-serif); min-width: 0; }
+.matrix-payment *, .matrix-information * { box-sizing: border-box; }
+.matrix-payment button, .matrix-payment input, .matrix-information button { font: inherit; }
+.matrix-payment-heading { display: flex; justify-content: space-between; align-items: start; gap: 14px; margin-bottom: 18px; }
+.matrix-payment h2 { font-family: "RF Dewi UltraBold", var(--ui-font, system-ui, sans-serif); font-size: 18px; font-weight: 700; margin: 0; color: var(--text, #1a1a1a); letter-spacing: -.3px; }
+.matrix-payment .matrix-payment-heading h2 > span { font: inherit; letter-spacing: inherit; }
+.matrix-payment-heading p { font-size: 12px; color: #787287; margin: 5px 0 0; }
+.matrix-event-copy > strong { font-weight: inherit; }
+.matrix-base-price { flex-shrink: 0; text-align: right; color: #8e8998; }
+.matrix-base-price span { display: block; font-size: 10px; margin-bottom: 4px; }
+.matrix-base-price del { font-size: 16px; }
+.matrix-options { display: grid; gap: 10px; padding: 0; border: 0; margin: 0; min-width: 0; }
+.matrix-option { display: flex; position: relative; align-items: center; gap: 12px; width: 100%; margin: 0; padding: 14px; border: 1px solid #e6e3ed; border-radius: 12px; background: #fff; text-align: left; color: #282336; cursor: pointer; transition: border-color .15s, background .15s; }
+.matrix-option input { width: 16px; height: 16px; flex: 0 0 16px; margin: 0; accent-color: #7442eb; }
+.matrix-option.is-selected { border-color: #8755ee; box-shadow: 0 0 0 1px #8755ee; }
+.matrix-option--subscription { background: #f5faed; }
+.matrix-option--subscription.is-selected { background: #edf6df; border-color: #719d38; box-shadow: 0 0 0 1px #719d38; }
+.matrix-option--pass { background: #f8f5ff; }
+.matrix-option--residency { background: #f7f3ff; }
+.matrix-option--residency.is-selected { background: #f0e7ff; }
+.matrix-option-copy { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.matrix-option-copy strong { font-size: 13px; font-weight: 650; line-height: 1.3; }
+.matrix-option-copy > span { color: #82788e; font-size: 11px; line-height: 1.4; }
+.matrix-option-value { text-align: right; display: grid; gap: 4px; flex-shrink: 0; max-width: 35%; }
+.matrix-option-value strong { font-size: 14px; font-weight: 700; white-space: nowrap; }
+.matrix-option-value > span { color: #7650bf; font-size: 10px; }
+.matrix-option-value > .matrix-option-base-price { display: grid; gap: 2px; color: #8e8998; text-align: inherit; }
+.matrix-option-value .matrix-option-base-price > span { font-size: 9px; margin: 0; }
+.matrix-option-value .matrix-option-base-price del { font-size: 11px; }
+.matrix-comparison .matrix-option-value .matrix-option-base-price { display: grid; gap: 2px; align-items: start; margin: 0; text-align: inherit; }
+.matrix-icon { width: 32px; height: 32px; padding: 7px; flex: 0 0 32px; border-radius: 9px; background: #f0edf7; color: #797188; }
+.matrix-icon svg { width: 100%; height: 100%; display: block; }
+.matrix-icon--residency { background: #e9deff; color: #7843e5; }
+.matrix-icon--subscription { background: #e0efca; color: #54872b; }
+.matrix-icon--pass { background: #eae1ff; color: #7a48d6; }
+.matrix-resident-perks { display: flex; align-items: center; gap: 7px; color: #817090; font-size: 11px; margin: 14px 0 0; }
+.matrix-resident-perks svg { width: 16px; height: 16px; flex-shrink: 0; color: #9360ee; }
+.matrix-payment .matrix-confirm, .matrix-information .matrix-confirm { display: block; width: 100%; min-height: 54px; border: 0; border-radius: var(--radius, 16px); background: var(--purple, #7353d9); color: #fff; font-family: var(--btn-font, system-ui, sans-serif); font-size: 15px; font-weight: 650 !important; padding: 14px 12px; margin-top: 18px; cursor: pointer; }
+.matrix-confirm:hover { background: #6535cf; }
+.matrix-confirm:disabled { background: #dad6e2; color: #8d8499; cursor: default; }
+.matrix-option:has(input:disabled), .matrix-option.is-unavailable { cursor: default; }
+.matrix-option.is-unavailable { background: #f7f7f8; color: #918a9b; }
+.matrix-option.is-unavailable .matrix-icon { filter: grayscale(1); opacity: .6; }
+.matrix-option:focus-visible, .matrix-confirm:focus-visible, .matrix-option:has(input:focus-visible), .matrix-success button:focus-visible { outline: 3px solid #ab88f5; outline-offset: 3px; }
+.matrix-payment-footnote { color: #9a91a4; font-size: 10px; line-height: 1.5; margin: 10px 0 0; text-align: center; }
+.matrix-notice { background: #fff8e7; color: #7e621d; padding: 12px; border-radius: 10px; font-size: 12px; }
+.matrix-success { padding: 18px; border-radius: 12px; background: #eff7e6; color: #385826; }
+.matrix-success strong { font-size: 17px; }
+.matrix-success p { font-size: 13px; margin: 8px 0 15px; }
+.matrix-success button { border: 1px solid #b7cba3; border-radius: 7px; background: transparent; color: #45612f; padding: 8px 12px; cursor: pointer; }
+.matrix-information { font: 14px/1.6 system-ui, sans-serif; padding: 12px 4px; color: #44374e; }
+.matrix-information h3 { font-size: 20px; margin: 0 0 14px; color: #2c2036; }
+.matrix-information-note { font-size: 12px; color: #95889f; }
+.matrix-subscription-plans { display: grid; gap: 10px; min-width: 0; padding: 0; margin: 16px 0; border: 0; }
+.matrix-subscription-plans legend { padding: 0 0 10px; font-weight: 650; }
+.matrix-subscription-plan { display: grid; grid-template-columns: 16px minmax(0,1fr) auto; align-items: center; gap: 8px; border: 1px solid #e1d9eb; border-radius: 12px; padding: 12px 10px; cursor: pointer; background: #fff; }
+.matrix-subscription-plan.is-selected { border-color: #8755ee; box-shadow: 0 0 0 1px #8755ee; background: #f5f0fe; }
+.matrix-subscription-plan input { width: 16px; height: 16px; margin: 0; accent-color: #7442eb; }
+.matrix-subscription-plan-copy, .matrix-subscription-plan-total { display: grid; gap: 3px; min-width: 0; }
+.matrix-subscription-plan-copy strong { font-size: 14px; }
+.matrix-subscription-plan-copy > span, .matrix-subscription-plan-total > span { font-size: 11px; color: #82788e; line-height: 1.4; }
+.matrix-subscription-plan-total { text-align: right; }
+.matrix-subscription-plan-total strong { font-size: 13px; white-space: nowrap; }
+.matrix-subscription-plan:has(input:focus-visible) { outline: 3px solid #ab88f5; outline-offset: 3px; }
+.modal-content--fullscreen .modal-body.matrix-purchase-modal { padding: 0; overflow: hidden; background: #f5f5f7; }
+.matrix-purchase-offer, .matrix-purchase-offer * { box-sizing: border-box; }
+.matrix-purchase-offer { height: 100%; display: flex; flex-direction: column; color: #282336; font: 14px/1.5 var(--ui-font, system-ui, sans-serif); }
+.matrix-purchase-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 20px max(16px, calc((100% - 520px)/2)); }
+.matrix-purchase-offer .matrix-subscription-plans { margin: 0 0 20px; }
+.matrix-purchase-benefits, .matrix-purchase-booking { background: #fff; border: 1px solid #e6e3ed; border-radius: 18px; padding: 20px; margin-bottom: 16px; }
+.matrix-purchase-benefits h2 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -.5px; }
+.matrix-purchase-benefits > p { margin: 8px 0 0; color: #787287; }
+.matrix-purchase-benefits ul { list-style: none; padding: 0; margin: 18px 0 0; }
+.matrix-purchase-benefits li { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-top: 1px solid #efedf2; }
+.matrix-purchase-benefit-icon { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 10px; background: #edf6df; color: #54872b; font-size: 12px; font-weight: 700; }
+.matrix-purchase-benefits > .matrix-purchase-limits { font-size: 12px; line-height: 1.5; padding-top: 12px; border-top: 1px solid #efedf2; }
+.matrix-purchase-booking h3 { margin: 0; font-size: 17px; }
+.matrix-purchase-booking p { margin: 6px 0 0; color: #787287; font-size: 12px; }
+.matrix-purchase-booking .matrix-purchase-explanation { margin-top: 12px; color: #44374e; }
+.matrix-purchase-booking .matrix-order-lines { margin-bottom: 0; }
+.matrix-purchase-footer { flex-shrink: 0; padding: 12px max(16px, calc((100% - 520px)/2)) calc(12px + env(safe-area-inset-bottom, 0px)); background: #fff; border-top: 1px solid #e6e3ed; }
+.matrix-purchase-footer .matrix-confirm { display: block; width: 100%; min-height: 54px; border: 0; border-radius: var(--radius, 16px); background: var(--purple, #7353d9); color: #fff; padding: 14px 10px; font: 650 14px/1.4 var(--btn-font, system-ui, sans-serif); cursor: pointer; }
+.matrix-purchase-footer .matrix-confirm:disabled { background: #dad6e2; color: #8d8499; cursor: default; }
+.matrix-purchase-footer p { margin: 8px 0 0; text-align: center; font-size: 11px; color: #82788e; }
+.matrix-order-lines { display: grid; gap: 12px; margin: 18px 0; }
+.matrix-order-lines > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.matrix-order-lines dt { min-width: 0; }
+.matrix-order-lines dd { margin: 0; white-space: nowrap; font-weight: 650; }
+.matrix-order-total { border-top: 1px solid #e6e3ed; padding-top: 12px; font-weight: 700; }
+.matrix-back { display: block; margin: 12px auto 0; border: 0; padding: 8px; background: none; color: #7650bf; font: inherit; cursor: pointer; }
+.matrix-back:focus-visible { outline: 3px solid #ab88f5; outline-offset: 2px; }
+.matrix-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+@media(max-width: 450px) { .matrix-payment { padding: 16px; border-radius: var(--radius, 16px); } .matrix-payment h2 { font-size: 18px; } .matrix-option { padding: 12px 10px; gap: 8px; } .matrix-option .matrix-icon { width: 26px; height: 26px; padding: 5px; flex-basis: 26px; } .matrix-option-value strong { font-size: 14px; } .matrix-option-copy strong { font-size: 14px; } .matrix-option-copy > span { font-size: 12px; } .matrix-base-price del { font-size: 13px; } }
+@media(prefers-reduced-motion: reduce) { .matrix-option { transition: none; } }
+.matrix-comparison { padding: 20px 16px; background: var(--bg, #f5f5f7); min-height: 100vh; font: 14px/1.5 var(--ui-font, system-ui, sans-serif); color: var(--text, #1a1a1a); }
+.matrix-comparison > h1 { max-width: 358px; font-family: "RF Dewi UltraBold", var(--ui-font, system-ui, sans-serif); font-size: 22px; margin: 0 auto 8px; }
+.matrix-comparison > p { max-width: 358px; color: var(--text-secondary, #6b7280); font-size: 13px; margin: 0 auto 20px; }
+.matrix-comparison > div { display: grid; grid-template-columns: minmax(0,1fr); max-width: 358px; margin: 0 auto; gap: 16px; align-items: start; }
+.matrix-comparison .matrix-payment { margin: 0; }
+.matrix-comparison .matrix-payment { padding: 16px; border-radius: var(--radius, 16px); }
+.matrix-comparison .matrix-option { padding: 12px 10px; gap: 8px; }
+.matrix-comparison .matrix-option .matrix-icon { width: 26px; height: 26px; padding: 5px; flex-basis: 26px; }
+.matrix-comparison .matrix-option-copy strong, .matrix-comparison .matrix-option-value strong { font-size: 14px; }
+.matrix-comparison .matrix-option-copy > span { font-size: 12px; }
+@media(max-width: 359px) { .matrix-option .matrix-icon { display: none; } }
+.matrix-option.is-quote { cursor: default; background: #fffbef; border-color: #eadbad; }
+.matrix-option.is-quote .matrix-option-value { color: #96712c; }
+.matrix-copay-note { margin: 12px 0 0; padding: 10px; border-radius: 8px; background: #fffbef; color: #93752e; font-size: 11px; line-height: 1.5; }
+.matrix-game-payers { padding: 0; margin: 18px 0; border: 0; min-width: 0; font: 14px/1.45 system-ui, sans-serif; color: #292132; display: grid; gap: 12px; }
+.matrix-game-payers legend { font-size: 17px; font-weight: 700; padding: 0 0 12px; }
+.matrix-payer { display: flex; align-items: center; gap: 12px; padding: 16px; border-radius: 15px; border: 1px solid #e2dceb; background: #fff; cursor: pointer; min-width: 0; }
+.matrix-payer.is-selected { border-color: #8852e9; box-shadow: 0 0 0 1px #8852e9; background: #f8f4ff; }
+.matrix-payer input { width: 17px; height: 17px; flex: 0 0 17px; margin: 0; accent-color: #7d46e3; }
+.matrix-payer-copy { min-width: 0; flex: 1; display: grid; gap: 6px; }
+.matrix-payer-copy strong { font-size: 15px; }
+.matrix-payer-copy span { font-size: 12px; color: #8b8096; }
+.matrix-payer-copy em { font-size: 11px; font-style: normal; color: #8461ac; }
+.matrix-payer-price { display: grid; text-align: right; gap: 5px; max-width: 36%; }
+.matrix-payer-price strong { font-size: 17px; }
+.matrix-payer-price del { color: #9b90a5; font-size: 12px; }
+.matrix-payer:has(input:focus-visible) { outline: 3px solid #b291ee; outline-offset: 3px; }
+@media(max-width: 450px) { .matrix-payer { padding: 13px 10px; gap: 8px; } .matrix-payer-copy strong { font-size: 14px; } .matrix-payer-price strong { font-size: 14px; } }
+.matrix-payer--personal { align-items: flex-start; }
+.matrix-payer--personal > input { margin-top: 3px; }
+.matrix-payer-copy .matrix-quarter-prices { display: grid; gap: 7px; margin-top: 6px; }
+.matrix-quarter-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 10px; border-radius: 9px; }
+.matrix-quarter-row--base { background: #f4f3f6; }
+.matrix-quarter-row--subscription { background: #f0f6e8; }
+.matrix-option--boost { background: #edf8f0; }
+.matrix-icon--boost { color: #28734c; background: #d4eddd; }
+.matrix-option--boost.is-selected { border-color: #37815a; box-shadow: 0 0 0 1px #37815a; background: #e5f4e9; }
+.matrix-quarter-row--residency { background: #f0e9fc; }
+.matrix-quarter-row > span:first-child { display: grid; gap: 4px; min-width: 0; }
+.matrix-quarter-row b { color: #4b3f57; font-size: 12px; font-weight: 600; }
+.matrix-quarter-row small { color: #95899f; font-size: 10px; line-height: 1.4; }
+.matrix-quarter-row .matrix-quarter-price { display: grid; gap: 4px; text-align: right; max-width: 115px; }
+.matrix-quarter-price strong { font-size: 14px; color: #45334f; }
+.matrix-quarter-price del { color: #9d90a8; font-size: 10px; }
+.matrix-quarter-row.is-unavailable { background: #f2f1f3; }
+.matrix-quarter-row.is-unavailable b, .matrix-quarter-row.is-unavailable strong { color: #a39aa8; }
+@media(max-width: 450px) { .matrix-quarter-row { padding: 9px 8px; gap: 7px; } .matrix-quarter-price strong { font-size: 12px; } }
+
+.matrix-product-badge { display: block; width: auto; height: 40px; max-width: 100%; object-fit: contain; object-position: left center; }
+.matrix-purchase-event { display: grid; gap: 6px; margin: 14px 0 20px; font-size: 14px; line-height: 1.5; }
+.matrix-purchase-event > span { color: #787287; }

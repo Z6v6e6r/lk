@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.app.json",
+  "compilerOptions": {
+    "composite": false,
+    "types": ["vite/client", "node"],
+    "tsBuildInfoFile": "../../node_modules/.tmp/booking-preview.tsbuildinfo"
+  },
+  "include": ["./**/*.ts", "./**/*.tsx", "../../src/**/*.d.ts"]
+}
