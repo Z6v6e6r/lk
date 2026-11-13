@@ -61,7 +61,7 @@ const lk1ReplayIdentityMatches = () => true;
 const finishError = (_ctx, status, error, details) => ({type:'error',status,error,details});
 const lk1FreeServiceToken = () => 'fixture-service';
 const prepareHttp = (_ctx, step, method, url) => {ctx.step=step;Object.assign(msg,{method,url});return {type:'http',method,url};};
-${read('../nodered_lk1_hub_nodes/gateway.js').split('const lk1HttpRejoinIdentity =')[1].split('if (ctx.step === \"lk1_http_rejoin_predecessor_find\") {')[0].replace(/^/, 'const lk1HttpRejoinIdentity =')}
+${read('../nodered_lk1_hub_nodes/gateway.js').split('const lk1HttpRejoinIdentity =')[1].split('if (ctx.step === "lk1_http_rejoin_predecessor_find") {')[0].replace(/^/, 'const lk1HttpRejoinIdentity =')}
 function predecessor(previous) {return previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey, true;}
 ${protocol}
 ${guard}

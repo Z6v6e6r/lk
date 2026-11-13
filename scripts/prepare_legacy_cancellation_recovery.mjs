@@ -23,8 +23,8 @@ export function legacyRouterEdits() {
       '  const returnedLegacy = lk1LegacyVerified(ctx, owner);\n  const released = (returnedNative || returnedLegacy || existingGameLeave)'],
     ['  return finishError(ctx, 409, "Дневное посещение уже занято. Обновите стоимость записи.", {',
       '  ctx.lk1DailyVisitRefusal = JSON.stringify([ctx.operationKey, ctx.operationId, ctx.actorClientId, ctx.clientSubscriptionId, ctx.exerciseId, ctx.lk1.fingerprint]);\n  return finishError(ctx, 409, "Дневное посещение уже занято. Обновите стоимость записи.", {'],
-    ['&& typeof lk1FreeReturnedOperation === \"function\" && lk1FreeReturnedOperation(operation)\n    && (!previous',
-      '&& typeof lk1FreeReturnedOperation === \"function\" && (lk1FreeReturnedOperation(operation) || lk1LegacyVerified(ctx, operation))\n    && (!previous'],
+    ['&& typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(operation)\n    && (!previous',
+      '&& typeof lk1FreeReturnedOperation === "function" && (lk1FreeReturnedOperation(operation) || lk1LegacyVerified(ctx, operation))\n    && (!previous'],
     ['previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey,',
       'previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey\n      || (lk1LegacyVerified(ctx, previous) ? `legacy-readback:${previous.operationId}` : null),'],
   ];
