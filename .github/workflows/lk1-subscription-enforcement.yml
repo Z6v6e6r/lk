@@ -605,6 +605,7 @@ jobs:
         run: >-
           node --test
           scripts/tests/resultLifecycle.nodered.test.ts
+          scripts/tests/resultAuthTransport.test.mjs
           scripts/tests/resultSession.nodered.test.ts
           scripts/tests/resultSubmitP0.regression.test.ts
           scripts/tests/matchResult.playerSelection.test.ts
@@ -626,7 +627,7 @@ jobs:
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         run: |
           npm install --prefix "$RUNNER_TEMP/function98-runtime" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund node-red@4.0.9
-          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/function98NativeRuntime.test.mjs
+          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/function98NativeRuntime.test.mjs scripts/tests/resultAuthTransportRuntime.test.mjs
 
       - name: Run Partner membership R4 gates
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'

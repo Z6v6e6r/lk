@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createResultAuthTransportNodes, RESULT_AUTH_IDS } from './lib/resultAuthTransport.mjs';
 
 const rootDir = process.env.NODERED_REPO_ROOT
   ? path.resolve(process.env.NODERED_REPO_ROOT)
@@ -678,9 +679,9 @@ const resultAuthPrepare = ensureNode({
   libs: [],
   x: 420,
   y: 3560,
-  wires: [['result_actor_auth_profile_request_001'], [submitHttpResp.id]],
+  wires: [[RESULT_AUTH_IDS.budget], [submitHttpResp.id]],
 });
-ensureNode({
+const resultAuthRequest = ensureNode({
   id: 'result_actor_auth_profile_request_001',
   type: 'http request',
   z: tabId,
@@ -700,6 +701,13 @@ ensureNode({
   y: 3560,
   wires: [['result_actor_auth_profile_001']],
 });
+createResultAuthTransportNodes({
+  tab: tabId,
+  request: resultAuthRequest.id,
+  response: submitHttpResp.id,
+  budgetSource: readFn('fn_result_auth_request_budget.js'),
+  failureSource: readFn('fn_result_auth_transport_error.js'),
+}).forEach(ensureNode);
 ensureNode({
   id: 'result_actor_auth_profile_001',
   type: 'function',
