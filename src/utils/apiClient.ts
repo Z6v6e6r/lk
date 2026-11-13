@@ -54,6 +54,8 @@ import { isRequestTimeoutError, runWithAbortTimeout } from "./requestTimeout.ts"
 import { SubscriptionRejoinTracker } from "./subscriptionRejoin.ts";
 import { nativeSubscriptionCancellationVerified, pollNativeSubscriptionCancellation, nativeCancellationRequestId } from "./nativeSubscriptionCancellation";
 import { SplitPaymentAmbiguityGuard } from "./splitPaymentAmbiguityGuard.ts";
+import { SplitCreateAttempts, isAmbiguousSplitCreate, recoverSplitCreateResult,
+  pendingSplitCreateResult, type SplitCreateResultBinding } from "./splitCreateRecovery.ts";
 import { createTournamentParticipantReader } from "./tournamentParticipantRead.ts";
 import {
   buildPadelAvailableGamesQuery,
@@ -9089,6 +9091,7 @@ async function requestPadelSplitPayment(
   splitRequest: ReturnType<typeof buildPadelSplitRequest>,
   baseUrl: string,
   params: PadelSplitPaymentParams,
+  signal?: AbortSignal,
 ): Promise<ApiResult<unknown>> {
   const ambiguityGuard = getBrowserPadelSplitAmbiguityGuard();
   const ambiguityScope = buildPadelSplitAmbiguityScope(splitRequest, params);
@@ -9111,6 +9114,7 @@ async function requestPadelSplitPayment(
     ...splitRequest.options,
     retries: 0,
     body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
+    ...(signal ? { signal } : {}),
   };
 
   if (params.paymentMode !== "subscription") {
@@ -9123,6 +9127,7 @@ async function requestPadelSplitPayment(
     const response = await runWithAbortTimeout(
       PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS,
       (signal) => request<unknown>(splitRequest.path, { ...requestOptions, signal }),
+      requestOptions.signal ?? undefined,
     );
     const ambiguous = hasPadelSplitAmbiguousState(response.data)
       || hasPadelSplitAmbiguousState(response.error?.raw)
@@ -9156,6 +9161,8 @@ async function requestPadelSplitPayment(
 interface PadelSplitPendingPollOptions {
   delaysMs?: readonly number[];
   wait?: (delayMs: number) => Promise<void>;
+  signal?: AbortSignal;
+  onRecovery?: () => void;
 }
 
 async function requestPadelSplitJoinWithPendingPoll(
@@ -9183,34 +9190,71 @@ async function requestPadelSplitJoinWithPendingPoll(
   return response;
 }
 
-// Split create can answer PENDING_CONFIRMATION as well: the gateway may have accepted the
-// request while Viva or the entitlement service still owes the booking readback. The LK game
-// record is created by the browser only after a confirmed response, so a single pending answer
-// used to leave a confirmed booking without a game. Re-issue the same operationId inside the
-// bounded schedule; the operation keeps its atomic claim and one-time creates never poll.
+let browserSplitCreateAttempts: SplitCreateAttempts | null = null;
+function getSplitCreateAttempts(): SplitCreateAttempts {
+  if (!browserSplitCreateAttempts) {
+    let storage: Storage | null = null;
+    try { if (typeof window !== "undefined") storage = window.localStorage; } catch { /* active-tab memory fallback */ }
+    browserSplitCreateAttempts = new SplitCreateAttempts(storage);
+  }
+  return browserSplitCreateAttempts;
+}
+type SplitCreateIdentity = Pick<PadelSplitPaymentParams, "date" | "fromTime" | "toTime" | "roomId"
+  | "clientId" | "clientPhone" | "clientSubscriptionId" | "spot">;
+export function hasPendingPadelSplitCreate(params: SplitCreateIdentity): boolean {
+  return getSplitCreateAttempts().has(buildPadelSplitIdempotencyKey("create", params as PadelSplitPaymentParams));
+}
+export function completePadelSplitCreate(operationId: string | null | undefined): void {
+  if (operationId) getSplitCreateAttempts().complete(operationId);
+}
+
+// An accepted/ambiguous CREATE is never replayed. Only the authenticated GET reader
+// may recover its result. Keep the original paymentRef until the LK card is saved.
 async function requestPadelSplitCreateWithPendingPoll(
   splitRequest: ReturnType<typeof buildPadelSplitRequest>,
   baseUrl: string,
   params: PadelSplitPaymentParams,
   options: PadelSplitPendingPollOptions | null = null,
 ): Promise<ApiResult<unknown>> {
-  const resolvedOptions = options ?? {};
-  const delaysMs = resolvedOptions.delaysMs ?? SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS;
-  const wait = resolvedOptions.wait ?? (async (delayMs) => {
-    await new Promise((resolve) => {
-      globalThis.setTimeout(resolve, delayMs);
-    });
-  });
-  let response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
-  if (params.paymentMode !== "subscription") return response;
-  for (const delayMs of delaysMs) {
-    if (response.error || !resolvePadelSplitPendingError(response.data, response.status)) {
-      return response;
-    }
-    await wait(delayMs);
-    response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
+  if (params.paymentMode !== "subscription") return requestPadelSplitPayment(splitRequest, baseUrl, params, options?.signal);
+  const session = readAuthToken();
+  const stopped = () => ({ data: null, status: 409, error: { status: 409,
+    message: "Проверка остановлена. Откройте бронирования в личном кабинете.", raw: { code: "SPLIT_CREATE_RESULT_CANCELLED" } } });
+  if (!session || options?.signal?.aborted) return stopped();
+  const splitCreateAttempts = getSplitCreateAttempts();
+  const attempt = splitCreateAttempts.begin(splitRequest.operationId, params.paymentRef || "");
+  params = { ...params, paymentRef: attempt.paymentRef };
+  let response: ApiResult<unknown>;
+  try {
+    response = attempt.recoveryOnly
+      ? pendingSplitCreateResult(splitRequest.operationId)
+      : await requestPadelSplitPayment(splitRequest, baseUrl, params, options?.signal);
+  } catch (error) {
+    if (readAuthToken() !== session || options?.signal?.aborted) return stopped();
+    throw error;
   }
-  return response;
+  if (readAuthToken() !== session || options?.signal?.aborted) return stopped();
+  if (!isAmbiguousSplitCreate(response)) {
+    if (response.error) splitCreateAttempts.complete(splitRequest.operationId);
+    return response;
+  }
+  options?.onRecovery?.();
+  const binding: SplitCreateResultBinding = {
+    operationId: splitRequest.operationId, paymentRef: attempt.paymentRef,
+    clientSubscriptionId: params.clientSubscriptionId || "", studioId: params.studioId, roomId: params.roomId,
+    fromTime: `${params.date}T${params.fromTime}:00+03:00`,
+    toTime: moscowBookingEndIso(params.date, params.fromTime, params.toTime),
+  };
+  const query = new URLSearchParams({ operationId: binding.operationId });
+  const recovered = await recoverSplitCreateResult(binding, (remainingMs) => runWithAbortTimeout(remainingMs,
+    (signal) => request<unknown>(`/lk/games/split/create-result?${query}`, {
+      method: "GET", baseUrl, auth: true, retries: 0, cache: "no-store", signal,
+    }), options?.signal), {
+    signal: options?.signal, session: readAuthToken, delaysMs: options?.delaysMs, wait: options?.wait,
+  });
+  if (!recovered.error && recovered.status === 200 && isRecord(recovered.data)
+    && typeof recovered.data.paymentRef === "string") splitCreateAttempts.adopt(splitRequest.operationId, recovered.data.paymentRef);
+  return recovered;
 }
 
 export async function apiCreatePadelSplitGamePayment(
@@ -9275,7 +9319,7 @@ export async function apiCreatePadelSplitGamePayment(
   }
   if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode, {
     action: "create",
-    paymentRef,
+    paymentRef: getSplitCreateAttempts().paymentRef(splitRequest.operationId) ?? paymentRef,
     operationId: splitRequest.operationId,
   })) {
     return {
@@ -9290,6 +9334,9 @@ export async function apiCreatePadelSplitGamePayment(
   }
   if (params.paymentMode === "subscription") {
     markPadelSplitDecisionSettled(splitRequest, params);
+    // Legacy free-success packets omit operationId. The verified request owns
+    // this reference; retain it so LK persistence can close the right journal entry.
+    parsed.operationId = splitRequest.operationId;
   }
 
   return {
