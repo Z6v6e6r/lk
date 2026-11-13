@@ -98,6 +98,13 @@ function checkout(id: string): TournamentVivaCheckout {
     customPricing: null, purchasedProducts: [], clientSubscriptions: matrix.profile.pass && passFits ? [{ ...pass, raw: { ...input(pass.raw), visitsLeft: readPassRemaining(new URLSearchParams(location.search)), visitsUsed: 5 - readPassRemaining(new URLSearchParams(location.search)) } }] : [], oneTimes: [{ ...oneTime, cost: id.includes('training') ? 550000 : 800000 }], subscriptions: [] };
 }
 const input = (value: unknown): Record<string, unknown> => typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
+// Comparison uses the same events as the individual fixture screens.
+export const comparisonEventDetails = {
+  game: { date: game.booking?.date, time: [game.booking?.timeFrom, game.booking?.timeTo].join('–'), location: [game.booking?.studioName, studios[0].address, game.booking?.roomName].join(' · ') },
+  training: { date: trainings()[0].date, time: trainings()[0].timeLabel, location: [trainings()[0].studioName, trainings()[0].studioAddress, trainings()[0].roomName].join(' · ') },
+  tournament: { date: tournaments()[0].date, time: tournaments()[0].timeLabel, location: [tournaments()[0].studioName, tournaments()[0].address].join(' · ') },
+};
+
 const slots = (date: string): GameTimeSlot[] => [1, 2, 3].flatMap(court => ['09:00', '11:00', '14:00', '18:00', '19:00', '20:30', '22:00'].map(time => ({
   id: `demo-slot-${court}-${time}`, roomId: `demo-court-${court}`, roomName: `Корт ${court}`, date, time,
   price: PREVIEW_COURT_HOURLY_PRICE * 2, subServiceIds: ['demo-service'], durationMinutes: 120, timeTo: `${(Number(time.slice(0, 2)) + 2) % 24}`.padStart(2, '0') + `:${time.slice(3)}`,

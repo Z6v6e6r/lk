@@ -11,6 +11,7 @@ import { ResidencyPurchaseOffer } from './ResidencyPurchaseOffer';
 import { BoostPurchaseOffer } from './BoostPurchaseOffer';
 import { boostPurchaseOption } from './boostOffers';
 import { readPreviewStage } from './previewStage';
+import { type BookingEventDetails } from './bookingEventDetails';
 import './matrix.css';
 
 function PaymentIcon({ kind }: { kind: PaymentKind }) {
@@ -28,7 +29,7 @@ const optionNames: Record<PaymentKind, string> = {
   full: 'Полная цена', residency: 'С Резидентством', subscription: 'По подписке', pass: 'По абонементу Энергия 5', boost: 'С Бустом — бесплатно',
 };
 
-export function MatrixPaymentOptions({ service, eventKey, disabled = false, excludesPrivileges = false, durationMinutes, gamePaymentScope, courtAmount = null }: { service: ServiceKind; eventKey: string; disabled?: boolean; excludesPrivileges?: boolean; durationMinutes?: number; gamePaymentScope?: GamePaymentScope; courtAmount?: number | null }) {
+export function MatrixPaymentOptions({ service, eventKey, disabled = false, excludesPrivileges = false, durationMinutes, gamePaymentScope, courtAmount = null, eventDetails }: { service: ServiceKind; eventKey: string; disabled?: boolean; excludesPrivileges?: boolean; durationMinutes?: number; gamePaymentScope?: GamePaymentScope; courtAmount?: number | null; eventDetails?: BookingEventDetails }) {
   const params = new URLSearchParams(location.search);
   const settings = readMatrixSettings(params);
   const residencyPrice = readResidencyPrice(params);
@@ -235,9 +236,9 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
         eventDescription={`${price.name} · ${duration} мин${isPersonalGame ? ' · моя доля ¼' : ''}`} groupId={groupId} disabled={locked}
         onSelect={setPurchaseSubscriptionId} onContinue={confirmSubscriptionPurchase} />
     </Modal>
-    <Modal isOpen={residencyOfferOpen} onClose={() => setResidencyOfferOpen(false)} title="Добавьте Резидентство" variant="fullscreen" bodyClassName="matrix-purchase-modal">
+    <Modal isOpen={residencyOfferOpen} onClose={() => setResidencyOfferOpen(false)} title={`Добавь Резидентство ${service === 'training' ? 'к своей тренировке' : service === 'tournament' ? 'к своему турниру' : 'к своей игре'}`} variant="fullscreen" bodyClassName="matrix-purchase-modal">
       <ResidencyPurchaseOffer option={choice} residencyPrice={residencyPrice} referenceAmount={referenceAmount}
-        eventDescription={`${price.name} · ${duration} мин${isPersonalGame ? ' · моя доля ¼' : ''}`} disabled={locked} onContinue={addResidency} />
+        eventName={price.name} durationMinutes={duration} eventDetails={eventDetails} service={service} gamePaymentScope={gamePaymentScope} disabled={locked} onContinue={addResidency} />
     </Modal>
     <Modal isOpen={boostOfferOpen} onClose={() => setBoostOfferOpen(false)} title="Добавьте РАбуста" variant="fullscreen" bodyClassName="matrix-purchase-modal">
       <BoostPurchaseOffer option={boostOffer} boostPrice={boostPrice} profile={profile} plan={paymentContext.subscriptionPlan}
