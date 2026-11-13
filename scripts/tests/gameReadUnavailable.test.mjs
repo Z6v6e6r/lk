@@ -34,7 +34,7 @@ function client({ statuses = [404], networkError = false, fallback = false } = {
     resolveLkApiBaseUrlCandidates:()=>fallback ? ['https://fixture.invalid','https://fallback.invalid'] : ['https://fixture.invalid'],
     resolveLkApiFallbackTimeoutMs:()=>25,
     resolveRequestCacheConfig:()=>null, readAuthToken:()=>'fixture-session', requestChangesSubscriptions:()=>false,
-    invalidateSubscriptionSnapshot:()=>{}, isLkIdleRequestPausedError:()=>false, trackClientError:()=>{},
+    invalidateSubscriptionSnapshot:()=>{}, isLkIdleRequestPausedError:()=>false, trackClientError:()=>{}, captureSplitLeaveInitiator:()=>{},
     UUID:/^fixture-id$/,diagnosticId:()=>'fixture-id',abortCause:()=>null,
     isRecord:v=>v && typeof v==='object',pickString:(v,keys)=>keys.map(k=>v[k]).find(v=>typeof v==='string'),
     normalizePadelGameRecord:v=>v?.id ? v : null,normalizePadelGameResultActionResponse:v=>v,
