@@ -1,5 +1,6 @@
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
 import { moscowBookingEndIso } from "../../utils/bookingEndTime";
+import { readAuthToken } from "../../utils/authTokenStorage";
 import { isRequestTimeoutError, runWithAbortTimeout } from "../../utils/requestTimeout";
 import { BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence } from "./bookingConversionEvidence";
 import { observeGameLeave } from "./observeGameLeave";
@@ -40,6 +41,8 @@ import {
   apiFetchMasterServiceGameModes,
   apiCreatePadelGameRecord,
   apiCreatePadelSplitGamePayment,
+  hasPendingPadelSplitCreate,
+  completePadelSplitCreate,
   apiCreatePadelSplitParticipantPayment,
   apiCancelPadelSplitParticipantBookings,
   apiLeavePadelGameAsCurrentUser,
@@ -4915,8 +4918,10 @@ export default function GamesPage({
   const [loadingSlotPrice, setLoadingSlotPrice] = useState(false);
   const [loadingPay, setLoadingPay] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
-  const [gamePreparationStage, setGamePreparationStage] = useState<"profile" | "slot" | null>(null);
+  const [gamePreparationStage, setGamePreparationStage] = useState<"profile" | "slot" | "confirmation" | null>(null);
   const gamePreparationRef = useRef<AbortController | null>(null);
+  const gameCreationRef = useRef<AbortController | null>(null);
+  const [gameCreationPending, setGameCreationPending] = useState(false);
   const [paymentMode, setPaymentMode] = useState<GamePaymentMode>("self");
   const [splitCheckoutMode, setSplitCheckoutMode] = useState<SplitCheckoutMode>("one_time");
   const [selectedSplitSubscriptionId, setSelectedSplitSubscriptionId] = useState<string | null>(null);
@@ -6506,6 +6511,15 @@ export default function GamesPage({
   ].join("|");
   // A changed selection or closed overlay must not finish an old preparation.
   useEffect(() => () => gamePreparationRef.current?.abort(), [promoSelectionKey]);
+  useEffect(() => {
+    setGameCreationPending(false);
+    setLoadingPay(false);
+    return () => {
+      gamePreparationRef.current?.abort();
+      gameCreationRef.current?.abort();
+      gameCreationRef.current = null;
+    };
+  }, [promoSelectionKey, selectedSplitSubscriptionId]);
   const bookingPreset = useMemo(() => {
     const bookingId = normalizeBookingId(createFromBooking?.bookingId);
     const date = toDateKey(createFromBooking?.date ?? null);
@@ -7277,7 +7291,11 @@ export default function GamesPage({
       ? "Проверяем профиль…"
       : gamePreparationStage === "slot"
         ? "Проверяем доступность корта…"
-        : "Создаём игру…"
+        : gamePreparationStage === "confirmation"
+          ? "Проверяем создание игры…"
+          : "Создаём игру…"
+    : gameCreationPending
+    ? "Проверить создание игры"
     : publicCreateNeedsSplitSubscriptionSelection
     ? "Выберите абонемент для списания"
     : splitPaymentSelected
@@ -9945,7 +9963,9 @@ export default function GamesPage({
     };
   }, [profileId, profilePhone]);
 
-  const prepareGamePayment = useCallback(async () => {
+  const prepareGamePayment = useCallback(async (hasPendingCreate?: (profile: {
+    clientId: string | null; clientPhone: string | null;
+  }) => boolean) => {
     const controller = new AbortController();
     gamePreparationRef.current = controller;
     try {
@@ -9955,6 +9975,9 @@ export default function GamesPage({
         setGamePreparationStage("profile");
         const profile = await resolveCurrentClientProfile(signal);
         signal.throwIfAborted();
+        // A previous CREATE may already own this slot. This branch is permitted
+        // only when its next request is a GET of that exact pending operation.
+        if (hasPendingCreate?.(profile)) return profile;
         setGamePreparationStage("slot");
         const available = await revalidateSelectedSlotForPayment(signal);
         signal.throwIfAborted();
@@ -9963,7 +9986,7 @@ export default function GamesPage({
     } catch (error) {
       if (!controller.signal.aborted) {
         setPayError(isRequestTimeoutError(error)
-          ? "Проверка заняла слишком много времени. Игра не создана. Попробуйте ещё раз."
+          ? "Проверка данных заняла слишком много времени. Проверьте подключение и повторите проверку."
           : "Не удалось подготовить игру. Проверьте подключение и попробуйте ещё раз.");
       }
       return null;
@@ -10900,13 +10923,16 @@ export default function GamesPage({
     const fromTime = time;
     const toTime = addMinutesToTime(fromTime, duration);
     const subServiceIds = resolvedSelectedSubServiceIds;
-    const paymentRef = generatePaymentRef();
-    const baseRedirectUrl = buildBaseRedirectUrl(fromDate, {
+    let paymentRef = generatePaymentRef();
+    let baseRedirectUrl = buildBaseRedirectUrl(fromDate, {
       [PAYMENT_REF_QUERY_KEY]: paymentRef,
       splitPayment: "organizer",
     });
 
-    const profile = await prepareGamePayment();
+    const profile = await prepareGamePayment((actor) => preferredPaymentMode === "subscription"
+      && hasPendingPadelSplitCreate({ date: fromDate, fromTime, toTime, roomId: courtId,
+        clientId: actor.clientId, clientPhone: actor.clientPhone,
+        clientSubscriptionId: preferredClientSubscriptionId, spot: 1 }));
     if (!profile) {
       setLoadingPay(false);
       return;
@@ -10940,6 +10966,12 @@ export default function GamesPage({
       ? Math.max(0, Math.round(paymentAmount))
       : null;
 
+    const creationController = new AbortController();
+    gameCreationRef.current = creationController;
+    const creationSession = readAuthToken();
+    const isCurrentCreation = () => gameCreationRef.current === creationController
+      && !creationController.signal.aborted && readAuthToken() === creationSession;
+    try {
     const paymentResult = await apiCreatePadelSplitGamePayment({
       date: fromDate,
       fromTime,
@@ -10979,13 +11011,24 @@ export default function GamesPage({
             : activeSplitPaymentPromoConfig.shareAmounts.fourPlayers,
         }
         : null,
-    });
+    }, { signal: creationController.signal, onRecovery: () => {
+      if (isCurrentCreation()) {
+        setGamePreparationStage("confirmation");
+      }
+    } });
+    if (!isCurrentCreation()) { setLoadingPay(false); return; }
+    setGamePreparationStage(null);
 
     if (paymentResult.error || !paymentResult.data) {
+      const pending = paymentResult.status === 202 && isRecordObject(paymentResult.error?.raw)
+        && paymentResult.error.raw.state === "PENDING_CONFIRMATION";
       const dailyLimitMessage = resolvedPaymentMode === "subscription"
         ? resolveSubscriptionCategoryDailyLimitErrorMessage(paymentResult.error)
         : null;
-      if (dailyLimitMessage) {
+      if (pending) {
+        setGameCreationPending(true);
+        setPayError(null);
+      } else if (dailyLimitMessage) {
         setPayError(dailyLimitMessage);
       } else if (resolvedPaymentMode === "subscription") {
         setPayError(formatSubscriptionDecisionPresentation(
@@ -11002,6 +11045,9 @@ export default function GamesPage({
       setLoadingPay(false);
       return;
     }
+    setGameCreationPending(false);
+    paymentRef = paymentResult.data.paymentRef || paymentRef;
+    baseRedirectUrl = buildBaseRedirectUrl(fromDate, { [PAYMENT_REF_QUERY_KEY]: paymentRef, splitPayment: "organizer" });
 
     const subscriptionDecisionNotice = resolvedPaymentMode === "subscription"
       ? formatSubscriptionDecisionPresentation(resolveSubscriptionDecisionPresentation({
@@ -11040,9 +11086,10 @@ export default function GamesPage({
     const resolvedPaymentAmount = paymentResult.data.toPay ?? shareAmount;
     const paidAt = new Date().toISOString();
     const organizerPaymentStatus = paymentResult.data.paymentUrl ? "PAYMENT_PENDING" : "PAID";
-    const splitDeadlineAt =
-      paymentResult.data.deadlineAt ??
-      new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString();
+    const recoveredCreate = isRecordObject(paymentResult.data.raw)
+      && paymentResult.data.raw.recovery === "SPLIT_CREATE_RESULT_V1";
+    const splitDeadlineAt = paymentResult.data.deadlineAt
+      ?? (recoveredCreate ? null : new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString());
     const resolvedDirectionId = paymentResult.data.directionId ?? SPLIT_OPEN_GAME_DIRECTION_ID;
     const resolvedExerciseTypeId = paymentResult.data.exerciseTypeId ?? SPLIT_OPEN_GAME_EXERCISE_TYPE_ID;
     const resolvedSplitShareAmount = paymentResult.data.shareAmount ?? shareAmount;
@@ -11191,6 +11238,7 @@ export default function GamesPage({
           paidAt,
         },
       });
+      if (!isCurrentCreation()) { setLoadingPay(false); return; }
 
       if (!directCreateResult.data?.id) {
         setPayError(directCreateResult.error?.message || "Не удалось создать split-игру");
@@ -11199,6 +11247,7 @@ export default function GamesPage({
       }
 
       const createdRecord = directCreateResult.data;
+      completePadelSplitCreate(paymentResult.data.operationId);
       const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
       upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
       void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
@@ -11227,6 +11276,7 @@ export default function GamesPage({
         payload,
         resolvedBookingIds,
       );
+      if (!isCurrentCreation()) { setLoadingPay(false); return; }
       if (!persistedDraft.record) {
         setPayError(
           `${persistedDraft.error || "Не удалось сохранить игру в ЛК"}. `
@@ -11237,6 +11287,7 @@ export default function GamesPage({
       }
 
       upsertGameRecordInStores(persistedDraft.record, { communityMode: "upsert" });
+      completePadelSplitCreate(paymentResult.data.operationId);
       enqueuePendingPaymentSync(paymentRef, resolvedBookingIds, "split_pay_click");
       pushCabinetFlashNotice(subscriptionDecisionNotice);
 
@@ -11249,6 +11300,12 @@ export default function GamesPage({
 
     setPayError("Не удалось получить ссылку split-оплаты");
     setLoadingPay(false);
+    } finally {
+      if (gameCreationRef.current === creationController) {
+        gameCreationRef.current = null;
+        setGamePreparationStage(null);
+      }
+    }
   }, [
     studioId,
     studioMasterServiceId,
@@ -18121,6 +18178,23 @@ export default function GamesPage({
                     Не удалось определить доступный абонемент. Обновите список и попробуйте снова.
                   </div>
                 )
+            )}
+            {(loadingPay || gameCreationPending) && !subscriptionUsageShadowEnabled && (
+              <div className="game-create-progress" role="status" aria-live="polite" aria-atomic="true">
+                <strong>
+                  {gamePreparationStage === "profile"
+                    ? "Проверяем профиль…"
+                    : gamePreparationStage === "slot"
+                      ? "Проверяем доступность корта…"
+                      : gamePreparationStage === "confirmation" || gameCreationPending
+                        ? "Проверяем создание игры…"
+                        : "Создаём игру…"}
+                </strong>
+                <span>{gameCreationPending && !loadingPay
+                  ? "Подтверждение пока не получено. Нажмите «Проверить создание игры»: проверим ту же попытку без повторного создания."
+                  : "Ожидаем подтверждение. Это может занять некоторое время."}</span>
+                <div className={`game-create-progress-track${gameCreationPending && !loadingPay ? " is-paused" : ""}`} aria-hidden="true" />
+              </div>
             )}
             <button
               className={`game-submit game-submit-booking game-submit-inline ${canProceedToPayment && !subscriptionUsageShadow.busy ? "active" : ""}`}

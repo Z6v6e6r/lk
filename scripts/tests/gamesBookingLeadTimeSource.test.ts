@@ -25,7 +25,7 @@ test("self payment revalidates the selected slot before calling Viva pay", () =>
   const handlerStart = gamesSource.indexOf("const handleMasterServicePay = useCallback");
   const handlerEnd = gamesSource.indexOf("const handleCreateSubmit = useCallback", handlerStart);
   const handlerSource = gamesSource.slice(handlerStart, handlerEnd);
-  const revalidateIndex = handlerSource.indexOf("await revalidateSelectedSlotForPayment()");
+  const revalidateIndex = handlerSource.indexOf("await prepareGamePayment()");
   const payIndex = handlerSource.indexOf("await apiPayMasterService(");
 
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, "self-payment handler must exist");
@@ -33,16 +33,17 @@ test("self payment revalidates the selected slot before calling Viva pay", () =>
   assert.ok(payIndex > revalidateIndex, "self-payment revalidation must run before Viva pay");
 });
 
-test("split payment revalidates the selected slot before creating payment", () => {
+test("split payment prepares the slot before CREATE and permits only an existing-attempt recovery exception", () => {
   const handlerStart = gamesSource.indexOf("const handleSplitGamePay = useCallback");
   const handlerEnd = gamesSource.indexOf("const handleMasterServicePay = useCallback", handlerStart);
   const handlerSource = gamesSource.slice(handlerStart, handlerEnd);
-  const revalidateIndex = handlerSource.indexOf("await revalidateSelectedSlotForPayment()");
+  const revalidateIndex = handlerSource.indexOf("await prepareGamePayment(");
   const payIndex = handlerSource.indexOf("await apiCreatePadelSplitGamePayment(");
 
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, "split-payment handler must exist");
   assert.ok(revalidateIndex >= 0, "split payment must revalidate the selected slot");
   assert.ok(payIndex > revalidateIndex, "split revalidation must run before payment creation");
+  assert.match(handlerSource.slice(revalidateIndex, payIndex), /preferredPaymentMode === "subscription"\s*&& hasPendingPadelSplitCreate\(/);
 });
 
 test("slot revalidation fails closed when Viva cannot confirm availability", () => {
@@ -55,4 +56,15 @@ test("slot revalidation fails closed when Viva cannot confirm availability", () 
   assert.match(guardSource, /if \(!hasRevalidatedGameSlot\(/);
   assert.match(guardSource, /catch \{/);
   assert.match(guardSource, /return false;/);
+});
+
+
+test("bounded preparation verifies the slot after the profile and before returning", () => {
+  const start = gamesSource.indexOf("const prepareGamePayment = useCallback");
+  const end = gamesSource.indexOf("const fetchCommunityAutopublishTargets", start);
+  const preparation = gamesSource.slice(start, end);
+  assert.match(preparation, /runWithAbortTimeout\(20_000/);
+  assert.ok(preparation.indexOf("await revalidateSelectedSlotForPayment(signal)")
+    > preparation.indexOf("await resolveCurrentClientProfile(signal)"));
+  assert.doesNotMatch(preparation, /apiCreatePadel|apiPayMasterService/);
 });
