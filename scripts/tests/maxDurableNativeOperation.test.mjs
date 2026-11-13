@@ -26,7 +26,7 @@ async function setup() {
   const original = fs.readFileSync(live), originalPins = durablePins(original);
   const pausePlan = await pause.prepare({ expectedSourceSha256: sha256(original), expectedTargetSha256: target,
     expectedCodeSha256: max_durableOperationCodeHash(), sourceCommit: commit, trustedPins: originalPins, native: await native() });
-  async function post(op, plan, phase) {
+  async function post(op, plan, phase, confirm = true) {
     const before = { flows: JSON.parse(fs.readFileSync(live)), rev: revision };
     const begin = await op.begin({ expectedPlanSha256: plan.planSha256, native: await native() });
     const preserve = await createMaxDurableBodyPreserver(begin.seal, before);
@@ -34,6 +34,7 @@ async function setup() {
     fs.writeFileSync(live, JSON.stringify(JSON.parse(result.postDataText).flows, null, 4));
     now += 1; const ackAt = now; revision += '-changed'; now += 1;
     const audit = { ...result.audit, status: 'FORWARDED_AWAITING_READBACK', forwarded: 1, rejected: 0, notAfter: begin.seal.notAfter };
+    if (!confirm) return {begin, result, phase};
     const confirmed = await op.confirm({ expectedPlanSha256: plan.planSha256, native: await native(), audit, httpStatus: 200, ackAt });
     assert.equal(confirmed.status, 'SOAKING'); return { begin, result, phase };
   }
@@ -111,4 +112,20 @@ for (const field of ['phase', 'ackSha256', 'sourceSha256', 'expiresAtMs']) test(
     assert.deepEqual(fs.readFileSync(f.live),live);assert.deepEqual(fs.readFileSync(f.lease),lease);
     assert.equal(fs.existsSync(path.join(a.stage,'abort.json')),false);
   } finally {f.cleanup();}
+});
+
+test('lost activation ACK reconciles observed post without replay and adoption starts a fresh full soak', async () => {
+  const f=await setup();try {
+    await f.paused();const a=await f.activation();
+    await a.op.reserve({expectedPlanSha256:a.plan.planSha256,confirmation:'RESERVE_MAX_DURABLE_ACTIVATE_NATIVE_NO_RESTART_147',native:await f.native()});
+    await f.post(a.op,a.plan,'activate',false);const bytes=fs.readFileSync(f.live);
+    assert.equal((await a.op.reconcile({expectedPlanSha256:a.plan.planSha256,native:await f.native()})).status,'POST');
+    f.advance(500000);
+    const native=await f.native();
+    await assert.rejects(a.op.adopt({expectedPlanSha256:a.plan.planSha256,expectedRevisionSha256:native.revisionSha256,confirmation:'ADOPT_OBSERVED_MAX_OUTBOX_POST_NO_REPLAY_147',native}));
+    await a.op.adopt({expectedPlanSha256:a.plan.planSha256,expectedRevisionSha256:native.revisionSha256,confirmation:'ADOPT_OBSERVED_MAX_DURABLE_ACTIVATE_POST_NO_REPLAY_147',native});
+    f.advance(899999);await assert.rejects(a.op.finish({expectedPlanSha256:a.plan.planSha256,native:await f.native()}));
+    f.advance(2);assert.equal((await a.op.finish({expectedPlanSha256:a.plan.planSha256,native:await f.native()})).leaseReleased,true);
+    assert.deepEqual(fs.readFileSync(f.live),bytes);
+  }finally{f.cleanup();}
 });
