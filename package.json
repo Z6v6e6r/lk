@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "test:split-leave-diagnostics": "node --test scripts/tests/clientErrorDiagnostics.test.mjs scripts/tests/splitLeaveDiagnostics.test.mjs",
     "test:exhibition-client": "node --experimental-strip-types --test scripts/tests/exhibitionPublicInvite.test.mjs scripts/tests/exhibitionCabinetRegistration.test.mjs scripts/tests/exhibitionRegistrationTransport.test.mjs scripts/tests/padelJumpEventRegistrationForm.test.mjs scripts/tests/eventCommunityPanel.test.mjs scripts/tests/jumpRankingLayout.test.mjs scripts/tests/communityHeaderLogo.test.mjs",
     "test:community-types": "node --experimental-strip-types --test scripts/tests/communityTypes.test.ts",
     "dev": "vite",

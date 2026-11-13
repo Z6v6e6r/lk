@@ -1,3 +1,4 @@
+import { installSplitLeaveDiagnostics } from "./utils/splitLeaveDiagnostics";
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
@@ -94,6 +95,7 @@ function buildSelfLeavePreviewGame(): PadelGameRecord {
 ensureFreshRelease({ entry: "games", bundleFileNames: ["games.js", "games-dev.js"] });
 mountDevReleaseBadge({ bundleFileNames: ["games.js", "games-dev.js"] });
 installGlobalErrorTracking();
+installSplitLeaveDiagnostics();
 trackAnalyticsEvent("widget_bundle_loaded", { entry: "games" });
 
 function normalizePath(value: string) {

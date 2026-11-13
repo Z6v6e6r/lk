@@ -1,4 +1,7 @@
 import { useEffect } from "react";
+import { createDiagnosticBudget } from "./diagnosticBudget.mjs";
+import { clientDiagnostic } from "./errorDiagnostics";
+import { sanitizeEvent } from "./errorDiagnosticsCore.mjs";
 import { SERV2, SERV2_FALLBACK, TENANT_KEY } from "../consts/api_config";
 import {
   identifyFirebaseAnalyticsUser,
@@ -83,8 +86,6 @@ const VISITS_STORAGE_KEY = `${TENANT_KEY}_lk_analytics_visits_v1`;
 const PENDING_STORAGE_KEY = `${TENANT_KEY}_lk_analytics_pending_v1`;
 const MAX_PENDING_EVENTS = 100;
 const CLICK_DEDUPE_MS = 350;
-const ERROR_DEDUPE_TTL_MS = 30_000;
-const ERROR_DEDUPE_LIMIT = 250;
 const ANALYTICS_DISABLE_TTL_MS = 10 * 60 * 1000;
 const NON_RETRYABLE_HTTP_STATUSES = new Set([400, 401, 403, 404, 405, 410, 413, 415, 422]);
 const ANALYTICS_ERRORS_ONLY = String(
@@ -98,7 +99,12 @@ let lastClickSignature = "";
 let lastClickAt = 0;
 let pendingFlush: Promise<void> | null = null;
 let widgetOpenTracked = false;
-const recentErrorSignatures = new Map<string, number>();
+const clientErrorBudget = createDiagnosticBudget(120);
+const clientTransportBudget = createDiagnosticBudget(180);
+let clientSuppressionTimer: ReturnType<typeof setTimeout> | null = null;
+const diagnosticDeliveryStats = { deferredDeliveries: 0, queueEvictions: 0 };
+export function clientDiagnosticDeliveryStats() { return { ...diagnosticDeliveryStats }; }
+const migratedPendingEvents = new Map<string, string>();
 let analyticsDisabledUntil = 0;
 let analyticsDisableNotified = false;
 
@@ -161,48 +167,7 @@ function safeToString(value: unknown): string {
   }
 }
 
-function normalizeErrorPayload(error: unknown) {
-  if (error instanceof Error) {
-    const name = trimString(error.name) ?? "Error";
-    const message = trimString(error.message) ?? "Unknown error";
-    const stack = trimString(error.stack);
-    return {
-      name,
-      message: cutText(message, 1000),
-      stack: stack ? cutText(stack, 4000) : null,
-    };
-  }
 
-  const message = trimString(safeToString(error)) ?? "Unknown error";
-  return {
-    name: "NonError",
-    message: cutText(message, 1000),
-    stack: null,
-  };
-}
-
-function shouldDropDuplicateError(signature: string): boolean {
-  const now = Date.now();
-  for (const [key, timestamp] of recentErrorSignatures.entries()) {
-    if (now - timestamp > ERROR_DEDUPE_TTL_MS) {
-      recentErrorSignatures.delete(key);
-    }
-  }
-
-  const existing = recentErrorSignatures.get(signature);
-  if (existing && now - existing <= ERROR_DEDUPE_TTL_MS) {
-    return true;
-  }
-
-  recentErrorSignatures.set(signature, now);
-  if (recentErrorSignatures.size > ERROR_DEDUPE_LIMIT) {
-    const oldest = [...recentErrorSignatures.entries()]
-      .sort((a, b) => a[1] - b[1])
-      .slice(0, recentErrorSignatures.size - ERROR_DEDUPE_LIMIT);
-    oldest.forEach(([key]) => recentErrorSignatures.delete(key));
-  }
-  return false;
-}
 
 function parseJson<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -310,11 +275,33 @@ function getVisitorKey(): { key: string; type: "client" | "phone" | "session" } 
 }
 
 function readPendingEvents(): string[] {
-  const raw = getFromStorage(PENDING_STORAGE_KEY);
-  return parseJson<string[]>(raw, []);
+  const restored = parseJson<unknown>(getFromStorage(PENDING_STORAGE_KEY), []);
+  if (!Array.isArray(restored)) return [];
+  const safe: string[] = [];
+  for (const serialized of restored.slice(-MAX_PENDING_EVENTS)) {
+    if (typeof serialized !== "string" || serialized.length > 65536) continue;
+    try {
+      const event = JSON.parse(serialized);
+      if (event.event !== "client_error") { safe.push(serialized); continue; }
+      // Legacy pending records never replay raw URL/user/device/message/stack data.
+      let migrated = migratedPendingEvents.get(serialized);
+      if (!migrated) {
+        const diagnostic = sanitizeEvent(event.payload) ?? clientDiagnostic({ legacyEvent: true, deviceEventTime: event.timestamp });
+        if (diagnostic) {
+          migrated = JSON.stringify({ event: "client_error", timestamp: diagnostic.deviceEventTime, payload: diagnostic });
+          migratedPendingEvents.set(serialized, migrated);
+          while (migratedPendingEvents.size > MAX_PENDING_EVENTS) migratedPendingEvents.delete(migratedPendingEvents.keys().next().value!);
+        }
+      }
+      if (migrated) safe.push(migrated);
+    } catch { /* corrupt pending envelope */ }
+  }
+  writePendingEvents(safe); // A migrated event gets its ID once, before any resend.
+  return safe;
 }
 
 function writePendingEvents(events: string[]) {
+  diagnosticDeliveryStats.queueEvictions += Math.max(0, events.length - MAX_PENDING_EVENTS);
   saveToStorage(PENDING_STORAGE_KEY, JSON.stringify(events.slice(-MAX_PENDING_EVENTS)));
 }
 
@@ -324,7 +311,9 @@ function queuePendingEvent(serializedEvent: string) {
   writePendingEvents(queue);
 }
 
-function buildEnvelope(event: string, payload: AnalyticsPayload): AnalyticsEnvelope {
+function buildEnvelope(event: string, payload: AnalyticsPayload): AnalyticsEnvelope | { event: string; timestamp: unknown; payload: AnalyticsPayload } {
+  if (event === "client_error") return { event, timestamp: payload.deviceEventTime, payload };
+
   const href = typeof window !== "undefined" ? window.location.href : null;
   const path = typeof window !== "undefined" ? window.location.pathname : null;
   const search = typeof window !== "undefined" ? window.location.search : null;
@@ -406,7 +395,13 @@ async function sendEvent(
   let hasRetryableFailure = false;
   let lastStatus: number | null = null;
 
+  let diagnostic = false;
+  try { diagnostic = JSON.parse(serializedEvent).event === "client_error"; } catch { /* existing non-diagnostic transport */ }
   for (const endpoint of endpoints) {
+    if (diagnostic && !clientTransportBudget.admit(performance.now(), "client_error")) {
+      diagnosticDeliveryStats.deferredDeliveries++;
+      return { delivered: false, retryable: true, status: null, paused: false };
+    }
     try {
       const response = await fetch(endpoint, {
         method: "POST",
@@ -572,7 +567,13 @@ export function trackAnalyticsEvent(
   const eventName = trimString(event);
   if (!eventName) return;
 
-  trackFirebaseAnalyticsEvent(eventName, payload);
+  if (eventName === "client_error") {
+    const safe = sanitizeEvent(payload);
+    if (!safe) return;
+    payload = safe;
+  } else {
+    trackFirebaseAnalyticsEvent(eventName, payload);
+  }
 
   if (ANALYTICS_ERRORS_ONLY && !ANALYTICS_EVENT_ALLOWLIST.has(eventName)) return;
   if (isAnalyticsTemporarilyDisabled()) return;
@@ -626,36 +627,37 @@ export function trackCabinetVisit(payload: AnalyticsPayload = {}) {
 
 export function trackClientError(
   source: string,
-  error: unknown,
+  _error: unknown,
   context: AnalyticsPayload = {},
-  options?: { handled?: boolean; severity?: "error" | "warning" },
+  _options?: { handled?: boolean; severity?: "error" | "warning" },
 ) {
-  const normalizedSource = trimString(source) ?? "unknown";
-  const normalized = normalizeErrorPayload(error);
-  const handled = options?.handled ?? true;
-  const severity = options?.severity ?? "error";
-  if (ANALYTICS_ERRORS_ONLY && severity !== "error") return;
+  try {
+    const stage = source.startsWith("api.") ? "api_request"
+      : source === "window.resource_error" ? "asset_load"
+      : source.includes("profile") ? "profile_request"
+      : source.includes("mount") ? "module_mount"
+      : source.includes("load") ? "module_registration" : "global_error";
+    const diagnostic = clientDiagnostic({ ...context, stage: context.stage ?? stage,
+      code: context.code ?? (source === "api.request_http_error" ? "CLIENT_HTTP_ERROR"
+        : source === "api.request_network_error" ? "CLIENT_NETWORK_ERROR" : "CLIENT_RUNTIME_ERROR") });
+    if (!diagnostic) return;
+    if (clientErrorBudget.admit(performance.now(), "client_error")) {
+      trackAnalyticsEvent("client_error", { ...diagnostic, suppressed: false });
+    } else if (!clientSuppressionTimer) {
+      clientSuppressionTimer = setTimeout(flushClientDiagnosticSuppression, 1000);
+    }
+  } catch { /* Diagnostics must not change a request or UI lifecycle. */ }
+}
 
-  const signature = [
-    normalizedSource,
-    normalized.name,
-    normalized.message,
-    normalized.stack ?? "",
-    String(handled),
-    severity,
-  ].join("|");
-
-  if (shouldDropDuplicateError(signature)) return;
-
-  trackAnalyticsEvent("client_error", {
-    source: normalizedSource,
-    handled,
-    severity,
-    errorName: normalized.name,
-    errorMessage: normalized.message,
-    errorStack: normalized.stack,
-    context,
-  });
+export function flushClientDiagnosticSuppression() {
+  if (clientSuppressionTimer) { clearTimeout(clientSuppressionTimer); clientSuppressionTimer = null; }
+  try {
+    for (const { kind, count } of clientErrorBudget.drain()) {
+      const event = clientDiagnostic({ stage: "collector", code: "DETAIL_SUPPRESSED" });
+      if (event) trackAnalyticsEvent("client_error", { ...event, requestId: undefined, eventKind: "suppression",
+        aggregate: true, suppressed: true, suppressedEventKind: kind, suppressedCount: count, ...diagnosticDeliveryStats });
+    }
+  } catch { /* best-effort diagnostics */ }
 }
 
 function extractResourceErrorPayload(target: EventTarget | null): AnalyticsPayload | null {

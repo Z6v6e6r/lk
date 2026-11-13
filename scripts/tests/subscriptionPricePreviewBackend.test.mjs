@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { randomUUID } from 'node:crypto';
+import { sanitizeEvent, UUID } from '../../src/utils/errorDiagnosticsCore.mjs';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
 import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, composeSubscriptionPreviewServerTimeArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
@@ -110,11 +112,16 @@ function tariffDiagnostic(payload, overrides = {}) {
   return { msg, ctx, warnings };
 }
 
-test('ambiguous tariff diagnostics survive final response, server log and analytics summary', () => {
-  const apiSource = fs.readFileSync(new URL('../../src/utils/apiClient.ts', import.meta.url), 'utf8');
-  const summarySource = apiSource.slice(apiSource.indexOf('function summarizeApiErrorPayload('), apiSource.indexOf('function pickNumeric('));
-  const summarize = new Function(ts.transpileModule(summarySource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
-    + '; return summarizeApiErrorPayload;')();
+test('ambiguous tariff response/log stay intact; browser diagnostics exclude entity IDs', () => {
+  const source = fs.readFileSync(new URL('../../src/utils/errorDiagnostics.ts', import.meta.url), 'utf8');
+  const ast = ts.createSourceFile('helpers.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const body = ast.statements.filter(node => !ts.isImportDeclaration(node) && !ts.isExportDeclaration(node))
+    .map(node => node.getText(ast).replace(/^export /, '')).join('\n').replaceAll('import.meta.env.VITE_DIAGNOSTIC_BUILD', '"UNKNOWN"');
+  const compiled = ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const diagnostic = new Function('sanitizeEvent', 'UUID', 'crypto', compiled + '; return clientDiagnostic;')(sanitizeEvent, UUID, { randomUUID });
+  const summarize = payload => diagnostic({ stage: 'api_request', code: payload.error.code,
+    reason: payload.error.details.reason, tariffCount: payload.error.details.tariffCount,
+    exerciseId: payload.error.details.exerciseId, raw: payload });
   for (const [payload, count, reason] of [[[], 0, 'empty_tariff_list'], [[{}, {}], 2, 'multiple_tariffs'],
     [[null], 1, 'invalid_tariff_record'], [['fixture-sensitive'], 1, 'invalid_tariff_record'],
     [{ content: [null], totalElements: 1 }, 1, 'invalid_tariff_record']]) {
@@ -125,15 +132,17 @@ test('ambiguous tariff diagnostics survive final response, server log and analyt
     assert.equal(ctx.basePriceMinor, undefined);
     assert.deepEqual(warnings, [{ event: 'subscription_price_preview_failed', code: 'LK1_EVENT_TARIFF_AMBIGUOUS',
       step: 'groupTariff', exerciseId, tariffCount: count, reason, correlationId: 'fixture-correlation' }]);
-    assert.deepEqual(JSON.parse(summarize(msg.payload)), msg.payload);
+    const event = summarize(msg.payload);
+    assert.equal(event.tariffCount, count);
+    assert(!JSON.stringify(event).includes(exerciseId));
+    assert.equal(event.exerciseId, undefined); assert.equal(event.raw, undefined);
     assert.ok(!JSON.stringify([msg.payload, warnings]).includes('fixture-sensitive'));
   }
   const refused = tariffDiagnostic([{ id: 'fixture-product', type: 'INVALID', cost: 12345 }]);
   const summary = summarize(refused.msg.payload);
-  assert.ok(summary.endsWith('...'), 'Exercise diagnostics must survive a truncated provider-shape summary');
-  assert.ok(summary.includes(`"exerciseId":"${exerciseId}"`));
-  assert.ok(summary.includes('"tariffCount":1'));
-  assert.ok(summary.includes('"reason":"product_type"'));
+  assert.equal(summary.tariffCount, 1);
+  assert.equal(summary.reason, 'product_type');
+  assert(!JSON.stringify(summary).includes(exerciseId));
 });
 
 test('other tariff refusals retain their verdict and distinguish unknown count from zero', () => {

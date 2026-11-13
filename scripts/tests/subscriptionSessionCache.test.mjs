@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
-import { webcrypto } from 'node:crypto';
+import { webcrypto, randomUUID } from 'node:crypto';
+import { UUID, routeTemplate } from '../../src/utils/errorDiagnosticsCore.mjs';
 import { build } from 'esbuild';
 import fs from 'node:fs';
 import ts from 'typescript';
@@ -179,7 +180,7 @@ test('actual request boundary invalidates before and after partial/ambiguous wri
     const isRead = mode === 'preview' || mode === 'dryRun';
     const api = new Function('API_BASE', 'Headers', 'FormData', 'readAuthToken', 'requestChangesSubscriptions',
       'invalidateSubscriptionSnapshot', 'fetch', 'isLkIdleRequestPausedError', 'trackClientError', 'isRecord',
-      'pickString', 'summarizeApiErrorPayload', `${js}; return rawRequest;`)(
+      'pickString', 'summarizeApiErrorPayload', 'UUID', 'diagnosticId', 'routeTemplate', 'abortCause', `${js}; return rawRequest;`)(
       'https://fixture.invalid', Headers, FormData, () => token('a'), cache.requestChangesSubscriptions,
       () => { invalidations += 1; }, async () => {
         assert.equal(invalidations, isRead ? 0 : 1);
@@ -187,7 +188,7 @@ test('actual request boundary invalidates before and after partial/ambiguous wri
         return new Response(JSON.stringify({ ok: mode !== 'partial', bookingSuccessCount: 1 }), {
           status: mode === 'partial' ? 409 : 200, headers: { 'Content-Type': 'application/json' },
         });
-      }, () => false, () => {}, value => value && typeof value === 'object', () => null, () => ({}));
+      }, () => false, () => {}, value => value && typeof value === 'object', () => null, () => ({}), UUID, randomUUID, routeTemplate, () => 'unknown');
     await api(mode === 'preview' ? '/lk/subscriptions/game-price-preview' : mode === 'dryRun' ? '/lk/games/split/cleanup' : '/lk/games/game/split/leave',
       { method: 'POST', auth: true, ...(mode === 'dryRun' ? { body: '{"dryRun":true}' } : {}) });
     assert.equal(invalidations, isRead ? 0 : 2, mode);
