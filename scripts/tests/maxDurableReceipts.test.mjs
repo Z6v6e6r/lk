@@ -85,7 +85,7 @@ test('runtime resolves scoped env, ignores message URL/headers, deduplicates rec
     const msg = { maxOutboxReceipt: r, maxOutboxLeaseUntil: until, url: 'https://invalid.test',
       headers: { token: 'private override' }, payload: 'private original text' };
     await Promise.all([handlers.input(msg, v => outputs.push(v), () => {}), handlers.input(msg, v => outputs.push(v), () => {})]);
-    assert.equal(calls, 1); assert.deepEqual(reads, ['SUPPORT_API_BASE_URL', 'SUPPORT_INTEGRATION_TOKEN']);
+    assert.equal(calls, 1); assert.deepEqual(reads, ['SUPPORT_API_BASE_URL', 'SUPPORT_MAX_OUTBOX_INTEGRATION_TOKEN']);
     assert.equal(outputs.length, 2); assert.deepEqual(Object.keys(outputs[0]), ['maxOutboxReceiptResult']);
     assert(!JSON.stringify(outputs).includes(r.leaseToken)); assert(!JSON.stringify(outputs).includes('private'));
     assert.deepEqual(warnings, []); handlers.close();

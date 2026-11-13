@@ -32,7 +32,8 @@ so cache cleanup cannot later admit an already-released token. Fresh leases with
 a later expiry can resume after capacity is available.
 
 The receipt runtime reads fixed SUPPORT_API_BASE_URL and
-SUPPORT_INTEGRATION_TOKEN keys through Node-RED's scoped env API. Incoming
+SUPPORT_MAX_OUTBOX_INTEGRATION_TOKEN (falling back to the previous
+SUPPORT_INTEGRATION_TOKEN when the scoped API returns no value) keys through Node-RED's scoped env API. Incoming
 message URL/headers/token overrides are ignored. It retries the same immutable
 CUP receipt for network/5xx/429 only, at most twenty bounded HTTP attempts within
 the original wall and monotonic lease budget. It never retries a MAX send.
@@ -80,3 +81,37 @@ restart, retry exhaustion, stale tokens, closed runtime, invalid/oversized
 responses, scoped env and context stripping, same-lease dedup, sender saturation
 and lease cleanup, archive refusal, exact graph delta and preservation. Local
 rehearsal is not evidence of deployed message delivery.
+
+
+## Paired native operation and server-only credential
+
+`nodered_max_durable_release.mjs` closes the live transition into two native
+modified-nodes operations: pause changes only two poller disabled flags; activate
+accepts that exact paused source and changes eight nodes/adds four. The matching
+root/browser custodians are `max_durable_*` under `nodered_reviewed_flow_deploy`.
+They preserve native snapshot fields/order, one original authenticated POST,
+whole-source/revision/code/process pins and the shared release lease. Activation
+hands off only its proven pause lease; abort before attempt returns that exact
+protected predecessor. Lost ACK is reconciled read-only and explicitly adopted,
+never replayed. Final activation and recovery require a fresh 900-second soak.
+The paired inverse restores the paused graph, never resumes legacy consumption.
+`nodered_max_durable_worker_rebind.mjs` emits separate forward and paused-recovery
+13-file bindings; only the exact 64-byte flow guard constant changes.
+
+The adapter loads only SUPPORT_MAX_OUTBOX_INTEGRATION_TOKEN from the fixed
+server path `/etc/phab-traffic/max-outbox-integration.env` while registering a new
+module. The file contains one 64-lowercase-hex key, owner-only mode0600, one hard
+link and a protected canonical parent. No message/flow selects the path; a trusted
+runtime setting is available only for isolated rehearsal. Missing file preserves
+existing installations; malformed/unsafe/conflicting configuration fails closed.
+The value never appears in flow JSON, editor responses, outputs or warnings.
+Existing process functions inherit the environment dynamically without restart.
+CUP reads the same dedicated EnvironmentFile; legacy ingress retains its previous
+SUPPORT_INTEGRATION_TOKEN policy. Native module upload must be rehearsed and its
+npm hooks/dependency closure checked before installing on a shared runtime.
+
+Actual4.0.9 hot-upload rehearsal starts without the package, preserves an existing
+function/config/http/unrelated instance, proves runtime key inheritance, verifies
+editor metadata does not expose the key, applies pause/8+4/paused inverse, checks
+exact native4-space disk encoding and confirms both synthetic connector receipts.
+No live provider or database is contacted by that rehearsal.

@@ -97,7 +97,8 @@ function register(RED) {
             return;
           }
           const env = name => RED.util.evaluateNodeProperty(name, 'env', this);
-          const baseUrl = env('SUPPORT_API_BASE_URL'), integrationToken = env('SUPPORT_INTEGRATION_TOKEN');
+          const baseUrl = env('SUPPORT_API_BASE_URL'), integrationToken = env('SUPPORT_MAX_OUTBOX_INTEGRATION_TOKEN')
+            || env('SUPPORT_INTEGRATION_TOKEN');
           const controller = new AbortController(); active.add(controller);
           const job = { fingerprint, until, finished: false };
           job.result = persistReceipt(structuredClone(receipt), msg.maxOutboxLeaseUntil,

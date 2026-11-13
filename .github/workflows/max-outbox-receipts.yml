@@ -1,7 +1,7 @@
 name: MAX outbox adapter
 on:
   pull_request:
-    paths: ['scripts/prepare_max_durable_queue.mjs', 'scripts/tests/maxDurableQueueBuilder.test.mjs', 'scripts/tests/maxDurableReceipts.test.mjs', 'scripts/nodered_max_outbox_resume.mjs', 'scripts/nodered_max_outbox_inverse.mjs', 'scripts/tests/maxOutboxInverse.test.mjs', 'scripts/tests/maxOutboxInverseBrowserGuard.test.mjs', 'scripts/nodered_reviewed_flow_deploy/max_outbox_*.mjs', 'scripts/tests/maxOutboxNativeOperation.test.mjs', 'scripts/tests/maxOutboxBrowserGuard.test.mjs', 'scripts/tests/maxOutboxNativeRuntime.test.mjs', 'scripts/tests/fixtures/max-outbox-native-fixture.mjs', 'scripts/nodered_max_outbox_worker_rebind.mjs', 'scripts/tests/maxOutboxResume.test.mjs', 'scripts/tests/maxOutboxWorkerRebind.test.mjs', 'scripts/tests/maxOutboxSenderLifecycle.test.mjs', 'scripts/nodered_max_activation.mjs', 'scripts/tests/maxActivation.test.mjs', 'scripts/max-response-guard.cjs', 'scripts/prepare_max_response_guard.mjs', 'scripts/tests/maxResponseGuard.test.mjs', 'scripts/tests/fixtures/max-response-guard/**', 'node-red/max-outbox-adapter/**', 'scripts/nodered_max_nodes/fn_max_outbox*', 'scripts/prepare_max_outbox_receipts.mjs', 'scripts/tests/maxOutboxReceipts.test.mjs', 'scripts/tests/maxOutboxRateLimit.test.mjs', 'scripts/tests/maxOutboxEditorLoader.test.mjs', 'scripts/tests/fixtures/max-outbox/**', '.github/workflows/max-outbox-receipts.yml']
+    paths: ['scripts/nodered_max_durable*.mjs', 'scripts/nodered_reviewed_flow_deploy/max_durable*.mjs', 'scripts/tests/maxDurable*.test.mjs', 'scripts/tests/maxIntegrationConfig.test.mjs', 'scripts/tests/fixtures/max-durable-queue.mjs', 'scripts/prepare_max_durable_queue.mjs', 'scripts/tests/maxDurableQueueBuilder.test.mjs', 'scripts/tests/maxDurableReceipts.test.mjs', 'scripts/nodered_max_outbox_resume.mjs', 'scripts/nodered_max_outbox_inverse.mjs', 'scripts/tests/maxOutboxInverse.test.mjs', 'scripts/tests/maxOutboxInverseBrowserGuard.test.mjs', 'scripts/nodered_reviewed_flow_deploy/max_outbox_*.mjs', 'scripts/tests/maxOutboxNativeOperation.test.mjs', 'scripts/tests/maxOutboxBrowserGuard.test.mjs', 'scripts/tests/maxOutboxNativeRuntime.test.mjs', 'scripts/tests/fixtures/max-outbox-native-fixture.mjs', 'scripts/nodered_max_outbox_worker_rebind.mjs', 'scripts/tests/maxOutboxResume.test.mjs', 'scripts/tests/maxOutboxWorkerRebind.test.mjs', 'scripts/tests/maxOutboxSenderLifecycle.test.mjs', 'scripts/nodered_max_activation.mjs', 'scripts/tests/maxActivation.test.mjs', 'scripts/max-response-guard.cjs', 'scripts/prepare_max_response_guard.mjs', 'scripts/tests/maxResponseGuard.test.mjs', 'scripts/tests/fixtures/max-response-guard/**', 'node-red/max-outbox-adapter/**', 'scripts/nodered_max_nodes/fn_max_outbox*', 'scripts/prepare_max_outbox_receipts.mjs', 'scripts/tests/maxOutboxReceipts.test.mjs', 'scripts/tests/maxOutboxRateLimit.test.mjs', 'scripts/tests/maxOutboxEditorLoader.test.mjs', 'scripts/tests/fixtures/max-outbox/**', '.github/workflows/max-outbox-receipts.yml']
   push:
     branches: ['codex/max-retry-receipts']
 permissions:
@@ -16,7 +16,7 @@ jobs:
           node-version: '22'
       - run: node --experimental-strip-types --test scripts/tests/maxOutboxReceipts.test.mjs scripts/tests/maxOutboxRateLimit.test.mjs scripts/tests/maxSupportBridge.nodered.test.ts
       - name: Test durable queue topology and idempotent receipt retries
-        run: node --test scripts/tests/maxDurableQueueBuilder.test.mjs scripts/tests/maxDurableReceipts.test.mjs
+        run: node --test scripts/tests/maxDurableQueueBuilder.test.mjs scripts/tests/maxDurableReceipts.test.mjs scripts/tests/maxIntegrationConfig.test.mjs scripts/tests/maxDurableNativeOperation.test.mjs scripts/tests/maxDurableBrowserGuard.test.mjs scripts/tests/maxDurableWorkerRebind.test.mjs
       - name: Test legacy MAX response handling and no-send-retry contract
         run: node --test scripts/tests/maxResponseGuard.test.mjs scripts/tests/maxActivation.test.mjs
       - name: Test new-only MAX topology and worker binding preparation
@@ -30,4 +30,4 @@ jobs:
       - name: Rehearse native outgoing-only deploy and inverse with synthetic transport
         env:
           NODERED_RUNTIME_ROOT: ${{ runner.temp }}/max-editor-runtime
-        run: node --test scripts/tests/maxOutboxNativeRuntime.test.mjs
+        run: node --test scripts/tests/maxOutboxNativeRuntime.test.mjs scripts/tests/maxDurableNativeRuntime.test.mjs

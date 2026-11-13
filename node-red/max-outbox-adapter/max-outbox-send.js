@@ -141,6 +141,7 @@ async function deliver(command, token, { fetchImpl = globalThis.fetch, timeoutMs
 }
 
 function register(RED) {
+  require('./max-integration-config.js').loadIntegrationConfig({ file: RED.settings?.padlhubMaxOutboxTokenFile });
   require('./max-outbox-receipt.js')(RED);
   function MaxOutboxSend(config) {
     RED.nodes.createNode(this, config);
