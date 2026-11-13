@@ -5,6 +5,11 @@ retained the player's old leave events, so the next Viva roster reconciliation
 could immediately remove the newly joined player while `joinResponses` still
 said `JOINED`.
 
+This is a verified repeated-join defect, not proof of what initiated the first
+leave operation. A stored `actor=self` identifies the authenticated SELF leave
+route; it does not prove that the player deliberately clicked Leave. The origin
+of an initial unwanted leave request needs separate client/request evidence.
+
 Both `GameJoinPage` and the game details in `GamesPage` now clear that player's
 previous roster blockers in the existing versioned join PATCH. The PATCH writes
 the new membership, roster/waitlist, join response and cleaned metadata together.
@@ -33,8 +38,9 @@ already missing from a live game.
 `scripts/tests/gameJoinRosterSync.test.ts` executes the actual ordinary join
 payload construction from both pages and then the shared Viva reconciliation,
 using synthetic data and no network. It covers roster and waitlist joins,
-promotion after waitlist rejoin, repeated sync, a subsequent real leave, legacy
-aliases, identity conflicts, immutability and retained audit history.
+promotion after waitlist rejoin, first joins without leave history, repeated sync,
+a subsequent real leave, legacy aliases, identity conflicts, immutability and
+retained audit history.
 
 Run it with the existing reconciliation, membership and CAS tests:
 

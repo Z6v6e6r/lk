@@ -176,9 +176,14 @@ const inviteBranch = localJoinBranch("src/components/games/GameJoinPage.tsx", "c
 const detailsBranch = localJoinBranch("src/components/games/GamesPage.tsx", "await patchGameRoster(nextParticipants");
 
 for (const route of ["invite", "details"]) {
-  for (const hasSlot of [true, false]) {
-    test(`${route} ordinary ${hasSlot ? "roster" : "waitlist"} rejoin writes cleanup with the new membership`, async () => {
-      const metadata = metadataFixture();
+  for (const { hasSlot, hasPriorLeave } of [
+    { hasSlot: true, hasPriorLeave: true },
+    { hasSlot: false, hasPriorLeave: true },
+    { hasSlot: true, hasPriorLeave: false },
+    { hasSlot: false, hasPriorLeave: false },
+  ]) {
+    test(`${route} ordinary ${hasSlot ? "roster" : "waitlist"} ${hasPriorLeave ? "rejoin" : "first join"} writes the new membership safely`, async () => {
+      const metadata: Record<string, unknown> = hasPriorLeave ? metadataFixture() : {};
       const participants = ["organizer", "second-client", "third-client", ...(!hasSlot ? ["fourth-client"] : [])]
         .map((id) => ({ id, name: id, status: "CONFIRMED", source: "INVITE_LINK" } satisfies PadelGamePlayer));
       const writes: Array<{ participants: PadelGamePlayer[]; waitlist: PadelGamePlayer[]; metadata: Record<string, unknown>; expectedUpdatedAt?: string }> = [];
@@ -204,9 +209,9 @@ for (const route of ["invite", "details"]) {
       await vm.runInContext(route === "invite" ? inviteBranch : detailsBranch, context);
       assert.equal(writes.length, 1);
       const write = writes[0];
-      assert.deepEqual(write.metadata.leaveEvents, [otherLeave]);
-      assert.deepEqual(write.metadata.playerLeaveEvents, []);
-      assert.deepEqual(write.metadata.leftPlayers, []);
+      assert.deepEqual(write.metadata.leaveEvents, hasPriorLeave ? [otherLeave] : undefined);
+      assert.deepEqual(write.metadata.playerLeaveEvents, hasPriorLeave ? [] : undefined);
+      assert.deepEqual(write.metadata.leftPlayers, hasPriorLeave ? [] : undefined);
       assert.equal(write.metadata.selfRemovalAuditLog, metadata.selfRemovalAuditLog);
       assert.equal(write.metadata.leaveOperations, metadata.leaveOperations);
       const joined = [...write.participants, ...write.waitlist].find((p) => p.id === rejoinPlayer.id);
@@ -215,7 +220,7 @@ for (const route of ["invite", "details"]) {
       const response = (write.metadata.joinResponses as Record<string, { status: string; membershipId: string }>)[rejoinPlayer.phone!];
       assert.equal(response.status, hasSlot ? "JOINED" : "WAITLIST");
       assert.equal(response.membershipId, rejoinPlayer.membershipId);
-      assert.equal(metadata.leaveEvents.length, 2, "input snapshot must stay unchanged");
+      assert.equal((metadata.leaveEvents as unknown[] | undefined)?.length, hasPriorLeave ? 2 : undefined, "input snapshot must stay unchanged");
       if (route === "invite") assert.equal(write.expectedUpdatedAt, "fixture-version");
       const promoted = hasSlot ? write.participants : [...participants.slice(0, 3), joined!];
       assert.equal(rosterSync(promoted, write.metadata, participants.slice(0, 3)).mergedCandidates.length, 4);
