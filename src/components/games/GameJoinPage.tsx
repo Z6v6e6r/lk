@@ -60,7 +60,7 @@ import {
   resolveSplitJoinShareCount,
 } from "./splitOrdinaryPricing";
 import { useSplitOrdinaryPrice } from "./useSplitOrdinaryPrice";
-import { createLocalMembershipId } from "./localMembershipGeneration";
+import { clearPreviousLeaveEventsForLocalJoin, createLocalMembershipId } from "./localMembershipGeneration";
 import {
   SubscriptionUsageShadowPanel,
   useSubscriptionUsageShadow,
@@ -1825,9 +1825,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       }
 
       const nowIso = new Date().toISOString();
-      const metadata: Record<string, unknown> = isRecord(actualGame.metadata)
-        ? { ...actualGame.metadata }
-        : {};
+      const metadata = clearPreviousLeaveEventsForLocalJoin(
+        isRecord(actualGame.metadata) ? actualGame.metadata : {},
+        localJoinPlayer,
+      );
       const joinResponses = isRecord(metadata.joinResponses)
         ? { ...metadata.joinResponses as Record<string, unknown> }
         : {};
