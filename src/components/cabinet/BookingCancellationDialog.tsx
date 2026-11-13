@@ -238,6 +238,7 @@ export function BookingCancellationDialog({
                           <button
                             key={action.id}
                             type="button"
+                            data-lk-leave-action="BOOKING_CANCEL_COMMIT"
                             className="booking-cancel-dialog__option"
                             onClick={() => void handleAction(action)}
                             disabled={Boolean(submittingActionId)}
@@ -266,6 +267,7 @@ export function BookingCancellationDialog({
                     <button
                       type="button"
                       className="btn-cancel primary"
+                      data-lk-leave-action="BOOKING_CANCEL_COMMIT"
                       onClick={() => void handleAction(plan.actions[0])}
                       disabled={Boolean(submittingActionId)}
                     >

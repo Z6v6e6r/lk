@@ -31,6 +31,35 @@
           "requestId"
         ]
       }
+    },
+    {
+      "if": {
+        "required": [
+          "leaveTrace"
+        ]
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "const": "browser"
+          },
+          "eventKind": {
+            "const": "client_error"
+          },
+          "method": {
+            "const": "POST"
+          },
+          "routeTemplate": {
+            "const": "/lk/games/:gameId/split/leave"
+          },
+          "stage": {
+            "const": "leave_initiator"
+          },
+          "code": {
+            "const": "SPLIT_LEAVE_INITIATED"
+          }
+        }
+      }
     }
   ],
   "properties": {
@@ -545,7 +574,8 @@
         "/lk/games/payment/confirm",
         "/lk/games/confirm",
         "/lk/games/records/:gameId",
-        "UNKNOWN"
+        "UNKNOWN",
+        "/lk/games/:gameId/split/leave"
       ]
     },
     "method": {
@@ -562,6 +592,7 @@
     },
     "stage": {
       "enum": [
+        "leave_initiator",
         "roster_bridge_response",
         "roster_projection_build",
         "roster_projection_ack",
@@ -904,7 +935,8 @@
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
         "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
-        "PREVIEW_EMPTY_TARIFF_OBSERVED"
+        "PREVIEW_EMPTY_TARIFF_OBSERVED",
+        "SPLIT_LEAVE_INITIATED"
       ]
     },
     "reason": {
@@ -1192,6 +1224,7 @@
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
         "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "PREVIEW_EMPTY_TARIFF_OBSERVED",
+        "SPLIT_LEAVE_INITIATED",
         "target_missing",
         "target_upstream_error",
         "target_identity",
@@ -1489,7 +1522,8 @@
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
         "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
-        "PREVIEW_EMPTY_TARIFF_OBSERVED"
+        "PREVIEW_EMPTY_TARIFF_OBSERVED",
+        "SPLIT_LEAVE_INITIATED"
       ]
     },
     "transportCode1": {
@@ -1776,7 +1810,8 @@
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
         "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
-        "PREVIEW_EMPTY_TARIFF_OBSERVED"
+        "PREVIEW_EMPTY_TARIFF_OBSERVED",
+        "SPLIT_LEAVE_INITIATED"
       ]
     },
     "transportCode2": {
@@ -2063,7 +2098,8 @@
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
         "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
-        "PREVIEW_EMPTY_TARIFF_OBSERVED"
+        "PREVIEW_EMPTY_TARIFF_OBSERVED",
+        "SPLIT_LEAVE_INITIATED"
       ]
     },
     "transportCode3": {
@@ -2350,7 +2386,8 @@
         "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
         "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
         "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
-        "PREVIEW_EMPTY_TARIFF_OBSERVED"
+        "PREVIEW_EMPTY_TARIFF_OBSERVED",
+        "SPLIT_LEAVE_INITIATED"
       ]
     },
     "responseKind": {
@@ -2943,6 +2980,106 @@
     "correlationHash": {
       "type": "string",
       "pattern": "^c1:[0-9a-f]{64}$"
+    },
+    "leaveTrace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frames",
+        "actions",
+        "visibility"
+      ],
+      "properties": {
+        "visibility": {
+          "enum": [
+            "visible",
+            "hidden",
+            "UNKNOWN"
+          ]
+        },
+        "frames": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "asset",
+              "line",
+              "column"
+            ],
+            "properties": {
+              "asset": {
+                "enum": [
+                  "bundle.js",
+                  "bundle-dev.js",
+                  "games.js",
+                  "games-dev.js",
+                  "apiClient.ts",
+                  "splitLeaveDiagnostics.ts",
+                  "GamesPage.tsx",
+                  "GameJoinPage.tsx",
+                  "Cabinet.tsx",
+                  "GameBookingCancellation.tsx"
+                ]
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "column": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              }
+            }
+          }
+        },
+        "actions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "kind",
+              "ageMs"
+            ],
+            "properties": {
+              "action": {
+                "enum": [
+                  "GAME_JOIN",
+                  "GAME_LEAVE",
+                  "GAME_BACK",
+                  "BOOKING_CANCEL_OPEN",
+                  "BOOKING_CANCEL_COMMIT",
+                  "OTHER_CONTROL",
+                  "CONFIRM_ACCEPT",
+                  "CONFIRM_DISMISS"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "pointerdown",
+                  "click",
+                  "key_activate",
+                  "confirm"
+                ]
+              },
+              "ageMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 120000
+              },
+              "trusted": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
