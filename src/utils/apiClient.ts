@@ -24,6 +24,7 @@ import { captureSplitLeaveInitiator } from "./splitLeaveDiagnostics";
 import { UUID } from "./errorDiagnosticsCore.mjs";
 import { gamePatchDiagnosticUrl } from "./gamePatchDiagnostics.mjs";
 import { abortCause, callerBuild, diagnosticId, routeTemplate } from "./errorDiagnostics";
+import { correlateGameReadRequest } from "./gameReadCorrelation";
 import type {
   BookingCancellationAction,
   BookingCancellationOptionsResponse,
@@ -4226,12 +4227,14 @@ async function rawRequest<T>(
   const requestStarted = performance.now();
   let diagnosticRequestId: string | undefined;
   try { diagnosticRequestId = diagnosticId(); } catch { /* unavailable crypto -> UNKNOWN */ }
+  const correlationAttached = correlateGameReadRequest(headers, fullUrl, fetchOptions.method, diagnosticRequestId);
   const diagnosticAttempt = diagnosticContext ? ++diagnosticContext.attempt : 1;
   let diagnosticRoute = "UNKNOWN";
   try { diagnosticRoute = routeTemplate(new URL(fullUrl, window.location.href).pathname); } catch { /* unknown */ }
   const requestDiagnostic = () => ({ requestId: diagnosticRequestId, logicalOperation: diagnosticContext?.logicalOperation,
     attempt: diagnosticAttempt, routeTemplate: diagnosticRoute, method: fetchOptions.method ?? "GET",
-    durationMs: performance.now() - requestStarted, abortCause: abortCause(fetchOptions.signal), stage: "api_request" });
+    durationMs: performance.now() - requestStarted, abortCause: abortCause(fetchOptions.signal),
+    callerBuild: callerBuild(), correlationAttached, stage: "api_request" });
 
   try {
     response = await fetch(fullUrl, { ...fetchOptions, headers });
