@@ -35,7 +35,7 @@ function client({ statuses = [404], networkError = false, fallback = false } = {
     resolveLkApiFallbackTimeoutMs:()=>25,
     resolveRequestCacheConfig:()=>null, readAuthToken:()=>'fixture-session', requestChangesSubscriptions:()=>false,
     invalidateSubscriptionSnapshot:()=>{}, isLkIdleRequestPausedError:()=>false, trackClientError:()=>{}, captureSplitLeaveInitiator:()=>{},
-    UUID:/^fixture-id$/,diagnosticId:()=>'fixture-id',abortCause:()=>null,
+    UUID:/^fixture-id$/,diagnosticId:()=>'fixture-id',abortCause:()=>null,callerBuild:()=>"UNKNOWN",correlateGameReadRequest:()=>false,
     isRecord:v=>v && typeof v==='object',pickString:(v,keys)=>keys.map(k=>v[k]).find(v=>typeof v==='string'),
     normalizePadelGameRecord:v=>v?.id ? v : null,normalizePadelGameResultActionResponse:v=>v,
     setTimeout:(fn,delay)=>{delays.push(delay);return setTimeout(fn,delay===300 ? 0 : delay);},clearTimeout,

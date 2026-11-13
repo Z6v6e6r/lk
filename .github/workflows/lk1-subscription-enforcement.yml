@@ -692,6 +692,8 @@ jobs:
           scripts/tests/referralAttributionReleaseCandidate.test.mjs
           scripts/tests/correlatedErrorDiagnostics.test.mjs
           scripts/tests/clientErrorDiagnostics.test.mjs
+          scripts/tests/gameReadCorrelation.test.mjs
+          scripts/tests/gameReadDiagnosticsNginx.test.mjs
           scripts/tests/splitLeaveDiagnostics.test.mjs
           scripts/tests/subscriptionRouterBackgroundDiagnostic.test.mjs
 

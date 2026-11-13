@@ -575,7 +575,8 @@
         "/lk/games/confirm",
         "/lk/games/records/:gameId",
         "UNKNOWN",
-        "/lk/games/:gameId/split/leave"
+        "/lk/games/:gameId/split/leave",
+        "/lk/games/:gameId/result/state"
       ]
     },
     "method": {
@@ -2760,6 +2761,9 @@
       "type": "boolean"
     },
     "previewSubservices2xx": {
+      "type": "boolean"
+    },
+    "correlationAttached": {
       "type": "boolean"
     },
     "previewExplicitMatchesEndpoints": {
