@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { composeCancellationSyncRecovery, patchCancellationSyncRouter } from '../prepare_cancellation_sync_recovery.mjs';
@@ -13,6 +14,8 @@ test('owned split-leave edits reproduce maintained sources exactly and reject re
     for (const [a, b] of [...edits[file]].reverse()) {
       assert.equal(before.split(b).length, 2); before = before.replace(b, () => a);
     }
+    if (file.endsWith('fn_split_leave_router.js')) assert.equal(crypto.createHash('sha256').update(before).digest('hex'),
+      '99a6cecec71c886644fef122e75d891559d231d29767b1c8c494f16c508c0fab', 'previous reviewed owner source is immutable');
     let after = before;
     for (const [a, b] of edits[file]) { assert.equal(after.split(a).length, 2); after = after.replace(a, () => b); }
     assert.equal(after, current);
