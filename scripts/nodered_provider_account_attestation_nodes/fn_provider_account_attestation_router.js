@@ -1,6 +1,6 @@
-// Outputs: [bounded actor-token GET -> http request, result/refusal -> response].
-// Only GET profile, subscriptions and (with a target) one exercise. No Mongo, no global
-// credential, no provider write.
+// Outputs: [bounded actor-token GET -> http request, result/refusal -> response,
+// read-only LK1 game lookup -> mongodb find]. Only GET profile, subscriptions and (with a target)
+// one exercise; with `legacyGameId` one `lk_games` find first. No global credential, no write.
 const ctx = msg._providerAccountAttestation;
 const reject = (status, code) => {
   delete msg._providerAccountAttestation;
@@ -32,6 +32,18 @@ const request = (step, path) => {
   return [msg, null];
 };
 if (ctx.step === "start") return request("profile", "/profile");
+// The LK1 game record names the Viva exercise; it is read, never returned.
+if (ctx.step === "game") {
+  const records = !msg.error && Array.isArray(msg.payload) ? msg.payload.filter(paObject) : null;
+  if (!records) return reject(503, "PROVIDER_ACCOUNT_UNAVAILABLE");
+  const matches = records.filter((r) => r.id === ctx.body.target.legacyGameId);
+  const record = matches.length === 1 && records.length === 1 ? matches[0] : null;
+  const exerciseId = record && (record.tenantKey === undefined || record.tenantKey === PA_TENANT_KEY)
+    && record.archived !== true ? paGameExerciseId(record) : null;
+  if (!exerciseId) return reject(409, "PROVIDER_ACCOUNT_INVALID");
+  ctx.exerciseId = exerciseId;
+  return request("exercise", "/exercises/" + encodeURIComponent(exerciseId));
+}
 if (!["profile", "subscriptions", "exercise"].includes(ctx.step)) return reject(503, "PROVIDER_ACCOUNT_UNAVAILABLE");
 const status = Number(msg.statusCode);
 if (msg.error || msg.url !== ctx.expectedUrl || msg.responseUrl !== ctx.expectedUrl) {
@@ -103,7 +115,18 @@ if (ctx.step === "subscriptions") {
   ctx.subscriptions = projected.slice(0, PA_MAX_SUBSCRIPTIONS);
   // The JOIN proof considers every attested subscription, not only the 50 shown.
   ctx.attestedIds = projected.map((s) => s.clientSubscriptionId);
-  if (ctx.body.target) return request("exercise", "/exercises/" + encodeURIComponent(ctx.body.target.exerciseId));
+  if (ctx.body.target?.legacyGameId) {
+    ctx.step = "game";
+    msg.payload = { id: ctx.body.target.legacyGameId, archived: { $ne: true } };
+    msg.limit = PA_GAME_COLLECTION_LIMIT;
+    for (const key of ["url", "method", "headers", "responseUrl", "statusCode", "error", "followRedirects",
+      "maxRedirects", "requestTimeout"]) delete msg[key];
+    return [null, null, msg];
+  }
+  if (ctx.body.target) {
+    ctx.exerciseId = ctx.body.target.exerciseId;
+    return request("exercise", "/exercises/" + encodeURIComponent(ctx.exerciseId));
+  }
   ctx.step = "done";
 }
 
@@ -112,7 +135,7 @@ if (ctx.step === "exercise") {
   const ids = paObject(exercise) ? [exercise.id, exercise.exerciseId, exercise.uuid].filter((v) => v !== undefined && v !== null) : [];
   const startsAt = paSelect.eventStartsAt(exercise);
   const durationMinutes = paSelect.eventDurationMinutes(exercise);
-  if (!ids.length || ids.some((v) => String(v).toLowerCase() !== ctx.body.target.exerciseId.toLowerCase()) || !startsAt
+  if (!ids.length || ids.some((v) => String(v).toLowerCase() !== ctx.exerciseId.toLowerCase()) || !startsAt
     || !Number.isSafeInteger(durationMinutes)) return reject(409, "PROVIDER_ACCOUNT_INVALID");
   const owned = ctx.attestedIds.filter((id) => paSelect.findOwnedSubscriptions(exercise, id).length > 0);
   const startMs = Date.parse(startsAt);
@@ -133,7 +156,8 @@ if (ctx.step === "exercise") {
       && !e.paused && !e.idMismatch;
   });
   ctx.targetProof = {
-    exerciseId: ctx.body.target.exerciseId,
+    ...(ctx.body.target.legacyGameId ? { legacyGameId: ctx.body.target.legacyGameId }
+      : { exerciseId: ctx.body.target.exerciseId }),
     startsAt,
     durationMinutes,
     ownedClientSubscriptionIds: shown,

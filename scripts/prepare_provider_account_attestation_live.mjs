@@ -5,9 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import {
   composeProviderAccountAttestation,
+  providerAccountAttestationGameIds,
   providerAccountAttestationIds,
+  PROVIDER_ACCOUNT_GAMES_CLIENT,
   PROVIDER_ACCOUNT_ROUTE,
 } from './patch_nodered_provider_account_attestation.mjs';
+import { buildExactGraphContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 import { providerAccountAttestationSource } from './lib/providerAccountAttestationSource.mjs';
 import { assertFlowArray, verifyWorkspace } from './verify_nodered_source_origin.mjs';
 import { assertHubOutputPath } from './patch_live_lk1_hub.mjs';
@@ -20,9 +23,17 @@ import { validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/run
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hash = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 
-// Installed flows.json on lk-primary-147 after JOIN v2 + lk1-one-daily-visit (2026-11-08 13:23 MSK).
+// Installed flows.json on lk-primary-147 after the attestation install (#305, 2026-11-08 22:45 MSK):
+// the reviewed candidate 0f6590d4 itself, so the nine installed attestation nodes are pinned too.
 export const ATTESTATION_LIVE_SOURCE_SHA256 =
-  '99f2d29f5c67ad6955f6623c0c160115c24d0de26f791b3ec61aa5291a094c57';
+  '0f6590d4a69b16e69b6c6cdf77075de114b207e08abcbab623fb740b5a9af97b';
+// Upgrade (legacyGameId target): only these fields of the installed nodes may change.
+const UPGRADE_CHANGES = Object.freeze({
+  [providerAccountAttestationIds.verify]: ['func'],
+  [providerAccountAttestationIds.router]: ['func', 'outputs', 'wires'],
+  [providerAccountAttestationIds.probe]: ['func'],
+  [providerAccountAttestationIds.sanitize]: ['func'],
+});
 const RECEIVER_ADMISSION_IN = 'lk_booked_operation_admission_in_20261021';
 
 const CLOSURE = [
@@ -58,6 +69,11 @@ export const opaqueRoute = (url) => /[()+]|[^/]:|\?(?<!:[A-Za-z0-9_]+\?)/.test(u
 // Facts of the installed graph the additive route relies on. Each one fails closed.
 export function assertLiveAttestationFacts(flow) {
   assertFlowArray(flow);
+  // The legacy-game lookup reads lk_games through the existing games database client.
+  const client = flow.find((n) => n.id === PROVIDER_ACCOUNT_GAMES_CLIENT);
+  if (!client || client.type !== 'mongodb4-client' || client.dbName !== 'games' || client.d) {
+    throw new Error('ATTESTATION_LIVE_GAMES_CLIENT_MISSING');
+  }
   const disabledTabs = new Set(flow.filter((n) => n.type === 'tab' && n.disabled).map((n) => n.id));
   const active = (n) => n && !n.d && !disabledTabs.has(n.z);
   // The same delegation boundary as the installed receiver.
@@ -91,28 +107,52 @@ export function assertLiveAttestationFacts(flow) {
   }
 }
 
+const installedIds = new Set(Object.values(providerAccountAttestationIds));
+const isInstalled = (n) => installedIds.has(n.id) || n.z === providerAccountAttestationIds.tab;
+
 export function composeProviderAccountAttestationLive(liveBytes, deploymentId,
   expectedSha256 = ATTESTATION_LIVE_SOURCE_SHA256) {
   if (hash(liveBytes) !== expectedSha256) throw new Error('ATTESTATION_LIVE_PREIMAGE_DRIFT');
   const flow = JSON.parse(Buffer.from(liveBytes).toString('utf8'));
-  assertLiveAttestationFacts(flow);
-  const packet = composeProviderAccountAttestation(liveBytes, deploymentId);
-  const { candidate } = packet;
-  if (!isDeepStrictEqual(candidate.slice(0, flow.length), flow)) throw new Error('ATTESTATION_LIVE_EXISTING_NODE_CHANGED');
-  const added = candidate.slice(flow.length);
-  if (!isDeepStrictEqual(added.map((n) => n.id), Object.values(providerAccountAttestationIds))) {
-    throw new Error('ATTESTATION_LIVE_ADDITIONS_INVALID');
+  const installed = flow.filter(isInstalled);
+  const remainder = flow.filter((n) => !isInstalled(n));
+  // Facts and collisions are checked on the graph without the installed attestation tab.
+  assertLiveAttestationFacts(remainder);
+  if (!isDeepStrictEqual(installed.map((n) => n.id), Object.values(providerAccountAttestationIds))
+    || !isDeepStrictEqual(flow.slice(0, remainder.length), remainder)) {
+    throw new Error('ATTESTATION_LIVE_INSTALLED_SHAPE_INVALID');
   }
+  const fresh = composeProviderAccountAttestation(Buffer.from(JSON.stringify(remainder, null, 2) + '\n'), deploymentId);
+  const target = new Map(fresh.candidate.slice(remainder.length).map((n) => [n.id, n]));
+  const allowedChanges = [];
+  const upgraded = installed.map((node) => {
+    const next = target.get(node.id);
+    const fields = [...new Set([...Object.keys(node), ...Object.keys(next)])]
+      .filter((k) => !isDeepStrictEqual(node[k], next[k])).sort();
+    if (!isDeepStrictEqual(fields, [...(UPGRADE_CHANGES[node.id] ?? [])].sort())) {
+      throw new Error('ATTESTATION_LIVE_UNEXPECTED_CHANGE:' + node.id + ':' + fields.join('+'));
+    }
+    if (fields.length) allowedChanges.push({ id: node.id, fields });
+    return next;
+  });
+  const additions = Object.values(providerAccountAttestationGameIds).map((id) => target.get(id));
+  const candidate = [...remainder, ...upgraded, ...additions];
   for (const [key, name] of [['verify', 'verify'], ['router', 'router'], ['probe', 'probe'], ['sanitize', 'response']]) {
-    if (added.find((n) => n.id === providerAccountAttestationIds[key]).func !== providerAccountAttestationSource(name)) {
+    if (candidate.find((n) => n.id === providerAccountAttestationIds[key]).func !== providerAccountAttestationSource(name)) {
       throw new Error('ATTESTATION_LIVE_FUNCTION_SOURCE_DRIFT');
     }
   }
-  if (added.some((n) => /mongodb|inject|link (in|out)|e-?mail|file|exec|catch/.test(n.type))) {
+  const mongo = additions.filter((n) => /mongodb/.test(n.type));
+  if (mongo.length !== 1 || mongo[0].operation !== 'find' || mongo[0].collection !== 'lk_games'
+    || mongo[0].clientNode !== PROVIDER_ACCOUNT_GAMES_CLIENT
+    || additions.some((n) => /inject|link (in|out)|e-?mail|file|exec/.test(n.type))) {
     throw new Error('ATTESTATION_LIVE_FORBIDDEN_NODE_TYPE');
   }
-  validateReviewedFlowContract({ liveBytes, candidateBytes: packet.candidateBytes, contract: packet.contract });
-  return packet;
+  const candidateBytes = Buffer.from(JSON.stringify(candidate, null, 2) + '\n');
+  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId, allowedChanges,
+    allowedAdditionIds: additions.map((n) => n.id) });
+  validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
+  return { candidate, candidateBytes, contract, allowedChanges, selectorRevision: fresh.selectorRevision };
 }
 
 function typescriptVersion() {
@@ -142,7 +182,8 @@ export function prepareProviderAccountAttestationLive(workspace, outputDirectory
   const contractText = JSON.stringify(packet.contract, null, 2) + '\n';
   const report = { ...source, sourceSha256: hash(liveBytes), candidateSha256: hash(packet.candidateBytes),
     contractSha256: hash(contractText), contractKind: 'exact-graph', deploymentId: packet.contract.deploymentId,
-    nodeCount: packet.candidate.length, additions: Object.values(providerAccountAttestationIds), changes: 0,
+    nodeCount: packet.candidate.length, additions: Object.values(providerAccountAttestationGameIds),
+    changes: packet.allowedChanges,
     route: PROVIDER_ACCOUNT_ROUTE, selectorRevision: packet.selectorRevision, flag: 'LK1_PROVIDER_ACCOUNT_ATTESTATION_ENABLED',
     sourceOnly: true, activationAuthorized: false, imported: false, providerWritesPerformed: false };
   fs.mkdirSync(output, { mode: 0o700 });
