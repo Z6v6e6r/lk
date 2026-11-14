@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createFprState } from "../../src/components/tournaments/fpr6x25.ts";
 import { loadFprCommunityLeague as loadOriginal, type FprLeagueRanking } from "../../src/components/tournaments/fprCommunityLeague.ts";
 import { resolveFprCommunitySelection } from "../../src/components/tournaments/fprCommunitySelection.ts";
 const loadFprCommunityLeague = (input: Omit<Parameters<typeof loadOriginal>[0], "fetchLevels">) => loadOriginal({ ...input,
@@ -99,11 +100,11 @@ test("existing published communities stay fixed even when their names are outsid
   assert.deepEqual(result.choices, []);
 });
 
-test("multiple publications display all names and use the explicit primary community", () => {
+test("multiple publications offer their communities and default to the explicit primary", () => {
   const binding = { ratingCommunityId: "terekhovo",
     publishedCommunities: [publication("ordinary"), publication("terekhovo", true)] };
-  const result = resolveFprCommunitySelection(binding, communities, "kotelniki");
-  assert.equal(result.fixed, true);
+  const result = resolveFprCommunitySelection(binding, communities, "");
+  assert.equal(result.fixed, false);
   assert.equal(result.communityId, "terekhovo");
   assert.deepEqual(result.publishedNames, [communities[0].name, communities[1].name]);
   assert.equal(result.error, null);
@@ -111,18 +112,55 @@ test("multiple publications display all names and use the explicit primary commu
 
 test("a publication role also establishes the primary community when the top-level ID is missing", () => {
   const result = resolveFprCommunitySelection({ ratingCommunityId: null,
-    publishedCommunities: [publication("ordinary"), publication("terekhovo", true)] }, communities, "kotelniki");
+    publishedCommunities: [publication("ordinary"), publication("terekhovo", true)] }, communities, "");
   assert.equal(result.communityId, "terekhovo");
   assert.equal(result.error, null);
 });
 
-test("ambiguous publications never expose a selector or silently choose an unrelated community", () => {
+test("multiple publications require a selection and only offer published communities", () => {
+  const binding = { ratingCommunityId: null,
+    publishedCommunities: [publication("ordinary"), publication("terekhovo")] };
+  for (const selectedId of ["", "kotelniki", "removed"]) {
+    const result = resolveFprCommunitySelection(binding, communities, selectedId);
+    assert.equal(result.fixed, false);
+    assert.equal(result.communityId, "");
+    assert.deepEqual(result.choices.map(c => c.id), ["ordinary", "terekhovo"]);
+    assert.equal(result.error, null);
+    assert.equal(result.needsCommunityList, false);
+  }
+  assert.equal(resolveFprCommunitySelection(binding, communities, "ordinary").communityId, "ordinary");
+  assert.equal(resolveFprCommunitySelection(binding, communities, "terekhovo").communityId, "terekhovo");
+});
+
+test("an organizer can override the primary with another published community", () => {
+  const result = resolveFprCommunitySelection({ ratingCommunityId: "terekhovo",
+    publishedCommunities: [publication("ordinary"), publication("terekhovo", true)] }, communities, "ordinary");
+  assert.equal(result.fixed, false);
+  assert.equal(result.communityId, "ordinary");
+});
+
+test("published options work without list access and need no Time for Friends name", () => {
   const result = resolveFprCommunitySelection({ ratingCommunityId: null,
-    publishedCommunities: [publication("ordinary"), publication("terekhovo")] }, communities, "kotelniki");
+    publishedCommunities: [publication("hub", false, "хАБ Нагатинская"),
+      publication("women", false, "ЖЕНСКАЯ ЛИГА D")] }, [], "women");
+  assert.equal(result.communityId, "women");
+  assert.equal(result.communityName, "ЖЕНСКАЯ ЛИГА D");
+  assert.equal(result.choices.length, 2);
+  assert.equal(result.needsCommunityList, false);
+});
+
+test("duplicate publications in one community do not require a new selection", () => {
+  const result = resolveFprCommunitySelection({ ratingCommunityId: null,
+    publishedCommunities: [publication("ordinary"), publication("ordinary")] }, communities, "");
   assert.equal(result.fixed, true);
-  assert.equal(result.communityId, "");
-  assert.deepEqual(result.choices, []);
-  assert.match(result.error!, /рейтинговое сообщество/);
+  assert.equal(result.communityId, "ordinary");
+});
+
+test("a stale primary or competing primary roles never select the first publication", () => {
+  for (const binding of [
+    { ratingCommunityId: "removed", publishedCommunities: [publication("ordinary"), publication("terekhovo")] },
+    { ratingCommunityId: null, publishedCommunities: [publication("ordinary", true), publication("terekhovo", true)] },
+  ]) assert.equal(resolveFprCommunitySelection(binding, communities, "").communityId, "");
 });
 
 test("an existing rating binding remains fixed without publication metadata", () => {
@@ -131,4 +169,30 @@ test("an existing rating binding remains fixed without publication metadata", ()
   assert.equal(result.communityName, "unknown");
   assert.equal(result.communityId, "unknown");
   assert.deepEqual(result.choices, []);
+});
+
+test("switching the published community changes first-round seeds from its own snapshot", async () => {
+  const roster = Array.from({ length: 8 }, (_, i) => ({ id: `p${i + 1}`, name: `Player ${i + 1}`, rating: "3" }));
+  const binding = { ratingCommunityId: null,
+    publishedCommunities: [publication("hub"), publication("women")] };
+  const order = { hub: roster.map(p => p.id), women: ["p1", "p3", "p5", "p7", "p2", "p4", "p6", "p8"] };
+  const plans = [];
+  for (const id of ["hub", "women"] as const) {
+    const choice = resolveFprCommunitySelection(binding, [], id);
+    const league = await loadFprCommunityLeague({ communityId: choice.communityId,
+      communityName: choice.communityName, players: roster,
+      fetch: async period => ({ communityId: choice.communityId, period, updatedAt: "2026-11-14T11:00:00Z",
+        items: order[id].map((playerId, i) => ({ playerId, rank: i + 1, overallScore: 80 - i, currentLevel: 3 })) }) });
+    const state = createFprState({ tournamentId: "synthetic-event", now: "2026-11-14T11:00:00Z",
+      endsAt: "2026-11-14T14:00:00Z", courts: ["Court 1", "Court 2"], leagueSource: id, reserveAllowed: false,
+      communityRating: { policy: "community-tournament-v1", communityId: choice.communityId,
+        communityName: choice.communityName, period: league.period, snapshotUpdatedAt: league.snapshotUpdatedAt,
+        sourceExerciseId: "synthetic-event", publicationId: `publication-${id}` },
+      players: roster.map(p => ({ id: p.id, name: p.name, level: Number(league.values[p.id].level),
+        leaguePlace: Number(league.values[p.id].place), leaguePoints: Number(league.values[p.id].points) })) });
+    assert.deepEqual(state.players.map(p => p.id), order[id]);
+    assert.equal(state.communityRating?.communityId, id);
+    plans.push(state.attempts[0].matches);
+  }
+  assert.notDeepEqual(plans[0], plans[1]);
 });
