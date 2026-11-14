@@ -1,0 +1,135 @@
+<!--
+Родина / https://ffc.team/rodina
+Добавить целиком в ОДИН новый блок T123 после существующих блоков страницы.
+Работает с текущим #rodina-site-005jda и его Shadow DOM.
+Существующие блоки, кнопки и обработчики менять не требуется.
+Для отключения удалить этот T123 и повторно опубликовать страницу.
+-->
+<script>
+(function () {
+  'use strict';
+
+  // A repeated T123 must not install duplicate spacers or scroll listeners.
+  if (window.rodinaStickyHeader) return;
+  var api = window.rodinaStickyHeader = {};
+  var attempts = 0;
+  var timer = setInterval(boot, 250);
+  boot();
+
+  function boot() {
+    var host = document.getElementById('rodina-site-005jda');
+    var root = host && host.shadowRoot;
+    var headers = root && root.querySelectorAll('#mobileExperience .topbar, #desktopExperience .desktop-header');
+    // The compressed T123 application attaches its shadow root asynchronously.
+    if (!headers || headers.length !== 2) {
+      if (++attempts >= 240) {
+        clearInterval(timer);
+        delete window.rodinaStickyHeader;
+        console.warn('Rodina: sticky header could not find the page headers.');
+      }
+      return;
+    }
+    clearInterval(timer);
+
+    var style = document.createElement('style');
+    style.textContent = `
+      #mobileExperience .topbar.rodina-pinned-header,
+      #desktopExperience .desktop-header.rodina-pinned-header {
+        position: fixed !important;
+        top: 0 !important;
+        left: var(--rodina-header-left) !important;
+        width: var(--rodina-header-width) !important;
+        margin: 0 !important;
+        box-sizing: border-box;
+        z-index: 100;
+        background: #000e18;
+      }
+      .home-nav { top: var(--rodina-pinned-header-height, 0px); }
+    `;
+    root.appendChild(style);
+
+    var states = Array.from(headers, function (header) {
+      var space = document.createElement('div');
+      space.hidden = true;
+      space.setAttribute('aria-hidden', 'true');
+      space.setAttribute('data-rodina-header-space', '');
+      header.before(space);
+      return { header: header, space: space, pinned: false };
+    });
+    var frame = 0;
+    var geometryChanged = false;
+    var page = root.querySelector('.rodina-page');
+
+    function release(state) {
+      state.header.classList.remove('rodina-pinned-header');
+      state.header.style.removeProperty('--rodina-header-left');
+      state.header.style.removeProperty('--rodina-header-width');
+      state.space.hidden = true;
+      state.pinned = false;
+    }
+
+    function update() {
+      frame = 0;
+      // Measure natural geometry again after rotation, font loading or resizing.
+      if (geometryChanged) states.forEach(release);
+      geometryChanged = false;
+      var height = 0;
+      states.forEach(function (state) {
+        var header = state.header;
+        if (!header.getClientRects().length) {
+          release(state);
+          return;
+        }
+        var rect = (state.pinned ? state.space : header).getBoundingClientRect();
+        if (rect.top > 0) {
+          release(state);
+          return;
+        }
+        if (!state.pinned) {
+          // Keep the original node, so links, phone dialog and event handlers survive.
+          state.space.style.height = rect.height + 'px';
+          header.style.setProperty('--rodina-header-left', rect.left + 'px');
+          header.style.setProperty('--rodina-header-width', rect.width + 'px');
+          state.space.hidden = false;
+          header.classList.add('rodina-pinned-header');
+          state.pinned = true;
+        }
+        height = header.getBoundingClientRect().height;
+      });
+      if (page) page.style.setProperty('--rodina-pinned-header-height', height + 'px');
+    }
+
+    function schedule() {
+      if (!frame) frame = requestAnimationFrame(update);
+    }
+
+    function refresh() {
+      geometryChanged = true;
+      schedule();
+    }
+
+    var observer = new ResizeObserver(refresh);
+    states.forEach(function (state) { observer.observe(state.header); });
+    window.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', refresh);
+    window.addEventListener('pageshow', refresh);
+    update();
+
+    api.destroy = function () {
+      clearInterval(timer);
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', refresh);
+      window.removeEventListener('pageshow', refresh);
+      states.forEach(function (state) {
+        release(state);
+        state.space.remove();
+      });
+      if (page) page.style.removeProperty('--rodina-pinned-header-height');
+      style.remove();
+      delete window.rodinaStickyHeader;
+    };
+  }
+})();
+</script>
