@@ -75,6 +75,10 @@ export function patchCancelledAllowancePreview(source) {
 // these exact later additions before those recipes verify the original hash.
 export function restorePreCancelledAllowanceSource(source, relative) {
   source = restorePreFreeCancellationSource(source, relative);
+  // The seat-only generation is removed above; its predecessor allowance is
+  // retained as an exact inverse anchor so old reviewed hashes stay immutable.
+  const previousAllowance = JSON.parse(fs.readFileSync(new URL('./lib/cancellationSyncSourceEdits.json', import.meta.url))).cancelledAllowanceBefore;
+  if (source.split(previousAllowance + '\n\n').length === 2) source = source.replace(previousAllowance + '\n\n', '');
   const deltas = relative === 'nodered_lk1_hub_nodes/gateway.js' ? [
     read('cancelled_successor') + '\n', read('cancelled_allowance') + '\n',
     '    if (lk1CancelledZeroVisitOperation(operation)) continue;\n',

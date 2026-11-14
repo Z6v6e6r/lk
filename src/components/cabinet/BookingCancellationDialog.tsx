@@ -9,6 +9,7 @@ import {
   type BookingCancellationAction,
   type BookingCancellationOptionsResponse,
   resolveBookingCancellationPlan,
+  bookingCancellationFailureMessage,
 } from "../../utils/bookingCancellation";
 import { Modal } from "../UI/Modal";
 
@@ -38,7 +39,10 @@ async function defaultExecuteAction(
   const accepted = response.status !== null && response.status >= 200 && response.status < 300;
   const verifiableConflict = response.status !== null
     && [400, 404, 409, 422].includes(response.status);
-  if (!accepted && !verifiableConflict) {
+  const unknownOutcome = response.status === null || response.status >= 500;
+  if (response.status === 202) return { ok: true, state: "RETRY_REQUIRED",
+    message: response.error?.message || "Запрос отмены принят. Проверяем возврат; повторная отмена не требуется." };
+  if (!accepted && !verifiableConflict && !unknownOutcome) {
     return {
       ok: false,
       message: response.error?.message || "Не удалось отменить запись",
@@ -56,11 +60,15 @@ async function defaultExecuteAction(
       };
     }
   }
+  if (cancelled && !accepted && ["card", "deposit"].includes(action.id)) {
+    return { ok: true, state: "RETRY_REQUIRED",
+      message: "Отмена записи подтверждена. Статус возврата ещё проверяется; повторная отмена не требуется." };
+  }
   return {
     ok: cancelled,
     message: cancelled
       ? action.successMessage
-      : (verification.error?.message || "Не удалось подтвердить отмену записи"),
+      : bookingCancellationFailureMessage(response, verification),
   };
 }
 

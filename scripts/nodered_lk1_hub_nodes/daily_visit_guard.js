@@ -84,7 +84,8 @@ if (ctx.step === "lk1_daily_visit_owner") {
   const owner = msg.payload[0], guard = ctx.lk1DailyVisitPrevious;
   if (!guard || owner._id !== guard.ownerOperationKey || owner.operationId !== guard.ownerOperationId
     || owner.tenantKey !== ctx.tenantKey || normalizeId(owner.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)
-    || owner.serviceDate !== ctx.serviceDate || owner.lk1?.decision?.subscriptionVisitCount !== 1) {
+    || owner.serviceDate !== ctx.serviceDate || owner.actorClientId !== ctx.actorClientId
+    || owner.lk1?.decision?.subscriptionVisitCount !== 1) {
     return lk1Stop(ctx, "LK1_DAILY_VISIT_BINDING_INVALID");
   }
   const returnedNative = typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(owner);
@@ -95,7 +96,9 @@ if (ctx.step === "lk1_daily_visit_owner") {
     && ((owner.bookingId && owner.releaseBookingId === owner.bookingId
       && owner.releasedBookingIds?.includes(owner.bookingId))
       || owner.reconciliation?.decision === "SAFE_TO_RELEASE");
-  if (!released && !(typeof lk1ReconciledVerified === "function" && lk1ReconciledVerified(ctx, owner))) {
+  const seatReleased = typeof lk1SeatReleasedOperation === "function" && lk1SeatReleasedOperation(owner);
+  if (!released && !seatReleased && !(typeof lk1ReconciledVerified === "function" && lk1ReconciledVerified(ctx, owner))) {
+    if (typeof lk1SeatStart === 'function') { const started = lk1SeatStart(ctx, owner); if (started) return started; }
     return lk1DailyVisitReject(ctx);
   }
   // No timeout/FAILED takeover: a failed owner can still retry its own operation.

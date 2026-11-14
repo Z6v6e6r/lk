@@ -519,6 +519,12 @@ jobs:
           scripts/tests/lk1UnpaidBookingCancellation.test.mjs
           scripts/tests/cancelledDayAllowance.test.mjs
           scripts/tests/lk1FreeCancellation.test.mjs
+          scripts/tests/lk1SeatRecovery.test.mjs
+          scripts/tests/gameCancellationReconciliation.test.mjs
+          scripts/tests/organizerBookingDiscovery.test.mjs
+          scripts/tests/cancellationSyncRecovery.test.mjs
+          scripts/tests/cancellationSyncRuntime.test.mjs
+          scripts/tests/cancellationReadback.client.test.mjs
           scripts/tests/lk1NativeDeployGuard.test.mjs
           scripts/tests/legacyCancellationRecovery.test.mjs
           scripts/tests/reconciledCancellationRecovery.test.mjs

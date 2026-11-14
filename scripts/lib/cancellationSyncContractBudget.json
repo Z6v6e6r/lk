@@ -1,0 +1,186 @@
+{
+  "sourceNodeCount": 4994,
+  "allowedChanges": [
+    {
+      "id": "7ad34f13c4b25d60",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "4cb1e542db56b508",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "e0d7883bc1a9fa8c",
+      "fields": [
+        "func"
+      ]
+    },
+    {
+      "id": "591234d213742276",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "9878400d518ebcbd",
+      "fields": [
+        "func",
+        "wires"
+      ]
+    },
+    {
+      "id": "9508f8e0ae8d282a",
+      "fields": [
+        "func"
+      ]
+    },
+    {
+      "id": "6172933891ac92e1",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "bcc3dccf8d64f9bb",
+      "fields": [
+        "func",
+        "wires"
+      ]
+    },
+    {
+      "id": "11079a30bf3cc6ad",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "7c280001a0c1e015",
+      "fields": [
+        "func",
+        "wires"
+      ]
+    },
+    {
+      "id": "lk_split_leave_operation_route_20260801",
+      "fields": [
+        "func",
+        "outputs",
+        "wires"
+      ]
+    },
+    {
+      "id": "lk_split_leave_operation_claim_ack_20260801",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "lk_split_leave_game_update_build_20260801",
+      "fields": [
+        "func"
+      ]
+    },
+    {
+      "id": "lk_split_leave_operation_done_ack_20260801",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "lk_split_leave_operation_done_readback_20260801",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "lk_split_leave_retry_hydrate_20260801",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "lk_staff_player_leave_authorize_20260812",
+      "fields": [
+        "wires"
+      ]
+    },
+    {
+      "id": "legacy_roster_bridge_build_20260816",
+      "fields": [
+        "func"
+      ]
+    },
+    {
+      "id": "lk_subscription_booking_router_20260804",
+      "fields": [
+        "func"
+      ]
+    },
+    {
+      "id": "lk_subscription_price_preview_20260908_router",
+      "fields": [
+        "func"
+      ]
+    }
+  ],
+  "allowedAdditionIds": [
+    "organizer_handoff_20260913_http",
+    "organizer_handoff_20260913_auth",
+    "organizer_handoff_20260913_profile",
+    "organizer_handoff_20260913_resolve",
+    "organizer_handoff_20260913_prepare",
+    "organizer_handoff_20260913_find",
+    "organizer_handoff_20260913_build",
+    "organizer_handoff_20260913_update",
+    "organizer_handoff_20260913_ack",
+    "organizer_handoff_20260913_provider",
+    "organizer_handoff_20260913_provider_find",
+    "organizer_handoff_20260913_provider_build",
+    "organizer_handoff_20260913_provider_update",
+    "organizer_handoff_20260913_provider_ack",
+    "organizer_handoff_20260913_local",
+    "organizer_handoff_20260913_local_find",
+    "organizer_handoff_20260913_local_build",
+    "organizer_handoff_20260913_local_update",
+    "organizer_handoff_20260913_local_ack",
+    "organizer_handoff_20260913_daily",
+    "organizer_handoff_20260913_daily_find",
+    "organizer_handoff_20260913_daily_build",
+    "organizer_handoff_20260913_daily_update",
+    "organizer_handoff_20260913_daily_ack",
+    "organizer_handoff_20260913_release",
+    "organizer_handoff_20260913_release_update",
+    "organizer_handoff_20260913_release_ack",
+    "organizer_handoff_20260913_patch_read",
+    "organizer_handoff_20260913_patch_find",
+    "organizer_handoff_20260913_patch_check",
+    "organizer_handoff_20260913_patch_ack",
+    "organizer_handoff_20260913_cleanup_gate",
+    "organizer_handoff_20260913_cleanup_find",
+    "organizer_handoff_20260913_cleanup_build",
+    "organizer_handoff_20260913_cleanup_update",
+    "organizer_handoff_20260913_cleanup_ack",
+    "organizer_handoff_20260913_cleanup_write_ack",
+    "organizer_handoff_20260913_cleanup_pause",
+    "organizer_handoff_20260913_cleanup_pause_update",
+    "organizer_handoff_20260913_cleanup_pause_ack",
+    "organizer_handoff_20260913_catch",
+    "organizer_handoff_20260913_catch_response",
+    "cancellation_sync_20261114_http",
+    "cancellation_sync_20261114_auth",
+    "cancellation_sync_20261114_profile",
+    "cancellation_sync_20261114_resolve",
+    "cancellation_sync_20261114_prepare",
+    "cancellation_sync_20261114_find",
+    "cancellation_sync_20261114_route",
+    "cancellation_sync_20261114_provider",
+    "cancellation_sync_20261114_update",
+    "cancellation_sync_20261114_count_prepare",
+    "cancellation_sync_20261114_count_find",
+    "cancellation_sync_20261114_count_resolve"
+  ]
+}

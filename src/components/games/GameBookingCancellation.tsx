@@ -6,6 +6,7 @@ import {
   apiLeavePadelGameAsCurrentUser,
   apiTransferPadelGameOrganizer,
   apiReleaseSubscriptionBookingClaim,
+  apiReconcilePadelGameCancellation,
   type Booking,
   type PadelGameRecord,
 } from "../../utils/apiClient";
@@ -29,6 +30,7 @@ export function GameBookingCancellation({ gameId, organizer, onGameChanged }: {
   const [transferredGame, setTransferredGame] = useState<PadelGameRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncedCancellation, setSyncedCancellation] = useState(false);
   const busy = useRef(false);
 
   const openCancellation = async () => {
@@ -42,7 +44,7 @@ export function GameBookingCancellation({ gameId, organizer, onGameChanged }: {
         setError(fresh.error?.message || "Не удалось проверить состав игры. Попробуйте снова.");
         return;
       }
-      const result = await apiFetchBookings(false);
+      const result = await apiFetchBookings(false, { fresh: true });
       if (result.error || !result.data) {
         setError(result.error?.message || "Не удалось загрузить запись. Попробуйте снова.");
         return;
@@ -50,6 +52,14 @@ export function GameBookingCancellation({ gameId, organizer, onGameChanged }: {
       const ids = collectGameCancellationBookingIds(fresh.data);
       const matches = result.data.content.filter((item) => !item.isCancelled
         && ids.has(item.id.trim().toLowerCase()));
+      if (matches.length === 0) {
+        const reconciliation = await apiReconcilePadelGameCancellation(gameId);
+        if (!reconciliation.error && reconciliation.data?.state === "CANCELLED") {
+          setSyncedCancellation(true);
+          onGameChanged?.({ ...fresh.data, status: "CANCELLED", archived: true });
+          return;
+        }
+      }
       if (matches.length !== 1 || result.data.totalPages > 1) {
         setError("Не удалось однозначно определить вашу запись в игре. Отмена остановлена.");
         return;
@@ -104,11 +114,12 @@ export function GameBookingCancellation({ gameId, organizer, onGameChanged }: {
   return (
     <div>
       <div className="booking-cancel-row">
-        <button data-lk-leave-action="BOOKING_CANCEL_OPEN" className="btn-cancel danger" type="button" disabled={loading}
+        <button data-lk-leave-action="BOOKING_CANCEL_OPEN" className="btn-cancel danger" type="button" disabled={loading || syncedCancellation}
           onClick={() => { void openCancellation(); }}>
-          {loading ? "Проверяем запись..." : "Отменить запись"}
+          {syncedCancellation ? "Запись уже отменена" : loading ? "Проверяем запись..." : "Отменить запись"}
         </button>
       </div>
+      {syncedCancellation && <p role="status">Отмена подтверждена. Информация об игре обновлена.</p>}
       {error && !handoff && <div className="booking-status-text" role="alert">{error}</div>}
       <Modal isOpen={Boolean(handoff)} title="Кому передать роль организатора?" variant="dialog"
         onClose={() => { if (!busy.current) setHandoff(null); }}>
