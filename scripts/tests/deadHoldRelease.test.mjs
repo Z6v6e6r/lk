@@ -3,9 +3,9 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import {
   DEAD_HOLD_RELEASE_REASON, buildDeadHoldReleaseCommands, dailyVisitGuardKey, deadHoldPlanDigest,
-  planDeadHoldRelease,
+  inFlightReason, planDeadHoldRelease,
 } from '../lib/deadHoldRelease.mjs';
-import { applyPlan, buildPlan, isPlainJson, parseReleaseArgs, restoreBackup, verifyApplied } from '../release_dead_subscription_holds.mjs';
+import { applyPlan, buildPlan, isPlainJson, parseReleaseArgs, restoreBackup, runScheduledTick, verifyApplied } from '../release_dead_subscription_holds.mjs';
 
 // Synthetic identities only.
 const NOW = '2026-11-14T09:00:00.000Z';
@@ -107,6 +107,30 @@ test('the CLI refuses an apply without backup and approved digest', () => {
   assert.equal(isPlainJson({ a: new Date() }), false);
 });
 
+test('a cancellation the client is making in LK right now is never raced', () => {
+  const op = operation();
+  const job = (extra = {}) => ({ kind: 'LK1_FREE_CANCEL_JOB_V1', phase: 'CANCEL_INTENT',
+    clientSubscriptionId: 'fixture-subscription-0001', binding: { bookingId: 'fixture-booking-0001' }, ...extra });
+  assert.equal(inFlightReason({ operation: op, jobs: [job()], now: NOW }), 'IN_FLIGHT_JOB');
+  assert.equal(inFlightReason({ operation: op, jobs: [job({ clientSubscriptionId: 'other', binding: { bookingId: 'fixture-booking-0001' } })], now: NOW }), 'IN_FLIGHT_JOB');
+  assert.equal(inFlightReason({ operation: op, jobs: [job({ clientSubscriptionId: undefined, binding: {} })], now: NOW }), 'IN_FLIGHT_JOB_UNRESOLVED');
+  assert.equal(inFlightReason({ operation: op, jobs: [job({ phase: 'DONE' }), job({ phase: 'DECLINED' })], now: NOW }), null);
+  assert.equal(inFlightReason({ operation: op, jobs: [job({ clientSubscriptionId: 'other', binding: { bookingId: 'other' } })], now: NOW }), null);
+  assert.equal(inFlightReason({ operation: op, now: NOW, quietMs: 5 * 60000 }), null);
+  assert.equal(inFlightReason({ operation: operation({ updatedAt: '2026-11-14T08:57:00.000Z' }), now: NOW, quietMs: 5 * 60000 }), 'UPDATED_RECENTLY');
+  assert.equal(inFlightReason({ operation: operation({ updatedAt: undefined }), now: NOW, quietMs: 5 * 60000 }), 'UPDATED_RECENTLY');
+});
+
+test('the scheduled mode needs no digest but always a backup dir and report', () => {
+  const base = ['--flows', '/x', '--token-file', '/t'];
+  assert.throws(() => parseReleaseArgs([...base, '--scheduled']), /ARGUMENT_REQUIRED/);
+  assert.throws(() => parseReleaseArgs([...base, '--scheduled', '--apply', '--backup-dir', '/b', '--report', '/r']), /ARGUMENT_INVALID/);
+  const options = parseReleaseArgs([...base, '--scheduled', '--backup-dir', '/b', '--report', '/r']);
+  assert.equal(options.scheduled, true);
+  assert.equal(options.quietMinutes, 5);
+  assert.equal(parseReleaseArgs(base).quietMinutes, 0);
+});
+
 // Real replica set (scripts/run_lk1_guard_repair_replica_tests.sh pattern). Skipped
 // unless DEAD_HOLD_TEST_MONGO_URI points at a disposable replica set.
 const uri = process.env.DEAD_HOLD_TEST_MONGO_URI;
@@ -155,6 +179,35 @@ test('replica set: release, concurrent change and restore', { skip: !uri }, asyn
     assert.deepEqual(restored.map(item => item.outcome).sort(), ['OPERATION_NOT_IN_RELEASED_STATE', 'RESTORED']);
     assert.deepEqual(await collection.findOne({ _id: dead._id }), dead);
     assert.deepEqual(await collection.findOne({ _id: guardOf(dead)._id }), guardOf(dead));
+    // Scheduled tick: the restored, the drifted and a new dead hold are released; an
+    // in-flight LK cancellation is not.
+    const fresh = operation({ _id: 'lk1-product:fresh', operationId: 'fixture-operation-0004',
+      clientSubscriptionId: 'fixture-subscription-0004', bookingId: 'fixture-booking-0004', exerciseId: 'fixture-exercise-0004' });
+    const racing = operation({ _id: 'lk1-product:racing', operationId: 'fixture-operation-0005',
+      clientSubscriptionId: 'fixture-subscription-0005', bookingId: 'fixture-booking-0005', exerciseId: 'fixture-exercise-0005' });
+    await collection.insertMany([fresh, guardOf(fresh), racing, guardOf(racing), { _id: 'lk1-free-cancel-job:fixture',
+      kind: 'LK1_FREE_CANCEL_JOB_V1', phase: 'CANCEL_INTENT', clientSubscriptionId: 'fixture-subscription-0005',
+      binding: { bookingId: 'fixture-booking-0005' } }]);
+    for (const n of ['0004', '0005']) {
+      responses[`fixture-exercise-${n}`] = [cancelled({ id: `fixture-booking-${n}`, clientSubscriptionId: `fixture-subscription-${n}`,
+        exerciseId: `fixture-exercise-${n}` })];
+    }
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dead-hold-tick-'));
+    const tickOptions = { ...options, quietMinutes: 5, maxTargets: 10, backupDir: path.join(dir, 'b'), report: path.join(dir, 'r.json') };
+    const tickPlan = await buildPlan({ collection, options: tickOptions, token: 'fixture', fetchImpl });
+    const tick = await runScheduledTick({ client, collection, plan: tickPlan, options: tickOptions });
+    assert.equal(tick.result, 'DONE');
+    assert.deepEqual(tick.outcomes, { RELEASED_WITH_GUARD: 3 });
+    assert.equal(tick.byReason.IN_FLIGHT_JOB, 1);
+    assert.equal((await collection.findOne({ _id: racing._id })).state, 'CONFIRMED');
+    assert.ok(await collection.findOne({ _id: guardOf(racing)._id }));
+    assert.equal(JSON.parse(fs.readFileSync(tickOptions.report, 'utf8')).result, 'DONE');
+    const idle = await runScheduledTick({ client, collection, plan: { ...tickPlan, targets: [] }, options: tickOptions });
+    assert.equal(idle.result, 'NOTHING_TO_RELEASE');
+    fs.rmSync(dir, { recursive: true, force: true });
     await collection.drop();
   } finally {
     await client.close();

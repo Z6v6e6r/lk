@@ -119,3 +119,33 @@ export function buildDeadHoldRestoreCommands({ operation, guard }) {
     guardDocument: guard ?? null,
   };
 }
+
+/** Job documents of the native LK cancellation and the manual visit repair. */
+export const IN_FLIGHT_JOB_KINDS = Object.freeze(['LK1_FREE_CANCEL_JOB_V1', 'LK1_CANCELLED_VISIT_REPAIR_V1']);
+export const TERMINAL_JOB_PHASES = Object.freeze(['DONE', 'DECLINED']);
+
+/**
+ * A scheduled release must never race a cancellation the client is making in LK right
+ * now: that path owns the operation until its job is terminal. `jobs` are the
+ * non-terminal job documents; `quietMs` skips operations written in the last minutes.
+ * Returns a deny reason or null.
+ */
+export function inFlightReason({ operation, jobs = [], now, quietMs = 0 }) {
+  const subscription = normalizeId(operation?.clientSubscriptionId);
+  const booking = normalizeId(operation?.bookingId);
+  for (const job of jobs) {
+    if (!IN_FLIGHT_JOB_KINDS.includes(job?.kind) || TERMINAL_JOB_PHASES.includes(job?.phase)) continue;
+    const jobSubscription = normalizeId(job.clientSubscriptionId ?? job.binding?.clientSubscriptionId);
+    const jobBooking = normalizeId(job.binding?.bookingId ?? job.bookingId);
+    // A job without readable identity blocks everything: it cannot be ruled out.
+    if (!jobSubscription && !jobBooking) return 'IN_FLIGHT_JOB_UNRESOLVED';
+    if ((jobSubscription && jobSubscription === subscription) || (jobBooking && jobBooking === booking)) {
+      return 'IN_FLIGHT_JOB';
+    }
+  }
+  if (quietMs > 0) {
+    const updated = Date.parse(operation?.updatedAt ?? '');
+    if (!Number.isFinite(updated) || Date.parse(now) - updated < quietMs) return 'UPDATED_RECENTLY';
+  }
+  return null;
+}

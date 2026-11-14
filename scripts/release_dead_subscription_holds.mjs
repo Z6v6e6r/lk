@@ -21,15 +21,15 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
   buildDeadHoldReleaseCommands, buildDeadHoldRestoreCommands, dailyVisitGuardKey,
-  deadHoldPlanDigest, planDeadHoldRelease, WRITE_OPTIONS,
+  deadHoldPlanDigest, inFlightReason, IN_FLIGHT_JOB_KINDS, planDeadHoldRelease, TERMINAL_JOB_PHASES, WRITE_OPTIONS,
 } from './lib/deadHoldRelease.mjs';
 import { moscowDate } from './lib/subscriptionHoldAudit.mjs';
 
 const require = createRequire(import.meta.url);
 const VALUE_FLAGS = new Set(['--flows', '--mongo-url', '--database', '--collection', '--token-file', '--viva-base',
   '--days-ahead', '--request-gap-ms', '--backup-dir', '--approved-plan-digest', '--restore', '--now',
-  '--mongodb-module', '--max-targets']);
-const BOOLEAN_FLAGS = new Set(['--apply']);
+  '--mongodb-module', '--max-targets', '--quiet-minutes', '--report']);
+const BOOLEAN_FLAGS = new Set(['--apply', '--scheduled']);
 
 export function parseReleaseArgs(argv) {
   const out = {};
@@ -50,7 +50,10 @@ export function parseReleaseArgs(argv) {
   if (!out['--flows'] && !out['--mongo-url']) throw new Error('ARGUMENT_REQUIRED --flows | --mongo-url');
   const apply = Boolean(out['--apply']);
   const restore = out['--restore'] ?? null;
+  const scheduled = Boolean(out['--scheduled']);
   if (apply && restore) throw new Error('ARGUMENT_INVALID --apply with --restore');
+  if (scheduled && (apply || restore || out['--approved-plan-digest'])) throw new Error('ARGUMENT_INVALID --scheduled is its own mode');
+  if (scheduled && (!out['--backup-dir'] || !out['--report'])) throw new Error('ARGUMENT_REQUIRED --scheduled needs --backup-dir and --report');
   if (apply && (!out['--backup-dir'] || !/^[a-f0-9]{64}$/.test(out['--approved-plan-digest'] ?? ''))) {
     throw new Error('ARGUMENT_REQUIRED --apply needs --backup-dir and --approved-plan-digest');
   }
@@ -67,6 +70,10 @@ export function parseReleaseArgs(argv) {
     daysAhead: integer('--days-ahead', 14, 0, 60),
     requestGapMs: integer('--request-gap-ms', 150, 0, 10000),
     maxTargets: integer('--max-targets', 150, 1, 1000),
+    // The scheduled tick leaves operations written in the last minutes to the request path.
+    quietMinutes: integer('--quiet-minutes', scheduled ? 5 : 0, 0, 120),
+    report: out['--report'] ?? null,
+    scheduled,
     backupDir: out['--backup-dir'] ?? null,
     approvedPlanDigest: out['--approved-plan-digest'] ?? null,
     restore,
@@ -118,6 +125,8 @@ export async function buildPlan({ collection, options, token, fetchImpl }) {
     if (options.requestGapMs) await sleep(options.requestGapMs);
   }
   const guardKeys = [...new Set(bound.map(dailyVisitGuardKey))];
+  const jobs = await collection.find({ kind: { $in: [...IN_FLIGHT_JOB_KINDS] }, phase: { $nin: [...TERMINAL_JOB_PHASES] } },
+    { maxTimeMS: 30000 }).toArray();
   const guards = new Map((guardKeys.length ? await collection.find({ _id: { $in: guardKeys } }).toArray() : [])
     .map(guard => [guard._id, guard]));
   const targets = [];
@@ -125,9 +134,12 @@ export async function buildPlan({ collection, options, token, fetchImpl }) {
   for (const operation of bound) {
     const bookings = bookingsByExercise.get(String(operation.exerciseId ?? '').trim().toLowerCase()) ?? null;
     const guard = guards.get(dailyVisitGuardKey(operation)) ?? null;
+    const blocked = inFlightReason({ operation, jobs, now: options.now, quietMs: (options.quietMinutes ?? 0) * 60000 });
     const decision = !isPlainJson(operation) || (guard && !isPlainJson(guard))
       ? { eligible: false, reason: 'NON_JSON_DOCUMENT' }
       : planDeadHoldRelease({ operation, bookings, guard, today });
+    // Only an otherwise eligible target is held back, so the counts keep their meaning.
+    if (decision.eligible && blocked) { decision.eligible = false; decision.reason = blocked; }
     byReason[decision.reason ?? 'ELIGIBLE'] = (byReason[decision.reason ?? 'ELIGIBLE'] ?? 0) + 1;
     if (decision.eligible) targets.push({ operation, guard: decision.releaseGuard ? guard : null });
   }
@@ -251,6 +263,34 @@ export async function restoreBackup({ client, collection, backup }) {
   return results;
 }
 
+function writeReport(file, value) {
+  const temporary = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+}
+
+/** One scheduled tick: no approval digest, bounded, backup only when something is released. */
+export async function runScheduledTick({ client, collection, plan, options }) {
+  const base = { mode: 'scheduled', at: options.now, ...planReport(plan) };
+  let report;
+  if (plan.providerUnreadable > 0 && plan.providerUnreadable === plan.exercisesRead) {
+    report = { ...base, result: 'PROVIDER_UNREADABLE' };
+  } else if (plan.targets.length > options.maxTargets) {
+    report = { ...base, result: 'TOO_MANY_TARGETS' };
+  } else if (!plan.targets.length) {
+    report = { ...base, result: 'NOTHING_TO_RELEASE' };
+  } else {
+    fs.mkdirSync(options.backupDir, { recursive: true, mode: 0o700 });
+    const backupPath = path.join(options.backupDir, `dead-holds-${options.now.replace(/[:.]/g, '-')}.json`);
+    writePrivateFile(backupPath, { createdAt: options.now, planDigest: plan.digest, targets: plan.targets });
+    const results = await applyPlan({ client, collection, plan, now: options.now });
+    const postcheckMismatches = await verifyApplied({ collection, plan, results });
+    report = { ...base, result: 'DONE', backupPath, outcomes: tally(results), postcheckMismatches };
+  }
+  writeReport(options.report, report);
+  return report;
+}
+
 const tally = results => results.reduce((acc, item) => { acc[item.outcome] = (acc[item.outcome] ?? 0) + 1; return acc; }, {});
 
 export async function runDeadHoldRelease(options) {
@@ -269,6 +309,7 @@ export async function runDeadHoldRelease(options) {
     }
     const token = fs.readFileSync(options.tokenFile, 'utf8').trim();
     const plan = await buildPlan({ collection, options, token });
+    if (options.scheduled) return runScheduledTick({ client, collection, plan, options });
     if (!options.apply) return { mode: 'plan', ...planReport(plan) };
     if (plan.digest !== options.approvedPlanDigest) return { mode: 'apply', result: 'PLAN_DRIFT', ...planReport(plan) };
     if (plan.targets.length > options.maxTargets) return { mode: 'apply', result: 'TOO_MANY_TARGETS', ...planReport(plan) };
@@ -288,7 +329,8 @@ if (isMain) {
   try {
     const report = await runDeadHoldRelease(parseReleaseArgs(process.argv.slice(2)));
     console.log(JSON.stringify(report, null, 2));
-    if (report.result && report.result !== 'DONE') process.exitCode = 2;
+    if (report.result && !['DONE', 'NOTHING_TO_RELEASE'].includes(report.result)) process.exitCode = 2;
+    if (report.postcheckMismatches) process.exitCode = 3;
   } catch (error) {
     console.error(JSON.stringify({ error: /^[A-Z_]+/.test(error?.message ?? '') ? error.message : 'RELEASE_FAILED' }));
     process.exitCode = 1;
