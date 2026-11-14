@@ -18,6 +18,7 @@ import {
   claimBookingId,
   exactId,
   hasCreateAttempt,
+  isExplicitlyCancelled,
   isProviderCancelled,
   normalizeId,
   readCompleteBookingRows,
@@ -69,6 +70,12 @@ export function moneyMarkers(operation) {
   if (operation?.managedEntitlementOperationId || operation?.managedSubscriptionInstanceId) markers.push('managed');
   const price = lk1.decision?.benefit?.finalPriceMinor;
   if (Number.isSafeInteger(price) && price > 0) markers.push('finalPriceMinor>0');
+  // An unknown price or paid overage is not proof of a free booking.
+  if (!Number.isSafeInteger(price)) markers.push('finalPriceMinor_unresolved');
+  for (const kind of ['gameMinutes', 'courtMinutes']) {
+    const overage = lk1.decision?.[kind]?.paidOverageMinutes;
+    if (![undefined, null, 0].includes(overage)) markers.push(`${kind}.paidOverageMinutes`);
+  }
   return markers;
 }
 
@@ -128,20 +135,35 @@ export function classifySubscriptionHold({ operation, bookings }) {
       return verdict(HOLD_VERDICT.EVIDENCE_CONFLICT, { detail: 'BOUND_EXERCISE_MISMATCH' });
     }
     if (!isProviderCancelled(row)) return verdict(HOLD_VERDICT.LIVE);
-    return verdict(HOLD_VERDICT.DEAD_HOLD_CANCELLED, { exerciseCancelledSignal });
+    // A cancelled-then-rebooked client (same actor and subscription, new booking row on
+    // this exercise) still holds the visit.
+    const other = otherActiveBooking(rows, row);
+    if (other) return other;
+    return verdict(HOLD_VERDICT.DEAD_HOLD_CANCELLED, {
+      exerciseCancelledSignal,
+      // Strict proof: an explicit flag/date or an exact CANCELLED status, never a
+      // substring such as CANCELLATION_REQUESTED or LATE_CANCEL.
+      explicitCancellation: isExplicitlyCancelled(row),
+    });
   }
   // The bound booking is absent from a complete readback. Another active booking of the
   // same actor and subscription on this exercise is still a live hold.
-  for (const row of rows) {
-    if (isProviderCancelled(row)) continue;
-    const client = rowClientId(row);
-    if (!client) return verdict(HOLD_VERDICT.EVIDENCE_CONFLICT, { detail: 'PROVIDER_IDENTITY_UNRESOLVED' });
-    if (client !== actor) continue;
-    const sub = rowSubscriptionId(row);
-    if (!sub) return verdict(HOLD_VERDICT.EVIDENCE_CONFLICT, { detail: 'PROVIDER_SUBSCRIPTION_ID_UNRESOLVED' });
-    if (sub === subscription) return verdict(HOLD_VERDICT.LIVE, { detail: 'OTHER_ACTIVE_BOOKING' });
-  }
+  const other = otherActiveBooking(rows, null);
+  if (other) return other;
   return verdict(HOLD_VERDICT.DEAD_HOLD_ABSENT, { exerciseCancelledSignal });
+  function otherActiveBooking(candidates, bound) {
+    for (const row of candidates) {
+      // Anything that is not strictly cancelled counts as possibly active here.
+      if (row === bound || isExplicitlyCancelled(row)) continue;
+      const client = rowClientId(row);
+      if (!client) return verdict(HOLD_VERDICT.EVIDENCE_CONFLICT, { detail: 'PROVIDER_IDENTITY_UNRESOLVED' });
+      if (client !== actor) continue;
+      const sub = rowSubscriptionId(row);
+      if (!sub) return verdict(HOLD_VERDICT.EVIDENCE_CONFLICT, { detail: 'PROVIDER_SUBSCRIPTION_ID_UNRESOLVED' });
+      if (sub === subscription) return verdict(HOLD_VERDICT.LIVE, { detail: 'OTHER_ACTIVE_BOOKING' });
+    }
+    return null;
+  }
 }
 
 export const isDeadHold = decision => [HOLD_VERDICT.DEAD_HOLD_CANCELLED, HOLD_VERDICT.DEAD_HOLD_ABSENT]

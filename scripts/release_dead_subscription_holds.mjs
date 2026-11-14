@@ -230,9 +230,15 @@ const errorCode = error => [error?.codeName ?? error?.name ?? 'Error', error?.co
   ...(Array.isArray(error?.errorLabels) ? error.errorLabels : []), errorText(error)].filter(Boolean).join(':');
 
 /** Release every target, each in its own transaction. Never retries a failed target. */
-export async function applyPlan({ client, collection, plan, now }) {
+export async function applyPlan({ client, collection, plan, now, recheck = null }) {
   const results = [];
   for (const target of plan.targets) {
+    // The Mongo CAS cannot see Viva: re-read the booking right before this write, so a
+    // restored or rebooked seat after the plan's read keeps its hold.
+    if (recheck) {
+      const reason = await recheck(target);
+      if (reason) { results.push({ operation: label(target.operation._id), outcome: `SKIPPED_RECHECK_${reason}` }); continue; }
+    }
     const { operationCommand, guardCommand } = buildDeadHoldReleaseCommands({ ...target, now });
     const result = await inTransaction(client, async (session) => {
       const updated = await collection.updateOne(operationCommand.query, operationCommand.update, { session });
@@ -247,6 +253,19 @@ export async function applyPlan({ client, collection, plan, now }) {
     if (['TRANSACTION_ERROR', 'COMMIT_UNKNOWN'].includes(result.outcome)) break;
   }
   return results;
+}
+
+/** Fresh Viva readback for one target; returns a reason to skip, or null. */
+export function makeRecheck({ options, token, fetchImpl }) {
+  const today = moscowDate(options.now);
+  return async ({ operation, guard }) => {
+    const bookings = await readExerciseBookings({ vivaBase: options.vivaBase, token,
+      exerciseId: String(operation.exerciseId ?? '').trim().toLowerCase(), fetchImpl });
+    if (bookings === null) return 'PROVIDER_UNREADABLE';
+    const decision = planDeadHoldRelease({ operation, bookings, guard, today });
+    if (!decision.eligible) return decision.reason ?? 'NOT_ELIGIBLE';
+    return decision.releaseGuard === Boolean(guard) ? null : 'GUARD_PLAN_CHANGED';
+  };
 }
 
 /** Postcheck from primary: released operations and absent guards. */
@@ -315,7 +334,7 @@ export async function runScheduledTick({ client, collection, plan, options }) {
     fs.mkdirSync(options.backupDir, { recursive: true, mode: 0o700 });
     const backupPath = path.join(options.backupDir, `dead-holds-${options.now.replace(/[:.]/g, '-')}.json`);
     writePrivateFile(backupPath, { createdAt: options.now, planDigest: plan.digest, targets: plan.targets });
-    const results = await applyPlan({ client, collection, plan, now: options.now });
+    const results = await applyPlan({ client, collection, plan, now: options.now, recheck: options.recheck ?? null });
     const postcheckMismatches = await verifyApplied({ collection, plan, results });
     const failed = results.some(item => ['TRANSACTION_ERROR', 'COMMIT_NOT_APPLIED'].includes(item.outcome));
     report = { ...base, result: failed ? 'FAILED_TARGETS' : 'DONE', backupPath, outcomes: tally(results), postcheckMismatches };
@@ -341,19 +360,21 @@ export async function runDeadHoldRelease(options) {
     if (options.restore) {
       const backup = JSON.parse(fs.readFileSync(options.restore, 'utf8'));
       const results = await restoreBackup({ client, collection, backup });
-      return { mode: 'restore', results: tally(results) };
+      const restored = results.filter(item => item.outcome === 'RESTORED').length;
+      return { mode: 'restore', result: restored === results.length ? 'DONE' : 'PARTIAL_RESTORE', restored, results: tally(results) };
     }
     const token = fs.readFileSync(options.tokenFile, 'utf8').trim();
     const plan = await buildPlan({ collection, options, token, fetchImpl: options.fetchImpl });
+    const recheck = makeRecheck({ options, token, fetchImpl: options.fetchImpl });
     // `return await`: a bare returned promise would let `finally` close the pool mid-tick.
-    if (options.scheduled) return await runScheduledTick({ client, collection, plan, options });
+    if (options.scheduled) return await runScheduledTick({ client, collection, plan, options: { ...options, recheck } });
     if (!options.apply) return { mode: 'plan', ...planReport(plan) };
     if (plan.digest !== options.approvedPlanDigest) return { mode: 'apply', result: 'PLAN_DRIFT', ...planReport(plan) };
     if (plan.targets.length > options.maxTargets) return { mode: 'apply', result: 'TOO_MANY_TARGETS', ...planReport(plan) };
     fs.mkdirSync(options.backupDir, { recursive: true, mode: 0o700 });
     const backupPath = path.join(options.backupDir, `dead-holds-${options.now.replace(/[:.]/g, '-')}.json`);
     writePrivateFile(backupPath, { createdAt: options.now, planDigest: plan.digest, targets: plan.targets });
-    const results = await applyPlan({ client, collection, plan, now: options.now });
+    const results = await applyPlan({ client, collection, plan, now: options.now, recheck });
     const postcheckMismatches = await verifyApplied({ collection, plan, results });
     const failed = results.some(item => ['TRANSACTION_ERROR', 'COMMIT_NOT_APPLIED'].includes(item.outcome));
     return { mode: 'apply', result: failed ? 'FAILED_TARGETS' : 'DONE', backupPath, outcomes: tally(results), postcheckMismatches, ...planReport(plan) };

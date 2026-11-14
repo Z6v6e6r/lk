@@ -67,4 +67,5 @@ if [ "$(wc -l <"$STATE/run.log")" -gt 6000 ]; then
 fi
 find "$BACKUPS" -type f -mtime +30 -delete
 chmod 600 "$STATE"/* 2>/dev/null || true
-exit 0
+# Non-DONE results and postcheck mismatches surface in systemctl --failed and the journal.
+exit "$STATUS"

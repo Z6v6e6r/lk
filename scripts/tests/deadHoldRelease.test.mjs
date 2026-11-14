@@ -53,7 +53,16 @@ test('everything that is not an explicit cancellation is left alone', () => {
     [plan(operation({ lk1: { decision: { subscriptionVisitCount: 0, benefit: { finalPriceMinor: 100 } } } }), [cancelled()]), 'MONEY_MARKERS'],
     [plan(operation({ managedSubscriptionInstanceId: 'fixture-managed' }), [cancelled()]), 'MONEY_MARKERS'],
     [plan(operation({ activationState: 'PENDING' }), [cancelled()]), 'ACTIVATION_PENDING'],
-    [plan(operation({ lk1: { decision: {} } }), [cancelled()]), 'VISIT_COUNT_UNRESOLVED'],
+    [plan(operation({ lk1: { decision: { benefit: { finalPriceMinor: 0 } } } }), [cancelled()]), 'VISIT_COUNT_UNRESOLVED'],
+    // Review findings: unknown price, paid overage, loose statuses, cancelled then rebooked.
+    [plan(operation({ lk1: { decision: { subscriptionVisitCount: 1 } } }), [cancelled()]), 'MONEY_MARKERS'],
+    [plan(operation({ lk1: { decision: { subscriptionVisitCount: 1, benefit: { finalPriceMinor: 0 },
+      gameMinutes: { freeMinutes: 60, paidOverageMinutes: 30 } } } }), [cancelled()]), 'MONEY_MARKERS'],
+    [plan(op, [row({ status: 'CANCELLATION_REQUESTED' })]), 'CANCELLATION_NOT_EXPLICIT'],
+    [plan(op, [row({ status: 'LATE_CANCEL' })]), 'CANCELLATION_NOT_EXPLICIT'],
+    [plan(op, [row({ status: 'NOT_CANCELLED' })]), 'CANCELLATION_NOT_EXPLICIT'],
+    [plan(op, [cancelled(), row({ id: 'fixture-booking-0002' })]), 'VERDICT_LIVE'],
+    [plan(op, [cancelled(), row({ id: 'fixture-booking-0002', status: 'CANCELLATION_REQUESTED' })]), 'VERDICT_LIVE'],
     [plan(op, [cancelled({ clientId: 'fixture-actor-0002' })]), 'VERDICT_EVIDENCE_CONFLICT'],
     [plan(op, [row({ isCancelled: false, status: 'CANCELLED' })]), 'VERDICT_LIVE'],
     [plan(op, [cancelled()], guardOf(op, { ownerOperationId: 'other' })), 'GUARD_BINDING_INVALID'],
@@ -241,4 +250,23 @@ test('replica set: release, concurrent change and restore', { skip: !uri }, asyn
   } finally {
     await client.close();
   }
+});
+
+test('a rebooking of another client or subscription does not keep the hold', () => {
+  const op = operation();
+  assert.equal(plan(op, [cancelled(), row({ id: 'fixture-booking-0002', clientId: 'fixture-actor-0002' })]).eligible, true);
+  assert.equal(plan(op, [cancelled(), row({ id: 'fixture-booking-0002', clientSubscriptionId: 'Fixture-Subscription-0002' })]).eligible, true);
+});
+
+test('a fresh Viva readback before the write skips a restored booking', async () => {
+  const { makeRecheck } = await import('../release_dead_subscription_holds.mjs');
+  const op = operation();
+  const answer = rows => async () => ({ ok: true, json: async () => rows });
+  const options = { now: NOW, vivaBase: 'https://viva.invalid' };
+  assert.equal(await makeRecheck({ options, token: 't', fetchImpl: answer([cancelled()]) })({ operation: op, guard: guardOf(op) }), null);
+  assert.equal(await makeRecheck({ options, token: 't', fetchImpl: answer([row()]) })({ operation: op, guard: guardOf(op) }), 'VERDICT_LIVE');
+  assert.equal(await makeRecheck({ options, token: 't', fetchImpl: async () => ({ ok: false }) })({ operation: op, guard: null }), 'PROVIDER_UNREADABLE');
+  const skipped = await applyPlan({ client: null, collection: null, now: NOW, plan: { targets: [{ operation: op, guard: null }] },
+    recheck: async () => 'VERDICT_LIVE' });
+  assert.equal(skipped[0].outcome, 'SKIPPED_RECHECK_VERDICT_LIVE');
 });

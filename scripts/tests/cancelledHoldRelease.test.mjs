@@ -42,11 +42,11 @@ function usageSlice(source) {
   const end = policyEnd >= 0 ? policyEnd : source.indexOf('\n\n  };\n// Dedicated advisory graph.', start);
   return source.slice(start, end);
 }
-function usage(source, category, operations, cancellationSnapshot) {
+function usage(source, category, operations, cancellationSnapshot, activeBookings = []) {
   const ctx = { step: 'lk1_usage_operations', tenantKey: 'fixture', actorClientId: 'actor',
     clientSubscriptionId: 'subscription-a', serviceDate: day, category: categoryOf(category),
     managedAction: { GAME: 'JOIN_GAME', GROUP_TRAINING: 'BOOK_GROUP_TRAINING', TOURNAMENT: 'BOOK_TOURNAMENT' }[category],
-    lk1: { rule, bookings: [], activeBookings: [], cancellationSnapshot,
+    lk1: { rule, bookings: [], activeBookings, cancellationSnapshot,
       target: { resolutionSource: 'SERVER', category, directionId: 2680, durationMinutes: 60,
         startsAt: '2026-11-08T09:00:00Z', basePriceMinor: 100000, priceSource: 'VIVA_EXISTING_TARIFF', currency: 'RUB' } },
     lk1ProductIdentity: { subscription: { visitsLeft: 20 } } };
@@ -78,6 +78,22 @@ for (const [kind, source] of Object.entries(usageSources)) {
     }
   });
 
+  test(`${kind}: a same-day booking of another subscription or another day does not keep the hold`, () => {
+    for (const row of [{ id: 'booking-x', clientSubscriptionId: 'subscription-b', date: day },
+      { id: 'booking-y', clientSubscriptionId: 'subscription-a', date: '2026-11-09' }]) {
+      const op = operation('GROUP_TRAINING');
+      const { usage: result } = usage(source, 'GROUP_TRAINING', [op], snapshot([cancelledRow()]), [row]);
+      assert.equal(result.usedOrReservedVisitsToday, 0, row.id);
+    }
+  });
+
+  test(`${kind}: the takeover proof carries the receipt time, not the step time`, () => {
+    const observedAt = new Date(Date.now() - 20000).toISOString();
+    const op = operation('GROUP_TRAINING', { updatedAt: new Date(Date.now() - 30000).toISOString() });
+    const { ctx } = usage(source, 'GROUP_TRAINING', [op], snapshot([cancelledRow()], observedAt));
+    assert.equal(ctx.lk1CancelledHolds[op._id].observedAt, Date.parse(observedAt));
+  });
+
   test(`${kind}: anything short of a fresh exact cancellation keeps the hold`, () => {
     const cases = [
       ['active row', operation('GROUP_TRAINING'), snapshot([cancelledRow({ status: 'ACTIVE', isCancelled: false })])],
@@ -96,9 +112,19 @@ for (const [kind, source] of Object.entries(usageSources)) {
         decision: { subscriptionVisitCount: 1, benefit: { finalPriceMinor: 100 } } } }), snapshot([cancelledRow()])],
       ['managed', operation('GROUP_TRAINING', { managedSubscriptionInstanceId: 'm' }), snapshot([cancelledRow()])],
       ['pending', operation('GROUP_TRAINING', { state: 'PENDING_CONFIRMATION' }), snapshot([cancelledRow()])],
+      ['price unknown', operation('GROUP_TRAINING', { lk1: { ...operation('GROUP_TRAINING').lk1,
+        decision: { subscriptionVisitCount: 1 } } }), snapshot([cancelledRow()])],
+      ['paid overage', operation('GAME', { lk1: { ...operation('GAME').lk1, decision: { subscriptionVisitCount: 1,
+        benefit: { finalPriceMinor: 0 }, gameMinutes: { localDate: day, freeMinutes: 60, paidOverageMinutes: 30 } } } }),
+      snapshot([cancelledRow()])],
+      // Moved by an administrator: a same-day Viva booking no LK operation owns.
+      ['replacement booking', operation('GROUP_TRAINING'), snapshot([cancelledRow()]),
+        [{ id: 'booking-new', exerciseId: 'exercise-b', clientSubscriptionId: 'subscription-a', date: day }]],
+      ['replacement booking, subscription unknown', operation('GROUP_TRAINING'), snapshot([cancelledRow()]),
+        [{ id: 'booking-new', exerciseId: 'exercise-b', date: day }]],
     ];
-    for (const [name, op, receipt] of cases) {
-      const { usage: result, ctx } = usage(source, 'GROUP_TRAINING', [op], receipt);
+    for (const [name, op, receipt, active = []] of cases) {
+      const { usage: result, ctx } = usage(source, 'GROUP_TRAINING', [op], receipt, active);
       assert.equal(result.usedOrReservedVisitsToday, 1, name);
       assert.equal(ctx.lk1CancelledHolds?.[op._id], undefined, name);
     }

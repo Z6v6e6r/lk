@@ -43,6 +43,7 @@ export function planDeadHoldRelease({ operation, bookings, guard, today }) {
   // Only an explicitly cancelled bound row. A booking missing from the readback is
   // reported by the audit, but this one-off run does not act on absence.
   if (decision.verdict !== HOLD_VERDICT.DEAD_HOLD_CANCELLED) return deny(`VERDICT_${decision.verdict}`);
+  if (decision.explicitCancellation !== true) return deny('CANCELLATION_NOT_EXPLICIT');
   if (decision.moneyMarkers.length) return deny('MONEY_MARKERS');
   if (![0, 1].includes(decision.subscriptionVisitCount)) return deny('VISIT_COUNT_UNRESOLVED');
   if (!guard) return { eligible: true, reason: null, releaseGuard: false, decision };
