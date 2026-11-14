@@ -89,6 +89,8 @@ test('real HTTP server auth rejects BEFORE disk admission; valid POST is durably
 test('nginx patch changes one unique anchor and refuses drift/duplicate', async () => {
   const { patchNginx, LOCATION } = await import('./nginx_patch.mjs'); const source = Buffer.from('server {\n    listen 443 ssl;\n    location ^~ /api/ {\n    }\n}\n'); const output = patchNginx(source, sha(source)); assert.equal(output.toString(), source.toString().replace('    location ^~ /api/ {', LOCATION + '    location ^~ /api/ {'));
   assert.throws(() => patchNginx(source, '0'.repeat(64)), /DRIFT/); assert.throws(() => patchNginx(output, sha(output)), /SHAPE/);
+  for (const indent of ['', '\t', '  ']) { const raw = Buffer.from(source.toString().replace('    location', indent + 'location')); const result = patchNginx(raw, sha(raw)); assert.equal(result.toString(), raw.toString().replace(indent + 'location ^~ /api/ {', LOCATION + indent + 'location ^~ /api/ {')); }
+  for (const text of ['# location ^~ /api/ {', 'location ^~ /api/ {\nlocation ^~ /api/ {', 'location ^~ /api/ { # ambiguous']) { const raw = Buffer.from(text); assert.throws(() => patchNginx(raw, sha(raw)), /SHAPE/); }
 });
 test('CUP redirects cannot forward integration credential to another server', async t => {
   const { jsonFetch } = await import('./server.mjs'); let reached = 0; const target = http.createServer((req, res) => { reached++; res.end('{}'); }); await new Promise(resolve => target.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => target.close(resolve)));

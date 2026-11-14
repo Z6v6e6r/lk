@@ -19,8 +19,9 @@ export const LOCATION = `    # padlhub-max-inbound-v1: independent authenticated
 `;
 export function patchNginx(raw, expectedSha) {
   if (crypto.createHash('sha256').update(raw).digest('hex') !== expectedSha) throw Error('NGINX_SOURCE_DRIFT');
-  const text = raw.toString('utf8'), anchor = '    location ^~ /api/ {';
-  if (text.includes('/integrations/max/padlhub/webhook') || text.split(anchor).length !== 2) throw Error('NGINX_SHAPE');
+  const text = raw.toString('utf8'), anchors = [...text.matchAll(/^[\t ]*location \^~ \/api\/ \{\r?$/gm)];
+  if (text.includes('/integrations/max/padlhub/webhook') || anchors.length !== 1) throw Error('NGINX_SHAPE');
+  const anchor = anchors[0][0];
   return Buffer.from(text.replace(anchor, LOCATION + anchor));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
