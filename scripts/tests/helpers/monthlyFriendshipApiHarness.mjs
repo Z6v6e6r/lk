@@ -70,6 +70,10 @@ export function harness({ rows=[], globals={} }={}) {
     if(msg.url.includes('/products/subscriptions?'))return {content:[product],number:0,totalPages:1,totalElements:1,numberOfElements:1,last:true};
     if(msg.url.includes('/clients?'))return {content:[{id:'fixture-client',phone}],number:0,totalPages:1,totalElements:1,numberOfElements:1,last:true};
     if(msg.method==='POST' && msg.url.endsWith('/transactions'))return {id:'fixture-transaction',toPay:product.cost,paymentUrl:'https://bank.example.test/pay',paymentDueDate:'2026-11-02T13:00:00.000Z'};
+    if(msg.method==='GET' && msg.url==='https://api.vivacrm.ru/api/v1/transactions/fixture-transaction')return {
+      id:'fixture-transaction',status:'UNPAID',paymentDueDate:'2026-11-02T13:00:00.000Z',client:{id:'fixture-client'},
+      products:[{id:product.id,count:1,cost:product.cost,discount:0}],sum:product.cost,discount:0,toPay:product.cost,
+    };
     throw Error('unexpected provider URL '+msg.url);
   };
   const advance=(msg,{stop,respond=provider,max=80}={})=>{

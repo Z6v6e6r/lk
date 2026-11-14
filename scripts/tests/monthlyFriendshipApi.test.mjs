@@ -71,8 +71,9 @@ test('parallel same-key admission has one insert winner and one provider POST',(
   const a=h.advance(message('purchase',b),{stop}),second=h.advance(message('purchase',b),{stop});
   h.io(a);h.io(second);
   const first=h.advance(a.msg);assert.equal(first.msg.payload.state,'PAYMENT_PENDING');
-  const r=h.advance(second.msg,{respond:m=>m.url.includes('/transactions/')?{id:'fixture-transaction',status:'UNPAID',paymentDueDate:'2026-11-02T13:00:00.000Z',client:{id:'fixture-client'},products:[{id:product.id,count:1,cost:product.cost,discount:0}],sum:product.cost,discount:0,toPay:product.cost}:h.provider(m)});
+  const r=h.advance(second.msg);
   assert.equal(r.msg.payload.state,'PAYMENT_PENDING',JSON.stringify(r.msg.payload));assert.equal(h.requests.filter(r=>r.method==='POST').length,1);
+  assert.equal(h.requests.filter(r=>r.method==='GET' && r.url.endsWith('/transactions/fixture-transaction')).length,1);
 });
 test('delegation expiry after returned provider response retains observation and original transaction for recovery',()=>{
   const h=harness(),q=h.advance(message('quote')).msg.payload;
