@@ -7,7 +7,7 @@ OnCalendar=*:17/30
 AccuracySec=30s
 RandomizedDelaySec=30
 Persistent=false
-Unit=padlhub-dead-hold-release@full.service
+Unit=padlhub-dead-hold-release-full.service
 
 [Install]
 WantedBy=timers.target

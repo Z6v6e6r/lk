@@ -23,7 +23,7 @@ It never returns a visit in Viva. Visit returns stay manual (LK2 `AGENTS.md`).
 | `padlhub-dead-hold-release-near.timer` | today, tomorrow | 5 min |
 | `padlhub-dead-hold-release-full.timer` | next 14 days | 30 min |
 
-Both run `padlhub-dead-hold-release@<mode>.service` and share one lock. The Viva token
+Both run `padlhub-dead-hold-release-<mode>.service` and share one lock. The Viva token
 is read from `/root/.node-red/confirmed-claim-release/state/viva.token` (minted there);
 a stale token makes the tick log `TOKEN_STALE` and do nothing.
 
@@ -31,7 +31,7 @@ a stale token makes the tick log `TOKEN_STALE` and do nothing.
 
 ```sh
 systemctl list-timers 'padlhub-dead-hold-release-*'
-systemctl start padlhub-dead-hold-release@near.service      # one tick now
+systemctl start padlhub-dead-hold-release-near.service      # one tick now
 tail -5 /root/.node-red/dead-hold-release/state/run.log
 ```
 

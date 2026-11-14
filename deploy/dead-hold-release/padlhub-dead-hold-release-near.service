@@ -1,5 +1,5 @@
 [Unit]
-Description=Release subscription holds whose Viva booking is cancelled (%i window)
+Description=Release subscription holds whose Viva booking is cancelled (near window)
 Documentation=file:/root/.node-red/dead-hold-release/README.md
 After=network-online.target
 Wants=network-online.target
@@ -10,5 +10,5 @@ User=root
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=6
-ExecStart=/root/.node-red/dead-hold-release/run-dead-hold-release.sh %i
+ExecStart=/root/.node-red/dead-hold-release/run-dead-hold-release.sh near
 TimeoutStartSec=1500
