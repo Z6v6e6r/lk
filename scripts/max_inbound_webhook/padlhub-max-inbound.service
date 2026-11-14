@@ -1,0 +1,30 @@
+[Unit]
+Description=PadlHub MAX authenticated inbound webhook
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/opt/padlhub-max-inbound/current
+ExecStart=/opt/padlhub-max-inbound/current/runtime/node /opt/padlhub-max-inbound/current/server.mjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=45
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/padlhub-max-padlhub-inbound
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
