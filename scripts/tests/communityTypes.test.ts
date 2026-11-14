@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+// Keep binary/cache repair regressions in the existing community CI contour.
+import './communityLogoBinary.test.mjs';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { sanitizeTypedCommunityPayload, addTypedCommunityResponseRedaction } from '../lib/communityResponseRedaction.mjs';
