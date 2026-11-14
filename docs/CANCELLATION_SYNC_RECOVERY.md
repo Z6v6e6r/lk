@@ -53,6 +53,12 @@ managed/payment features. `cancellationSyncGatewayDeltas.json` permits exact
 historical inversion without changing prior release hashes. Whole-source, anchor,
 node-field or wire drift aborts composition.
 
+The bundled worker's default whole-flow and gateway pins match this exact composed
+candidate. It intentionally refuses the previous production generation; backend
+and worker must be released together. Two authenticated active reads, credentials,
+runtime identity and subsequent disk-byte/mtime guards are unchanged. A Node-RED
+serialization difference requires a reviewed generation update, never a bypass.
+
 ## Deliberately held cases
 
 - A manual replacement with no exact consumption count returns NEEDS_VISIT_COUNT.

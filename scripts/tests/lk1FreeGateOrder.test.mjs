@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { moveFreeCancellationStepsAfterDailyHelpers } from '../patch_live_lk1_free_cancellation.mjs';
-import { LK1_UNPAID_FLOW_SHA256, LK1_UNPAID_GATEWAY_SHA256 } from '../lib/lk1LiveGatewayGuard.mjs';
 import { composeFreeGateOrder, FREE_GATE_ROUTER_ID } from '../patch_live_lk1_free_gate_order.mjs';
 const read = name => fs.readFileSync(new URL(name, import.meta.url), 'utf8');
 const steps = read('../nodered_lk1_hub_nodes/free_cancel.js').split('// FREE_CANCEL_STEPS\n')[1].trim();
@@ -68,8 +67,9 @@ test('source drift or duplicate dispatch is refused', () => {
 const live = process.env.LK1_FREE_GATE_LIVE_SOURCE;
 test('exact live router candidate passes the same complete-router regressions', { skip: !live && 'private production flow is not exported to Git/CI' }, () => {
   const built = composeFreeGateOrder(fs.readFileSync(live));
-  assert.equal(built.candidateSha256, LK1_UNPAID_FLOW_SHA256);
-  assert.equal(built.gatewaySha256, LK1_UNPAID_GATEWAY_SHA256);
+  // Historical gate-order release stays frozen independently of current worker generation.
+  assert.equal(built.candidateSha256, 'fa66595e6c4b89c853a6a6ee5cf2861791c05c1cc8eb006f59f3ee8e5f1581fa');
+  assert.equal(built.gatewaySha256, 'a35313a5888f721f96d19bf5cf43e92bad5dc41757809e5ea8b8e8f7e5c2066b');
   const candidate = JSON.parse(built.candidateBytes), before = JSON.parse(fs.readFileSync(live));
   assert.equal(candidate.length, before.length);
   for (let i = 0; i < before.length; i++) {
