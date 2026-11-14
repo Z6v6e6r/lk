@@ -34,6 +34,11 @@ const enums = {
     'SUBSCRIPTIONS_SHAPE', 'SUBSCRIPTIONS_COUNT', 'SUBSCRIPTIONS_DUPLICATE', 'SUBSCRIPTION_ID_SHAPE', 'UNKNOWN'],
   validationFieldShape: ['MISSING', 'NULL', 'STRING', 'NUMBER', 'ARRAY', 'OBJECT', 'BOOLEAN', 'OTHER', 'UNKNOWN'],
   previewTargetKind: ['NEW_GAME', 'EXISTING_GAME', 'UNKNOWN'],
+  previewLegacyPlanVerdict: ['NO_PLAN', 'OPEN_GAME_EXCLUDED', 'UNKNOWN'],
+  previewLegacyRuleDisposition: ['NO_MATCH', 'SALE_BEFORE_CUTOFF', 'STATION_EXCLUDED', 'MANAGED', 'UNKNOWN'],
+  previewLegacyResolverEvidence: ['NO_RECOGNIZED_MARKER', 'UNKNOWN'],
+  previewLegacyRequestedCountBucket: ['ONE', 'MULTIPLE', 'UNKNOWN'],
+  previewLegacyOrigin: ['UNKNOWN'],
   previewTargetSource: ['CLIENT_INPUT', 'SERVER_CONFIRMED', 'UNKNOWN'],
   previewDuration: ['MINUTES_60', 'MINUTES_90', 'MINUTES_120', 'UNKNOWN'],
   previewCanonicalDuration: ['NULL', 'DIFFERENT', 'UNKNOWN'],
@@ -65,6 +70,7 @@ flags.push('previewOffsetValid', 'previewEndAtMidnight', 'previewSubservicesMatc
 flags.push('correlationAttached');
 flags.push('previewExplicitMatchesEndpoints', 'previewEndpointOffsetPairValid',
   'previewEndpointStartMatch', 'previewDurationFactsFailed');
+flags.push('previewLegacyPartialQuotesDiscarded', 'previewLegacyBoundNamePresent', 'previewLegacyFactsFailed');
 flags.push('tariffCompleteListGuardPassed', 'tariffExtractedEmpty', 'tariffTransportErrorPresent',
   'tariffBindingContextPresent', 'tariffMethodMatch', 'tariffRequestScopeMatch', 'tariffResponseUrlPresent',
   'tariffResponseScopeMatch', 'tariffTenantScopeMatch', 'tariffExerciseScopeMatch',

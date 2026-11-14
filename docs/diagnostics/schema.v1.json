@@ -456,6 +456,30 @@
         "UNKNOWN"
       ]
     },
+    "previewLegacyPlanVerdict": {
+      "enum": ["NO_PLAN", "OPEN_GAME_EXCLUDED", "UNKNOWN"]
+    },
+    "previewLegacyRuleDisposition": {
+      "enum": ["NO_MATCH", "SALE_BEFORE_CUTOFF", "STATION_EXCLUDED", "MANAGED", "UNKNOWN"]
+    },
+    "previewLegacyResolverEvidence": {
+      "enum": ["NO_RECOGNIZED_MARKER", "UNKNOWN"]
+    },
+    "previewLegacyRequestedCountBucket": {
+      "enum": ["ONE", "MULTIPLE", "UNKNOWN"]
+    },
+    "previewLegacyOrigin": {
+      "enum": ["UNKNOWN"]
+    },
+    "previewLegacyPartialQuotesDiscarded": {
+      "type": "boolean"
+    },
+    "previewLegacyBoundNamePresent": {
+      "type": "boolean"
+    },
+    "previewLegacyFactsFailed": {
+      "type": "boolean"
+    },
     "previewTargetSource": {
       "enum": [
         "CLIENT_INPUT",
