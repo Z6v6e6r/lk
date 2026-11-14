@@ -72,6 +72,22 @@ test("FPR create rejects changed seeds, roster mismatch, legacy event IDs and al
   }
 });
 
+test("FPR creation preserves a selected publication without requiring its primary role", () => {
+  const input = fixture();
+  input.params.fpr6x25.testMode = false;
+  input.params.fpr6x25.communityRating = { policy: "community-tournament-v1", communityId: "women",
+    communityName: "Synthetic women's league", period: "all", snapshotUpdatedAt: null,
+    sourceExerciseId: "synthetic-physical-event", publicationId: "women-publication" };
+  input.params.sourceExerciseId = "synthetic-physical-event";
+  const out = prepare({ payload: structuredClone(input) })[0];
+  assert.equal(out.statusCode, 200);
+  const saved = out.payload.$setOnInsert;
+  assert.deepEqual(saved.params.fpr6x25.communityRating, input.params.fpr6x25.communityRating);
+  assert.deepEqual(saved.params.fpr6x25.attempts, input.params.fpr6x25.attempts);
+  assert.deepEqual(update(saved, { action: "start_round" }).params.fpr6x25.communityRating,
+    input.params.fpr6x25.communityRating);
+});
+
 test("FPR commands use CAS and idempotency; legacy result/finish payload cannot bypass the reducer", () => {
   let doc = fixture();
   const before = structuredClone(doc);
