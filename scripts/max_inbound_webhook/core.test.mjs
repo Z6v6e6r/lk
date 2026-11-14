@@ -140,7 +140,7 @@ test('real lifetime flock remains held while wrapper forwards repeated stop and 
   const { spawn, spawnSync } = await import('node:child_process');
   if (spawnSync('/usr/bin/flock', ['--version']).error?.code === 'ENOENT') { t.skip('Linux flock fixture runs in CI'); return; }
   const inbox = fixture(t), lock = path.join(inbox.dir, '.runtime.lock'), ready = path.join(inbox.dir, 'ready'), drained = path.join(inbox.dir, 'drained'), entry = path.join(inbox.dir, 'child.mjs'); fs.writeFileSync(lock, '', { mode: 0o600 });
-  fs.writeFileSync(entry, `import fs from 'node:fs';let stopping=false;process.on('SIGTERM',()=>{if(stopping)return;stopping=true;setTimeout(()=>{fs.writeFileSync(${JSON.stringify(drained)},'once');process.exit(0)},250)});fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`, { mode: 0o600 });
+  fs.writeFileSync(entry, `import fs from 'node:fs';import{memoizedStop}from ${JSON.stringify(new URL('./server.mjs', import.meta.url).href)};const stop=memoizedStop(async()=>{await new Promise(r=>setTimeout(r,250));fs.writeFileSync(${JSON.stringify(drained)},'once')});process.on('SIGTERM',()=>{stop().then(()=>process.exit(0)).catch(()=>process.exit(1))});fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`, { mode: 0o600 });
   const code = `import{launchLocked}from ${JSON.stringify(new URL('./server.mjs', import.meta.url).href)};launchLocked({directory:${JSON.stringify(inbox.dir)},entry:${JSON.stringify(entry)}});`;
   const parent = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: 'ignore' }); t.after(() => { if (parent.exitCode === null) parent.kill('SIGKILL'); });
   const exit = new Promise(resolve => parent.once('exit', resolve)); const deadline = Date.now() + 3000;
@@ -148,4 +148,8 @@ test('real lifetime flock remains held while wrapper forwards repeated stop and 
   assert.notEqual(spawnSync('/usr/bin/flock', ['-n', lock, 'true']).status, 0); parent.kill('SIGTERM'); await new Promise(resolve => setTimeout(resolve, 20)); parent.kill('SIGTERM'); await new Promise(resolve => setTimeout(resolve, 30));
   assert.notEqual(spawnSync('/usr/bin/flock', ['-n', lock, 'true']).status, 0); assert.equal(await exit, 0); assert.equal(fs.readFileSync(drained, 'utf8'), 'once'); assert.equal(spawnSync('/usr/bin/flock', ['-n', lock, 'true']).status, 0);
   assert.match(fs.readFileSync(new URL('./padlhub-max-inbound.service', import.meta.url), 'utf8'), /^KillMode=mixed$/m);
+});
+
+test('actual production shutdown helper returns one pending promise for repeated signals', async () => {
+ const { memoizedStop } = await import('./server.mjs'); let release, calls=0, finished=false; const waiting=new Promise(r=>{release=r}); const stop=memoizedStop(async()=>{calls++;await waiting;finished=true}); const first=stop(),second=stop(); assert.equal(first,second); await Promise.resolve(); assert.equal(calls,1); assert.equal(finished,false); release(); await Promise.all([first,second]); assert.equal(finished,true); assert.equal(calls,1);
 });

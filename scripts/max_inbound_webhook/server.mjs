@@ -59,6 +59,10 @@ export function persistenceConfirmer(db, collections, { waitMs = 15000, sleepMs 
   };
 }
 
+export function memoizedStop(operation) {
+  let pending; return () => { pending ??= Promise.resolve().then(operation); return pending; };
+}
+
 export async function main() {
   const parent = '/etc/padlhub'; const st = fs.lstatSync(parent);
   need(st.isDirectory() && !st.isSymbolicLink() && fs.realpathSync(parent) === parent && st.uid === process.getuid() && !(st.mode & 0o022), 'CONFIG_DIRECTORY');
@@ -80,7 +84,7 @@ export async function main() {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(18941, '127.0.0.1', resolve); });
   let stopping = false;
   const timer = setInterval(() => { if (!stopping) dispatcher.tick().catch(() => { console.error('MAX_INGRESS_STORAGE_FAILURE'); process.exit(1); }); }, 500);
-  const stop = async () => { if (stopping) return; stopping = true; dispatcher.stop(); clearInterval(timer); server.close(); while (dispatcher.running) await new Promise(resolve => setTimeout(resolve, 100)); await mongo.close(); };
+  const stop = memoizedStop(async () => { stopping = true; dispatcher.stop(); clearInterval(timer); server.close(); while (dispatcher.running) await new Promise(resolve => setTimeout(resolve, 100)); await mongo.close(); });
   process.on('SIGTERM', () => { stop().then(() => process.exit(0)).catch(() => process.exit(1)); });
   process.on('SIGINT', () => { stop().then(() => process.exit(0)).catch(() => process.exit(1)); });
   console.log(JSON.stringify({ event: 'MAX_INGRESS_READY', port: 18941, connector: 'MAX_BOT' }));
