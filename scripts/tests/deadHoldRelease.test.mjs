@@ -5,7 +5,7 @@ import {
   DEAD_HOLD_RELEASE_REASON, buildDeadHoldReleaseCommands, dailyVisitGuardKey, deadHoldPlanDigest,
   inFlightReason, planDeadHoldRelease,
 } from '../lib/deadHoldRelease.mjs';
-import { applyPlan, buildPlan, isPlainJson, parseReleaseArgs, restoreBackup, runScheduledTick, verifyApplied } from '../release_dead_subscription_holds.mjs';
+import { applyPlan, buildPlan, isPlainJson, parseReleaseArgs, restoreBackup, runDeadHoldRelease, runScheduledTick, verifyApplied } from '../release_dead_subscription_holds.mjs';
 
 // Synthetic identities only.
 const NOW = '2026-11-14T09:00:00.000Z';
@@ -217,8 +217,25 @@ test('replica set: release, concurrent change and restore', { skip: !uri }, asyn
     const failed = await applyPlan({ client, collection: failing, now: NOW,
       plan: { targets: [{ operation: broken, guard: guardOf(broken) }, { operation: live, guard: guardOf(live) }] } });
     assert.deepEqual(failed.map(item => item.outcome), ['TRANSACTION_ERROR']);
-    assert.equal(failed[0].error, 'FixtureFailure:1');
+    assert.equal(failed[0].error, 'FixtureFailure:1:fixture');
     assert.deepEqual(await collection.findOne({ _id: broken._id }), broken);
+    // The whole CLI path, connection lifecycle included: the client must stay open until
+    // the tick finished (a bare returned promise once closed the pool mid-transaction).
+    const viaCli = operation({ _id: 'lk1-product:cli', operationId: 'fixture-operation-0007',
+      clientSubscriptionId: 'fixture-subscription-0007', bookingId: 'fixture-booking-0007', exerciseId: 'fixture-exercise-0007' });
+    await collection.insertMany([viaCli, guardOf(viaCli)]);
+    responses['fixture-exercise-0007'] = [cancelled({ id: 'fixture-booking-0007', clientSubscriptionId: 'fixture-subscription-0007',
+      exerciseId: 'fixture-exercise-0007' })];
+    const tokenFile = path.join(dir, 'token');
+    fs.writeFileSync(tokenFile, 'fixture');
+    const cliOptions = { ...parseReleaseArgs(['--mongo-url', uri, '--database', 'dead_hold_test', '--collection', collection.collectionName,
+      '--token-file', tokenFile, '--scheduled', '--backup-dir', path.join(dir, 'cli-b'), '--report', path.join(dir, 'cli.json'),
+      '--now', NOW, '--request-gap-ms', '0']), mongodbModule: process.env.DEAD_HOLD_TEST_MONGODB_MODULE || 'mongodb', fetchImpl };
+    const cli = await runDeadHoldRelease(cliOptions);
+    assert.equal(cli.result, 'DONE');
+    assert.equal(cli.outcomes.RELEASED_WITH_GUARD >= 1, true);
+    assert.equal(Object.keys(cli.outcomes).some(key => key.startsWith('TRANSACTION_ERROR')), false);
+    assert.equal((await collection.findOne({ _id: viaCli._id })).state, 'RELEASED');
     fs.rmSync(dir, { recursive: true, force: true });
     await collection.drop();
   } finally {

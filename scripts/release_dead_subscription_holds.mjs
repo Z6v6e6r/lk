@@ -223,8 +223,11 @@ async function inTransaction(client, body) {
     session.endSession();
   }
 }
+// Driver text with quoted values and long hex/uuid runs removed, so no identifier leaks.
+const errorText = error => String(error?.message ?? '').replace(/"[^"]*"|'[^']*'/g, '<v>')
+  .replace(/[0-9a-f-]{8,}/gi, '<id>').replace(/lk1[^\s,]*/g, '<id>').slice(0, 160);
 const errorCode = error => [error?.codeName ?? error?.name ?? 'Error', error?.code ?? '',
-  ...(Array.isArray(error?.errorLabels) ? error.errorLabels : [])].filter(Boolean).join(':');
+  ...(Array.isArray(error?.errorLabels) ? error.errorLabels : []), errorText(error)].filter(Boolean).join(':');
 
 /** Release every target, each in its own transaction. Never retries a failed target. */
 export async function applyPlan({ client, collection, plan, now }) {
@@ -314,7 +317,8 @@ export async function runScheduledTick({ client, collection, plan, options }) {
     writePrivateFile(backupPath, { createdAt: options.now, planDigest: plan.digest, targets: plan.targets });
     const results = await applyPlan({ client, collection, plan, now: options.now });
     const postcheckMismatches = await verifyApplied({ collection, plan, results });
-    report = { ...base, result: 'DONE', backupPath, outcomes: tally(results), postcheckMismatches };
+    const failed = results.some(item => ['TRANSACTION_ERROR', 'COMMIT_NOT_APPLIED'].includes(item.outcome));
+    report = { ...base, result: failed ? 'FAILED_TARGETS' : 'DONE', backupPath, outcomes: tally(results), postcheckMismatches };
   }
   writeReport(options.report, report);
   return report;
@@ -340,8 +344,9 @@ export async function runDeadHoldRelease(options) {
       return { mode: 'restore', results: tally(results) };
     }
     const token = fs.readFileSync(options.tokenFile, 'utf8').trim();
-    const plan = await buildPlan({ collection, options, token });
-    if (options.scheduled) return runScheduledTick({ client, collection, plan, options });
+    const plan = await buildPlan({ collection, options, token, fetchImpl: options.fetchImpl });
+    // `return await`: a bare returned promise would let `finally` close the pool mid-tick.
+    if (options.scheduled) return await runScheduledTick({ client, collection, plan, options });
     if (!options.apply) return { mode: 'plan', ...planReport(plan) };
     if (plan.digest !== options.approvedPlanDigest) return { mode: 'apply', result: 'PLAN_DRIFT', ...planReport(plan) };
     if (plan.targets.length > options.maxTargets) return { mode: 'apply', result: 'TOO_MANY_TARGETS', ...planReport(plan) };
@@ -350,7 +355,8 @@ export async function runDeadHoldRelease(options) {
     writePrivateFile(backupPath, { createdAt: options.now, planDigest: plan.digest, targets: plan.targets });
     const results = await applyPlan({ client, collection, plan, now: options.now });
     const postcheckMismatches = await verifyApplied({ collection, plan, results });
-    return { mode: 'apply', result: 'DONE', backupPath, outcomes: tally(results), postcheckMismatches, ...planReport(plan) };
+    const failed = results.some(item => ['TRANSACTION_ERROR', 'COMMIT_NOT_APPLIED'].includes(item.outcome));
+    return { mode: 'apply', result: failed ? 'FAILED_TARGETS' : 'DONE', backupPath, outcomes: tally(results), postcheckMismatches, ...planReport(plan) };
   } finally {
     await client.close();
   }
