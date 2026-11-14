@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
+import './previewRequestValidationRelease.test.mjs';
 import { createDiagnostics } from '../diagnostics/runtime.mjs';
 import { previewEmptyTariffFacts } from '../diagnostics/preview-empty-tariffs.mjs';
 import { sanitizeEvent } from '../../src/utils/errorDiagnosticsCore.mjs';
