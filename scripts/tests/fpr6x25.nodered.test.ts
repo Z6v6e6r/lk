@@ -72,6 +72,22 @@ test("FPR create rejects changed seeds, roster mismatch, legacy event IDs and al
   }
 });
 
+test("FPR creation preserves a selected publication without requiring its primary role", () => {
+  const input = fixture();
+  input.params.fpr6x25.testMode = false;
+  input.params.fpr6x25.communityRating = { policy: "community-tournament-v1", communityId: "women",
+    communityName: "Synthetic women's league", period: "all", snapshotUpdatedAt: null,
+    sourceExerciseId: "synthetic-physical-event", publicationId: "women-publication" };
+  input.params.sourceExerciseId = "synthetic-physical-event";
+  const out = prepare({ payload: structuredClone(input) })[0];
+  assert.equal(out.statusCode, 200);
+  const saved = out.payload.$setOnInsert;
+  assert.deepEqual(saved.params.fpr6x25.communityRating, input.params.fpr6x25.communityRating);
+  assert.deepEqual(saved.params.fpr6x25.attempts, input.params.fpr6x25.attempts);
+  assert.deepEqual(update(saved, { action: "start_round" }).params.fpr6x25.communityRating,
+    input.params.fpr6x25.communityRating);
+});
+
 test("new FPR server inserts add 45 minutes once for cached clients and replace client policy metadata", () => {
   const input = fixture(), before = structuredClone(input);
   input.params.fprDeadlinePolicy = { version: 999, extensionMinutes: 999, baseEndsAt: '2099-01-01' };
