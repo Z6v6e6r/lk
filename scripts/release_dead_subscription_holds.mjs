@@ -191,30 +191,57 @@ const TRANSACTION_OPTIONS = Object.freeze({
   readConcern: { level: 'snapshot' }, writeConcern: WRITE_OPTIONS.writeConcern, readPreference: 'primary',
 });
 
+/**
+ * One explicit transaction without driver retries. The 3.x driver on the server
+ * mishandles `withTransaction` retries after an abort, so a failed attempt is aborted
+ * once and reported; the next tick re-plans from fresh reads instead of retrying.
+ * `body` returns an outcome; throwing `Abort(outcome)` rolls back with that outcome.
+ */
+class Abort extends Error {
+  constructor(outcome) { super('ABORT'); this.outcome = outcome; }
+}
+async function inTransaction(client, body) {
+  const session = client.startSession();
+  try {
+    session.startTransaction(TRANSACTION_OPTIONS);
+    let outcome;
+    try {
+      outcome = await body(session);
+    } catch (error) {
+      try { await session.abortTransaction(); } catch { /* already aborted by the server */ }
+      if (error instanceof Abort) return { outcome: error.outcome };
+      return { outcome: 'TRANSACTION_ERROR', error: errorCode(error) };
+    }
+    try {
+      await session.commitTransaction();
+    } catch (error) {
+      // Commit outcome unknown: the postcheck reads the real state.
+      return { outcome: 'COMMIT_UNKNOWN', error: errorCode(error) };
+    }
+    return { outcome };
+  } finally {
+    session.endSession();
+  }
+}
+const errorCode = error => [error?.codeName ?? error?.name ?? 'Error', error?.code ?? '',
+  ...(Array.isArray(error?.errorLabels) ? error.errorLabels : [])].filter(Boolean).join(':');
+
 /** Release every target, each in its own transaction. Never retries a failed target. */
 export async function applyPlan({ client, collection, plan, now }) {
   const results = [];
   for (const target of plan.targets) {
     const { operationCommand, guardCommand } = buildDeadHoldReleaseCommands({ ...target, now });
-    const session = client.startSession();
-    let outcome = 'UNKNOWN';
-    try {
-      await session.withTransaction(async () => {
-        const updated = await collection.updateOne(operationCommand.query, operationCommand.update, { session });
-        if (updated.matchedCount !== 1 || updated.modifiedCount !== 1) { outcome = 'OPERATION_CHANGED'; throw new Error('ABORT'); }
-        if (guardCommand) {
-          const deleted = await collection.deleteOne(guardCommand.query, { session });
-          if (deleted.deletedCount !== 1) { outcome = 'GUARD_CHANGED'; throw new Error('ABORT'); }
-        }
-        outcome = guardCommand ? 'RELEASED_WITH_GUARD' : 'RELEASED';
-      }, TRANSACTION_OPTIONS);
-    } catch (error) {
-      if (error?.message !== 'ABORT') outcome = 'TRANSACTION_ERROR';
-    } finally {
-      await session.endSession();
-    }
-    results.push({ operation: label(target.operation._id), outcome });
-    if (outcome === 'TRANSACTION_ERROR') break;
+    const result = await inTransaction(client, async (session) => {
+      const updated = await collection.updateOne(operationCommand.query, operationCommand.update, { session });
+      if (updated.matchedCount !== 1 || updated.modifiedCount !== 1) throw new Abort('OPERATION_CHANGED');
+      if (guardCommand) {
+        const deleted = await collection.deleteOne(guardCommand.query, { session });
+        if (deleted.deletedCount !== 1) throw new Abort('GUARD_CHANGED');
+      }
+      return guardCommand ? 'RELEASED_WITH_GUARD' : 'RELEASED';
+    });
+    results.push({ operation: label(target.operation._id), ...result });
+    if (['TRANSACTION_ERROR', 'COMMIT_UNKNOWN'].includes(result.outcome)) break;
   }
   return results;
 }
@@ -222,6 +249,16 @@ export async function applyPlan({ client, collection, plan, now }) {
 /** Postcheck from primary: released operations and absent guards. */
 export async function verifyApplied({ collection, plan, results }) {
   const released = new Set(results.filter(item => item.outcome.startsWith('RELEASED')).map(item => item.operation));
+  const unknown = new Set(results.filter(item => item.outcome === 'COMMIT_UNKNOWN').map(item => item.operation));
+  for (const target of plan.targets) {
+    if (!unknown.has(label(target.operation._id))) continue;
+    const [operation] = await collection.find({ _id: target.operation._id }).toArray();
+    // Resolve the unknown commit to what actually happened.
+    const item = results.find(entry => entry.operation === label(target.operation._id));
+    item.outcome = operation?.state === 'RELEASED' && operation.releaseReason === 'DEAD_HOLD_PROVIDER_CANCELLED'
+      ? (target.guard ? 'RELEASED_WITH_GUARD' : 'RELEASED') : 'COMMIT_NOT_APPLIED';
+    if (item.outcome.startsWith('RELEASED')) released.add(item.operation);
+  }
   let mismatches = 0;
   for (const target of plan.targets) {
     if (!released.has(label(target.operation._id))) continue;
@@ -240,25 +277,17 @@ export async function restoreBackup({ client, collection, backup }) {
   const results = [];
   for (const entry of backup.targets) {
     const { operationCommand, guardDocument } = buildDeadHoldRestoreCommands(entry);
-    const session = client.startSession();
-    let outcome = 'UNKNOWN';
-    try {
-      await session.withTransaction(async () => {
-        const replaced = await collection.replaceOne(operationCommand.query, operationCommand.replacement, { session });
-        if (replaced.matchedCount !== 1) { outcome = 'OPERATION_NOT_IN_RELEASED_STATE'; throw new Error('ABORT'); }
-        if (guardDocument) {
-          const [current] = await collection.find({ _id: guardDocument._id }, { session }).toArray();
-          if (current) { outcome = 'GUARD_REOWNED'; throw new Error('ABORT'); }
-          await collection.insertOne(guardDocument, { session });
-        }
-        outcome = 'RESTORED';
-      }, TRANSACTION_OPTIONS);
-    } catch (error) {
-      if (error?.message !== 'ABORT') outcome = 'TRANSACTION_ERROR';
-    } finally {
-      await session.endSession();
-    }
-    results.push({ operation: label(entry.operation._id), outcome });
+    const result = await inTransaction(client, async (session) => {
+      const replaced = await collection.replaceOne(operationCommand.query, operationCommand.replacement, { session });
+      if (replaced.matchedCount !== 1) throw new Abort('OPERATION_NOT_IN_RELEASED_STATE');
+      if (guardDocument) {
+        const [current] = await collection.find({ _id: guardDocument._id }, { session }).toArray();
+        if (current) throw new Abort('GUARD_REOWNED');
+        await collection.insertOne(guardDocument, { session });
+      }
+      return 'RESTORED';
+    });
+    results.push({ operation: label(entry.operation._id), ...result });
   }
   return results;
 }
@@ -291,7 +320,10 @@ export async function runScheduledTick({ client, collection, plan, options }) {
   return report;
 }
 
-const tally = results => results.reduce((acc, item) => { acc[item.outcome] = (acc[item.outcome] ?? 0) + 1; return acc; }, {});
+const tally = results => results.reduce((acc, item) => {
+  const key = item.error ? `${item.outcome}:${item.error}` : item.outcome;
+  acc[key] = (acc[key] ?? 0) + 1; return acc;
+}, {});
 
 export async function runDeadHoldRelease(options) {
   const mongodb = require(options.mongodbModule);

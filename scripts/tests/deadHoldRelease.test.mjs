@@ -207,6 +207,18 @@ test('replica set: release, concurrent change and restore', { skip: !uri }, asyn
     assert.equal(JSON.parse(fs.readFileSync(tickOptions.report, 'utf8')).result, 'DONE');
     const idle = await runScheduledTick({ client, collection, plan: { ...tickPlan, targets: [] }, options: tickOptions });
     assert.equal(idle.result, 'NOTHING_TO_RELEASE');
+    // A driver error inside the transaction rolls back and stops the tick.
+    const broken = operation({ _id: 'lk1-product:broken', operationId: 'fixture-operation-0006',
+      clientSubscriptionId: 'fixture-subscription-0006', bookingId: 'fixture-booking-0006', exerciseId: 'fixture-exercise-0006' });
+    await collection.insertMany([broken, guardOf(broken)]);
+    const failing = new Proxy(collection, { get: (target, key) => (key === 'deleteOne'
+      ? async () => { throw Object.assign(new Error('fixture'), { codeName: 'FixtureFailure', code: 1 }); }
+      : Reflect.get(target, key).bind?.(target) ?? Reflect.get(target, key)) });
+    const failed = await applyPlan({ client, collection: failing, now: NOW,
+      plan: { targets: [{ operation: broken, guard: guardOf(broken) }, { operation: live, guard: guardOf(live) }] } });
+    assert.deepEqual(failed.map(item => item.outcome), ['TRANSACTION_ERROR']);
+    assert.equal(failed[0].error, 'FixtureFailure:1');
+    assert.deepEqual(await collection.findOne({ _id: broken._id }), broken);
     fs.rmSync(dir, { recursive: true, force: true });
     await collection.drop();
   } finally {
