@@ -87,12 +87,20 @@ export function auditWindow({ now, daysBack, daysAhead }) {
   return { from: shiftDate(today, -daysBack), to: shiftDate(today, daysAhead), today };
 }
 
+// Same URL handling as reconcile_hung_subscription_claims.mjs, so the audit
+// authenticates against exactly the database the scheduled reconciler uses.
+function attachMongoDatabase(url, database) {
+  if (!url) return url;
+  if (/\/[A-Za-z0-9_-]+(\?|$)/.test(url.replace(/^mongodb(\+srv)?:\/\//, '').split('@').pop() || '')) return url;
+  return url.endsWith('/') ? `${url}${database}` : `${url}/${database}`;
+}
+
 function readMongoUrl(options) {
-  if (options.mongoUrlFile) return fs.readFileSync(options.mongoUrlFile, 'utf8').trim();
+  if (options.mongoUrlFile) return attachMongoDatabase(fs.readFileSync(options.mongoUrlFile, 'utf8').trim(), options.database);
   const flows = JSON.parse(fs.readFileSync(options.flows, 'utf8'));
   const node = (Array.isArray(flows) ? flows : []).find(item => typeof item?.uri === 'string' && item.uri.startsWith('mongodb'));
   if (!node) throw new Error('MONGO_NODE_NOT_FOUND');
-  return node.uri;
+  return attachMongoDatabase(node.uri, options.database);
 }
 
 const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms); });
@@ -113,8 +121,9 @@ async function readExerciseBookings({ vivaBase, token, exerciseId }) {
 
 async function loadLive(options, window) {
   const mongodb = require(options.mongodbModule);
+  // Options limited to those the installed driver (3.x on the server) and 4.x share.
   const client = new mongodb.MongoClient(readMongoUrl(options), {
-    serverSelectionTimeoutMS: 10000, readPreference: 'secondaryPreferred', retryWrites: false, maxPoolSize: 2,
+    serverSelectionTimeoutMS: 10000, readPreference: 'secondaryPreferred',
   });
   await client.connect();
   try {
