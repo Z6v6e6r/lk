@@ -9,7 +9,7 @@ const stable = x => Array.isArray(x) ? x.map(stable) : object(x) ? Object.fromEn
 export const canonical = x => JSON.stringify(stable(x));
 const id = x => {
   if (typeof x === 'number') { need(Number.isSafeInteger(x), 'UNSAFE_ID'); return String(x); }
-  need(typeof x === 'string' && x.length > 0 && x.length <= 200 && !/[\x00-\x20]/.test(x), 'INVALID_ID'); return x;
+  need(typeof x === 'string' && x.length > 0 && x.length <= 200 && ![...x].some(char => char.charCodeAt(0) <= 0x20), 'INVALID_ID'); return x;
 };
 const syncDirectory = dir => { const fd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } };
 export function privateDirectory(dir) {
