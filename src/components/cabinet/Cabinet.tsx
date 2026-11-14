@@ -7,6 +7,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, type CSSProperties }
 import { UserProfile } from "./UserProfile";
 import {
   apiCancelBooking,
+  apiReconcilePadelGameCancellation,
   apiCreateReferralSubscriptionInvite,
   apiCleanupPadelGameByOrganizer,
   apiFetchProfile,
@@ -95,7 +96,7 @@ import {
   resolveReferralSubscriptionWindow,
   resolveReferralShareOwnerCandidate,
 } from "../../utils/referralSubscription";
-import type { BookingCancellationAction } from "../../utils/bookingCancellation";
+import { bookingCancellationFailureMessage, type BookingCancellationAction } from "../../utils/bookingCancellation";
 import { forceAppRefresh } from "../../utils/forceAppRefresh";
 import { consumeCabinetFlashNotice } from "../../utils/cabinetFlashNotice";
 import {
@@ -1644,6 +1645,27 @@ export function Cabinet({
   const [currenSub, SetCurrenSub] = useState<Subscription | null>(null);
   const [currenSubName, SetCurrenSubName] = useState<string>("Абонемент");
   const [createdGames, setCreatedGames] = useState<PadelGameRecord[]>([]);
+  const cancellationSyncAttempts = useRef(new Set<string>());
+  const cancellationSyncIdentity = useRef(profile?.id);
+  useEffect(() => {
+    cancellationSyncIdentity.current = profile?.id;
+    cancellationSyncAttempts.current.clear();
+  }, [profile?.id]);
+  useEffect(() => {
+    if (!profile?.id || !historyBookings) return;
+    const cancelledIds = new Set(historyBookings.content.filter(b => b.isCancelled).map(b => b.id));
+    const candidates = createdGames.filter(g => g.organizer?.id === profile.id
+      && !g.archived && !isGameCancelledStatus(g.status)
+      && collectGameBookingIds(g).some(id => cancelledIds.has(id))
+      && !cancellationSyncAttempts.current.has(`${profile.id}:${g.id}:${g.updatedAt}`)).slice(0, 4);
+    for (const game of candidates) cancellationSyncAttempts.current.add(`${profile.id}:${game.id}:${game.updatedAt}`);
+    void Promise.all(candidates.map(game => apiReconcilePadelGameCancellation(game.id))).then(results => {
+      const cancelled = new Set(results.filter(r => !r.error && r.data?.state === "CANCELLED").map(r => r.data!.gameId));
+      if (cancellationSyncIdentity.current === profile.id && cancelled.size) {
+        setCreatedGames(current => current.filter(g => !cancelled.has(g.id)));
+      }
+    });
+  }, [profile?.id, historyBookings, createdGames]);
   const [exactGameLinkStateByBookingId, setExactGameLinkStateByBookingId] = useState<
     Record<string, ExactGameLinkState>
   >({});
@@ -2344,7 +2366,10 @@ export function Cabinet({
     const accepted = response.status !== null && response.status >= 200 && response.status < 300;
     const verifiableConflict = response.status !== null
       && [400, 404, 409, 422].includes(response.status);
-    if (!accepted && !verifiableConflict) {
+    const unknownOutcome = response.status === null || response.status >= 500;
+    if (response.status === 202) return { ok: true, state: "RETRY_REQUIRED",
+      message: response.error?.message || "Запрос отмены принят. Проверяем возврат; повторная отмена не требуется." };
+    if (!accepted && !verifiableConflict && !unknownOutcome) {
       return {
         ok: false,
         message: response.error?.message || "Не удалось отменить запись",
@@ -2361,12 +2386,16 @@ export function Cabinet({
         };
       }
     }
+    if (cancelled && !accepted && ["card", "deposit"].includes(action.id)) {
+      return { ok: true, state: "RETRY_REQUIRED",
+        message: "Отмена записи подтверждена. Статус возврата ещё проверяется; повторная отмена не требуется." };
+    }
     return {
       ok: cancelled,
       state: cancelled ? "DONE" : undefined,
       message: cancelled
         ? action.successMessage
-        : (verification.error?.message || "Не удалось подтвердить отмену записи"),
+        : bookingCancellationFailureMessage(response, verification),
     };
   }, []);
   const resolveCancelledGameForBooking = useCallback((booking: Booking): PadelGameRecord | null => {

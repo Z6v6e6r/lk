@@ -6,6 +6,7 @@ export const requestId = 'fixture-cancel-request';
 const get = (row, path) => path.split('.').reduce((r, k) => r?.[k], row);
 function matches(row, query) {
   return Object.entries(query).every(([key, value]) => {
+    if (key === '$expr') return isDeepStrictEqual(row, value.$eq[1].$literal);
     if (key === '$or') return value.some(q => matches(row, q));
     const actual = get(row, key);
     if (value && typeof value === 'object' && !Array.isArray(value)) {

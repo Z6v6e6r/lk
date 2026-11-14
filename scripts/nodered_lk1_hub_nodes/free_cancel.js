@@ -48,7 +48,63 @@ const lk1FreePrewriteGate = (ctx, continuation) => {
     tenantKey: ctx.tenantKey, clientSubscriptionId: normalizeId(ctx.clientSubscriptionId),
     phase: { $in: lk1FreePending } });
 };
+const lk1SeatApplyEffect = (ctx, effect) => {
+  if (effect.kind === 'reply') {
+    const resume = ctx.lk1SeatContinuation;
+    ctx.lk1SeatSeen = { ...ctx.lk1SeatSeen, [resume.ownerKey]: true };
+    delete ctx.lk1SeatRecovery; delete ctx.lk1SeatContinuation; delete ctx.lk1SeatExpectedHttp;
+    return lk1Find(ctx, resume.step, resume.step === 'lk1_usage_operations'
+      ? { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, clientSubscriptionId: ctx.clientSubscriptionId }
+      : { _id: resume.ownerKey });
+  }
+  if (effect.kind === 'find') return lk1Find(ctx, 'lk1_seat_recovery', effect.query);
+  if (effect.kind === 'update') {
+    ctx.step = 'lk1_seat_recovery'; msg._subscriptionBooking = ctx;
+    msg.payload = [effect.query, effect.change, effect.options]; delete msg.error;
+    return emit(OUTPUT_MONGO_UPDATE);
+  }
+  if (effect.kind === 'http' && effect.method === 'GET') {
+    const token = lk1FreeServiceToken();
+    if (!token) return lk1SeatApplyEffect(ctx, lk1FreeStep(ctx.lk1SeatRecovery, { error: true }));
+    ctx.lk1SeatExpectedHttp = VIVA_API_BASE + effect.path;
+    return prepareHttp(ctx, 'lk1_seat_recovery', 'GET', ctx.lk1SeatExpectedHttp,
+      undefined, { Authorization: `Bearer ${token}`, Accept: 'application/json' });
+  }
+  return lk1Stop(ctx, 'LK1_SEAT_EFFECT_INVALID');
+};
+const lk1SeatStart = (ctx, owner) => {
+  if (!lk1SeatCandidate(owner) || ctx.lk1SeatSeen?.[owner._id]
+    || owner.actorClientId !== ctx.actorClientId || owner.tenantKey !== ctx.tenantKey
+    || normalizeId(owner.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)) return null;
+  const begun = lk1FreeBegin({ tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
+    bookingId: owner.bookingId || null, seatOnly: true, operationKey: owner._id,
+    reservationKey: ctx.operationKey, requestId: `lk-seat-release:${owner.operationId.slice(0, 130)}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}` });
+  ctx.lk1SeatContinuation = { step: ctx.step, ownerKey: owner._id };
+  ctx.lk1SeatRecovery = begun.state;
+  return lk1SeatApplyEffect(ctx, begun.effect);
+};
 // FREE_CANCEL_STEPS
+if (ctx.step === 'lk1_seat_recovery') {
+  if (!ctx.lk1SeatRecovery || !ctx.lk1SeatContinuation) return lk1Stop(ctx, 'LK1_SEAT_CONTEXT_MISSING');
+  const expected = ctx.lk1SeatExpectedHttp;
+  const invalid = expected && (msg.method !== 'GET' || msg.url !== expected || msg.responseUrl !== expected);
+  delete ctx.lk1SeatExpectedHttp;
+  return lk1SeatApplyEffect(ctx, lk1FreeStep(ctx.lk1SeatRecovery,
+    { payload: msg.payload, status: msg.statusCode, error: !!msg.error || !!invalid }));
+}
+if (['lk1_ingress_operation_find', 'lk1_http_rejoin_predecessor_find', 'lk1_rejoin_predecessor_find'].includes(ctx.step)
+  && !msg.error && Array.isArray(msg.payload) && msg.payload.length === 1) {
+  const started = lk1SeatStart(ctx, msg.payload[0]);
+  if (started) return started;
+}
+if (ctx.step === 'lk1_usage_operations' && !msg.error && Array.isArray(msg.payload)) {
+  for (const owner of msg.payload) {
+    if (owner?.serviceDate !== ctx.serviceDate || owner.state !== 'CONFIRMED') continue;
+    const cancelled = ctx.lk1?.bookings?.some(row => (row.id || row.bookingId) === owner.bookingId
+      && (row.isCancelled === true || row.cancelled === true));
+    if (cancelled) { const started = lk1SeatStart(ctx, owner); if (started) return started; }
+  }
+}
 if (ctx.step === 'lk1_profile_continue' && ctx.action === 'cancel-free') return lk1FreeStart(ctx);
 if (ctx.step === 'lk1_free_cancel_effect') {
   if (!ctx.lk1FreeCancellation) return lk1Stop(ctx, 'LK1_FREE_CANCEL_CONTEXT_MISSING');

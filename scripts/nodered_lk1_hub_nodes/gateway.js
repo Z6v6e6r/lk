@@ -258,6 +258,7 @@ const lk1RejoinPreviousId = (id) => {
     ? (value.generation === 1 ? value.base : `${value.base}:rejoin:${value.generation - 1}`) : null;
 };
 const lk1ReleasedWithoutPayment = (operation) => {
+  if (typeof lk1SeatReleasedOperation === "function" && lk1SeatReleasedOperation(operation)) return true;
   if (typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(operation)) return true;
   const presentId = value => typeof value === "string" && value.trim().length > 0;
   const bookingIds = [operation.bookingId, operation.upstreamBookingId].filter(value => value != null);
@@ -347,8 +348,63 @@ const lk1FreePrewriteGate = (ctx, continuation) => {
     tenantKey: ctx.tenantKey, clientSubscriptionId: normalizeId(ctx.clientSubscriptionId),
     phase: { $in: lk1FreePending } });
 };
-
+const lk1SeatApplyEffect = (ctx, effect) => {
+  if (effect.kind === 'reply') {
+    const resume = ctx.lk1SeatContinuation;
+    ctx.lk1SeatSeen = { ...ctx.lk1SeatSeen, [resume.ownerKey]: true };
+    delete ctx.lk1SeatRecovery; delete ctx.lk1SeatContinuation; delete ctx.lk1SeatExpectedHttp;
+    return lk1Find(ctx, resume.step, resume.step === 'lk1_usage_operations'
+      ? { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, clientSubscriptionId: ctx.clientSubscriptionId }
+      : { _id: resume.ownerKey });
+  }
+  if (effect.kind === 'find') return lk1Find(ctx, 'lk1_seat_recovery', effect.query);
+  if (effect.kind === 'update') {
+    ctx.step = 'lk1_seat_recovery'; msg._subscriptionBooking = ctx;
+    msg.payload = [effect.query, effect.change, effect.options]; delete msg.error;
+    return emit(OUTPUT_MONGO_UPDATE);
+  }
+  if (effect.kind === 'http' && effect.method === 'GET') {
+    const token = lk1FreeServiceToken();
+    if (!token) return lk1SeatApplyEffect(ctx, lk1FreeStep(ctx.lk1SeatRecovery, { error: true }));
+    ctx.lk1SeatExpectedHttp = VIVA_API_BASE + effect.path;
+    return prepareHttp(ctx, 'lk1_seat_recovery', 'GET', ctx.lk1SeatExpectedHttp,
+      undefined, { Authorization: `Bearer ${token}`, Accept: 'application/json' });
+  }
+  return lk1Stop(ctx, 'LK1_SEAT_EFFECT_INVALID');
+};
+const lk1SeatStart = (ctx, owner) => {
+  if (!lk1SeatCandidate(owner) || ctx.lk1SeatSeen?.[owner._id]
+    || owner.actorClientId !== ctx.actorClientId || owner.tenantKey !== ctx.tenantKey
+    || normalizeId(owner.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)) return null;
+  const begun = lk1FreeBegin({ tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
+    bookingId: owner.bookingId || null, seatOnly: true, operationKey: owner._id,
+    reservationKey: ctx.operationKey, requestId: `lk-seat-release:${owner.operationId.slice(0, 130)}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}` });
+  ctx.lk1SeatContinuation = { step: ctx.step, ownerKey: owner._id };
+  ctx.lk1SeatRecovery = begun.state;
+  return lk1SeatApplyEffect(ctx, begun.effect);
+};
 // HUB_STEPS
+if (ctx.step === 'lk1_seat_recovery') {
+  if (!ctx.lk1SeatRecovery || !ctx.lk1SeatContinuation) return lk1Stop(ctx, 'LK1_SEAT_CONTEXT_MISSING');
+  const expected = ctx.lk1SeatExpectedHttp;
+  const invalid = expected && (msg.method !== 'GET' || msg.url !== expected || msg.responseUrl !== expected);
+  delete ctx.lk1SeatExpectedHttp;
+  return lk1SeatApplyEffect(ctx, lk1FreeStep(ctx.lk1SeatRecovery,
+    { payload: msg.payload, status: msg.statusCode, error: !!msg.error || !!invalid }));
+}
+if (['lk1_ingress_operation_find', 'lk1_http_rejoin_predecessor_find', 'lk1_rejoin_predecessor_find'].includes(ctx.step)
+  && !msg.error && Array.isArray(msg.payload) && msg.payload.length === 1) {
+  const started = lk1SeatStart(ctx, msg.payload[0]);
+  if (started) return started;
+}
+if (ctx.step === 'lk1_usage_operations' && !msg.error && Array.isArray(msg.payload)) {
+  for (const owner of msg.payload) {
+    if (owner?.serviceDate !== ctx.serviceDate || owner.state !== 'CONFIRMED') continue;
+    const cancelled = ctx.lk1?.bookings?.some(row => (row.id || row.bookingId) === owner.bookingId
+      && (row.isCancelled === true || row.cancelled === true));
+    if (cancelled) { const started = lk1SeatStart(ctx, owner); if (started) return started; }
+  }
+}
 if (ctx.step === 'lk1_profile_continue' && ctx.action === 'cancel-free') return lk1FreeStart(ctx);
 if (ctx.step === 'lk1_free_cancel_effect') {
   if (!ctx.lk1FreeCancellation) return lk1Stop(ctx, 'LK1_FREE_CANCEL_CONTEXT_MISSING');
@@ -451,7 +507,8 @@ const lk1HttpReleaseAllowsRejoin = operation => {
   const identity = lk1HttpRejoinIdentity(operation.operationId);
   const previous = lk1HttpRejoinPrevious(operation.operationId);
   return identity && identity.generation < 1000
-    && typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(operation)
+    && typeof lk1FreeReturnedOperation === "function" && (lk1FreeReturnedOperation(operation)
+      || (typeof lk1SeatReleasedOperation === "function" && lk1SeatReleasedOperation(operation)))
     && (!previous || (operation.rejoinPredecessor?.rootOperationId === identity.base
       && operation.rejoinPredecessor?.operationId === previous));
 };
@@ -465,7 +522,7 @@ if (ctx.step === "lk1_http_rejoin_predecessor_find") {
   }
   const previous = msg.payload[0];
   ctx.lk1Rejoin = { operationId: previousId, rootOperationId: lk1HttpRejoinIdentity(ctx.operationId).base,
-    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey,
+    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey || previous.lk1.seatRelease?.jobKey,
     releasedAt: previous.releasedAt };
   delete ctx.lk1IngressReplay;
   ctx.step = "lk1_profile_continue";
@@ -728,7 +785,7 @@ if (ctx.step === "lk1_rejoin_predecessor_find") {
     return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
   }
   const previous = msg.payload[0];
-  ctx.lk1Rejoin = { operationId: previousId, releaseOperationId: previous.releaseOperationId || previous.lk1?.freeCancellationReturn?.jobKey,
+  ctx.lk1Rejoin = { operationId: previousId, releaseOperationId: previous.releaseOperationId || previous.lk1?.freeCancellationReturn?.jobKey || previous.lk1?.seatRelease?.jobKey,
     bookingId: previous.releaseBookingId, releasedAt: previous.releasedAt };
   delete ctx.lk1IngressReplay;
   ctx.step = "lk1_profile_continue";
@@ -1009,11 +1066,18 @@ if (ctx.step === "lk1_usage_operations") {
 // Executed inside the shared booking/preview usage step. A missing or stale
 // receipt preserves the reservation; absence and payment failure prove nothing.
 const lk1CancelledZeroVisitOperation = (operation) => {
+  const visitsLeft = ctx.lk1ProductIdentity?.subscription?.visitsLeft
+    ?? ctx.lk1MoneyOwnership?.subscription?.visitsLeft;
+  const cancelledSeat = operation.lk1?.decision?.subscriptionVisitCount === 1
+    && operation.lk1?.decision?.benefit?.finalPriceMinor === 0
+    && Number.isSafeInteger(visitsLeft) && visitsLeft >= 1;
   const snapshot = ctx.lk1.cancellationSnapshot;
   const observed = Date.parse(snapshot?.observedAt);
   const updated = Date.parse(operation.updatedAt);
-  if (operation.state !== "CONFIRMED" || !["group_training", "tournament"].includes(operation.category)
-    || operation.lk1?.decision?.subscriptionVisitCount !== 0 || operation.lk1?.visitJob
+  if (operation.state !== "CONFIRMED" || !(cancelledSeat
+    ? ["group_training", "tournament", "open_game"].includes(operation.category)
+    : ["group_training", "tournament"].includes(operation.category))
+    || (operation.lk1?.decision?.subscriptionVisitCount !== 0 && !cancelledSeat) || operation.lk1?.visitJob
     || [operation.lk1?.decision?.gameMinutes, operation.lk1?.decision?.courtMinutes]
       .some(value => value && value.freeMinutes !== 0)
     || !Number.isFinite(observed) || !Number.isFinite(updated) || updated > observed

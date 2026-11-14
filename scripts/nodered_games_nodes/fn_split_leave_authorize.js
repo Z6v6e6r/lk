@@ -29,21 +29,6 @@ const parseTimeMinutes = (value) => {
   if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
   return hours * 60 + minutes;
 };
-const gameSubscriptionVisitCount = (game, splitPayment) => {
-  const booking = isObj(game?.booking) ? game.booking : {};
-  const explicitDuration = toNumber(booking.durationMinutes ?? splitPayment?.durationMinutes);
-  let durationMinutes = explicitDuration && explicitDuration > 0 ? explicitDuration : null;
-  if (durationMinutes === null) {
-    const from = parseTimeMinutes(booking.timeFrom);
-    const to = parseTimeMinutes(booking.timeTo);
-    if (from !== null && to !== null) {
-      const delta = to >= from ? to - from : to + 24 * 60 - from;
-      if (delta > 0) durationMinutes = delta;
-    }
-  }
-  if (durationMinutes === null) return null;
-  return durationMinutes >= 90 ? 2 : 1;
-};
 const inactiveStatus = (value) => /CANCEL|DECLIN|FAIL|ERROR|EXPIRE|REFUND|REJECT|VOID|CLOSE|ARCHIVE|LEFT|REMOV/i
   .test(String(value || ""));
 const strongId = (value) => (isObj(value)
@@ -193,8 +178,20 @@ if (mode === "ORGANIZER_TARGET") {
   const requested = asArray(ctx.legacyRequestedBookingIds).map(toStr).filter(Boolean);
   const selected = requested.map((bookingId) => linkedTargets.get(bookingId.toLowerCase()) || null);
   if (selected.some((item) => !item) || selected.length === 0) {
-    return respond(403, "CONFLICT", "Запись игрока не связана с этой игрой", ctx);
-  }
+    // The caller's booking IDs are hints, never authority. A replacement is
+    // discovered from the exact provider exercise for a stored current member.
+    const targetId = normalizeId(ctx.legacyRequestedClientId);
+    const members = [...asArray(game.participants), ...asArray(game.waitlist)]
+      .filter(row => strongId(row) === targetId && !inactiveStatus(row.status));
+    if (!targetId || members.length !== 1 || targetId === actorId
+      || selected.filter(Boolean).some(item => normalizeId(item.clientId) !== targetId)) {
+      return respond(403, "CONFLICT", "Запись игрока не связана с этой игрой", ctx);
+    }
+    targetClientId = targetId;
+    targetPhone = normalizePhone(members[0].phoneNorm || members[0].phone);
+    targetPayments = payments.filter(p => strongId(p) === targetId);
+    ctx.organizerBookingDiscovery = true;
+  } else {
   const selectedClientIds = Array.from(new Set(selected.map((item) => normalizeId(item.clientId)).filter(Boolean)));
   const selectedPhones = Array.from(new Set(selected.map((item) => normalizePhone(item.phone)).filter(Boolean)));
   if (selectedClientIds.length > 1 || selectedPhones.length > 1) {
@@ -204,6 +201,7 @@ if (mode === "ORGANIZER_TARGET") {
   targetPhone = selected[0].phone;
   targetPayments = Array.from(new Set(selected.map((item) => item.payment)));
   verifiedQueue = uniqBookingItems(selected);
+  }
 } else {
   const bookingItems = [];
   actorPayments.filter((payment) => !inactiveStatus(payment.status)).forEach((payment) => {
@@ -257,7 +255,7 @@ const targetJoinResponse = isObj(metadata.joinResponses) && targetPhoneNorm
 const activeTargetPayments = targetPayments.filter((item) => !inactiveStatus(item.status));
 const activeTargetParticipants = targetParticipants.filter((item) => !inactiveStatus(item.status));
 const activeTargetWaitlist = targetWaitlist.filter((item) => !inactiveStatus(item.status));
-const canonicalMembershipVersion = stableVersion([
+const canonicalMembershipVersion = ctx.organizerBookingDiscovery ? null : stableVersion([
   ...activeTargetPayments.flatMap((item) => [
     item.membershipId,
     ...asArray(item.bookingIds),
@@ -284,7 +282,10 @@ if (mode === "SELF") {
   }
 }
 if (mode === "ORGANIZER_TARGET") {
-  if (canonicalMembershipVersion) {
+  if (ctx.organizerBookingDiscovery) {
+    ctx.membershipVersion = null;
+    ctx.operationId = `organizer-discovery:${ctx.gameId}:${ctx.actorClientId}:${targetClientId}`;
+  } else if (canonicalMembershipVersion) {
     ctx.membershipVersion = canonicalMembershipVersion;
     ctx.operationId = `organizer-leave:${ctx.gameId}:${ctx.actorClientId || ctx.actorPhoneNorm}:${targetClientId || targetPhoneNorm}:${canonicalMembershipVersion}`;
   } else {
@@ -318,9 +319,9 @@ const targetActive = targetIsOrganizer
 if (!actorKnown && (targetActive || canonicalMembershipVersion || targetJoinResponse)) {
   return respond(403, "CONFLICT", "Профиль не связан с текущей записью игры", ctx);
 }
-const previouslyApplied = operationApplied || (!targetActive && targetPayments.some((item) => (
+const previouslyApplied = !ctx.organizerBookingDiscovery && (operationApplied || (!targetActive && targetPayments.some((item) => (
   inactiveStatus(item.status) && (toStr(item.leftAt) || toStr(item.cancelledAt))
-)));
+))));
 const exerciseId = toStr(
   splitPayment.vivaExerciseId
   || game.booking?.vivaExerciseId
@@ -334,8 +335,8 @@ if (exactManagedOwner && exerciseId !== boundOwner.providerExerciseId) {
 if (!previouslyApplied && (
   !exerciseId
   || !targetId
-  || (mode === "ORGANIZER_TARGET" && !ctx.membershipVersion)
-  || (mode !== "SELF" && verifiedQueue.length === 0)
+  || (mode === "ORGANIZER_TARGET" && !ctx.membershipVersion && !ctx.organizerBookingDiscovery)
+  || (mode !== "SELF" && verifiedQueue.length === 0 && !ctx.organizerBookingDiscovery)
 )) {
   return respond(409, "CONFLICT", "Не удалось однозначно связать профиль, игру и запись Viva", ctx);
 }
@@ -351,7 +352,7 @@ ctx.game = game;
 ctx.exerciseId = exerciseId;
 ctx.bookingQueue = verifiedQueue.map((item) => ({ ...item }));
 ctx.initialBookingIds = verifiedQueue.map((item) => item.bookingId);
-ctx.needsBookingDiscovery = mode === "SELF" && verifiedQueue.length === 0;
+ctx.needsBookingDiscovery = (mode === "SELF" || ctx.organizerBookingDiscovery) && verifiedQueue.length === 0;
 ctx.preOperationDiscovery = ctx.needsBookingDiscovery;
 ctx.bookingResults = [];
 const subscriptionInstanceIds = Array.from(new Set(
@@ -364,10 +365,10 @@ const subscriptionVisitCounts = Array.from(new Set(
     .map((item) => Number(item.subscriptionVisitCount))
     .filter((value) => Number.isSafeInteger(value) && value > 0),
 ));
-ctx.clientSubscriptionId = subscriptionInstanceIds.length === 1 ? subscriptionInstanceIds[0] : null;
-ctx.subscriptionVisitCount = subscriptionVisitCounts.length === 1
+ctx.clientSubscriptionId = !ctx.organizerBookingDiscovery && subscriptionInstanceIds.length === 1 ? subscriptionInstanceIds[0] : null;
+ctx.subscriptionVisitCount = !ctx.organizerBookingDiscovery && subscriptionVisitCounts.length === 1
   ? subscriptionVisitCounts[0]
-  : (subscriptionVisitCounts.length === 0 ? gameSubscriptionVisitCount(game, splitPayment) : null);
+  : null;
 ctx.upstreamAuthHeader = upstreamAuthHeader;
 ctx.localAlreadyApplied = previouslyApplied;
 ctx.targetClientId = targetClientId;

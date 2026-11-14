@@ -7,7 +7,7 @@ import { verifyWorkspace } from './verify_nodered_source_origin.mjs';
 const root = path.dirname(fileURLToPath(import.meta.url));
 export const SOURCE_SHA = 'e672b79ae011f647d5156d840315543b88e471880236374c2aea2eaf0239f223';
 const read = name => fs.readFileSync(path.join(root, 'nodered_organizer_handoff_nodes', name + '.js'), 'utf8');
-export function buildOrganizerHandoffCandidate(source) {
+export function buildOrganizerHandoffCandidate(source, options = {}) {
   const flow = structuredClone(source);
   const node = id => { const rows = flow.filter(n => n.id === id); if (rows.length !== 1) throw new Error(`Node mismatch ${id}`); return rows[0]; };
   const tab = node('016d6797a530ed0a').z;
@@ -20,7 +20,8 @@ export function buildOrganizerHandoffCandidate(source) {
     'lk_split_leave_operation_route_20260801': 'fn_split_leave_operation_route.js',
     'lk_split_leave_game_update_build_20260801': 'fn_split_leave_game_update.js',
   };
-  for (const [id, file] of Object.entries(sourceFiles)) node(id).func = fs.readFileSync(path.join(root, 'nodered_games_nodes', file), 'utf8');
+  for (const [id, file] of Object.entries(sourceFiles)) node(id).func = options.functionSources?.[id]
+    ?? fs.readFileSync(path.join(root, 'nodered_games_nodes', file), 'utf8');
   const replaceExact = (id, before, after) => {
     const target = node(id);
     if (target.func.split(before).length !== 2) throw new Error(`Preimage mismatch ${id}`);

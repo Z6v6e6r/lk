@@ -4818,6 +4818,7 @@ export async function apiFetchBookings(
   options: {
     size?: number;
     fresh?: boolean;
+    page?: number;
   } = {},
 ) {
   const size = Number.isFinite(options.size)
@@ -4827,7 +4828,8 @@ export async function apiFetchBookings(
     ? `/end-user/api/v2/${TENANT_KEY}/bookings/history?includeCanceled=true&size=${size}`
     : `/end-user/api/v2/${TENANT_KEY}/bookings?size=${size}`;
 
-  return request<BookingsResponse>(url, {
+  const page = Number.isSafeInteger(options.page) && Number(options.page) > 0 ? `&page=${options.page}` : "";
+  return request<BookingsResponse>(url + page, {
     method: "GET",
     auth: true,
     retries: 1,
@@ -4922,14 +4924,41 @@ export async function apiVerifyBookingCancellation(
   let lastStatus: ApiStatus = null;
   let lastError: ApiError | null = null;
 
+  const readComplete = async (history: boolean): Promise<ApiResult<BookingsResponse>> => {
+    const first = await apiFetchBookings(history, { size: 1000, fresh: true });
+    if (first.error || !first.data) return first;
+    const validRows = (v: Booking[]) => Array.isArray(v)
+      && v.every(row => row && typeof row.id === "string" && row.id.trim());
+    const pages = first.data.totalPages;
+    if (!Number.isSafeInteger(pages) || pages < 0 || pages > 20 || !validRows(first.data.content)
+      || first.data.pageable?.pageNumber > 0) return {
+      data: null, status: 503, error: { status: 503, message: "Не удалось полностью проверить записи" },
+    };
+    const content = [...first.data.content];
+    for (let page = 1; page < pages; page++) {
+      const next = await apiFetchBookings(history, { size: 1000, fresh: true, page });
+      if (next.error || !next.data) return next;
+      if (next.data.totalPages !== pages || !validRows(next.data.content)
+        || next.data.pageable?.pageNumber !== page) return { data: null, status: 409,
+        error: { status: 409, message: "Список записей изменился во время проверки. Обновите его." } };
+      content.push(...next.data.content);
+    }
+    if (new Set(content.map(row => row.id)).size !== content.length
+      || (Number.isSafeInteger(first.data.totalElements) && first.data.totalElements !== content.length)) {
+      return { data: null, status: 503, error: { status: 503, message: "Не удалось полностью проверить записи" } };
+    }
+    return { ...first, data: { ...first.data, content } };
+  };
+
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const [activeResult, historyResult] = await Promise.all([
-      apiFetchBookings(false, { size: 1000 }),
-      apiFetchBookings(true, { size: 1000 }),
+      readComplete(false),
+      readComplete(true),
     ]);
     lastStatus = historyResult.status ?? activeResult.status;
     lastError = historyResult.error || activeResult.error;
-    lastVerification = resolveBookingCancellationVerification(
+    lastVerification = lastError ? { bookingId, state: "unverified", record: null,
+      reason: "INCOMPLETE_EVIDENCE" } : resolveBookingCancellationVerification(
       bookingId,
       (activeResult.data?.content ?? []) as BookingCancellationVerificationRecord[],
       (historyResult.data?.content ?? []) as BookingCancellationVerificationRecord[],
@@ -4954,8 +4983,8 @@ export async function apiVerifyBookingCancellation(
     error: {
       status: activeBooking ? 409 : (lastError?.status ?? lastStatus ?? 409),
       message: activeBooking
-        ? "Viva всё ещё держит запись активной. Попробуйте отменить ещё раз."
-        : "Не удалось подтвердить отмену записи в Viva. Запись оставлена в личном кабинете.",
+        ? "Отмена пока не подтверждена: запись остаётся активной. Обновите список записей перед дальнейшими действиями."
+        : "Не удалось подтвердить отмену записи. Обновите статус; повторная отмена пока не требуется.",
       raw: {
         verification: lastVerification,
         cause: lastError?.raw ?? null,
@@ -5015,7 +5044,7 @@ export async function apiCancelBooking(
   return request<unknown>(`/end-user/api/v1/${TENANT_KEY}/bookings/${encodeURIComponent(bookingId)}`, {
     method: "DELETE",
     auth: true,
-    retries: 1,
+    retries: 0,
     ...(payload ? { body: JSON.stringify(payload) } : {}),
   });
 }
@@ -9517,6 +9546,13 @@ export async function apiTransferPadelGameOrganizer(
     `/lk/games/${encodeURIComponent(gameId.trim())}/organizer/transfer`,
     { method: "POST", baseUrl: getServ2Origin() || "", auth: true, retries: 0,
       body: JSON.stringify({ successorId, expectedUpdatedAt }) },
+  );
+}
+
+export async function apiReconcilePadelGameCancellation(gameId: string) {
+  return request<{ ok: boolean; gameId: string; state: "CANCELLED" | "ACTIVE" | "ACTIVE_REPLACEMENT" | "UNVERIFIED" }>(
+    `/lk/games/${encodeURIComponent(gameId.trim())}/cancellation/status`,
+    { method: "POST", auth: true, retries: 0, baseUrl: getServ2Origin() || "", body: "{}" },
   );
 }
 

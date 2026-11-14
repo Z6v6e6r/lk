@@ -73,6 +73,16 @@ export interface BookingCancellationVerification {
   bookingId: string;
   state: BookingCancellationVerificationState;
   record: BookingCancellationVerificationRecord | null;
+  reason?: "CONFLICTING_EVIDENCE" | "INCOMPLETE_EVIDENCE";
+}
+
+// Preserve a provider refusal separately from the later cancellation readback.
+export function bookingCancellationFailureMessage(
+  cancellation: { error?: { message?: string } | null },
+  verification: { error?: { message?: string } | null },
+): string {
+  return cancellation.error?.message || verification.error?.message
+    || "Отмена пока не подтверждена. Обновите список записей перед дальнейшими действиями.";
 }
 
 const AUTOMATIC_ACTION_PRIORITY: BookingCancellationActionId[] = [
@@ -110,24 +120,34 @@ export function resolveBookingCancellationVerification(
   historyRecords: BookingCancellationVerificationRecord[],
 ): BookingCancellationVerification {
   const normalizedBookingId = normalizeComparableBookingId(bookingId);
+  const validIdentity = (record: BookingCancellationVerificationRecord) => record
+    && (record.id == null || record.bookingId == null
+      || normalizeComparableBookingId(record.id) === normalizeComparableBookingId(record.bookingId));
+  if (!normalizedBookingId || [...activeRecords, ...historyRecords].some(record => !validIdentity(record))) {
+    return { bookingId, state: "unverified", record: null, reason: "INCOMPLETE_EVIDENCE" };
+  }
   const matchingActiveRecords = activeRecords.filter((record) => (
     normalizeComparableBookingId(record.id || record.bookingId) === normalizedBookingId
   ));
   const activeRecord = matchingActiveRecords.find((record) => (
     !isCancelledVerificationRecord(record)
   )) ?? null;
-  if (activeRecord) {
-    return {
-      bookingId,
-      state: "active",
-      record: activeRecord,
-    };
-  }
 
   const matchingRecords = [...historyRecords, ...matchingActiveRecords].filter((record) => (
     normalizeComparableBookingId(record.id || record.bookingId) === normalizedBookingId
   ));
   const cancelledRecord = matchingRecords.find(isCancelledVerificationRecord) ?? null;
+  const contradictoryRecord = matchingRecords.find((record) => (
+    ((record.isCancelled === false || record.cancelled === false)
+      && isCancelledVerificationRecord(record))
+    || (isCancelledVerificationRecord(record)
+      && ["ACTIVE", "BOOKED", "CONFIRMED"].includes(String(record.bookingStatus || record.status).toUpperCase()))
+  ));
+  if (contradictoryRecord || (activeRecord && cancelledRecord)) {
+    return { bookingId, state: "unverified", record: contradictoryRecord || activeRecord,
+      reason: "CONFLICTING_EVIDENCE" };
+  }
+  if (activeRecord) return { bookingId, state: "active", record: activeRecord };
   if (cancelledRecord) {
     return {
       bookingId,

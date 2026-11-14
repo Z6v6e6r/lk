@@ -4,6 +4,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 const deltas = JSON.parse(fs.readFileSync(new URL('./lib/lk1FreeCancellationSourceDeltas.json', import.meta.url)));
+const seatDeltas = JSON.parse(fs.readFileSync(new URL('./lib/cancellationSyncGatewayDeltas.json', import.meta.url)));
+const restoreSeatSource = (source, file) => [...(seatDeltas[file] || [])].reverse().reduce((s, [before, after]) =>
+  s.split(after).length === 2 ? s.replace(after, () => before) : s, source);
 const read = name => fs.readFileSync(new URL(name, import.meta.url), 'utf8');
 const hash = x => crypto.createHash('sha256').update(x).digest('hex');
 export const FREE_CANCEL_SOURCE = '3ecdd6693008e25d9965a3cc2efa7f960bd794194ad3966774fbe422f5544624';
@@ -20,12 +23,14 @@ export function freeReplace(source, before, after) {
   return source.replace(before, () => after);
 }
 export function restorePreFreeCancellationSource(source, relative) {
+  source = restoreSeatSource(source, `scripts/${relative}`);
   const list = deltas[`scripts/${relative}`] || [];
   return [...list].reverse().reduce((value, [before, after]) => {
     return value.split(after).length === 2 ? value.replace(after, () => before) : value;
   }, source);
 }
 export function historicalCancelledSuccessorSource(source) {
+  source = restoreSeatSource(source, 'scripts/nodered_lk1_hub_nodes/cancelled_successor.js');
   const [before, after] = deltas['scripts/nodered_lk1_hub_nodes/gateway.js'][1];
   return source === after ? before : source;
 }
