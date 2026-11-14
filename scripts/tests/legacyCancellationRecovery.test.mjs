@@ -7,7 +7,11 @@ import { fixture } from './fixtures/lk1FreeCancellationFixtures.mjs';
 import { applyLegacyEdits, legacyRouterEdits, legacyFinalizerEdits, composeLegacyCancellationRecovery, legacySha, LEGACY_IDS } from '../prepare_legacy_cancellation_recovery.mjs';
 const read = file => fs.readFileSync(new URL(file, import.meta.url), 'utf8');
 const protocol = read('../lib/lk1FreeCancellation.mjs').replace(/^export /gm, '');
-const guard = read('../nodered_lk1_hub_nodes/daily_visit_guard.js');
+// Rehearse the historical release recipe against its exact predecessor, while
+// the current seat-only generation is tested by cancellationSyncRecovery.
+const guard = read('../nodered_lk1_hub_nodes/daily_visit_guard.js').replace(
+  '  if (!released && !lk1SeatReleasedOperation(owner) && !lk1ReconciledVerified(ctx, owner)) {\n    const started = lk1SeatStart(ctx, owner); if (started) return started;\n    return lk1DailyVisitReject(ctx);\n  }',
+  '  if (!released && !lk1ReconciledVerified(ctx, owner)) return lk1DailyVisitReject(ctx);');
 const ack = { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
 function legacyFixture() {
   const f = fixture(); f.op.state = 'RELEASED'; f.op.releasedAt = f.op.updatedAt;
@@ -61,7 +65,7 @@ const lk1ReplayIdentityMatches = () => true;
 const finishError = (_ctx, status, error, details) => ({type:'error',status,error,details});
 const lk1FreeServiceToken = () => 'fixture-service';
 const prepareHttp = (_ctx, step, method, url) => {ctx.step=step;Object.assign(msg,{method,url});return {type:'http',method,url};};
-${read('../nodered_lk1_hub_nodes/gateway.js').split('const lk1HttpRejoinIdentity =')[1].split('if (ctx.step === "lk1_http_rejoin_predecessor_find") {')[0].replace(/^/, 'const lk1HttpRejoinIdentity =')}
+${read('../nodered_lk1_hub_nodes/gateway.js').split('const lk1HttpRejoinIdentity =')[1].split('if (ctx.step === "lk1_http_rejoin_predecessor_find") {')[0].replace(/^/, 'const lk1HttpRejoinIdentity =').replace('(lk1FreeReturnedOperation(operation)\n      || (typeof lk1SeatReleasedOperation === "function" && lk1SeatReleasedOperation(operation)))', 'lk1FreeReturnedOperation(operation)').replace(' || previous.lk1.seatRelease?.jobKey', '')}
 function predecessor(previous) {return previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey, true;}
 ${protocol}
 ${guard}

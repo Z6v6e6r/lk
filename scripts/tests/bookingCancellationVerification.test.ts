@@ -31,10 +31,10 @@ test("shared booking cancellation verifier checks both active and cancelled book
   assert.ok(helperStart >= 0);
   assert.ok(helperEnd > helperStart);
   const helperSource = apiClientSource.slice(helperStart, helperEnd);
-  assert.match(helperSource, /apiFetchBookings\(false/);
-  assert.match(helperSource, /apiFetchBookings\(true/);
+  assert.match(helperSource, /readComplete\(false/);
+  assert.match(helperSource, /readComplete\(true/);
   assert.match(helperSource, /lastVerification\.state === "cancelled"/);
-  assert.match(helperSource, /Viva всё ещё держит запись активной/);
+  assert.match(helperSource, /Отмена пока не подтверждена/);
 });
 
 test("generic 404 is not classified as already cancelled without read-back", () => {
@@ -93,8 +93,9 @@ test("self-removal records an unverified booking as failure instead of local suc
 });
 
 test("organizer cleanup carries the selected cancellation action through Viva execution", () => {
-  assert.match(cabinetSource, /cancellationActionId: action\.id/);
-  assert.match(cabinetSource, /actorBookingId: bookingId/);
+  const organizerSource = fs.readFileSync("src/components/games/GameBookingCancellation.tsx", "utf8");
+  assert.match(organizerSource, /cancellationActionId: action\.id/);
+  assert.match(organizerSource, /actorBookingId: booking\.id/);
   assert.match(apiClientSource, /cancellationActionId\?: BookingCancellationAction\["id"\]/);
   assert.match(apiClientSource, /actorBookingId\?: string/);
   assert.match(apiClientSource, /auth: true/);

@@ -1,11 +1,18 @@
 // Executed inside the shared booking/preview usage step. A missing or stale
 // receipt preserves the reservation; absence and payment failure prove nothing.
 const lk1CancelledZeroVisitOperation = (operation) => {
+  const visitsLeft = ctx.lk1ProductIdentity?.subscription?.visitsLeft
+    ?? ctx.lk1MoneyOwnership?.subscription?.visitsLeft;
+  const cancelledSeat = operation.lk1?.decision?.subscriptionVisitCount === 1
+    && operation.lk1?.decision?.benefit?.finalPriceMinor === 0
+    && Number.isSafeInteger(visitsLeft) && visitsLeft >= 1;
   const snapshot = ctx.lk1.cancellationSnapshot;
   const observed = Date.parse(snapshot?.observedAt);
   const updated = Date.parse(operation.updatedAt);
-  if (operation.state !== "CONFIRMED" || !["group_training", "tournament"].includes(operation.category)
-    || operation.lk1?.decision?.subscriptionVisitCount !== 0 || operation.lk1?.visitJob
+  if (operation.state !== "CONFIRMED" || !(cancelledSeat
+    ? ["group_training", "tournament", "open_game"].includes(operation.category)
+    : ["group_training", "tournament"].includes(operation.category))
+    || (operation.lk1?.decision?.subscriptionVisitCount !== 0 && !cancelledSeat) || operation.lk1?.visitJob
     || [operation.lk1?.decision?.gameMinutes, operation.lk1?.decision?.courtMinutes]
       .some(value => value && value.freeMinutes !== 0)
     || !Number.isFinite(observed) || !Number.isFinite(updated) || updated > observed

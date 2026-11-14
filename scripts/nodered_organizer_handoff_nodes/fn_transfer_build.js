@@ -40,5 +40,5 @@ const query = { id: ctx.gameId, archived: { $ne: true }, updatedAt: game.updated
 if (game.revision !== undefined) query.revision = game.revision;
 const update = { $set: set, $push: { organizerTransfers: { $each: [{ actorId: ctx.actorId, successorId: ctx.successorId, at: now }], $slice: -100 } } };
 if (Number.isSafeInteger(game.revision)) update.$inc = { revision: 1 };
-msg.payload = [query, update, { upsert: false }];
+msg.payload = [query, update, { upsert: false, writeConcern: { w: 'majority', j: true } }];
 return [msg, null];

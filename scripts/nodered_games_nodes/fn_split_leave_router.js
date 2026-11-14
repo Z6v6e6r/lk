@@ -94,7 +94,9 @@ const assignMembershipVersion = (ctx, parts) => {
   };
   const membershipSeed = stableParts.join("|");
   ctx.membershipVersion = `${hashPart(membershipSeed)}${hashPart([...membershipSeed].reverse().join(""))}`;
-  ctx.operationId = `self-leave:${ctx.gameId}:${ctx.actorClientId || ctx.actorPhoneNorm}:${ctx.membershipVersion}`;
+  ctx.operationId = ctx.mode === "ORGANIZER_TARGET"
+    ? `organizer-leave:${ctx.gameId}:${ctx.actorClientId}:${ctx.targetClientId}:${ctx.membershipVersion}`
+    : `self-leave:${ctx.gameId}:${ctx.actorClientId || ctx.actorPhoneNorm}:${ctx.membershipVersion}`;
   return true;
 };
 const upstream = (ctx, method, url, payload, authHeader = ctx.upstreamAuthHeader) => {
@@ -136,7 +138,7 @@ const subscriptionBookingReturned = (row, bookingId) => {
 const exactActiveSubscriptionCandidates = (payload, bookingId) => responseRows(payload).filter((row) => (
   subscriptionInstanceId(row) && subscriptionHasActiveBooking(row, bookingId)
 ));
-const fail = (ctx, statusCode, state, message) => {
+const fail = (ctx, statusCode, state, message, code = null) => {
   const retryScheduled = ctx.vivaTargetMode !== "DISCOVERY" && state === "VIVA_UNVERIFIED"
     && ctx.operationState === "STARTED"
     && Boolean(ctx.operationKey)
@@ -149,6 +151,7 @@ const fail = (ctx, statusCode, state, message) => {
   };
   msg.payload = {
     ok: retryScheduled,
+    ...(code ? { code } : {}),
     state: retryScheduled ? "IN_PROGRESS" : state,
     ...(ctx.mode === "STAFF_TARGET" ? {
       status: retryScheduled ? "IN_PROGRESS" : state,
@@ -293,6 +296,11 @@ const issueCurrentCancellation = (ctx) => {
   const bookingId = toStr(ctx.currentBookingId);
   const clientId = toStr(ctx.currentClientId);
   const refundMethod = toStr(ctx.currentRefundMethod);
+  // Discovery proves membership, not a once-only refund capability. A manually
+  // replaced booking cannot inherit an old payment's SERVICE/money dispatch.
+  if (ctx.organizerBookingDiscovery && refundMethod !== "NONE") {
+    return fail(ctx, 409, "CONFLICT", "Запись найдена, но безопасный возврат по заменённой записи ещё не подтверждён. Передайте её в поддержку.", "NEEDS_PROVIDER_RETURN_PROOF");
+  }
   if (ctx.managedSelfLeaveOwner && (ctx.mode !== "SELF" || ctx.backgroundStartedRecovery === true
     || bookingId !== ctx.managedSelfLeaveOwner.providerBookingId || clientId !== ctx.managedSelfLeaveOwner.providerClientId
     || refundMethod !== "SERVICE" || !Number.isFinite(Date.parse(ctx.managedOwnerActorExpiresAt))
@@ -486,7 +494,7 @@ if (ctx.step === "cancel_probe") {
     const clientSubscriptionId = toStr(evidence.clientSubscriptionId || ctx.clientSubscriptionId);
     const expectedReturnCount = Number(evidence.subscriptionVisitCount || ctx.subscriptionVisitCount);
     if (!Number.isSafeInteger(expectedReturnCount) || expectedReturnCount < 1) {
-      return fail(ctx, 409, "CONFLICT", "Не удалось однозначно определить абонемент и число посещений");
+      return fail(ctx, 409, "CONFLICT", "Не удалось подтвердить число посещений для возврата. Запись сохранена — обратитесь в поддержку.", "NEEDS_VISIT_COUNT");
     }
     ctx.expectedReturnCount = expectedReturnCount;
     if (!clientSubscriptionId) {
@@ -636,9 +644,9 @@ if (ctx.step === "verify_active") {
       return fail(ctx, 409, "CONFLICT", "Запись игрока в Viva изменилась. Обновите состав игры перед удалением.");
     }
   }
-  if (ctx.mode === "SELF" && bookingIds.size === 0) {
+  if ((ctx.mode === "SELF" || ctx.organizerBookingDiscovery) && bookingIds.size === 0) {
     const exactExerciseRows = activeRows.filter((row) => (
-      ctx.backgroundStartedRecovery === true
+      ctx.backgroundStartedRecovery === true || ctx.organizerBookingDiscovery
         ? Boolean(targetClientId && rowClientId(row) === targetClientId)
         : Boolean(exerciseId && rowExerciseId(row) === exerciseId)
     ));
@@ -649,6 +657,13 @@ if (ctx.step === "verify_active") {
     const discoveredBookingIds = Array.from(new Set(
       exactExerciseRows.map((row) => toStr(row?.id || row?.bookingId || row?.uuid)).filter(Boolean),
     ));
+    if (ctx.organizerBookingDiscovery && (exactExerciseRows.length !== 1 || discoveredBookingIds.length !== 1
+      || !completeBookingPage(msg.payload, 200)
+      || exactExerciseRows.some(row => rowClientId(row) !== targetClientId
+        || [row.clientId, row.client?.id].some(id => id != null && normalizeId(id) !== targetClientId)
+        || [row.exerciseId, row.exercise?.id].some(id => id != null && normalizeId(id) !== exerciseId)))) {
+      return fail(ctx, 409, "CONFLICT", "Не удалось подтвердить единственную текущую запись участника в Viva");
+    }
     if (discoveredBookingIds.length > 0) {
       ctx.initialBookingIds = discoveredBookingIds;
       ctx.bookingQueue = discoveredBookingIds.map((bookingId) => ({
