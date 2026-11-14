@@ -177,6 +177,8 @@ export function summarizeSubscriptionHolds({ operations, bookingsByExercise, gua
   const summary = {
     scanned: list.length,
     byVerdict: {},
+    // Why an operation could not be judged: reason codes only, never identifiers.
+    evidenceByDetail: {},
     deadHolds: {
       total: 0,
       byCategory: {},
@@ -192,6 +194,9 @@ export function summarizeSubscriptionHolds({ operations, bookingsByExercise, gua
   const deadHoldLabels = [];
   decisions.forEach((decision, index) => {
     increment(summary.byVerdict, decision.verdict);
+    if (String(decision.verdict).startsWith('EVIDENCE_')) {
+      increment(summary.evidenceByDetail, `${decision.verdict}:${decision.detail ?? 'none'}`);
+    }
     if (!isDeadHold(decision)) return;
     const dead = summary.deadHolds;
     dead.total += 1;

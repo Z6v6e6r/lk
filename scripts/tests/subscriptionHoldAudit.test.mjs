@@ -132,6 +132,10 @@ test('the summary counts dead holds, blocked days and never leaks identifiers', 
   assert.equal(summary.deadHolds.past, 1);
   assert.deepEqual(summary.deadHolds.byVisitCount, { 1: 2 });
   assert.equal(summary.dailyGuardsBlockedByDeadHold, 1);
+  assert.deepEqual(summary.evidenceByDetail, {});
+  const conflicted = summarizeSubscriptionHolds({ operations: [operation({ exerciseId: null })], bookingsByExercise,
+    guards: [], now: NOW, labelOf: auditLabel });
+  assert.deepEqual(conflicted.summary.evidenceByDetail, { 'EVIDENCE_CONFLICT:EXERCISE_ID_MISSING': 1 });
   assert.equal(deadHolds.filter(item => item.blocksDailyGuard).length, 1);
   const text = JSON.stringify({ summary, deadHolds });
   for (const secret of [ACTOR, SUB, BOOKING, EXERCISE, dead._id]) assert.equal(text.includes(secret), false, secret);
