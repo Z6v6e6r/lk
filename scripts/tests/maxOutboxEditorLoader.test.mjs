@@ -21,6 +21,9 @@ test('Node-RED 4.0.9 loads both editor types and persists a receipt using actual
   const userDir = fs.mkdtempSync(path.join(os.tmpdir(), 'max-editor-loader-'));
   const server = http.createServer(); // No listener, installed flows or real bot credentials.
   const originalFetch = globalThis.fetch;
+  const mediaKeys = ['SUPPORT_MEDIA_INTEGRATION_TOKEN', 'SUPPORT_MAX_MEDIA_SOURCE_HOSTS'];
+  const previousMediaEnvironment = Object.fromEntries(mediaKeys.map(key => [key, process.env[key]]));
+  for (const key of mediaKeys) delete process.env[key];
   const receipt = { id: 'synthetic-command', leaseToken: randomUUID(), kind: 'ack' };
   let cupCalls = 0, resolveOutput;
   const outputs = new Promise(resolve => { resolveOutput = resolve; });
@@ -35,6 +38,8 @@ test('Node-RED 4.0.9 loads both editor types and persists a receipt using actual
     }));
   };
   try {
+    const mediaFile = path.join(fs.realpathSync(userDir), 'media.json');
+    fs.writeFileSync(mediaFile, JSON.stringify({ mediaToken: 'a'.repeat(64), sourceHosts: ['media.synthetic.invalid'] }), { mode: 0o600 });
     fs.mkdirSync(path.join(userDir, 'node_modules'));
     fs.cpSync(adapter, path.join(userDir, 'node_modules', pkg), { recursive: true });
     fs.writeFileSync(path.join(userDir, 'package.json'), JSON.stringify({
@@ -54,7 +59,8 @@ test('Node-RED 4.0.9 loads both editor types and persists a receipt using actual
     RED.init(server, {
       userDir, flowFile: 'synthetic-flows.json', credentialSecret: 'synthetic-only',
       httpAdminRoot: '/red', disableEditor: false, functionExternalModules: false,
-      externalModules: { autoInstall: false }, logging: { console: { level: 'off' } }
+      externalModules: { autoInstall: false }, logging: { console: { level: 'off' } },
+      padlhubSupportMediaFile: mediaFile
     });
     RED.nodes.registerType('synthetic-capture', function(config) {
       RED.nodes.createNode(this, config);
@@ -66,6 +72,11 @@ test('Node-RED 4.0.9 loads both editor types and persists a receipt using actual
     const info = registry.getNodeInfo(`${pkg}/max-outbox-send`);
     const templates = registry.getNodeConfigs('en-US');
     assert.equal(typeof RED.nodes.getType('max-outbox-send'), 'function');
+    assert.equal(process.env.SUPPORT_MEDIA_INTEGRATION_TOKEN, 'a'.repeat(64));
+    assert.equal(process.env.SUPPORT_MAX_MEDIA_SOURCE_HOSTS, 'media.synthetic.invalid');
+    const { validateImages } = createRequire(path.join(adapter, 'package.json'))('./max-media.js');
+    assert.equal(validateImages([{ type: 'IMAGE', url: 'https://media.synthetic.invalid/cup-support/v1/' + 'b'.repeat(64) + '/' + 'c'.repeat(64) + '.jpg' }]).length, 1);
+    assert.throws(() => validateImages([{ type: 'IMAGE', url: 'https://other.synthetic.invalid/cup-support/v1/' + 'b'.repeat(64) + '/' + 'c'.repeat(64) + '.jpg' }]), /URL_REFUSED/);
     assert.equal(typeof RED.nodes.getType('max-legacy-outbox-send'), 'function');
     assert.equal(typeof RED.nodes.getType('max-outbox-receipt'), 'function');
     assert.match(templates, /data-template-name=["']max-outbox-receipt/);
@@ -96,6 +107,9 @@ test('Node-RED 4.0.9 loads both editor types and persists a receipt using actual
     try { await RED.stop(); } finally {
       server.close();
       globalThis.fetch = originalFetch;
+      for (const key of mediaKeys) {
+        if (previousMediaEnvironment[key] === undefined) delete process.env[key]; else process.env[key] = previousMediaEnvironment[key];
+      }
       fs.rmSync(userDir, { recursive: true, force: true });
     }
   }

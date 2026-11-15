@@ -84,6 +84,15 @@ attachments и `mediaRefreshRequired:true`. Сохранённое фото ос
    фото с подписью, несколько фото, повторное открытие после expiry и перезапуск ЦУП.
    Проверить provider MID и actual UI, а также отсутствие новых stuck/unknown commands.
 
+Для hot-регистрации adapter читает optional root-owned0600 файл
+`/etc/phab-traffic/max-media-integration.json` в защищённом canonical parent.
+Он содержит только `mediaToken` (64 hex) и `sourceHosts` (1–4 exact hostnames).
+Оба значения атомарно попадают в текущий process.env; конфликт, небезопасный файл
+или лишние поля блокируют регистрацию. S3 credentials/signing key в Node-RED не
+передаются. Отсутствующий файл сохраняет прежний text-only режим. Обновление файла
+после регистрации само по себе не меняет runtime; повторная конфигурация требует
+отдельно проверенного release-порядка. Cold restart ради этого не нужен.
+
 Откат не удаляет объекты/refs, не меняет signing key, не переотправляет команды и не
 трогает архив/held queue. Сохранить media reader и прежнюю S3 конфигурацию. Переключение
 outgoing graph требует inverse с новым source SHA и worker binding, а не восстановления
