@@ -116,7 +116,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const detail = (option: PaymentOption) => {
     if (option.mode === 'offer') {
       const cost = productCost(option);
-      return `${cost == null ? 'Цена продукта уточняется' : `${formatRubles(cost)} за 30 дней`} · ${option.amount === 0 ? 'участие включено' : option.amount != null ? `участие ${formatRubles(option.amount)}` : 'стоимость участия уточняется'}${option.kind === 'subscription' ? '. Подобран подходящий тариф; его можно изменить в следующем окне. Лимиты профиля сохраняются.' : ''}`;
+      return `${cost == null ? 'Цена продукта уточняется' : `${formatRubles(cost)}${option.kind === 'boost' ? '' : ' за 30 дней'}`} · ${option.amount === 0 ? 'участие включено' : option.amount != null ? `участие ${formatRubles(option.amount)}` : 'стоимость участия уточняется'}${option.kind === 'subscription' ? '. Подобран подходящий тариф; его можно изменить в следующем окне. Лимиты профиля сохраняются.' : ''}`;
     }
     if (option.reason === 'excluded-group') return option.kind === 'residency' ? 'Резидентство не действует на эту категорию групповых' : 'Подписка не действует на эту категорию групповых';
     if (option.reason === 'training-only') return 'Бесплатная тренировка ещё доступна. Скидки на другие услуги — после использования дневного лимита';
