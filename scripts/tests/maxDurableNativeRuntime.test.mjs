@@ -23,9 +23,12 @@ test('4.0.9 hot upload inherits private key in existing functions; native pause/
   const userDir=path.join(root,'user');fs.mkdirSync(userDir);
   const secret='c'.repeat(64),key='SUPPORT_MAX_OUTBOX_INTEGRATION_TOKEN',tokenFile=path.join(root,'integration.env');
   fs.writeFileSync(tokenFile,`${key}=${secret}\n`,{mode:0o600});
-  const envKeys=[key,'SUPPORT_INTEGRATION_TOKEN','npm_config_ignore_scripts','npm_config_registry','npm_config_cache'];
+  const mediaFile=path.join(root,'media.json'),mediaToken='d'.repeat(64);
+  fs.writeFileSync(mediaFile,JSON.stringify({mediaToken,sourceHosts:['media.synthetic.invalid']}),{mode:0o600});
+  const envKeys=[key,'SUPPORT_MEDIA_INTEGRATION_TOKEN','SUPPORT_MAX_MEDIA_SOURCE_HOSTS','SUPPORT_INTEGRATION_TOKEN','npm_config_ignore_scripts','npm_config_registry','npm_config_cache'];
   const oldEnv=Object.fromEntries(envKeys.map(k=>[k,process.env[k]]));
   delete process.env[key];process.env.SUPPORT_INTEGRATION_TOKEN='synthetic-legacy';
+  delete process.env.SUPPORT_MEDIA_INTEGRATION_TOKEN;delete process.env.SUPPORT_MAX_MEDIA_SOURCE_HOSTS;
   process.env.npm_config_ignore_scripts='true';process.env.npm_config_registry='http://127.0.0.1:1';process.env.npm_config_cache=path.join(root,'npm-cache');
   const originalFetch=globalThis.fetch,sends=[],receipts=[],pulls=[],errors=[];let incoming=0,unrelatedStarts=0,enabled=false,probeResult;
   const delivered=new Set();
@@ -56,7 +59,7 @@ test('4.0.9 hot upload inherits private key in existing functions; native pause/
     sends.push(u.searchParams.get('chat_id'));return new Response(JSON.stringify({message:{body:{mid:'synthetic-result'}}}),{status:200});
   };
   RED.init(server,{userDir,flowFile:'flows.json',flowFilePretty:true,httpAdminRoot:'/',httpNodeRoot:'/api',disableEditor:false,
-    credentialSecret:'synthetic-only',functionExternalModules:false,externalModules:{autoInstall:false},padlhubMaxOutboxTokenFile:tokenFile,
+    credentialSecret:'synthetic-only',functionExternalModules:false,externalModules:{autoInstall:false},padlhubMaxOutboxTokenFile:tokenFile,padlhubSupportMediaFile:mediaFile,
     logging:{console:{level:'off'},fixture:{level:'error',handler:()=>entry=>errors.push(String(entry.msg))}}});
   app.use(RED.httpAdmin);app.use('/api',RED.httpNode);
   const completed=new Set();RED.events.on('runtime-event',e=>{if(e.id==='runtime-deploy')completed.add(e.payload.revision);});
@@ -99,12 +102,12 @@ test('4.0.9 hot upload inherits private key in existing functions; native pause/
       if(n.type==='split')Object.assign(n,{splt:'\\n',spltType:'str',arraySplt:1,arraySpltType:'len',stream:false});
     }
     graph.push({id:'unrelated-startup',type:'synthetic-startup',z:routes[0].tab,wires:[]},
-      {id:'existing-probe',type:'function',z:routes[0].tab,func:`msg.payload=!!env.get('${key}');return msg;`,outputs:1,wires:[['probe-result']]},
+      {id:'existing-probe',type:'function',z:routes[0].tab,func:`msg.payload=[!!env.get('${key}'),!!env.get('SUPPORT_MEDIA_INTEGRATION_TOKEN'),env.get('SUPPORT_MAX_MEDIA_SOURCE_HOSTS')||null];return msg;`,outputs:1,wires:[['probe-result']]},
       {id:'probe-result',type:'synthetic-capture',z:routes[0].tab,wires:[]});
     await admin('POST',{rev:(await admin('GET')).rev,flows:graph,credentials:Object.fromEntries(routes.map(r=>[r.bot,{token:'synthetic-bot-token'}]))});
     const unrelated=RED.nodes.getNode('unrelated-startup'),probe=RED.nodes.getNode('existing-probe'),httpNodes=routes.map(r=>RED.nodes.getNode(r.http)),bots=routes.map(r=>RED.nodes.getNode(r.bot));
-    const probeValue=async expected=>{probeResult=undefined;probe.receive({});for(let i=0;i<100&&probeResult===undefined;i++)await new Promise(r=>setTimeout(r,5));assert.equal(probeResult,expected);};
-    await probeValue(false);assert.equal(typeof RED.nodes.getType('max-outbox-send'),'undefined');
+    const probeValue=async expected=>{probeResult=undefined;probe.receive({});for(let i=0;i<100&&probeResult===undefined;i++)await new Promise(r=>setTimeout(r,5));assert.deepEqual(Array.from(probeResult),expected);};
+    await probeValue([false,false,null]);assert.equal(typeof RED.nodes.getType('max-outbox-send'),'undefined');
     const adapter=fileURLToPath(new URL('../../node-red/max-outbox-adapter',import.meta.url));
     const packed=JSON.parse(execFileSync('npm',['pack','--json','--ignore-scripts','--pack-destination',root],{cwd:adapter,encoding:'utf8'}));
     const form=new FormData();form.append('tarball',new Blob([fs.readFileSync(path.join(root,packed[0].filename))]),packed[0].filename);
@@ -112,8 +115,10 @@ test('4.0.9 hot upload inherits private key in existing functions; native pause/
     assert.equal(upload.status,200,await upload.text());
     assert.equal(typeof RED.nodes.getType('max-outbox-send'),'function');assert.equal(typeof RED.nodes.getType('max-outbox-receipt'),'function');
     assert.equal(process.env[key],secret);assert.equal(process.env.SUPPORT_INTEGRATION_TOKEN,'synthetic-legacy');
-    assert.strictEqual(RED.nodes.getNode('existing-probe'),probe);await probeValue(true);
-    for(const p of ['/settings','/nodes','/flows']){const response=await fetch(base+p);assert(!(await response.text()).includes(secret));}
+    assert.equal(process.env.SUPPORT_MEDIA_INTEGRATION_TOKEN,mediaToken);
+    assert.equal(process.env.SUPPORT_MAX_MEDIA_SOURCE_HOSTS,'media.synthetic.invalid');
+    assert.strictEqual(RED.nodes.getNode('existing-probe'),probe);await probeValue([true,true,'media.synthetic.invalid']);
+    for(const p of ['/settings','/nodes','/flows']){const response=await fetch(base+p);const body=await response.text();assert(!body.includes(secret));assert(!body.includes(mediaToken));}
     const before=await admin('GET'),raw=JSON.stringify(before.flows);
     const pause=await apply(before,buildMaxDurableTransition(raw,durablePins(raw),'pause').flow,'pause');
     const pauseRaw=JSON.stringify(pause.flows);
@@ -126,7 +131,7 @@ test('4.0.9 hot upload inherits private key in existing functions; native pause/
     assert.strictEqual(RED.nodes.getNode('unrelated-startup'),unrelated);assert.equal(unrelatedStarts,1);assert.equal(incoming,0);
     await apply(after,buildMaxDurableRecovery(JSON.stringify(after.flows),pauseRaw,durablePins(pauseRaw)).flow,'recover');
     assert.equal(sends.length,2);assert.equal(incoming,0);assert.equal(unrelatedStarts,1);
-    assert(errors.every(e=>!e.includes(secret)));
+    assert(errors.every(e=>!e.includes(secret)&&!e.includes(mediaToken)));
   }finally{
     await RED.stop();server.closeAllConnections();cup.closeAllConnections();
     await Promise.all([new Promise(r=>server.close(r)),new Promise(r=>cup.close(r))]);
