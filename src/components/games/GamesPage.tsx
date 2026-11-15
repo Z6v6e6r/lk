@@ -1,4 +1,5 @@
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
+import { mergeRosterMetadata } from "./rosterMetadata";
 import { moscowBookingEndIso } from "../../utils/bookingEndTime";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isRequestTimeoutError, runWithAbortTimeout } from "../../utils/requestTimeout";
@@ -12900,14 +12901,10 @@ export default function GamesPage({
       ? options?.extraMetadata?.splitPayment
       : (isRecordObject(detailsMetadata.splitPayment) ? detailsMetadata.splitPayment : null);
     const splitPaymentPhones = extractSplitPaymentPhones(splitPaymentSource);
-    return {
-      ...detailsMetadata,
+    return mergeRosterMetadata(detailsMetadata, {
       ...(options?.extraMetadata ?? {}),
       organizerInMatch: options?.organizerInMatch ?? detailsOrganizerInMatch,
       teamSlots: buildStoredTeamSlots(options?.teamSlots ?? detailsTeamSlots),
-      organizerId: detailsOrganizerPayload.id ?? null,
-      organizerPhone: organizerPhone ?? null,
-      organizerPhoneNorm: organizerPhone ?? null,
       participantPhones,
       waitlistPhones,
       allRelatedPhones: Array.from(new Set([
@@ -12916,11 +12913,10 @@ export default function GamesPage({
         ...participantPhones,
         ...waitlistPhones,
       ].filter((value): value is string => Boolean(value)))),
-    };
+    });
   }, [
     detailsMetadata,
     detailsOrganizerInMatch,
-    detailsOrganizerPayload.id,
     detailsOrganizerPayload.phone,
     detailsTeamSlots,
     buildStoredTeamSlots,
