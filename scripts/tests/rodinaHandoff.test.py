@@ -73,6 +73,18 @@ class HandoffTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'):
                 handoff.build(root, 'https://rodina.moscow')
 
+    def test_rebuild_from_delivered_public_media_without_capture_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root)
+            handoff.build(root, 'https://rodina.moscow')
+            expected = (root / 'FILES-SHA256.json').read_bytes()
+            for media in (root / 'source/media').iterdir():
+                media.unlink()
+            handoff.build(root, 'https://rodina.moscow')
+            self.assertEqual(expected, (root / 'FILES-SHA256.json').read_bytes())
+            handoff.verify(root)
+
     def test_internal_navigation_matches_canonical_callback_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

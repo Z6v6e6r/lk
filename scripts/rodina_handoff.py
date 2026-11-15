@@ -225,7 +225,11 @@ def build(root, target_origin):
     for item in assets:
         if not re.fullmatch(r'[a-f0-9]{16}-[a-zA-Z0-9._-]+', item['file']):
             raise ValueError('Invalid media filename')
-        data = (root / 'source/media' / item['file']).read_bytes()
+        original = root / 'source/media' / item['file']
+        # The transfer ZIP stores each media file once, in the public directory.
+        if not original.is_file():
+            original = shared / 'media' / item['file']
+        data = original.read_bytes()
         if digest(data) != item['sha256']:
             raise ValueError('Media SHA256 mismatch: ' + item['file'])
         (shared / 'media' / item['file']).write_bytes(data)
