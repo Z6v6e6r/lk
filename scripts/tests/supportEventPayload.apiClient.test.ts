@@ -27,7 +27,7 @@ test("support event fallback identifies station-scoped client messages as TEXT",
 
   const fallbackSource = functionSource.slice(fallbackStart, fallbackEnd);
 
-  assert.match(fallbackSource, /kind:\s*"TEXT"/);
+  assert.match(fallbackSource, /kind:\s*attachments.length\s*\?\s*"MEDIA"\s*:\s*"TEXT"/);
   assert.match(fallbackSource, /\{\s*stationId,\s*selectedStationId:\s*stationId\s*\}/);
   assert.match(fallbackSource, /\{\s*stationName,\s*selectedStationName:\s*stationName\s*\}/);
 });

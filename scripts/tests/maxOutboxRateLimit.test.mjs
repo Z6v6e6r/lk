@@ -12,7 +12,7 @@ const accepted = () => new Response(JSON.stringify({ message: { body: { mid: 'sy
 test('same dialog is serialized with at least 500ms between starts across node instances/connectors', async () => {
   const original = globalThis.fetch, handlers = [], starts = [];
   let Type, active = 0, maximumActive = 0;
-  const RED = { nodes: { registerType: (_name, type) => { Type = type; },
+  const RED = { nodes: { registerType: (name, type) => { if (name === 'max-outbox-send') Type = type; },
     getNode: () => ({ token: 'synthetic' }), createNode: node => {
       node.on = (name, fn) => { if (name === 'input') handlers.push(fn); }; node.warn = () => {};
     } } };

@@ -195,7 +195,7 @@ test('fenced dispatch preserves safe diagnostics without exporting send fields o
 
 test('registered runtime node emits receipt only and completes handler on failure', async () => {
   let Type, handler, complete = 0, sent;
-  const RED = { nodes: { registerType: (_type, fn) => { Type = fn; }, getNode: () => null,
+  const RED = { nodes: { registerType: (name, fn) => { if (name === 'max-outbox-send') Type = fn; }, getNode: () => null,
     createNode: node => { node.on = (event, fn) => { if (event === 'input') handler = fn; }; node.warn = () => {}; } } };
   register(RED); new Type({ bot: 'synthetic' });
   await handler({ supportOutbox: command(), payload: 'private' }, value => { sent = value; }, () => { complete++; });
@@ -207,7 +207,7 @@ test('registered runtime node emits receipt only and completes handler on failur
 test('node lifecycle deduplicates same lease and close aborts without success receipt', async () => {
   const original = globalThis.fetch;
   let calls = 0, Type, providerStarted; const started = new Promise(resolve => { providerStarted = resolve; }); const handlers = new Map(); const warnings = [];
-  const RED = { nodes: { registerType: (_t, fn) => { Type = fn; }, getNode: () => ({ token: 'synthetic-token' }),
+  const RED = { nodes: { registerType: (name, fn) => { if (name === 'max-outbox-send') Type = fn; }, getNode: () => ({ token: 'synthetic-token' }),
     createNode: node => { node.on = (event, fn) => handlers.set(event, fn); node.warn = x => warnings.push(x); } } };
   try {
     globalThis.fetch = async (_url, options) => {
@@ -232,7 +232,7 @@ test('node lifecycle deduplicates same lease and close aborts without success re
 test('receipt output failure completes handler without repeating provider send', async () => {
   const original = globalThis.fetch;
   let Type, input, calls = 0, completed = 0; const warnings = [];
-  const RED = { nodes: { registerType: (_t, fn) => { Type = fn; }, getNode: () => ({ token: 'synthetic' }),
+  const RED = { nodes: { registerType: (name, fn) => { if (name === 'max-outbox-send') Type = fn; }, getNode: () => ({ token: 'synthetic' }),
     createNode: node => { node.on = (event, fn) => { if (event === 'input') input = fn; }; node.warn = x => warnings.push(x); } } };
   try {
     globalThis.fetch = async () => { calls++; return provider(200, { message: { body: { mid: 'accepted' } } }); };
@@ -264,7 +264,7 @@ test('observed MAX permanent refusal codes survive as safe receipts with one tra
 
 test('sender capacity emits proven local deferral and completed cache expires with lease, not ten minutes', async () => {
   let Type; const handlers = {}, outputs = [];
-  const RED = { nodes: { registerType: (_name, fn) => { Type = fn; }, getNode: () => ({ token: 'synthetic-only' }),
+  const RED = { nodes: { registerType: (name, fn) => { if (name === 'max-outbox-send') Type = fn; }, getNode: () => ({ token: 'synthetic-only' }),
     createNode: node => { node.on = (event, fn) => { handlers[event] = fn; }; node.warn = () => {}; } } };
   delete require.cache[require.resolve('../../node-red/max-outbox-adapter/max-outbox-send.js')];
   const freshRegister = require('../../node-red/max-outbox-adapter/max-outbox-send.js');

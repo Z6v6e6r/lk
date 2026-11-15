@@ -66,6 +66,7 @@ test('Node-RED 4.0.9 loads both editor types and persists a receipt using actual
     const info = registry.getNodeInfo(`${pkg}/max-outbox-send`);
     const templates = registry.getNodeConfigs('en-US');
     assert.equal(typeof RED.nodes.getType('max-outbox-send'), 'function');
+    assert.equal(typeof RED.nodes.getType('max-legacy-outbox-send'), 'function');
     assert.equal(typeof RED.nodes.getType('max-outbox-receipt'), 'function');
     assert.match(templates, /data-template-name=["']max-outbox-receipt/);
     assert.equal(info?.loaded, true);
@@ -73,6 +74,8 @@ test('Node-RED 4.0.9 loads both editor types and persists a receipt using actual
     assert.ok(!info.err);
     assert.match(templates, /data-template-name=["']max-outbox-send/);
     assert.match(templates, /data-help-name=["']max-outbox-send/);
+    assert.match(templates, /data-template-name=["']max-legacy-outbox-send/);
+    assert.match(templates, /data-help-name=["']max-legacy-outbox-send/);
     const runtimeSource = fs.readFileSync(path.join(adapter, 'max-outbox-send.js'), 'utf8');
     assert.ok(!templates.includes(runtimeSource), 'Editor must never receive runtime JavaScript as its template');
     assert.equal(cupCalls, 0);

@@ -29,32 +29,51 @@ export function createIngress({ secret, botId, inbox, notify = () => {} }) {
   });
 }
 
-export async function jsonFetch(url, options = {}, statuses = [200]) {
-  const r = await fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(7000) });
+export async function jsonFetch(url, options = {}, statuses = [200], timeoutMs = 7000) {
+  const r = await fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
   need(statuses.includes(r.status), 'UPSTREAM_STATUS');
   const chunks = []; let bytes = 0;
   for await (const chunk of r.body) { bytes += chunk.length; need(bytes <= 2_097_152, 'UPSTREAM_LIMIT'); chunks.push(chunk); }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
+export const MEDIA_INGEST_BUDGET_MS = 90000;
+export function postSupportEvent(config, dto, url = 'http://127.0.0.1:3000/api/support/dialogs/events') {
+  // An accepted text can trigger a photo auto-reply too. Budget both media stages, bounded DB
+  // reads and durable queue acceptance; the independent webhook ACK still returns immediately.
+  const mediaAware = Boolean(config.mediaIngressToken);
+  const headers = { 'content-type': 'application/json',
+    ...(config.ingressToken ? { 'x-integration-token': config.ingressToken } : {}),
+    ...(dto.attachments?.length && config.mediaIngressToken ? { 'x-support-media-token': config.mediaIngressToken } : {}) };
+  return jsonFetch(url, { method: 'POST', headers, body: JSON.stringify(dto) }, [200, 201], mediaAware ? MEDIA_INGEST_BUDGET_MS : 7000);
+}
+
 export function persistenceConfirmer(db, collections, { waitMs = 15000, sleepMs = 300 } = {}) {
-  const opts = { readConcern: { level: 'majority' }, maxTimeMS: 5000 };
   return async (dto, receipt) => {
-      const deadline = Date.now() + waitMs;
+      const start = performance.now(), deadline = start + (waitMs || 15000);
+      const opts = () => {
+        const remaining = Math.ceil(deadline - performance.now());
+        need(remaining > 0, 'PERSISTENCE_CONFIRM_TIMEOUT');
+        const timeoutMS = Math.min(5000, remaining);
+        return { readConcern: { level: 'majority' }, maxTimeMS: timeoutMS, timeoutMS };
+      };
+      try {
       do {
-        const message = await db.collection(collections.messages).findOne({ id: receipt.message.id }, opts);
+        const message = await db.collection(collections.messages).findOne({ id: receipt.message.id }, opts());
         if (message && message.connector === 'MAX_BOT' && message.direction === 'INBOUND'
           && message.externalMessageId === dto.externalMessageId && message.externalUserId === dto.externalUserId
           && message.externalChatId === dto.externalChatId && message.text === dto.text
           && canonical((message.attachments ?? []).map(x => ({ type: x.type, url: x.url }))) === canonical((dto.attachments ?? []).map(x => ({ type: x.type, url: x.url })))
           && message.dialogId === receipt.dialogId && message.clientId === receipt.clientId) {
-          const dialog = await db.collection(collections.dialogs).findOne({ id: receipt.dialogId, clientId: receipt.clientId }, opts);
-          const client = await db.collection(collections.clients).findOne({ id: receipt.clientId }, opts);
+          const dialog = await db.collection(collections.dialogs).findOne({ id: receipt.dialogId, clientId: receipt.clientId }, opts());
+          const client = await db.collection(collections.clients).findOne({ id: receipt.clientId }, opts());
           if (dialog && client && typeof dialog.updatedAt === 'string' && dialog.updatedAt >= message.createdAt
             && Array.isArray(client.identities) && client.identities.some(x => x.connector === 'MAX_BOT' && x.externalUserId === dto.externalUserId && x.externalChatId === dto.externalChatId)) return true;
         }
-        await new Promise(resolve => setTimeout(resolve, sleepMs));
-      } while (Date.now() < deadline);
+        if (!waitMs) break;
+        await new Promise(resolve => setTimeout(resolve, Math.min(sleepMs, Math.max(0, deadline - performance.now()))));
+      } while (performance.now() < deadline);
+      } catch { return false; }
       return false;
   };
 }
@@ -68,15 +87,16 @@ export async function main() {
   need(st.isDirectory() && !st.isSymbolicLink() && fs.realpathSync(parent) === parent && st.uid === process.getuid() && !(st.mode & 0o022), 'CONFIG_DIRECTORY');
   const config = JSON.parse(readPrivate('/etc/padlhub/max-padlhub-webhook.json', 65_536));
   need(validSecret(config.webhookSecret) && typeof config.botId === 'string', 'CONFIGURATION');
+  need(config.mediaIngressToken === undefined || (typeof config.mediaIngressToken === 'string' &&
+    /^[A-Za-z0-9_-]{32,2048}$/.test(config.mediaIngressToken)), 'MEDIA_TOKEN_CONFIGURATION');
   need(config.mongo?.messages && config.mongo?.dialogs && config.mongo?.clients && config.mongo?.uri && config.mongo?.db, 'MONGO_CONFIGURATION');
   const require = createRequire(import.meta.url); const { MongoClient } = require('mongodb');
   const mongo = new MongoClient(config.mongo.uri, { serverSelectionTimeoutMS: 5000, appName: 'max-padlhub-webhook' }); await mongo.connect();
   const db = mongo.db(config.mongo.db);
   const inbox = new Inbox('/var/lib/padlhub-max-padlhub-inbound');
-  const headers = { 'content-type': 'application/json', ...(config.ingressToken ? { 'x-integration-token': config.ingressToken } : {}) };
   const dispatcher = new Dispatcher(inbox, {
     ready: async () => { try { return (await jsonFetch('http://127.0.0.1:3000/api/health')).status === 'ok'; } catch { return false; } },
-    post: dto => jsonFetch('http://127.0.0.1:3000/api/support/dialogs/events', { method: 'POST', headers, body: JSON.stringify(dto) }, [200, 201]),
+    post: dto => postSupportEvent(config, dto),
     confirm: persistenceConfirmer(db, config.mongo),
   });
   const server = createIngress({ secret: config.webhookSecret, botId: config.botId, inbox });
