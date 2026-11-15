@@ -338,9 +338,10 @@ const dedupeIdentity =
   || toStr(supportEvent.primaryPhone)
   || "anonymous";
 const dedupeText = toStr(supportEvent.text) || "";
+const dedupePhotos = supportEvent.attachments.map(a => toStr(a?.id) || toStr(a?.mediaRef) || '').join('|');
 const dedupeKey = externalMessageId
   ? `${supportEvent.connector}|${supportEvent.channel}|ext:${externalMessageId}`
-  : `${supportEvent.connector}|${supportEvent.channel}|${dedupeIdentity}|${supportEvent.stationId}|${supportEvent.eventType}|${dedupeText.toLowerCase()}`;
+  : `${supportEvent.connector}|${supportEvent.channel}|${dedupeIdentity}|${supportEvent.stationId}|${supportEvent.eventType}|${dedupeText.toLowerCase()}${dedupePhotos ? '|photos:' + dedupePhotos : ''}`;
 const dedupeCache = isObj(context.get("supportEventDedupeCache"))
   ? context.get("supportEventDedupeCache")
   : {};

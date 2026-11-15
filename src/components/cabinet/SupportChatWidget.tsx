@@ -22,6 +22,7 @@ import type {
 } from "../../utils/apiClient";
 import { trackAnalyticsEvent } from "../../utils/analytics";
 import { SUPPORT_WEB_CONNECTOR } from "../../consts/api_config";
+import { prepareSupportPhoto, SUPPORT_PHOTO_TOTAL_BYTES, type SupportPhoto } from "../../utils/supportPhotos";
 
 const SUPPORT_CHANNEL = "WEB";
 const SUPPORT_CONNECTOR = SUPPORT_WEB_CONNECTOR;
@@ -123,12 +124,12 @@ function formatMessageTime(createdAt: string | null, createdTs: number): string 
 }
 
 function isAdminMessage(message: SupportDialogMessage): boolean {
-  return message.authorType === "ADMIN" || message.direction === "OUTBOUND";
+  return message.authorType === "ADMIN" || message.direction === "OUTBOUND" || message.direction === "SYSTEM";
 }
 
 function isServiceMessage(message: SupportDialogMessage): boolean {
   const type = (message.eventType || "").toUpperCase();
-  return type !== "MESSAGE" && type !== "ADMIN_REPLY" && type !== "TEXT";
+  return type !== "MESSAGE" && type !== "ADMIN_REPLY" && type !== "TEXT" && type !== "MEDIA";
 }
 
 function isMatchingClientEcho(
@@ -157,6 +158,9 @@ export function SupportChatWidget({
   const [messages, setMessages] = useState<SupportDialogMessage[]>([]);
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [photos, setPhotos] = useState<SupportPhoto[]>([]);
+  const [isPreparingPhotos, setIsPreparingPhotos] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [isLoadingStations, setIsLoadingStations] = useState(false);
@@ -432,9 +436,10 @@ export function SupportChatWidget({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (isSending || isPreparingPhotos) return;
 
     const text = draft.trim();
-    if (!text) return;
+    if (!text && !photos.length) return;
 
     if (supportUnavailable) {
       setSendError("Чат пока недоступен: support backend не опубликован на сервере.");
@@ -454,20 +459,21 @@ export function SupportChatWidget({
     if (
       previousSubmit
       && previousSubmit.stationId === (selectedStationId ?? "__academy__")
-      && previousSubmit.text === text
+      && previousSubmit.text === text + photos.map(x => x.id).join(",")
       && now - previousSubmit.at < 1800
     ) {
       return;
     }
     lastSubmitRef.current = {
       stationId: selectedStationId ?? "__academy__",
-      text,
+      text: text + photos.map(x => x.id).join(","),
       at: now,
     };
 
     setIsSending(true);
     setSendError(null);
 
+    try {
     const result = await apiCreateSupportDialogEvent({
       connector,
       channel: SUPPORT_CHANNEL,
@@ -475,6 +481,7 @@ export function SupportChatWidget({
       authorType: "CLIENT",
       eventType: "MESSAGE",
       text,
+      attachments: photos,
       phone: profile.phone,
       primaryPhone: profile.phone,
       displayName,
@@ -516,22 +523,26 @@ export function SupportChatWidget({
       (result.data.dialog as SupportDialog | null)
       ?? resolveActiveDialog(nextDialogsForReload, selectedStationId);
 
-    if (isMatchingClientEcho(echoedMessage, text, selectedStationId)) {
+    if (!photos.length && isMatchingClientEcho(echoedMessage, text, selectedStationId)) {
       setMessages((current) => upsertMessage(current, echoedMessage));
     } else {
       await loadMessages(dialogForReload, true);
     }
 
     setDraft("");
+    setPhotos([]);
     setIsSending(false);
 
-      trackAnalyticsEvent("support_chat_message_sent", {
+    trackAnalyticsEvent("support_chat_message_sent", {
       clientId: profile.id,
       stationId: selectedStationId,
       channel: SUPPORT_CHANNEL,
       connector,
       dialogId: result.data.dialog?.id ?? null,
     });
+    } catch {
+      setSendError("Не удалось подтвердить отправку. Обновите историю перед повторной попыткой.");
+    } finally { setIsSending(false); }
   };
 
   return (
@@ -654,6 +665,11 @@ export function SupportChatWidget({
                         </div>
                       )}
                       <div className="support-chat-message-text">{message.text}</div>
+                      {message.attachments?.map(photo => (
+                        <a key={photo.id} href={photo.url} target="_blank" rel="noopener noreferrer" className="support-chat-photo-link">
+                          <img src={photo.url} alt={photo.name || "Фото в переписке"} loading="lazy" referrerPolicy="no-referrer" />
+                        </a>
+                      ))}
                       <div className="support-chat-message-time">
                         {formatMessageTime(message.createdAt, message.createdTs)}
                       </div>
@@ -666,12 +682,33 @@ export function SupportChatWidget({
           </div>
 
           <form className="support-chat-composer" onSubmit={handleSubmit}>
+            {photos.length > 0 && <div className="support-chat-photo-drafts">
+              {photos.map(photo => <div key={photo.id} className="support-chat-photo-draft">
+                <img src={photo.url} alt={photo.name || "Выбранное фото"} />
+                <button type="button" disabled={isSending || isPreparingPhotos} aria-label={`Убрать фото ${photo.name || ""}`} onClick={() => setPhotos(current => current.filter(x => x.id !== photo.id))}>×</button>
+              </div>)}
+            </div>}
             {sendError && (
               <div className="support-chat-error" role="alert">
                 {sendError}
               </div>
             )}
             <div className="support-chat-composer-main">
+              <input ref={photoInputRef} disabled={isSending || isPreparingPhotos} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden onChange={async event => {
+                const files = Array.from(event.currentTarget.files || []); event.currentTarget.value = "";
+                setIsPreparingPhotos(true); setSendError(null);
+                try {
+                  if (photos.length + files.length > 10) throw new Error("Можно прикрепить до 10 фото.");
+                  const next = [...photos];
+                  for (const file of files) next.push(await prepareSupportPhoto(file));
+                  if (next.reduce((sum, p) => sum + (p.size || 0), 0) > SUPPORT_PHOTO_TOTAL_BYTES) throw new Error("Общий размер фото слишком большой. Отправьте их несколькими сообщениями.");
+                  setPhotos(next);
+                } catch (error) { setSendError(error instanceof Error ? error.message : "Не удалось подготовить фото."); }
+                finally { setIsPreparingPhotos(false); }
+              }} />
+              <button className="support-chat-photo-button" type="button" disabled={isSending || isPreparingPhotos || supportUnavailable || (requireStationSelection && !selectedStationId)} onClick={() => photoInputRef.current?.click()}>
+                {isPreparingPhotos ? "Обработка…" : "Фото"}
+              </button>
               <textarea
                 className="support-chat-textarea"
                 placeholder={
@@ -695,7 +732,8 @@ export function SupportChatWidget({
                 disabled={
                   supportUnavailable
                   || (requireStationSelection && !selectedStationId)
-                  || !draft.trim()
+                  || (!draft.trim() && !photos.length)
+                  || isPreparingPhotos
                   || isSending
                 }
               >

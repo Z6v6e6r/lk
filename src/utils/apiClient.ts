@@ -3,6 +3,7 @@ import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } 
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
 import type { SubscriptionPriceQuote, SubscriptionPriceTarget } from "../components/games/subscriptionPricePreview.ts";
+import { normalizeSupportPhotos, type SupportPhoto } from "./supportPhotos";
 import {
   TENANT_KEY,
   API_BASE,
@@ -3542,6 +3543,7 @@ export interface SupportDialogMessage {
   sender: SupportDialogMessageSender | null;
   deleted: boolean;
   metadata: Record<string, unknown> | null;
+  attachments: SupportPhoto[];
 }
 
 export interface SupportDialogMessagesPage {
@@ -3553,6 +3555,7 @@ export interface SupportDialogMessagesPage {
 }
 
 export interface SupportDialogEventPayload {
+  attachments?: SupportPhoto[];
   connector?: string | null;
   channel?: string;
   direction?: "INBOUND" | "OUTBOUND" | "SYSTEM";
@@ -6920,6 +6923,7 @@ function normalizeSupportDialogMessage(payload: unknown): SupportDialogMessage |
     connector: pickString(payload, ["connector"]),
     text,
     textPreview: pickString(payload, ["textPreview", "preview"]) ?? text,
+    attachments: normalizeSupportPhotos(payload.attachments),
     createdAt,
     createdTs,
     sender: normalizeSupportDialogMessageSender(payload.sender) ?? normalizeSupportDialogMessageSender(payload),
@@ -7880,7 +7884,8 @@ export async function apiCreateSupportDialogEvent(payload: SupportDialogEventPay
     || normalizePhoneForChat(payload.phoneNumber || "")
     || normalizePhoneForChat(payload.primaryPhone || "");
 
-  if (!text || !phone) {
+  const attachments = normalizeSupportPhotos(payload.attachments);
+  if ((!text && !attachments.length) || !phone) {
     return {
       data: null as SupportDialogEventResponse | null,
       error: {
@@ -7918,7 +7923,8 @@ export async function apiCreateSupportDialogEvent(payload: SupportDialogEventPay
         displayName,
         phone,
         text,
-        kind: "TEXT",
+        kind: attachments.length ? "MEDIA" : "TEXT",
+        attachments,
         ...(stationId ? { stationId, selectedStationId: stationId } : {}),
         ...(stationName ? { stationName, selectedStationName: stationName } : {}),
         meta: {
@@ -7936,7 +7942,8 @@ export async function apiCreateSupportDialogEvent(payload: SupportDialogEventPay
         phone,
         primaryPhone: phone,
         text,
-        kind: "TEXT",
+        kind: attachments.length ? "MEDIA" : "TEXT",
+        attachments,
         connector,
         channel: (payload.channel || "WEB").trim().toUpperCase(),
         ...(stationId ? { stationId, selectedStationId: stationId } : {}),
