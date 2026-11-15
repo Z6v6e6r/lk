@@ -416,6 +416,10 @@ jobs:
           scripts/tests/messageDelivery.test.ts
           scripts/tests/subscriptionBookingGateway.nodered.test.ts
           scripts/tests/rosterMetadataAuthority.test.ts
+          scripts/tests/gamePrivateProjection.test.mjs
+          scripts/tests/gamePrivateProjection.frontend.test.mjs
+          scripts/tests/organizerHandoff.nodered.test.mjs
+          scripts/tests/gamesPatchCasAck.test.mjs
           scripts/tests/existingBookingLinkRecovery.test.mjs
           scripts/tests/subscriptionBookingPagination.nodered.test.mjs
           scripts/tests/subscriptionBookingPaginationPatch.test.mjs
@@ -649,6 +653,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/function98-runtime" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund node-red@4.0.9
           NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/function98NativeRuntime.test.mjs
           NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/splitCreateResultRuntime.test.mjs
+          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/gamePrivateProjection.runtime.test.mjs
 
       - name: Run Partner membership R4 gates
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'

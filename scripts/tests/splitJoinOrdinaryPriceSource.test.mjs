@@ -22,7 +22,8 @@ test('the invite join surface prices a nominal record from the exact court price
 
 test('the invite join surface divides by the same share count the server charges', () => {
   assert.match(joinPage, /resolveSplitJoinShareCount\(getSplitShareCount\(game\), game \? resolveMaxPlayers\(game\) : 0\)/);
-  assert.match(joinPage, /const shareCount = resolveSplitJoinShareCount\(\s*\n\s*getSplitShareCount\(actualGame\),\s*\n\s*resolveMaxPlayers\(actualGame\),\s*\n\s*\);/);
+  assert.match(joinPage, /let shareCount = resolveSplitJoinShareCount\(\s*\n\s*getSplitShareCount\(actualGame\),\s*\n\s*resolveMaxPlayers\(actualGame\),\s*\n\s*\);/);
+  assert.ok(joinPage.includes('shareCount = resolveSplitJoinShareCount(getSplitShareCount(actualGame), maxPlayers);'));
   assert.doesNotMatch(joinPage, /getSplitShareCount\(game\)\s*\n\s*\?\? \(!game \|\| resolveMaxPlayers\(game\) <= DEFAULT_SINGLES_MAX_PLAYERS/);
 });
 
