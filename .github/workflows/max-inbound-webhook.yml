@@ -1,0 +1,29 @@
+name: MAX inbound webhook
+on:
+  pull_request:
+    paths: ['scripts/max_inbound_webhook/**', 'docs/MAX_INBOUND_WEBHOOK.md', '.github/workflows/max-inbound-webhook.yml']
+  push:
+    branches: ['codex/max-padlhub-webhook-20261114']
+permissions:
+  contents: read
+jobs:
+  inbound:
+    runs-on: ubuntu-22.04
+    services:
+      mongo:
+        image: mongo:8.0.5
+        ports: ['127.0.0.1:27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1})'"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: scripts/max_inbound_webhook
+      - run: node --test scripts/max_inbound_webhook/*.test.mjs
+        env:
+          MAX_WEBHOOK_TEST_MONGO_URI: mongodb://127.0.0.1:27017
+      - run: node --check scripts/max_inbound_webhook/core.mjs && node --check scripts/max_inbound_webhook/server.mjs
