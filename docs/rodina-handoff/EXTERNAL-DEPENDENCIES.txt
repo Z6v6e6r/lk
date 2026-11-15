@@ -1,0 +1,25 @@
+ВНЕШНИЕ ЗАВИСИМОСТИ
+
+Рабочие API, не переносятся в этом комплекте:
+- https://api.vivacrm.ru — публичное расписание/цены и защищённые операции Viva;
+- https://kc.vivacrm.ru — вход realm clients, client widget, PKCE;
+- https://ffc.team/lk1 — отдельный личный кабинет;
+- https://telegram.org/js/telegram-web-app.js — SDK Telegram, добавляется базой;
+- https://yandex.ru — карты и построение маршрутов.
+
+Ссылки, сохранённые из опубликованного интерфейса:
+- https://t.me — Telegram менеджера и канала;
+- https://ffc.team/events — мероприятия;
+- https://ffc.team/construction — строительство;
+- https://ffc.team/docs — общий список документов;
+- https://rodina.school/manezhi/ — футбольная школа;
+- https://rodina.moscow/ — сайт клуба;
+- https://dvoroteka.ru/ — ссылка студии внизу футера.
+
+Фотографии, SVG и два PDF перенесены в /rodina-assets/media/.
+Визуальные ресурсы Tilda/cg178013.tw1.ru не нужны готовой статической версии.
+Оригинальные внешние URL оставлены в редактируемых исходниках и карте ресурсов
+для подтверждения происхождения, а не как runtime-зависимость.
+Встроенные data: шрифты и SVG требуют соответствующих правил CSP.
+Cookie-consent и аналитика всего сайта — отдельная интеграция команды Родины;
+счётчики и общий runtime Tilda в комплект намеренно не переносятся.
