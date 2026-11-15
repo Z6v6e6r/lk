@@ -101,7 +101,7 @@ test('residency-backed Boost also combines event quotes and retains discounts af
       const options = combineResidencyBoost(raw, profile);
       assert.equal(options.filter(option => option.withResidency).length, 1);
       assert.equal(defaultPaymentOption(options)?.amount, dailyQuota === 'used' ? price : 0);
-      assert.ok(!options.some(option => option.kind === 'residency'));
+      assert.equal(options.find(option => option.withResidency)?.kind, dailyQuota === 'used' ? 'residency' : 'boost');
     }
   }
 });
@@ -140,7 +140,7 @@ test('Friendship 2.0 hides duplicate free Boost in games while retaining its ext
     const visible = withoutRedundantBoost(raw);
     assert.equal(visible.some(option => option.kind === 'boost'), service !== 'game');
     assert.equal(visible.find(option => option.kind === 'subscription')?.amount, service === 'game' ? 0 : service === 'training' ? 2750 : 4000);
-    assert.equal(defaultPaymentOption(visible)?.kind, 'residency');
+    assert.ok(['subscription', 'boost'].includes(defaultPaymentOption(visible)!.kind));
     if (service === 'game') {
       assert.equal(visible.filter(option => option.mode === 'book' && option.amount === 0).length, 1);
       assert.equal(createPreviewOrder(visible.find(option => option.kind === 'subscription')!)?.method, 'subscription');
@@ -177,7 +177,7 @@ test('Boost remains distinct when it improves the price, the subscription is uno
   }
 });
 
-test('subscribers default to their subscription or Boost; non-subscribers retain residency default', () => {
+test('default never purchases a product and does not spend a visit pack automatically', () => {
   for (const profile of PRIVILEGE_PROFILES) for (const subscriptionPlan of ['friendship', 'friendship-2', 'ra'] as const) {
     for (const service of ['game', 'training', 'tournament'] as const) {
       const raw = buildBookingPaymentOptions(service, profile, { subscription: true, pass: true },
@@ -189,8 +189,9 @@ test('subscribers default to their subscription or Boost; non-subscribers retain
         assert.ok(choice.kind === 'subscription' || choice.kind === 'boost');
         assert.equal(choice.mode, 'book');
       } else {
-        assert.ok(choice.kind === 'residency' || choice.withResidency);
-        assert.equal(choice.mode, profile.residency ? 'book' : 'offer');
+        assert.equal(choice.mode, 'book');
+        assert.ok(choice.kind !== 'pass');
+        if (!profile.residency) assert.equal(choice.kind, 'full');
       }
     }
   }
@@ -210,13 +211,14 @@ test('default selection skips unavailable residency and retains safe fallbacks',
   assert.deepEqual(defaultPaymentOption(court), full);
 });
 
-test('selecting an unowned residency is possible and uses the event discount on the primary button', () => {
+test('selecting an unowned residency is possible and shows product plus participation on the primary button', () => {
   const options = buildBookingPaymentOptions('training', PRIVILEGE_PROFILES[0], { subscription: false, pass: false });
   const full = options.find(option => option.kind === 'full')!;
   const resident = options.find(option => option.kind === 'residency')!;
   assert.equal(bookingButtonText(full), 'Записаться за 5 500 ₽');
   assert.equal(isSelectableMethod(resident), true);
-  assert.equal(bookingButtonText(resident), 'Записаться за 2 750 ₽');
+  assert.equal(bookingButtonText(resident, 790), 'Добавить Резидентство и записаться · 3 540 ₽');
+  assert.equal(bookingButtonText(resident), 'Уточнить стоимость продукта');
   assert.equal(createPreviewOrder(resident), null, 'The discount offer cannot skip buying residency');
 });
 test('owned residency pays only for the discounted event', () => {
@@ -284,7 +286,7 @@ test('an owned game subscription immediately becomes my personal share at the qu
     const first = display.find(isSelectableMethod)!;
     assert.equal(first.kind, 'subscription', 'An owned pass or residency must not take priority over my subscription');
     assert.equal(first.amount, amount);
-    assert.equal(display.find(option => option.kind === 'full')?.mode, 'reference');
+    assert.equal(display.find(option => option.kind === 'full')?.mode, 'book');
     assert.equal(display.find(option => option.kind === 'full')?.amount, courtAmount / 4);
     assert.equal(display.filter(option => option.kind === 'subscription').length, 1);
     assert.equal(createPreviewOrder(first)?.total, amount);
@@ -354,7 +356,7 @@ test('subscribers hide owned and purchasable residency in every stage and quota 
 test('hiding residency restores full payment when the owned subscription cannot cover the event', () => {
   const profile = PRIVILEGE_PROFILES[3];
   const raw = buildBookingPaymentOptions('game', profile, { subscription: false, pass: false }, { subscriptionPlan: 'friendship' }, 'quarter', 6000);
-  assert.equal(raw.find(option => option.kind === 'full')?.mode, 'reference');
+  assert.equal(raw.find(option => option.kind === 'full')?.mode, 'book');
   const visible = withoutResidencyForSubscribers(raw, profile);
   const choice = defaultPaymentOption(visible)!;
   assert.equal(choice.kind, 'full');
@@ -366,6 +368,26 @@ test('hiding residency restores full payment when the owned subscription cannot 
 test('the reported RA daily-used training shows just the subscription discount instead of duplicate residency', () => {
   const settings = readMatrixSettings(new URLSearchParams('subscription=1&residency=1&subscriptionPlan=ra&dailyQuota=used&dailyUsage=game-hour&pass=0&passFits=0'));
   const visible = withoutResidencyForSubscribers(buildBookingPaymentOptions('training', settings.profile, settings.applicability, settings), settings.profile);
-  assert.deepEqual(visible.filter(isSelectableMethod).map(option => [option.kind, option.amount]), [['subscription', 2750]]);
+  assert.deepEqual(visible.filter(isSelectableMethod).map(option => [option.kind, option.amount]), [['full', 5500], ['subscription', 2750]]);
   assert.equal(bookingButtonText(defaultPaymentOption(visible)), 'Записаться за 2 750 ₽');
+});
+
+test('purchase buttons include the entire product and event total, never free for an unowned subscription', () => {
+  assert.equal(bookingButtonText({ kind: 'subscription', mode: 'offer', amount: 0 }, 9800), 'Добавить подписку и записаться · 9 800 ₽');
+  assert.equal(bookingButtonText({ kind: 'boost', mode: 'offer', amount: 233.33 }, 8800), 'Добавить РАбуста и записаться · 9 033,33 ₽');
+  for (const price of [null, NaN, -1, 0]) assert.equal(bookingButtonText({ kind: 'residency', mode: 'offer', amount: 700 }, price), 'Уточнить стоимость продукта');
+});
+
+test('a retained full-price method preserves visits and is the default with only an owned pack', () => {
+  const settings = readMatrixSettings(new URLSearchParams('pass=1&subscriptionPlan=ra'));
+  const options = buildBookingPaymentOptions('training', settings.profile, settings.applicability, settings);
+  assert.equal(options.find(option => option.kind === 'full')?.mode, 'book');
+  assert.equal(defaultPaymentOption(options)?.kind, 'full');
+  assert.equal(options.find(option => option.kind === 'pass')?.mode, 'book');
+});
+
+
+test('no purchase or visit debit becomes the default when no priced non-consuming method exists', () => {
+  assert.equal(defaultPaymentOption([{ kind: 'residency', mode: 'offer', amount: 700 }]), undefined);
+  assert.equal(defaultPaymentOption([{ kind: 'pass', mode: 'book', amount: null }]), undefined);
 });

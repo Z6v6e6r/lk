@@ -7,6 +7,7 @@ import { DAILY_USAGE, SUBSCRIPTION_PLANS, type DailyUsage } from './privilegeRul
 import { readPreviewStage, type PreviewStage } from './previewStage';
 import { settingsSummary } from './settingsSummary';
 import { previewFrameQuery, readPreviewSkin, type PreviewSkin } from './previewSkin';
+import { copyPreviewRoute } from './previewNavigation';
 import officialLogo from '../../src/assets/logo hab black.svg';
 
 const screens = [
@@ -37,6 +38,8 @@ function Preview() {
   const [copyStatus, setCopyStatus] = useState('');
   const matrix = readMatrixSettings(params);
   const [subscription, setSubscription] = useState(matrix.profile.subscription);
+  const [subscriptionFits, setSubscriptionFits] = useState(matrix.applicability.subscription);
+  const [raFits, setRaFits] = useState(matrix.raFits);
   const [residency, setResidency] = useState(matrix.profile.residency);
   const [pass, setPass] = useState(matrix.profile.pass);
   const [boost, setBoost] = useState(matrix.boost);
@@ -54,10 +57,11 @@ function Preview() {
   const standardTournament = (screen === 'tournament-booking' || screen === 'tournament-join') && groupCategory !== 'pro';
   const hasPro = subscription && (subscriptionPlan === 'ra' || subscriptionPlan === 'friendship-2');
   const proQuotaUsed = DAILY_USAGE.some(usage => usage.id === dailyUsage && 'pro' in usage && usage.pro);
-  const query = new URLSearchParams({ stage, skin, screen, state, width, subscription: subscription ? '1' : '0', residency: residency ? '1' : '0', pass: pass ? '1' : '0',
-    boost: boost && boostAllowed ? '1' : '0', subscriptionFits: '1', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota,
+  let query = new URLSearchParams({ stage, skin, screen, state, width, subscription: subscription ? '1' : '0', residency: residency ? '1' : '0', pass: pass ? '1' : '0',
+    boost: boost && boostAllowed ? '1' : '0', subscriptionFits: subscriptionFits ? '1' : '0', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota,
     activeLimitExceeded: activeLimitExceeded ? '1' : '0', dailyUsage, proQuotaUsed: proQuotaUsed ? '1' : '0',
-    groupCategory, friendsTournament: friendsTournament ? '1' : '0', residencyPrice, boostPrice, raFits: '1', passRemaining });
+    groupCategory, friendsTournament: friendsTournament ? '1' : '0', residencyPrice, boostPrice, raFits: raFits ? '1' : '0', passRemaining });
+  if (screen === initialScreen) query = copyPreviewRoute(query, new URLSearchParams({ ...Object.fromEntries(params), screen, state }));
   const frameUrl = `${import.meta.env.BASE_URL}dev/booking-preview/frame.html?${query}&reset=${revision}`;
   const embeddedQuery = previewFrameQuery(query);
   const embeddedUrl = `${import.meta.env.BASE_URL}dev/booking-preview/frame.html?${embeddedQuery}&reset=${revision}`;
@@ -81,7 +85,10 @@ function Preview() {
   };
   const copyScenario = async () => {
     try {
-      await navigator.clipboard.writeText(`${location.origin}${location.pathname}?${serialized}`);
+      let shared = new URLSearchParams(serialized);
+      const active = frameRef.current?.contentWindow?.location;
+      if (active) shared = copyPreviewRoute(shared, new URLSearchParams(active.search));
+      await navigator.clipboard.writeText(`${location.origin}${location.pathname}?${shared}`);
       setCopyStatus('Ссылка скопирована. Пришлите её вместе с отзывом.');
     } catch {
       setCopyStatus('Скопируйте ссылку из адресной строки и приложите её к отзыву.');
@@ -104,7 +111,7 @@ function Preview() {
           {index === 3 && <h2>Присоединение</h2>}
           {index === 6 && <h2>Дополнительно</h2>}
           <button className={screen === key ? 'is-active' : ''} aria-current={screen === key ? 'page' : undefined}
-            onClick={() => setScreen(key)}>
+            onClick={() => { setScreen(key); setRevision(value => value + 1); }}>
             <strong>{title}</strong><span>{description}</span>
           </button>
         </div>)}
@@ -145,9 +152,11 @@ function Preview() {
       </section>
       <section className="preview-privileges" aria-label="Условия матрицы">
         <div className="preview-products">
+          <p className="preview-profile-note">Настройки описывают тестовый профиль. При покупке стенд подбирает подходящий тариф отдельно; заданные лимиты профиля не обнуляются.</p>
           <fieldset className="preview-product preview-product--subscription"><legend>1. Подписка</legend>
             <label className="preview-check"><input type="checkbox" checked={subscription} onChange={event => { setSubscription(event.target.checked); if (!event.target.checked && !residency) setBoost(false); }} />Есть подписка</label>
-            <label className="preview-field">Выбор подписки<select value={subscriptionPlan} onChange={event => setSubscriptionPlan(event.target.value as SubscriptionPlan)}>
+            {subscription && <label className="preview-check"><input type="checkbox" checked={subscriptionPlan === 'ra' ? raFits : subscriptionFits} onChange={event => subscriptionPlan === 'ra' ? setRaFits(event.target.checked) : setSubscriptionFits(event.target.checked)} />Подписка подходит к событию</label>}
+            <label className="preview-field">Подписка в профиле<select value={subscriptionPlan} onChange={event => setSubscriptionPlan(event.target.value as SubscriptionPlan)}>
               {SUBSCRIPTION_PLANS.map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
             </select></label>
             <p>{SUBSCRIPTION_PLANS.find(plan => plan.id === subscriptionPlan)?.description}</p>

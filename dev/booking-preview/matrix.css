@@ -144,3 +144,25 @@
 .matrix-product-badge { display: block; width: auto; height: 40px; max-width: 100%; object-fit: contain; object-position: left center; }
 .matrix-purchase-event { display: grid; gap: 6px; margin: 14px 0 20px; font-size: 14px; line-height: 1.5; }
 .matrix-purchase-event > span { color: #787287; }
+
+.matrix-method-group-label { margin: 12px 0 2px; font-size: 13px; font-weight: 700; color: #635a70; }
+.matrix-options:disabled .matrix-option { opacity: .55; cursor: default; }
+.matrix-unavailable { margin: 16px 0; color: #71697c; font-size: 13px; line-height: 1.5; }
+.matrix-unavailable summary, .preview-roster > summary { min-height: 44px; padding: 12px 0; cursor: pointer; font-weight: 600; }
+.matrix-unavailable li { margin-bottom: 8px; }
+.matrix-state { max-width: 600px; margin: 20px auto; padding: 24px; border-radius: 20px; background: #fff; color: #292530; }
+.matrix-state h1 { font-size: 24px; }
+.matrix-state button { padding: 14px 20px; border: 1px solid #ddd6e8; border-radius: 12px; cursor: pointer; }
+.matrix-skeleton span { display: block; height: 64px; background: #efedf3; border-radius: 12px; margin: 14px 0; }
+.preview-roster { border: 1px solid #e2e0e5; border-radius: 16px; padding: 0 16px; background: #fff; }
+.matrix-booking-footer { position: sticky; bottom: 0; background: #fff; z-index: 2; padding-bottom: 8px; }
+html[data-preview-skin] .group-schedule-trainer-description strong { text-transform: none; letter-spacing: normal; }
+html[data-preview-skin] .find-game-categories { flex-wrap: wrap; overflow: visible; }
+html[data-preview-skin] .find-game-category-row { align-items: flex-start; }
+html[data-preview-skin] .find-game-category { flex-shrink: 0; }
+html[data-preview-skin] .find-game-date { text-transform: none; }
+html[data-preview-skin] .find-game-date::first-letter { text-transform: uppercase; }
+html[data-preview-skin] .find-game-training-price { max-width: 160px; white-space: normal; }
+
+html[data-preview-skin] .details-date-capitalize { text-transform: none; }
+html[data-preview-skin] .details-date-capitalize::first-letter { text-transform: uppercase; }

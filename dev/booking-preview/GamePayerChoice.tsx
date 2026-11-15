@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { buildGamePaymentOptions, formatRubles, readMatrixSettings, type PaymentOption } from './paymentMatrix';
 import { gameSubscriptionComparison } from './gameSubscriptionComparison';
-import { combineSubscriptionBoost } from './bookingCheckout';
+import { combineSubscriptionBoost, readResidencyPrice } from './bookingCheckout';
 import { recommendedSubscriptionChoice, subscriptionPurchaseChoices } from './subscriptionOffers';
 import './matrix.css';
 
@@ -15,7 +15,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
   const recommendedSubscription = recommendedSubscriptionChoice(subscriptionPurchaseChoices('game', context, 'quarter', courtAmount));
   const subscription = !settings.profile.subscription && recommendedSubscription
     ? recommendedSubscription.option
-    : gameSubscriptionComparison(courtAmount, context);
+    : options.find(option => option.kind === 'subscription') || gameSubscriptionComparison(courtAmount, context);
   const residency = options.find(option => option.kind === 'residency');
   const subscriptionBoost = combineSubscriptionBoost(options, settings.profile).find(option => option.withSubscription);
   const subscriptionPrice = subscriptionBoost || subscription;
@@ -23,6 +23,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
   const boostParent = settings.profile.subscription ? 'subscription' : settings.profile.residency ? 'residency' : null;
   const residencyBoost = boostParent === 'residency' ? boost : undefined;
   const residencyPrice = residencyBoost || residency;
+  const residencyProductPrice = readResidencyPrice(new URLSearchParams(location.search));
   const personalBase = courtAmount != null && Number.isFinite(courtAmount) && courtAmount > 0 ? Math.round(courtAmount * 100 / 4) / 100 : null;
   const price = (option: PaymentOption | undefined) => {
     if (personalBase == null) return 'Цена уточняется';
@@ -34,7 +35,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
     : subscription?.mode === 'unavailable' ? 'Тариф не подходит к этому событию'
       : subscription?.benefit === 'partial-hour' ? `${subscription.freeMinutes} мин бесплатно · доплата за ${subscription.paidMinutes} мин${subscription.overtimeDiscount ? ' со скидкой 30%' : ''}`
         : subscription?.benefit === 'discount' ? `Скидка 30%${settings.activeLimitExceeded ? ' · больше 8 активных записей' : ' · дневной лимит использован'}`
-          : !settings.profile.subscription && recommendedSubscription ? `При оформлении ${recommendedSubscription.offer.name} · дневной бесплатный лимит доступен` : 'С подходящей подпиской · дневной бесплатный лимит доступен';
+          : !settings.profile.subscription && recommendedSubscription ? `Подписка «${recommendedSubscription.offer.name}» ${formatRubles(recommendedSubscription.offer.price)} за 30 дней · участие ${formatRubles(recommendedSubscription.option.amount || 0)}` : 'С подходящей подпиской · дневной бесплатный лимит доступен';
   const discount = (option: PaymentOption | undefined) => personalBase != null && option?.amount != null
     && option.amount > 0 && option.amount < personalBase;
   const boostNote = boost?.benefit === 'partial-hour' ? `${boost.freeMinutes} мин бесплатно · доплата за ${boost.paidMinutes} мин со скидкой 30%` : boost?.benefit === 'discount' ? 'Бесплатный лимит недоступен · скидка 30%' : 'Дневной лимит Буста доступен';
@@ -53,7 +54,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
             <span className="matrix-quarter-price">{(discount(subscriptionPrice) || (personalBase != null && subscriptionBoost?.amount === 0)) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(subscriptionPrice)}</strong></span>
           </span>
           {!settings.profile.subscription && <span className="matrix-quarter-row matrix-quarter-row--residency">
-            <span><b>{residencyBoost ? `С Резидентством и РАбуста${residencyBoost.amount === 0 ? ' — бесплатно' : ''}` : 'С Резидентством'}</b><small>{residencyBoost ? boostNote : settings.profile.residency ? 'Ваша скидка 30%' : 'Скидка 30% при наличии Резидентства'}</small></span>
+            <span><b>{residencyBoost ? `С Резидентством и РАбуста${residencyBoost.amount === 0 ? ' — бесплатно' : ''}` : 'С Резидентством'}</b><small>{residencyBoost ? boostNote : settings.profile.residency ? 'Ваша скидка 30%' : residencyProductPrice == null ? 'Стоимость Резидентства уточняется' : `Резидентство ${formatRubles(residencyProductPrice)} за 30 дней + участие ${price(residencyPrice)}`}</small></span>
             <span className="matrix-quarter-price">{(discount(residencyPrice) || (personalBase != null && residencyBoost?.amount === 0)) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(residencyPrice)}</strong></span>
           </span>}
         </span>

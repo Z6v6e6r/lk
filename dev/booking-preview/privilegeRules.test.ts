@@ -166,3 +166,12 @@ test('personal game starts with the better Boost benefit and creates a free loca
   assert.equal(new Set(list.map(option => option.kind)).size, list.length);
   assert.deepEqual(createPreviewOrder(list.find(option => option.kind === 'boost')!), { method: 'boost', bookingAmount: 0, product: null, productAmount: 0, total: 0 });
 });
+
+test('allowance explanation uses the same shared and independent limits without resetting used flags', async () => {
+  const { dailyAllowanceSummary } = await import('./privilegeRules.ts');
+  const subscriber = { subscription: true, residency: false, pass: false };
+  assert.match(dailyAllowanceSummary(subscriber, { subscriptionPlan: 'friendship-2', boost: true, dailyUsage: 'game-hour-event' })!, /Осталось 60 мин игры и 0 занятий/);
+  assert.match(dailyAllowanceSummary(subscriber, { subscriptionPlan: 'ra', boost: true, dailyUsage: 'training' })!, /Осталось 60 мин игры или 1 занятие/);
+  assert.match(dailyAllowanceSummary(subscriber, { subscriptionPlan: 'friendship', dailyQuota: 'used' })!, /лимит: 0 мин/);
+  assert.equal(dailyAllowanceSummary({ subscription: false, residency: false, pass: false }, {}), null);
+});

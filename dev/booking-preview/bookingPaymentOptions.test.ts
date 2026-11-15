@@ -48,10 +48,10 @@ test('games hide inapplicable Energy 5 for every privilege profile instead of of
     assert.ok(options.some(option => option.kind === 'subscription'));
   }
 });
-test('applicable Energy 5 is only available for an owned visit debit in games', () => {
+test('Energy 5 cannot be spent on a normal game even with the applicability flag', () => {
   for (const profile of PRIVILEGE_PROFILES) {
     const option = buildBookingPaymentOptions('game', profile, { ...doesNotFit, pass: true }, hour, 'quarter', 4000).find(option => option.kind === 'pass');
-    assert.equal(option?.mode, profile.pass ? 'book' : undefined);
+    assert.equal(option, undefined);
   }
 });
 test('excluded groups reject subscription purchases and never offer to buy a visit pack', () => {
@@ -77,7 +77,7 @@ test('Energy 5 never becomes a purchase offer in any stage, profile, event or ba
       const settings = readMatrixSettings(new URLSearchParams({ stage, privileges: profile.id, passFits: passFits ? '1' : '0', boost: '1', subscriptionPlan: 'ra' }));
       const options = withPassBalance(buildBookingPaymentOptions(service, settings.profile, settings.applicability, settings, service === 'game' ? 'quarter' : undefined, 6000), remaining);
       const pass = options.find(option => option.kind === 'pass');
-      const eligible = profile.pass && remaining > 0 && (service === 'tournament' || passFits);
+      const eligible = service !== 'game' && profile.pass && remaining > 0 && (service === 'tournament' || passFits);
       assert.equal(Boolean(pass), eligible, `${stage}/${service}/${profile.id}/${passFits}/${remaining}`);
       if (pass) {
         assert.equal(pass.mode, 'book');

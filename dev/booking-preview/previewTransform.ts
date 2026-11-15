@@ -51,7 +51,7 @@ const rules: Record<string, Array<{ className: string; replacement: string }>> =
     { className: 'team-card game-create-payment-method-card', replacement: '<></>' },
   ],
   'GroupSchedulePage.tsx': [
-    { className: 'tournament-signup-registration group-schedule-registration group-schedule-registration--trainer', replacement: '<MatrixPaymentOptions key={selectedTraining.id} service="training" eventKey={selectedTraining.id} excludesPrivileges={selectedTraining.raw.previewPrivilegesExcluded === true} durationMinutes={(Date.parse(selectedTraining.timeTo) - Date.parse(selectedTraining.timeFrom)) / 60000} eventDetails={{ date: selectedTraining.date, time: selectedTraining.timeLabel, station: selectedTraining.studioName, location: [selectedTraining.studioName, selectedTraining.studioAddress, selectedTraining.roomName].filter(Boolean).join(" · ") }} />' },
+    { className: 'tournament-signup-registration group-schedule-registration group-schedule-registration--trainer', replacement: '<MatrixPaymentOptions key={selectedTraining.id} service="training" eventKey={selectedTraining.id} eventName={selectedTraining.title} excludesPrivileges={selectedTraining.raw.previewPrivilegesExcluded === true} durationMinutes={(Date.parse(selectedTraining.timeTo) - Date.parse(selectedTraining.timeFrom)) / 60000} eventDetails={{ date: selectedTraining.date, time: selectedTraining.timeLabel, station: selectedTraining.studioName, location: [selectedTraining.studioName, selectedTraining.studioAddress, selectedTraining.roomName].filter(Boolean).join(" · ") }} />' },
   ],
   'TournamentSignupPage.tsx': [
     { className: 'tournament-signup-register-stack', replacement: '<MatrixPaymentOptions key={selectedExerciseId} service="tournament" eventKey={selectedExerciseId || "demo-tournament"} durationMinutes={selectedTournament?.startsAt && selectedTournament?.endsAt ? (Date.parse(selectedTournament.endsAt) - Date.parse(selectedTournament.startsAt)) / 60000 : 180} eventDetails={{ date: selectedTournament?.date, time: detailTimeLabel, station: detailStationLabel, location: [detailStationLabel, selectedTournament?.address].filter(Boolean).join(" · ") }} />' },
@@ -90,4 +90,45 @@ export function transformPreviewPayments(source: string, filename: string) {
     result = result.slice(0, replacement.start) + replacement.text + result.slice(replacement.end);
   }
   return 'import { GamePayerChoice } from "/dev/booking-preview/GamePayerChoice.tsx";\nimport { MatrixPaymentOptions } from "/dev/booking-preview/MatrixPaymentOptions.tsx";\n' + result;
+}
+
+// Narrow, fail-closed presentation overrides for the test stand only.
+export function transformPreviewUsability(source: string, filename: string) {
+  let result = source;
+  const replaceOnce = (before: string, after: string) => {
+    if (result.split(before).length !== 2) throw new Error(`Booking preview UI source changed in ${filename}: ${before.slice(0, 60)}`);
+    result = result.replace(before, after);
+  };
+  if (filename === 'GamesPage.tsx') {
+    replaceOnce('useState<GamePaymentMode>("self")', 'useState<GamePaymentMode>("split")');
+    replaceOnce('"Панорамик: —"', '""');
+    replaceOnce('Подходящие сообщества пока не найдены. Игра создастся без автопубликации в ленту.', 'Автопубликация в сообщества на тестовом стенде отключена.');
+    replaceOnce(': "Отлично";', ': "";');
+    replaceOnce('`${detailsTimeFrom} • ${detailsTimeTo}`', '`${detailsTimeFrom}–${detailsTimeTo}`');
+    replaceOnce('const detailsBadgeMonth = detailsDateValue\n    ? detailsDateValue\n        .toLocaleDateString("ru-RU", { month: "short" })\n        .replace(".", "")', 'const detailsBadgeMonth = detailsDateValue\n    ? detailsDateValue\n        .toLocaleDateString("ru-RU", { month: "short" })\n        .replace(".", "").slice(0, 3)');
+  }
+  if (filename === 'FindGamePage.tsx') {
+    replaceOnce('const url = new URL(normalizedInvite);', 'const url = new URL(normalizedInvite); if (game.booking?.date) url.searchParams.set("date", game.booking.date);');
+    replaceOnce('url.searchParams.set("joinGame", game.id);', 'url.searchParams.set("joinGame", game.id); if (game.booking?.date) url.searchParams.set("date", game.booking.date);');
+    replaceOnce('return [priceValueLabel || GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL, ...GAME_PLUS_TRAINER_INCLUDED_PRICE_LABELS].join("/");', 'return `${Number(priceValueLabel || GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL).toLocaleString("ru-RU")} ₽ · льготы при записи`;');
+    replaceOnce('find-game-player-fallback">PH</span>', 'find-game-player-fallback" aria-label="Участник">•</span>');
+  }
+  if (filename === 'GroupSchedulePage.tsx') {
+    replaceOnce('priceLabel: training.status === "FULL"\n      ? "мест нет"\n      : spotsLeft == null\n        ? "запись"\n        : `осталось ${spotsLeft}`,', 'priceLabel: "5 500 ₽ · льготы при записи",');
+  }
+  if (filename === 'TournamentSignupPage.tsx') {
+    const file = ts.createSourceFile(filename, result, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const cards: ts.JsxElement[] = [];
+    function visit(node: ts.Node) {
+      if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(attr => ts.isJsxAttribute(attr)
+        && attr.name.getText(file) === 'className' && attr.initializer && ts.isStringLiteral(attr.initializer) && attr.initializer.text === 'details-roster-card')
+        && node.getText(file).includes('Участники турнира')) { cards.push(node); return; }
+      ts.forEachChild(node, visit);
+    }
+    visit(file);
+    if (cards.length !== 1) throw new Error('Booking preview tournament roster region changed');
+    const card = cards[0];
+    result = result.slice(0, card.getStart(file)) + '<details className="preview-roster"><summary>Участники турнира · {detailParticipantCount}</summary>' + card.getText(file) + '</details>' + result.slice(card.end);
+  }
+  return result;
 }

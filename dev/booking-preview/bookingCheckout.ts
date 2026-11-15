@@ -10,9 +10,9 @@ export function isSelectableMethod(option: PaymentOption) {
 }
 
 export function defaultPaymentOption(options: PaymentOption[]): PaymentOption | undefined {
-  return options.find(option => (option.kind === 'residency' || option.withResidency) && isSelectableMethod(option))
-    || options.find(option => (option.kind === 'subscription' || option.withSubscription) && option.mode === 'book')
-    || options.find(isSelectableMethod);
+  const usable = options.filter(option => option.mode === 'book' && option.kind !== 'pass'
+    && option.amount != null && Number.isFinite(option.amount) && option.amount >= 0);
+  return usable.sort((a, b) => a.amount! - b.amount!)[0];
 }
 
 // Subscribers use their subscription/Boost, not a duplicate residency method.
@@ -33,7 +33,7 @@ export function combineResidencyBoost(options: PaymentOption[], privileges: Priv
   const boost = options.find(option => option.kind === 'boost' && option.mode === 'book'
     && option.amount != null && Number.isFinite(option.amount) && option.amount >= 0);
   if (!residency || !boost) return options;
-  return options.filter(option => option.kind !== 'boost').map(option => option === residency ? { ...boost, withResidency: true } : option);
+  return options.filter(option => option.kind !== 'boost').map(option => option === residency ? { ...(residency.amount != null && residency.amount <= boost.amount! ? residency : boost), withResidency: true } : option);
 }
 
 // One subscription + Boost card uses the lower known quote. Equal prices keep
@@ -60,21 +60,26 @@ export function withoutRedundantBoost(options: PaymentOption[]): PaymentOption[]
   return options.filter(option => !(option.kind === 'boost' && option.mode === 'book' && option.amount === subscription.amount));
 }
 
-// Keep the actual subscription method (and its quote) behind the personal-share
-// row. The full quarter remains only a crossed-out price reference.
+// Keep the subscription quote behind the personal-share row, retaining a
+// selectable full-price method for users who want to preserve their allowance.
 export function withPersonalSubscription(options: PaymentOption[], hasSubscription: boolean): PaymentOption[] {
   const subscription = options.find(option => option.kind === 'subscription' && option.mode === 'book'
     && option.amount != null && Number.isFinite(option.amount) && option.amount >= 0);
   if (!hasSubscription || !subscription) return options;
   const full = options.find(option => option.kind === 'full');
   const boost = options.find(option => option.kind === 'boost' && option.mode === 'book' && option.amount != null && option.amount <= subscription.amount!);
-  return [...(full ? [{ ...full, mode: 'reference' as const }] : []), ...(boost ? [boost] : []), subscription,
+  return [...(boost ? [boost] : []), subscription, ...(full ? [{ ...full, mode: 'book' as const }] : []),
     ...options.filter(option => option.kind !== 'full' && option.kind !== 'subscription' && option !== boost)];
 }
 
-export function bookingButtonText(option: PaymentOption | undefined) {
+export function bookingButtonText(option: PaymentOption | undefined, productPrice?: number | null, productName?: string) {
+  if (option?.kind === 'pass') return option.mode === 'book' ? 'Списать 1 тренировку и записаться' : 'Запись по абонементу недоступна';
+  if (option?.mode === 'offer') {
+    const order = createPreviewOrder(option, option.kind === 'residency' ? productPrice : null,
+      option.kind === 'subscription' ? productPrice : null, option.kind === 'boost' ? productPrice : null);
+    return order ? `Добавить ${productName || (option.kind === 'residency' ? 'Резидентство' : option.kind === 'boost' ? 'РАбуста' : 'подписку')} и записаться · ${formatRubles(order.total)}` : 'Уточнить стоимость продукта';
+  }
   if (!option) return 'Стоимость уточняется';
-  if (option.kind === 'pass') return option.mode === 'book' ? 'Списать 1 тренировку и записаться' : 'Запись по абонементу недоступна';
   if (option.amount == null) return option.kind === 'subscription' ? 'Выбрать подписку для записи' : 'Стоимость уточняется';
   return option.amount === 0 ? 'Записаться бесплатно' : `Записаться за ${formatRubles(option.amount)}`;
 }

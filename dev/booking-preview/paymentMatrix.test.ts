@@ -29,10 +29,10 @@ for (const [index, profile] of PRIVILEGE_PROFILES.entries()) {
   test(`matrix row: ${profile.name} across all services`, () => {
     for (const service of ['game', 'training', 'tournament'] as const) {
       const options = buildPaymentOptions(service, profile, { subscription: true, pass: true }, freeHour);
-      assert.deepEqual(new Set(options.filter(option => option.mode === 'book').map(option => option.kind)), new Set(expectedOwned[index]));
+      assert.deepEqual(new Set(options.filter(option => option.mode === 'book').map(option => option.kind)), new Set(['full', ...expectedOwned[index]]));
       assert.equal(options.length, 4, 'Alternatives must remain visible');
       assert.equal(new Set(options.map(option => option.kind)).size, 4);
-      assert.equal(options.find(option => option.kind === 'full')?.mode, index === 0 ? 'book' : 'reference');
+      assert.equal(options.find(option => option.kind === 'full')?.mode, 'book');
       assert.equal(options.find(option => option.kind === 'subscription')?.amount, 0);
       assert.equal(options.find(option => option.kind === 'pass')?.amount, null, 'A visit is not money or a free subscription');
     }
@@ -104,7 +104,7 @@ test('an excluded group category rejects residency and subscription, including p
         assert.equal(option.amount, null);
       }
       assert.equal(options.find(option => option.kind === 'pass')?.mode, pass && profile.pass ? 'book' : 'unavailable');
-      assert.equal(options[0].mode, profile.pass && pass ? 'reference' : 'book');
+      assert.equal(options[0].mode, 'book');
     }
   }
 });

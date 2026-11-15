@@ -16,7 +16,7 @@ export function settingsSummary(params: URLSearchParams): string[] {
     const screen = params.get('screen') || '';
     const service = screen.startsWith('tournament') ? 'tournament' : screen.startsWith('training') ? 'training' : 'game';
     const fits = energyPassApplies(service, settings.applicability.pass, settings);
-    const availability = screen === 'matrix' && !settings.applicability.pass ? ' · только обычные турниры' : fits ? '' : ' · не подходит';
+    const availability = screen === 'matrix' && !settings.applicability.pass ? ' · только обычные турниры' : !screen || fits ? '' : ' · не подходит';
     items.push(`Энергия 5 · остаток ${readPassRemaining(params)}${availability}`);
   }
   if (settings.boost) items.push('РАбуста');

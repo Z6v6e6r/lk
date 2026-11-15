@@ -4,6 +4,7 @@ import type { PreviewStage } from './previewStage.ts';
 // A purchase needs an already-owned base product. Do not sell Boost when the
 // event is already covered for the same (or a lower) price by that product.
 export function boostPurchaseOption(service: ServiceKind, profile: Privileges, fits: Applicability, context: Partial<PaymentContext>, stage: PreviewStage, scope?: GamePaymentScope, courtAmount: number | null = null): PaymentOption | undefined {
+  if (profile.subscription && (context.subscriptionPlan === 'ra' ? context.raFits === false : !fits.subscription)) return undefined;
   if (stage !== 'full' || context.boost || (!profile.subscription && !profile.residency)) return undefined;
   const quote = buildBookingPaymentOptions(service, profile, fits, { ...context, boost: true }, scope, courtAmount)
     .find(option => option.kind === 'boost' && option.mode === 'book' && option.amount != null && Number.isFinite(option.amount) && option.amount >= 0);

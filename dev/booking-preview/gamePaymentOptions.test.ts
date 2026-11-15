@@ -21,7 +21,7 @@ test('paying for myself means one quarter of the selected court price', () => {
 });
 test('residency discounts only my quarter and crosses out the undiscounted personal amount', () => {
   const options = buildGamePaymentOptions(4000, 'quarter', PRIVILEGE_PROFILES[1], fits, hour);
-  assert.deepEqual(options.find(option => option.kind === 'full'), { kind: 'full', mode: 'reference', amount: 1000 });
+  assert.deepEqual(options.find(option => option.kind === 'full'), { kind: 'full', mode: 'book', amount: 1000 });
   assert.equal(options.find(option => option.kind === 'residency')?.amount, 700);
   assert.equal(options.find(option => option.kind === 'residency')?.mode, 'book');
 });
@@ -38,7 +38,7 @@ test('extra game time charges only the personal share beyond the free hour', () 
   assert.equal(option.freeMinutes, 60);
   assert.equal(option.paidMinutes, 30);
   assert.equal(options[0].amount, 1000);
-  assert.equal(options[0].mode, 'reference');
+  assert.equal(options[0].mode, 'book');
 });
 test('final game prices match the payer comparison for every duration and ownership', () => {
   for (const [court, durationMinutes, personal, residency, copay] of [[4000, 60, 1000, 700, 0], [6000, 90, 1500, 1050, 500], [8000, 120, 2000, 1400, 1000]]) {

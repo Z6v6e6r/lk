@@ -67,3 +67,9 @@ test('offer benefits describe the owned base without granting Residency PRO acce
   assert.ok(boostBenefits(subscriber, 'friendship').some(line => line.includes('ПРО не входит')));
   for (const plan of ['ra', 'friendship-2'] as const) assert.ok(boostBenefits(subscriber, plan).some(line => line.includes('общий дневной лимит')));
 });
+
+test('Boost cannot be sold to bypass an explicitly ineligible base subscription', () => {
+  const profile = { subscription: true, residency: false, pass: false };
+  assert.equal(boostPurchaseOption('game', profile, { subscription: false, pass: false }, { subscriptionPlan: 'friendship', durationMinutes: 90 }, 'full', 'quarter', 6000), undefined);
+  assert.equal(boostPurchaseOption('training', profile, { subscription: true, pass: false }, { subscriptionPlan: 'ra', raFits: false }, 'full'), undefined);
+});

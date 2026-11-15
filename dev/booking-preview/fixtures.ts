@@ -11,7 +11,9 @@ export function setDemoAuthenticated(value: boolean) { authenticated = value; }
 export const dateKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 const tomorrow = new Date();
 tomorrow.setDate(tomorrow.getDate() + 1);
-export const eventDate = dateKey(tomorrow);
+const routeParams = new URLSearchParams(location.search);
+const requestedDate = routeParams.get('date');
+export const eventDate = requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) && !Number.isNaN(Date.parse(requestedDate)) ? requestedDate : dateKey();
 let trainingDate = eventDate;
 let tournamentDate = eventDate;
 export const profile: UserProfileType = {
@@ -26,7 +28,7 @@ export const studios: Studio[] = [
   { id: 'demo-luzhniki', name: 'Лужники', country: 'Россия', city: 'Москва', address: 'Тестовая станция · Центр Москвы', masterServiceId: 'demo-master', subServiceIds: ['demo-service'], preferredSubServiceId: 'demo-service' },
 ];
 const demoPlayers: PadelGamePlayer[] = ['Михаил Игровой', 'Анна Падел', 'Иван Корт', 'Мария Ракетка'].map((name, index) => ({
-  id: `demo-player-${index}`, name, phone: `7000000001${index}`, photo: null, rating: 'C', ratingNumeric: 2.5,
+  id: `demo-player-${index}`, name, phone: `7000000001${index}`, photo: null, rating: 'C', level: 'C', ratingNumeric: null,
   source: index === 0 ? 'ORGANIZER' : 'INVITE_LINK', status: 'CONFIRMED',
 }));
 const viewer: PadelGamePlayer = { id: profile.id, name: `${profile.firstName} ${profile.lastName}`, phone: profile.phone, rating: 'C', status: 'CONFIRMED' };
@@ -37,12 +39,12 @@ let game: PadelGameRecord = {
   participants: scenario === 'full' ? [...demoPlayers] : scenario === 'registered' ? [...demoPlayers.slice(0, 2), viewer] : demoPlayers.slice(0, 2),
   waitlist: [], invite: { maxPlayers: 4, waitlistEnabled: true },
   booking: { studioId: studios[0].id, studioName: studios[0].name, roomId: 'demo-court-1', roomName: 'Корт 1', date: eventDate, timeFrom: '19:00', timeTo: '20:30', durationMinutes: 90 },
-  payment: { amount: 4000, paymentUrl: null, paid: true },
-  metadata: { joinPrice: 1000 },
+  payment: { amount: PREVIEW_COURT_HOURLY_PRICE * 1.5, paymentUrl: null, paid: true },
+  metadata: { joinPrice: PREVIEW_COURT_HOURLY_PRICE * 1.5 / 4, teamSlots: scenario === 'full' ? [...demoPlayers] : scenario === 'registered' ? [...demoPlayers.slice(0, 2), viewer, null] : [...demoPlayers.slice(0, 2), null, null] },
 };
 const registrations = new Map<string, boolean>();
 function roster(count: number): PadelGamePlayer[] {
-  return Array.from({ length: count }, (_, index) => ({ ...demoPlayers[index % demoPlayers.length], id: `demo-roster-${index}`, phone: `7000000${String(index + 1000).padStart(4, '0')}`, name: index < 4 ? demoPlayers[index].name : `Игрок ${index + 1}` }));
+  return Array.from({ length: count }, (_, index) => ({ ...demoPlayers[index % demoPlayers.length], id: `demo-roster-${index}`, phone: `7000000${String(index + 1000).padStart(4, '0')}`, name: index < 4 ? demoPlayers[index].name : `Участник ${String.fromCharCode(1040 + index)} Тестовый` }));
 }
 function registration(id: string): TournamentRegistrationState {
   const registered = registrations.get(id) ?? scenario === 'registered';
@@ -55,11 +57,11 @@ function trainings(date = eventDate): GroupTrainingSummary[] {
     id: `demo-training-${index + 1}`, title, typeId: index === 1 ? 847 : 843,
     typeName: index === 1 ? 'Игра + тренер' : 'Групповая тренировка', typeColor: '#b6d87d',
     directionId: 100 + index, directionName: title,
-    directionDescription: 'Разминка, работа над техникой ударов и игровая практика. Небольшая группа и внимание тренера каждому участнику.',
+    directionDescription: index === 1 ? 'Три участника и тренер. Игровая практика с подсказками тренера.' : 'Разминка, работа над техникой ударов и игровая практика. Небольшая группа и внимание тренера каждому участнику.',
     whatToTake: 'Спортивная форма, чистая обувь и вода. Ракетку можно арендовать на станции.',
     timeFrom: `${date}T${index === 2 ? '20' : '18'}:00:00+03:00`, timeTo: `${date}T${index === 2 ? '21' : '19'}:30:00+03:00`,
     date, timeLabel: index === 2 ? '20:00–21:30' : '18:00–19:30',
-    clientsCount: scenario === 'full' ? 4 : 2, maxClientsCount: 4, spotsLeft: scenario === 'full' ? 0 : 2,
+    clientsCount: scenario === 'full' ? (index === 1 ? 3 : 4) : scenario === 'registered' ? 3 : 2, maxClientsCount: index === 1 ? 3 : 4, spotsLeft: scenario === 'full' ? 0 : (index === 1 ? 3 : 4) - (scenario === 'registered' ? 3 : 2),
     status: scenario === 'full' ? 'FULL' : 'AVAILABLE', girlsOnly: false,
     studioId: studios[index % studios.length].id, studioName: studios[index % studios.length].name,
     studioAddress: studios[index % studios.length].address, roomId: 'demo-court-1', roomName: 'Корт 1',
@@ -75,15 +77,15 @@ function tournaments(date = eventDate): TournamentSignupDetail[] {
     id: `demo-tournament-${index + 1}`, exerciseId: `demo-tournament-${index + 1}`, title,
     studioId: studios[index % studios.length].id, studioName: studios[index % studios.length].name, address: studios[index % studios.length].address,
     startsAt: `${date}T18:00:00+03:00`, endsAt: `${date}T21:00:00+03:00`, date, timeLabel: '18:00–21:00',
-    genderLabel: 'Смешанный', format: index === 1 ? 'Мексикано' : 'Американо', levelLabel: index === 1 ? 'D / D+' : 'C / C+', priceLabel: '8 000 ₽',
-    participantsCount: scenario === 'full' ? 16 : 10, maxParticipants: 16, waitlistCount: 0,
+    genderLabel: 'Смешанный', format: index === 2 ? 'Парный турнир' : index === 1 ? 'Мексикано' : 'Американо', levelLabel: index === 2 ? 'B / B+' : index === 1 ? 'D / D+' : 'C / C+', priceLabel: '8 000 ₽',
+    participantsCount: scenario === 'full' ? 16 : scenario === 'registered' ? 11 : 10, maxParticipants: 16, waitlistCount: 0,
     status: registration(`demo-tournament-${index + 1}`).status === 'REGISTERED' ? 'REGISTERED' : scenario === 'full' ? 'FULL' : 'AVAILABLE',
     trainerName: 'Андрей Тренер', trainerAvatarUrl: null, publicUrl: null,
     storedPricingPreview: null, storedHasFriendlySubscriptionTag: false, storedSummerSubscriptionOffer: null,
     description: 'Турнир для тех, кто хочет больше игровой практики. Равные условия, смена партнёров и много интересных матчей.',
     rules: 'Разминка — 10 минут. Играем несколько раундов со сменой партнёров. Итоговое место определяется по сумме набранных очков.',
     registration: registration(`demo-tournament-${index + 1}`),
-    raw: { id: `demo-tournament-${index + 1}`, name: title, price: 8000, participants: [...roster(scenario === 'full' ? 16 : 10), ...(registration(`demo-tournament-${index + 1}`).status === 'REGISTERED' ? [viewer] : [])], maxParticipants: 16, description: 'Игровая практика и дружеская атмосфера.' },
+    raw: { id: `demo-tournament-${index + 1}`, name: title, price: 8000, participants: [...roster(scenario === 'full' ? 16 : 10).map(player => ({ ...player, level: index === 2 ? 'B' : index === 1 ? 'D+' : 'C' })), ...(registration(`demo-tournament-${index + 1}`).status === 'REGISTERED' ? [viewer] : [])], maxParticipants: 16, description: 'Игровая практика и дружеская атмосфера.' },
   }));
 }
 const pass: TournamentVivaProduct = {
@@ -113,7 +115,7 @@ const slots = (date: string): GameTimeSlot[] => [1, 2, 3].flatMap(court => ['09:
 const handlers: Record<string, (...args: unknown[]) => unknown> = {
   apiFetchProfile: () => profile,
   apiFetchOnboardingStations: () => studios,
-  apiFetchPadelAvailableGames: (params) => ({ games: [{ ...game, booking: { ...game.booking, date: input(params).date || eventDate } }], total: 1, hasMore: false }),
+  apiFetchPadelAvailableGames: (params) => { game = { ...game, booking: game.booking ? { ...game.booking, date: String(input(params).date || eventDate) } : null }; return { games: [game], total: 1, hasMore: false }; },
   apiFetchPadelGamesByPhone: () => [],
   apiFetchPadelGameRecord: () => game,
   apiUpdatePadelGameRecord: (_id, patch) => { game = { ...game, ...input(patch) }; return game; },
@@ -140,8 +142,8 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
   apiFetchTournamentMyRegistration: id => registration(String(id)), apiFetchTournamentVivaMyRegistration: id => registration(String(id)),
   apiFetchTournamentVivaCheckout: id => checkout(String(id)), apiFetchTournamentVivaPublicCheckout: id => checkout(String(id)),
   apiFetchTournamentParticipants: id => {
-    const count = String(id).includes('training') ? (scenario === 'full' ? 4 : 2) : (scenario === 'full' ? 16 : 10);
-    const players = roster(count);
+    const count = String(id).includes('training') ? (scenario === 'full' ? (String(id) === 'demo-training-2' ? 3 : 4) : 2) : (scenario === 'full' ? 16 : 10);
+    const players: PadelGamePlayer[] = roster(count).map(player => ({ ...player, rating: String(id) === 'demo-tournament-3' ? 'B' : String(id) === 'demo-tournament-2' ? 'D+' : 'C', level: String(id) === 'demo-tournament-3' ? 'B' : String(id) === 'demo-tournament-2' ? 'D+' : 'C' }));
     if (registration(String(id)).status === 'REGISTERED') players.push(viewer);
     return { participants: players, participantsCount: players.length, waitlistCount: 0 };
   },

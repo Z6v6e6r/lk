@@ -81,3 +81,20 @@ export function currentBenefit(service: ServiceKind, privileges: Privileges, con
     benefit: 'partial-hour', freeMinutes, paidMinutes: duration - freeMinutes, overtimeDiscount: 30 };
   return { kind, mode, amount: 0, benefit: 'free-hour', freeMinutes: duration };
 }
+
+export function dailyAllowanceSummary(profile: Privileges, context: Partial<PaymentContext>) {
+  if (!profile.subscription && !context.boost) return null;
+  const eventCount = (count: number) => `${count} ${count === 1 ? 'занятие' : count >= 2 && count <= 4 ? 'занятия' : 'занятий'}`;
+  const fallback = context.dailyQuota === 'used' ? context.subscriptionPlan === 'friendship-2' ? 'game-two-hours' : 'game-hour' : 'none';
+  const usage = DAILY_USAGE.find(value => value.id === (context.dailyUsage && context.dailyUsage !== 'none' ? context.dailyUsage : fallback)) || DAILY_USAGE[0];
+  const used = usage.name === 'Ничего' ? 'ничего' : usage.name;
+  if (context.activeLimitExceeded) return `Сегодня: ${used}. Больше 8 активных записей — бесплатный лимит недоступен, сохраняются применимые скидки.`;
+  if (!context.boost) {
+    const minutes = context.dailyQuota === 'used' ? 0 : context.subscriptionPlan === 'friendship-2' ? 120 : 60;
+    return `Сегодня: ${used}. Бесплатный лимит: ${minutes} мин игры${context.subscriptionPlan === 'ra' ? ` или ${minutes ? 1 : 0} групповая тренировка / турнир` : ''}.`;
+  }
+  if (profile.subscription && context.subscriptionPlan === 'friendship-2') return `Сегодня: ${used}. Осталось ${Math.max(0, 120 - usage.gameMinutes)} мин игры и ${eventCount(Math.max(0, 1 - usage.events - (context.proQuotaUsed && !('pro' in usage) ? 1 : 0)))} (тренировка / турнир / ПРО).`;
+  const slots = profile.subscription ? 2 : 1;
+  const remaining = Math.max(0, slots - usage.events - usage.gameMinutes / 60 - (context.proQuotaUsed && !('pro' in usage) ? 1 : 0));
+  return `Сегодня: ${used}. Осталось ${remaining * 60} мин игры или ${eventCount(Math.floor(remaining))} (тренировка / турнир). Это общий лимит, варианты не складываются.`;
+}

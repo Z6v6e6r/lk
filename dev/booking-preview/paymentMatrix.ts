@@ -100,10 +100,9 @@ export function buildPaymentOptions(service: ServiceKind, privileges: Privileges
   const residency: PaymentOption = { kind: 'residency', mode: residencyExcluded ? 'unavailable' : privileges.residency ? 'book' : 'offer',
     amount: residencyExcluded ? null : price.residentPrice, ...(residencyExcluded ? { reason: excluded ? 'excluded-group' as const : 'pro-direction' as const } : {}) };
   const pass: PaymentOption = { kind: 'pass', mode: privileges.pass && fits.pass ? 'book' : 'unavailable', amount: null };
-  const boost = currentBenefit(service, privileges, context, true);
-  const hasApplicablePrivilege = [subscription, residency, pass, boost].some(option => option?.mode === 'book');
+  const boost = privileges.subscription && !subscriptionFits ? undefined : currentBenefit(service, privileges, context, true);
   const options: Record<Exclude<PaymentKind, 'boost'>, PaymentOption> = {
-    full: { kind: 'full', mode: hasApplicablePrivilege ? 'reference' : 'book', amount: price.price }, residency, subscription, pass,
+    full: { kind: 'full', mode: 'book', amount: price.price }, residency, subscription, pass,
   };
   const order: Exclude<PaymentKind, 'boost'>[] = subscription.mode === 'book'
     ? (pass.mode === 'book' ? ['full', 'subscription', 'pass', 'residency'] : ['full', 'subscription', 'residency', 'pass'])
@@ -137,16 +136,15 @@ export function buildGamePaymentOptions(courtAmount: number | null, scope: GameP
       amount: option.amount == null ? null : option.amount === 0 ? 0
         : option.kind === 'full' ? personalAmount : Math.round(personalAmount * 0.7 * 100) / 100 };
   });
-  return options.map(option => option.kind === 'full' && options.some(other => other.kind !== 'full' && other.mode === 'book')
-    ? { ...option, mode: 'reference' } : option);
+  return options;
 }
 
 export function energyPassApplies(service: ServiceKind, fits: boolean, context: Partial<PaymentContext> = {}) {
-  return (service === 'tournament' && !context.proDirection) || fits;
+  return service !== 'game' && ((service === 'tournament' && !context.proDirection) || fits);
 }
 
-// Only subscriptions can be purchased with a booking. Energy 5 is an owned
-// visit pack, never a purchase offer. Excluded groups reject subscriptions.
+// Energy 5 is an owned visit pack, never a purchase offer. Product purchase
+// quotes are resolved separately; excluded groups reject subscriptions.
 export function buildBookingPaymentOptions(service: ServiceKind, privileges: Privileges, fits: Applicability, context: Partial<PaymentContext> = {}, gameScope?: GamePaymentScope, courtAmount: number | null = null): PaymentOption[] {
   const purchaseFits = { subscription: !privileges.subscription || fits.subscription,
     pass: energyPassApplies(service, fits.pass, context) };

@@ -51,3 +51,16 @@ test('friendly label drift stops the preview build', () => {
     assert.throws(() => transformPreviewFriendlyLabel(source, 'FindGamePage.tsx'), /friendly label changed/);
   }
 });
+
+test('preview usability overrides preserve game date on both invite paths and use personal payment by default', async () => {
+  const { transformPreviewUsability } = await import('./previewTransform.ts');
+  const find = readFileSync(new URL('../../src/components/games/FindGamePage.tsx', import.meta.url), 'utf8');
+  const transformed = transformPreviewUsability(find, 'FindGamePage.tsx');
+  assert.ok(transformed.includes('const url = new URL(normalizedInvite); if (game.booking?.date) url.searchParams.set("date", game.booking.date);'));
+  assert.equal(transformed.match(/if \(game.booking\?\.date\) url.searchParams.set\("date", game.booking.date\);/g)?.length, 2);
+  assert.ok(!transformed.includes('.join("/")'));
+  const game = readFileSync(new URL('../../src/components/games/GamesPage.tsx', import.meta.url), 'utf8');
+  assert.ok(transformPreviewUsability(game, 'GamesPage.tsx').includes('useState<GamePaymentMode>("split")'));
+  assert.equal(readFileSync(new URL('../../src/components/games/GamesPage.tsx', import.meta.url), 'utf8'), game);
+  assert.throws(() => transformPreviewUsability('<div/>', 'GamesPage.tsx'), /UI source changed/);
+});
