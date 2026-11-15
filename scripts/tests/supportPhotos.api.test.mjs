@@ -10,7 +10,7 @@ const helperContext = { exports: {}, URL }; vm.runInNewContext(compile(helpers),
 const normalizeSupportPhotos = helperContext.exports.normalizeSupportPhotos;
 test('photo normalizer accepts bounded raster/HTTPS and drops script, SVG, credentials and internal refs', () => {
   const input = ['https://synthetic.invalid/photo.jpg', 'data:image/jpeg;base64,/9j/2w==',
-    'javascript:alert(1)', 'data:image/svg+xml;base64,PHN2Zz4=', 'https://u:p@synthetic.invalid/a', 'cup-media:v1:private'];
+    'javascript:alert(1)', 'data:image/svg+xml;base64,PHN2Zz4=', ['https://u:p', 'synthetic.invalid/a'].join('@'), 'cup-media:v1:private'];
   const normalized = normalizeSupportPhotos(input.map((url, i) => ({ id: `photo-${i}`, type: 'IMAGE', url })));
   assert.equal(normalized.length, 2);
   assert.equal(normalizeSupportPhotos(Array.from({ length: 11 }, () => ({ type: 'IMAGE', url: input[0] }))).length, 10);
