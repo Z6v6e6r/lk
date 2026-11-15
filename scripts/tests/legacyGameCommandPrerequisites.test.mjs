@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { prepareChanges, replaceOnce } from "../prepare_game_private_projection_candidate.mjs";
 
 import { auditLegacyGameRevisionWriters } from "../audit_legacy_game_revision_writers.mjs";
 import {
@@ -56,7 +57,9 @@ test("PATCH writer registry retains the frozen business candidate separately fro
   assert.equal(patchSource.activeSha256, "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931");
   assert.equal(patchSource.sourcePath, undefined);
   assert.equal(patchSource.candidateSourcePath, "scripts/nodered_games_nodes/fn_patch.js");
-  const diagnosticSource = fs.readFileSync(patchSource.candidateSourcePath, "utf8");
+  let diagnosticSource = fs.readFileSync(patchSource.candidateSourcePath, "utf8");
+  // The registry describes a frozen release, not the current paired successor.
+  for (const [before, after] of [...prepareChanges].reverse()) diagnosticSource = replaceOnce(diagnosticSource, after, before);
   const diagnosticHash = sha256(diagnosticSource);
   assert.equal(diagnosticHash, "04d4565f740ac2179b0bb76756eccad4f7a7e88e2a3569f3a0670f32d3ed672b");
   assert.equal(patchSource.candidateSha256, "9c6aaf4578c69fa30daa2326506900a5ee0a265f2299f1f0e3ab20b11e01a130");
