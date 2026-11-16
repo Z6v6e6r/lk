@@ -145,10 +145,17 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     }
     return `${passBalanceText(passRemaining)} · спишется 1 тренировка`;
   };
-  const amount = (option: PaymentOption) => option.mode === 'offer' && option.kind === 'subscription' ? subscriptionFromPrice != null ? formatRubles(subscriptionFromPrice) : 'Нужен расчёт' : option.mode === 'offer' ? offerOrder(option) ? formatRubles(offerOrder(option)!.total) : 'Нужен расчёт' : option.reason === 'unknown-price' ? 'Нужен расчёт' : option.mode === 'unavailable' ? 'Не действует'
-    : option.reason === 'training-only' ? 'Выбрать тариф'
-    : option.benefit === 'partial-hour' && option.amount == null ? 'Нужен расчёт'
-      : option.kind === 'pass' ? `Остаток: ${trainingCount(passRemaining)}` : option.amount === 0 ? 'Бесплатно' : formatRubles(option.amount!);
+  const amount = (option: PaymentOption) => {
+    if (option.mode === 'offer') {
+      if (option.kind === 'subscription') return subscriptionFromPrice != null ? formatRubles(subscriptionFromPrice) : 'Нужен расчёт';
+      const order = offerOrder(option);
+      return order ? formatRubles(option.kind === 'boost' ? order.bookingAmount : order.total) : 'Нужен расчёт';
+    }
+    return option.reason === 'unknown-price' ? 'Нужен расчёт' : option.mode === 'unavailable' ? 'Не действует'
+      : option.reason === 'training-only' ? 'Выбрать тариф'
+      : option.benefit === 'partial-hour' && option.amount == null ? 'Нужен расчёт'
+        : option.kind === 'pass' ? `Остаток: ${trainingCount(passRemaining)}` : option.amount === 0 ? 'Бесплатно' : formatRubles(option.amount!);
+  };
   const confirmText = bookingButtonText(choice, choice ? productCost(choice) : null);
   const confirm = async (allowanceConfirmed = false) => {
     const method = allowanceConfirmed ? pendingAllowance : choice;
