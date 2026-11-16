@@ -4,11 +4,13 @@ import { expiredSubscriptionCheckoutReason as reason, expiredSubscriptionCheckou
 
 const id = '00000000-0000-4000-8000-000000000001', product = '00000000-0000-4000-8000-000000000002';
 const owner = '00000000-0000-4000-8000-000000000003', operation = '00000000-0000-4000-8000-000000000004';
+const fixturePhone = '+' + '7' + '9' + '0'.repeat(9);
+const otherPhone = fixturePhone.slice(0, -1) + '1';
 const now = Date.parse('2026-11-16T08:00:00Z');
 function fixture() {
   const sale = { _id: 'sale', status: 'PAYMENT_PENDING', paymentRef: 'zero-' + id, transactionId: id, counterKey: 'friendship',
-    clientId: owner, clientPhone: '+79000000000', productId: product, amountMinor: 980000, toPayMinor: 980000, paymentUrl: 'https://pay.vivacrm.ru/test' };
-  const transaction = { id, status: 'UNPAID', client: { id: owner, phone: '+79000000000' },
+    clientId: owner, clientPhone: fixturePhone, productId: product, amountMinor: 980000, toPayMinor: 980000, paymentUrl: 'https://pay.vivacrm.ru/test' };
+  const transaction = { id, status: 'UNPAID', client: { id: owner, phone: fixturePhone },
     products: [{ id: product, type: 'SUBSCRIPTION', count: 1, cost: 980000, discount: 0, used: false, refunded: false }],
     sum: 980000, discount: 0, toPay: 980000, deposit: 0, paymentMethod: 'SMS', paymentLegs: [{ source: 'CARD_ONLINE', amountKopecks: 980000 }],
     cardPaymentInfo: { paymentId: id, paymentUrl: sale.paymentUrl, status: 'REJECTED', declineOutcome: 'EXPIRED', declineReason: 'OTHER', declineMessage: null },
@@ -44,7 +46,7 @@ test('paid, partial, refunded, issued, ambiguous, open, foreign and mismatched p
     (s) => { s.counterKey = 'network_friendship'; },
     (s, t) => { t.status = 'PAID'; }, (s, t) => { t.state = 'PAID'; },
     (s, t) => { t.uuid = product; }, (s, t) => { t.client.id = product; },
-    (s, t) => { t.client.phone = '+79000000001'; }, (s, t) => { t.clientPhone = '+79000000001'; },
+    (s, t) => { t.client.phone = otherPhone; }, (s, t) => { t.clientPhone = otherPhone; },
     (s, t) => { t.products[0].id = owner; }, (s, t) => { t.products[0].count = 2; },
     (s, t) => { t.toPay = 970000; }, (s, t) => { t.deposit = 1; }, (s, t) => { t.paidAmount = 1; },
     (s, t) => { t.products[0].used = true; }, (s, t) => { t.refundSum = 1; },
@@ -54,7 +56,7 @@ test('paid, partial, refunded, issued, ambiguous, open, foreign and mismatched p
     (s, t) => { s.clientId = product; },
     (s, t) => { s.clientId = ''; },
     (s, t) => { s.clientId = null; delete t.client.id; },
-    (s, t) => { s.clientId = null; t.client.phone = '+79000000001'; },
+    (s, t) => { s.clientId = null; t.client.phone = otherPhone; },
     (s, t) => { t.clientSubscriptionId = product; }, (s, t) => { t.receipts = [{}]; },
     (s, t) => { t.cardPaymentInfo.status = 'PENDING'; }, (s, t) => { t.cardPaymentInfo.declineOutcome = 'DECLINED'; },
     (s, t) => { t.cardPaymentInfo.paymentUrl += 'other'; }, (s, t) => { t.cardPaymentInfo.extra = true; },
