@@ -1811,6 +1811,8 @@ if (!ctxFromMsg) {
 
   const initialCtx = {
     mode: toStr(payload?.mode) || "GAME_CLEANUP",
+    nativePaymentCancelOnly: payload?.nativePaymentCancelOnly === true,
+    nativePaymentOperationKey: toStr(payload?.nativePaymentOperationKey),
     gameId,
     tenantKey: toStr(payload?.tenantKey),
     sourceTenantKey: toStr(payload?.tenantKey),
@@ -1938,6 +1940,13 @@ if (!ctxFromMsg) {
     return finalizeTask(initialCtx);
   }
 
+  if (initialCtx.nativePaymentCancelOnly) {
+    if (initialCtx.mode !== "PARTICIPANT_TIMEOUT" || !initialCtx.nativePaymentOperationKey) {
+      initialCtx.blockLocalMutation = true; initialCtx.blockReason = "native_payment_owner_required";
+      return finalizeTask(initialCtx);
+    }
+    return nextBookingRequest(initialCtx) || finalizeTask(initialCtx);
+  }
   return requestToken(initialCtx);
 }
 
@@ -1949,6 +1958,9 @@ if (ctx.step === "split_timeout_native_owner_found") {
     bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
     method: "native_payment_owner", unsupportedReason: "Native payment owner read is unavailable or ambiguous" });
   if (rows.length === 0) {
+    if (ctx.nativePaymentCancelOnly) return pushBookingFailureAndContinue(ctx, {
+      bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+      method: "native_payment_owner", unsupportedReason: "Native-only roster finalization requires its financial owner" });
     ctx.nativePaymentOwnerChecked = true;
     if (ctx.nativePaymentOwnerResumeLeg === "CANCEL") return claimSplitCloseMutation(ctx, "CANCEL");
     if (["DISPATCH", "FINAL"].includes(ctx.nativePaymentOwnerResumeLeg)) {
@@ -1971,7 +1983,9 @@ if (ctx.step === "split_timeout_native_owner_found") {
     && intent?.bookingId === ctx.currentBookingId && intent.actorClientId === ctx.currentClientId
     && intent.chargeMinor === payment.amountMinor && quote.decision?.benefit?.finalPriceMinor === payment.amountMinor;
   const lifecycle = typeof bookingPaymentLifecycle === "object" ? bookingPaymentLifecycle : null;
-  if (!bound || !lifecycle?.paymentAttemptReleased?.(owner)) {
+  if (!bound || !lifecycle?.paymentAttemptReleased?.(owner)
+    || ctx.nativePaymentCancelOnly && (owner._id !== ctx.nativePaymentOperationKey
+      || owner.lk1.paymentAttempt?.resourceJobKey && owner.lk1.paymentAttempt.resourceJobCompleted !== true)) {
     return pushBookingFailureAndContinue(ctx, { bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
       method: "native_payment_owner", unsupportedReason: bound
         ? "Native payment lifecycle still owns this booking and credit return" : "Native payment owner binding changed" });

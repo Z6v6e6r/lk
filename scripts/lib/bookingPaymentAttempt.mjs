@@ -104,3 +104,17 @@ export function paymentAttemptBooking(op, booking) {
     && !(flags[0] ? ['CANCELLED', 'CANCELED'] : ['ACTIVE', 'CONFIRMED', 'BOOKED']).includes(v))) return 'UNKNOWN';
   return flags[0] ? 'CANCELLED' : 'ACTIVE';
 }
+
+// This additive request is authority to start closing now, never proof that an
+// EXPIRE/CANCEL was dispatched or that capacity/credit has already been released.
+export function paymentAttemptCancelKey(tenantKey, actorClientId, bookingId, transactionId) {
+  return 'booking-payment-cancel:' + JSON.stringify([tenantKey, actorClientId, bookingId, transactionId]);
+}
+export function paymentAttemptCancelRequested(op) {
+  const r = op?.lk1?.paymentAttempt?.cancelRequest;
+  return !!(r?.schemaVersion === 1 && r.key === paymentAttemptCancelKey(op.tenantKey, op.actorClientId,
+    op.bookingId, op.lk1?.checkout?.transactionId) && r.operationKey === op._id
+    && r.tenantKey === op.tenantKey && r.actorClientId === op.actorClientId
+    && r.bookingId === op.bookingId && r.transactionId === op.lk1?.checkout?.transactionId
+    && paymentAttemptInstant(r.requestedAt) !== null);
+}

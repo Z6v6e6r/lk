@@ -6,6 +6,7 @@ import { createLk1VivaCancellationProvider, reconcileLk1UnpaidBooking,
 import { createLk1VivaServiceToken } from './lib/lk1VivaServiceToken.mjs';
 import { createLk1LiveGatewayGuard } from './lib/lk1LiveGatewayGuard.mjs';
 import { openLk1UnpaidScanCursor, scanLk1UnpaidPage } from './lib/lk1UnpaidScanCursor.mjs';
+import { runBookingPaymentCancelRequest } from './lib/bookingPaymentAttemptWorker.mjs';
 import { lk1FreePending } from './lib/lk1FreeCancellation.mjs';
 import { createLk1FreeCancellationProvider, runLk1FreeCancellationJob } from './lib/lk1FreeCancellationWorker.mjs';
 
@@ -114,6 +115,8 @@ try {
           return operations.find(query).sort({ _id: 1 }).limit(limit).toArray();
         },
         visit: async op => {
+          await urgentCancellation();
+          if (shouldStop()) return;
           let result;
           try { result = phase === 'FREE'
             ? mode === 'ENFORCE_NEW' ? await runLk1FreeCancellationJob({ job: op, operations,
@@ -132,16 +135,42 @@ try {
       return 0;
     }
   }
+  let urgentAfterId = null, nextRegularScan = 0, lastUrgentPoll = 0;
+  async function urgentCancellation() {
+    if (mode !== 'ENFORCE_NEW' || shouldStop()) return;
+    if (Date.now() - lastUrgentPoll < 2000) return;
+    lastUrgentPoll = Date.now();
+    const at = new Date(lastUrgentPoll).toISOString();
+    const jobs = await operations.find({ tenantKey, kind: 'BOOKING_PAYMENT_CANCEL_REQUEST_V1',
+      state: { $in: ['REQUESTED', 'CLOSING'] }, nextCheckAt: { $lte: at },
+      _id: { $gt: urgentAfterId || 'booking-payment-cancel:', $lt: 'booking-payment-cancel;' } })
+      .sort({ _id: 1 }).limit(1).toArray();
+    if (!jobs.length) { urgentAfterId = null; return; }
+    const job = jobs[0]; urgentAfterId = job._id;
+    if (shouldStop()) return;
+    try {
+      const result = await runBookingPaymentCancelRequest({ job, operations, provider,
+        tenantKey, cohortFrom: cutoffIso, mode, shouldStop });
+      process.stdout.write(JSON.stringify({ operation: label(job._id), state: result.state }) + '\n');
+    } catch {
+      process.stdout.write(JSON.stringify({ operation: label(job._id), state: 'CANCEL_REQUEST_RETRY_STORE' }) + '\n');
+    }
+  }
   do {
-    // Four shorter cycles retain the previous 100-row/two-minute scan budget.
-    // Closing intents get priority; cursors keep large cohorts fair across restarts.
-    const intents = await scanPhase('INTENT', 10);
-    const free = stopped ? 0 : await scanPhase('FREE', 5);
-    if (!stopped) await scanPhase('UNCLAIMED', 25 - intents - free);
+    // Explicit user cancellations get one bounded queue item per two seconds;
+    // provider commands still belong to the existing full-CAS payment owner.
+    await urgentCancellation();
+    if (shouldStop()) break;
+    if (Date.now() >= nextRegularScan) {
+      // Keep the normal100-row/two-minute scan budget independent of urgent work.
+      const intents = await scanPhase('INTENT', 10);
+      const free = stopped ? 0 : await scanPhase('FREE', 5);
+      if (!stopped) await scanPhase('UNCLAIMED', 25 - intents - free);
+      nextRegularScan = Date.now() + intervalMs;
+    }
     if (args.includes('--once') || stopped) break;
-    // A large cohort is traversed one bounded page per interval. Never burst
-    // through the full history with unbounded Viva GET traffic.
-    await new Promise(resolve => { const timer = setTimeout(resolve, intervalMs);
+    await new Promise(resolve => { const timer = setTimeout(resolve, Math.min(2000,
+      Math.max(1, nextRegularScan - Date.now())));
       wake = () => { clearTimeout(timer); resolve(); }; });
   } while (!stopped);
 } finally {

@@ -67,7 +67,7 @@ export function hubGatewaySource() {
 export function bookingPaymentAttemptSource() {
   const source = fs.readFileSync(new URL('./bookingPaymentAttempt.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
   return 'const bookingPaymentLifecycle = (() => {\n' + freeCancellationProtocolSource() + source
-    + '\nreturn { paymentAttemptCheckout, paymentAttemptDeadline, paymentAttemptReleased, paymentAttemptTransaction,\n nativeReleased: op => paymentAttemptReleased(op) || lk1FreeReturnedOperation(op) || lk1SeatReleasedOperation(op) };\n})();\n';
+    + '\nreturn { paymentAttemptInstant, paymentAttemptCheckout, paymentAttemptDeadline, paymentAttemptReleased, paymentAttemptTransaction, paymentAttemptCancelKey, paymentAttemptCancelRequested,\n nativeReleased: op => paymentAttemptReleased(op) || lk1FreeReturnedOperation(op) || lk1SeatReleasedOperation(op) };\n})();\n';
 }
 
 export const bookingReadbackSource = () => fs.readFileSync(new URL("../nodered_lk1_hub_nodes/booking_readback.js", import.meta.url), "utf8");

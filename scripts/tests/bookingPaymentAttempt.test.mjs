@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BOOKING_PAYMENT_WINDOW_MS, paymentAttemptCheckout, paymentAttemptDeadline,
-  paymentAttemptReleased, paymentAttemptBinding } from '../lib/bookingPaymentAttempt.mjs';
-import { eligiblePaymentAttempt, reconcileBookingPaymentAttempt } from '../lib/bookingPaymentAttemptWorker.mjs';
+  paymentAttemptReleased, paymentAttemptBinding, paymentAttemptCancelKey } from '../lib/bookingPaymentAttempt.mjs';
+import { eligiblePaymentAttempt, reconcileBookingPaymentAttempt, runBookingPaymentCancelRequest } from '../lib/bookingPaymentAttemptWorker.mjs';
 
 const start = '2099-01-01T12:00:00.000Z';
 const due = '2099-01-01T12:15:00.000Z';
@@ -291,4 +291,73 @@ test('older cancellation ownership is never taken over by a new lifecycle worker
     assert.equal((await f.run()).reason, 'PAYMENT_ATTEMPT_OUT_OF_SCOPE');
     assert.equal(f.provider.calls.length, 0); assert.equal(f.db.calls.length, 0);
   }
+});
+
+
+function userCancel(f) {
+  const op = f.db.row, at = '2099-01-01T12:01:00.000Z';
+  const key = paymentAttemptCancelKey(op.tenantKey, op.actorClientId, op.bookingId, op.lk1.checkout.transactionId);
+  op.lk1.paymentAttempt = { phase: 'CANCEL_REQUESTED', cancelRequest: { schemaVersion: 1, key,
+    operationKey: op._id, tenantKey: op.tenantKey, actorClientId: op.actorClientId,
+    bookingId: op.bookingId, transactionId: op.lk1.checkout.transactionId, requestedAt: at } };
+  const job = { _id: key, kind: 'BOOKING_PAYMENT_CANCEL_REQUEST_V1', tenantKey: op.tenantKey,
+    actorClientId: op.actorClientId, bookingId: op.bookingId, transactionId: op.lk1.checkout.transactionId,
+    operationKey: op._id, requestedAt: at, state: 'REQUESTED', nextCheckAt: at };
+  f.db.docs.set(key, structuredClone(job));
+  return { job, at };
+}
+for (const count of [0, 1]) test('explicit user cancel closes before15m and releases only after native proof, count=' + count, async () => {
+  const f = fixture({ count }); const { at } = userCancel(f);
+  const result = await f.run(at);
+  assert.equal(result.state, 'CLOSED'); assert.ok(paymentAttemptReleased(f.db.row));
+  assert.equal(f.db.row.releaseReason, 'PAYMENT_ATTEMPT_CANCELLED_BY_USER');
+  assert.equal(f.provider.calls.filter(v => v === 'EXPIRE').length, 1);
+  assert.equal(f.provider.calls.filter(v => v.startsWith('CANCEL_')).length, 1);
+  assert.equal(f.db.row.lk1.paymentAttempt.cancelRequest.requestedAt, at);
+  assert.equal(f.db.row.lk1.checkout.expiresAt, due);
+});
+test('unbound cancel request cannot bypass the original payment window', async () => {
+  const f = fixture(); const { at } = userCancel(f);
+  f.db.row.lk1.paymentAttempt.cancelRequest.actorClientId = 'other';
+  const result = await f.run(at); assert.equal(result.state, 'PAYMENT_REQUIRED');
+  assert.deepEqual(f.provider.calls, ['GET_TX']); assert.equal(f.db.calls.length, 0);
+});
+test('urgent job schedules the same financial owner and terminalizes only verified results', async () => {
+  const f = fixture(); const { job, at } = userCancel(f);
+  const result = await runBookingPaymentCancelRequest({ job, operations: f.db, provider: f.provider,
+    tenantKey: 'fixture', cohortFrom: start, mode: 'ENFORCE_NEW', now: () => at });
+  assert.equal(result.state, 'CLOSED'); assert.equal(f.db.docs.get(job._id).state, 'CLOSED');
+  await runBookingPaymentCancelRequest({ job: f.db.docs.get(job._id), operations: f.db, provider: f.provider,
+    tenantKey: 'fixture', cohortFrom: start, mode: 'ENFORCE_NEW', now: () => at });
+  assert.equal(f.provider.calls.filter(c => c === 'EXPIRE').length, 1);
+  assert.equal(f.provider.calls.filter(c => c === 'CANCEL_NONE').length, 1);
+});
+test('PAID wins user cancellation without freeing a visit or dispatching cancellation', async () => {
+  const f = fixture({ count: 1 }); const { job, at } = userCancel(f); f.tx.status = 'PAID';
+  const result = await runBookingPaymentCancelRequest({ job, operations: f.db, provider: f.provider,
+    tenantKey: 'fixture', cohortFrom: start, mode: 'ENFORCE_NEW', now: () => at });
+  assert.equal(result.state, 'PAID'); assert.equal(f.db.row.state, 'CONFIRMED');
+  assert.equal(f.db.docs.get(job._id).state, 'PAID'); assert.equal(paymentAttemptReleased(f.db.row), false);
+  assert.equal(f.provider.calls.some(c => c === 'EXPIRE' || c.startsWith('CANCEL_')), false);
+});
+for (const variant of ['OFF', 'SHADOW', 'STOP', 'FOREIGN', 'COHORT']) test('urgent user cancel fails closed: ' + variant, async () => {
+  const f = fixture(); const { job, at } = userCancel(f);
+  await runBookingPaymentCancelRequest({ job, operations: f.db, provider: f.provider,
+    tenantKey: variant === 'FOREIGN' ? 'other' : 'fixture',
+    cohortFrom: variant === 'COHORT' ? at : start,
+    mode: ['OFF', 'SHADOW'].includes(variant) ? variant : 'ENFORCE_NEW',
+    shouldStop: () => variant === 'STOP', now: () => at });
+  assert.equal(f.provider.calls.length, 0); assert.equal(f.db.calls.length, 0);
+});
+
+
+test('explicit cancellation never releases a separate visit debit before its existing return owner', async () => {
+  const f = fixture({ count: 1 }); const { job, at } = userCancel(f);
+  f.db.row.lk1.visitJob = { phase: 'DEBIT_UNKNOWN' };
+  f.provider.booking.paymentType = 'ON_PLACE'; delete f.provider.booking.clientSubscriptionId;
+  const result = await runBookingPaymentCancelRequest({ job, operations: f.db, provider: f.provider,
+    tenantKey: 'fixture', cohortFrom: start, mode: 'ENFORCE_NEW', now: () => at });
+  assert.equal(result.reason, 'CREDIT_RETURN_PENDING'); assert.equal(f.db.row.state, 'CONFIRMED');
+  assert.equal(f.db.docs.get(job._id).state, 'CLOSING');
+  assert.equal(f.provider.calls.filter(c => c === 'CANCEL_SERVICE').length, 0);
 });

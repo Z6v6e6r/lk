@@ -3693,8 +3693,8 @@ test("guarded patcher retains the business preimage and rejects an unregistered 
     ],
   };
 
-  assert.equal(businessSha256, "7c9858c4d12a867038afc659fa2964b4ae7d1991dc43a178be342d4139f38ca6");
-  assert.equal(funcSha256, "c41d70fbfefdc68a6628d9f6b20ae335706bf0e613ad999ee73a62819c72d0e3");
+  assert.equal(businessSha256, "43405dca722d0b901939451a6ad5e62bebd29394f1a75ee125e01741d8515d4f");
+  assert.equal(funcSha256, "2ced7efb45007538b7c1a366b444dcf40115c76c91cf7cdee31dcc2cd5a529c5");
   assert.equal(resolveManagedSubscriptionRouterContract(router, businessSha256), null);
   assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256), null);
 });

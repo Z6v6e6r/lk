@@ -1,4 +1,6 @@
 import { isSettledPaymentAttempt, canOpenPaymentAttempt, paymentAttemptFields, paymentAttemptDeadline, PAYMENT_ATTEMPT_TTL_MS, PAYMENT_ATTEMPT_CHECK_MESSAGE } from "../../utils/paymentAttemptLifecycle";
+import { BookingPaymentCancelButton } from "../UI/BookingPaymentCancelButton";
+import { bookingPaymentTarget, canCancelBookingPaymentAttempt, paymentCancellationBlocksAttempt, PAYMENT_CANCELLATION_CLOSED, PAYMENT_CANCELLATION_PAID } from "../../utils/bookingPaymentCancellation";
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
 import { mergeRosterMetadata } from "./rosterMetadata";
 import { moscowBookingEndIso } from "../../utils/bookingEndTime";
@@ -4981,6 +4983,7 @@ export default function GamesPage({
     subscriptionId: string | null;
   } | null>(null);
   const [leavePendingMessage, setLeavePendingMessage] = useState<string | null>(null);
+  const [paymentCancellationMessage, setPaymentCancellationMessage] = useState<string | null>(null);
   const [gameDetailsMetaError, setGameDetailsMetaError] = useState<string | null>(null);
   const [updatingGameRoster, setUpdatingGameRoster] = useState(false);
   const [updatingGameMeta, setUpdatingGameMeta] = useState(false);
@@ -5149,6 +5152,7 @@ export default function GamesPage({
   ]);
   useEffect(() => {
     setLeavePendingMessage(null);
+    setPaymentCancellationMessage(null);
     if (selfLeavePostInFlightRef.current) setUpdatingGameRoster(false);
     return () => {
       selfLeaveAttemptRef.current += 1;
@@ -8366,6 +8370,16 @@ export default function GamesPage({
     return status === "PAYMENT_PENDING" ? { ...detailsCurrentUserActiveSplitPayment,
       deadlineAt: resolveSplitPaymentItemDeadlineAt(detailsCurrentUserActiveSplitPayment, detailsSplitPaymentMetadata) } : null;
   }, [detailsCurrentUserActiveSplitPayment, detailsSplitPaymentMetadata]);
+  const detailsPaymentCancellationTarget = useMemo(() => {
+    const payments = Array.isArray(detailsSplitPaymentMetadata?.payments) ? detailsSplitPaymentMetadata.payments : [];
+    const owned = payments.find(item => isRecordObject(item) && item.clientId === profileId
+      && String(item.status || "").toUpperCase() === "PAYMENT_PENDING");
+    return (canCancelBookingPaymentAttempt(owned) ? bookingPaymentTarget(owned, activeGameRecord?.id) : null)
+      || (isCurrentUserOrganizerOfActiveGame && activeGameRecord?.payment?.paid !== true
+        && canCancelBookingPaymentAttempt(activeGameRecord?.payment)
+        ? bookingPaymentTarget({ ...activeGameRecord?.payment,
+          bookingId: activeGameRecord?.payment?.bookingId || activeGameRecord?.booking?.bookingId }, activeGameRecord?.id) : null);
+  }, [detailsSplitPaymentMetadata, profileId, activeGameRecord, isCurrentUserOrganizerOfActiveGame]);
   const detailsCurrentUserPendingSplitPaymentDeadlineTs = useMemo(() => (
     resolveSplitPaymentItemDeadlineTs(detailsCurrentUserPendingSplitPayment, detailsSplitPaymentMetadata)
   ), [detailsCurrentUserPendingSplitPayment, detailsSplitPaymentMetadata]);
@@ -12203,6 +12217,10 @@ export default function GamesPage({
 
   const handleRetryPayment = useCallback(async () => {
     if (retryingPayment) return;
+    if (detailsPaymentCancellationTarget && paymentCancellationBlocksAttempt(detailsPaymentCancellationTarget)) {
+      setGameRecordError("Отмена оплаты проверяется. Переход к оплате заблокирован.");
+      return;
+    }
     setRetryingPayment(true);
     setGameRecordError(null);
 
@@ -12289,6 +12307,7 @@ export default function GamesPage({
       }
 
       if (!canOpenPaymentAttempt({ ...activeGameRecord?.payment,
+        ...detailsPaymentCancellationTarget,
         createdAt: activeGameRecord?.createdAt, paymentUrl: paymentUrlToOpen })) {
         setGameRecordError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
         setRetryingPayment(false);
@@ -12304,6 +12323,7 @@ export default function GamesPage({
     }
   }, [
     retryingPayment,
+    detailsPaymentCancellationTarget,
     resolveGamePaymentByVivaBookings,
     activeGameRecord,
     gamePaymentUrl,
@@ -17469,6 +17489,24 @@ export default function GamesPage({
             </div>
           )}
 
+          {!subscriptionUsageShadowEnabled && detailsPaymentCancellationTarget && (
+            <BookingPaymentCancelButton target={detailsPaymentCancellationTarget} actorClientId={profileId}
+              onChange={() => setSplitPendingNowTs(Date.now())}
+              onSettled={async (state, isCurrent) => {
+                setPaymentCancellationMessage(state === "CLOSED" ? PAYMENT_CANCELLATION_CLOSED : PAYMENT_CANCELLATION_PAID);
+                if (!activeGameRecord?.id) return;
+                const refreshed = await apiFetchPadelGameRecord(activeGameRecord.id);
+                if (!isCurrent()) return;
+                if (refreshed.data) {
+                  upsertGameRecordInStores(refreshed.data, { communityMode: "if_exists" });
+                  setActiveGameRecordStore(refreshed.data);
+                  setParticipants(refreshed.data.participants || []);
+                  setWaitlistPlayers(refreshed.data.waitlist || []);
+                }
+                if (refreshed.status === 404) markGameUnavailable();
+              }} />
+          )}
+          {paymentCancellationMessage && <p role="status" aria-live="polite">{paymentCancellationMessage}</p>}
           {isGamePaid !== true && (
             <>
               <button
@@ -17477,7 +17515,7 @@ export default function GamesPage({
                   void handleRetryPayment();
                 }}
                 type="button"
-                disabled={retryingPayment}
+                disabled={retryingPayment || Boolean(detailsPaymentCancellationTarget && paymentCancellationBlocksAttempt(detailsPaymentCancellationTarget))}
               >
                 {retryingPayment ? "Проверяем оплату..." : "Оплатить"}
               </button>

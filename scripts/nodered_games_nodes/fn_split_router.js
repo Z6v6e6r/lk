@@ -3,7 +3,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (msg._gameCreateOwner || msg._quarterCreateCapability) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "7c9858c4d12a867038afc659fa2964b4ae7d1991dc43a178be342d4139f38ca6", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "43405dca722d0b901939451a6ad5e62bebd29394f1a75ee125e01741d8515d4f", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -1308,7 +1308,7 @@ const ordinaryAttemptPending = (ctx) => {
   msg.statusCode = 202;
   msg.headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
   msg.payload = { ok: true, state: "PENDING_CONFIRMATION", settlementState: "PENDING_CONFIRMATION",
-    paymentAttemptState: "CLOSING",
+    paymentAttemptState: "CLOSING", paymentAttemptCancelSupported: true,
     operationId: ctx.ordinaryHead?.operationId || ctx.ordinaryResumePayment?.operationId
       || ctx.ordinaryResumePayment?.paymentRef || ctx.operationId,
     bookingId: ctx.ordinaryResumePayment?.bookingId || null,
@@ -1328,6 +1328,10 @@ const ordinaryAttemptReview = (ctx) => {
   return [null, msg, null, null];
 };
 const ordinaryAttemptExpose = (ctx) => {
+  if (!ctx.ordinaryHeadKey || !ctx.trustedPaymentActor) return ordinaryAttemptPending(ctx);
+  return ordinaryAttemptMongo(ctx, "ordinary_attempt_exposure_head_found", { _id: ctx.ordinaryHeadKey });
+};
+const ordinaryAttemptExposeResponse = (ctx) => {
   const persistMsg = { ...msg, payload: ctx.ordinaryResponse };
   if (Date.now() >= Date.parse(ctx.ordinaryResponse.expiresAt)) {
     ctx.ordinaryResumePayment = { ...ctx.ordinaryResponse };
@@ -1370,7 +1374,7 @@ const ordinaryAttemptFinish = (ctx, response) => {
     amountMinor: response.toPayMinor, paymentAttemptCreatedAt: window.createdAt,
     createdAt: window.createdAt, deadlineAt: window.expiresAt, expiresAt: window.expiresAt,
     paymentAttemptHeadKey: ctx.ordinaryHead._id };
-  ctx.ordinaryResponse = { ...response, paymentAttemptState: "PAYMENT_REQUIRED", paymentAttemptCreatedAt: window.createdAt,
+  ctx.ordinaryResponse = { ...response, paymentAttemptCancelSupported: true, paymentAttemptState: "PAYMENT_REQUIRED", paymentAttemptCreatedAt: window.createdAt,
     deadlineAt: window.expiresAt, expiresAt: window.expiresAt, paymentAttemptHeadKey: ctx.ordinaryHead._id };
   return ordinaryAttemptMongo(ctx, "ordinary_attempt_checkout_saved", [{ _id: ctx.ordinaryHead._id,
     operationId: ctx.operationId, phase: "UPSTREAM_INTENT" }, { $set: {
@@ -1741,8 +1745,31 @@ if (ctx.step === "ordinary_attempt_profile") {
   const old = (ctx.existingSplitPayments || []).filter(p => p.clientId === actor
     && ["PAYMENT_PENDING", "PAID"].includes(p.status));
   if (old.length > 1) return ordinaryAttemptPending(ctx);
-  if (old.length === 1) return ordinaryAttemptReadProvider(ctx, old[0]);
+  if (old.length === 1) {
+    ctx.ordinaryResumePayment = old[0];
+    ctx.ordinaryLegacyResume = true;
+    ctx.ordinaryHeadKey = ordinaryAttemptContract()?.splitAttemptHeadKey(ctx, actor);
+    if (!ctx.ordinaryHeadKey) return ordinaryAttemptPending(ctx);
+    return ordinaryAttemptMongo(ctx, "ordinary_attempt_resume_head_found", { _id: ctx.ordinaryHeadKey });
+  }
   return continueSplitAfterToken(ctx);
+}
+if (ctx.step === "ordinary_attempt_resume_head_found" || ctx.step === "ordinary_attempt_exposure_head_found") {
+  const rows = Array.isArray(msg.payload) ? msg.payload : null;
+  const head = rows?.[0];
+  const exposure = ctx.step === "ordinary_attempt_exposure_head_found";
+  const payment = exposure ? ctx.ordinaryResponse : ctx.ordinaryResumePayment;
+  if (msg.error || !rows || rows.length > 1
+    || !head && !ctx.ordinaryLegacyResume
+    || head && (head._id !== ctx.ordinaryHeadKey || head.kind !== "SPLIT_BOOKING_PAYMENT_HEAD_V1"
+      || head.actorClientId !== ctx.trustedPaymentActor || head.tenantKey !== "iSkq6G"
+      || head.phase !== "PAYMENT_REQUIRED" || exposure && head.cancelRequestedAt
+      || head.payment?.bookingId !== payment?.bookingId || head.payment?.transactionId !== payment?.transactionId)) {
+    return ordinaryAttemptPending(ctx);
+  }
+  if (head) ctx.ordinaryHead = head;
+  if (exposure) return ordinaryAttemptExposeResponse(ctx);
+  return ordinaryAttemptReadProvider(ctx, payment);
 }
 if (ctx.step === "ordinary_attempt_head_found") {
   if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) return ordinaryAttemptPending(ctx);
@@ -1793,7 +1820,8 @@ function ordinaryAttemptClaimHead(ctx, previous) {
     const replacement = { ...head }; delete replacement._id;
     return ordinaryAttemptMongo(ctx, "ordinary_attempt_head_claimed", [{ _id: previous._id,
       $expr: { $eq: ["$$ROOT", { $literal: previous }] } },
-      { $set: replacement, $unset: { payment: "", closure: "", ownerOperationKey: "", ownerOperationId: "" },
+      { $set: replacement, $unset: { payment: "", closure: "", ownerOperationKey: "", ownerOperationId: "",
+        cancelRequestedAt: "", cancelRequestedBy: "", cancelRequestKey: "" },
         $push: { history: archived } },
       { writeConcern: { w: "majority", j: true } }], true);
   }
@@ -1876,21 +1904,25 @@ if (ctx.step === "ordinary_attempt_transaction") {
     ctx.ordinaryResumeBooking, ctx.trustedPaymentActor, ctx.exerciseId, Date.now());
   if (!result || result.state === "CLOSING") return ctx.action === "create" && ctx.ordinaryGameMissing
     ? ordinaryAttemptReview(ctx) : ordinaryAttemptPending(ctx);
+  // Cancellation suppresses every open checkout, while a verified concurrent
+  // payment still reaches the existing read-only PAID result.
+  if (ctx.ordinaryHead?.cancelRequestedAt && result.state !== "CONFIRMED") return ordinaryAttemptPending(ctx);
   msg.statusCode = 200;
   msg.headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
   msg.payload = { ok: true, gameId: ctx.gameId, exerciseId: ctx.exerciseId,
     operationId: payment.operationId || payment.paymentRef, paymentRef: payment.paymentRef,
     bookingId: payment.bookingId, transactionId: payment.transactionId,
     settlementState: result.state, paid: result.state === "CONFIRMED",
+    paymentAttemptCancelSupported: result.state === "PAYMENT_REQUIRED",
     paymentAttemptState: result.state === "CONFIRMED" ? "PAID" : "PAYMENT_REQUIRED",
     paymentAttemptHeadKey: payment.paymentAttemptHeadKey || ctx.ordinaryHead?._id || null,
     paymentAttemptCreatedAt: result.window?.createdAt,
     paymentUrl: result.paymentUrl || null, toPayMinor: payment.amountMinor,
     productId: payment.productId || null, spot: payment.spot || null,
     deadlineAt: result.window?.expiresAt, expiresAt: result.window?.expiresAt };
-  if (result.state === "PAYMENT_REQUIRED" && ctx.action === "join") {
+  if (result.state === "PAYMENT_REQUIRED") {
     ctx.ordinaryResponse = msg.payload; ctx.ordinaryResponseReused = true;
-    return ordinaryAttemptPendingGame(ctx);
+    return ctx.action === "join" ? ordinaryAttemptPendingGame(ctx) : ordinaryAttemptExpose(ctx);
   }
   return [null, msg, null, null];
 }

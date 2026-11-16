@@ -306,6 +306,7 @@ test("group checkout opens the same active attempt URL but never an expired or c
       isTrialGroupTraining: () => false, setDetailError: value => errors.push(value), setActionLoading: () => {}, setActionMessage: () => {},
       buildPaymentReturnUrls: () => ({ successUrl: "fixture-success", failUrl: "fixture-fail" }),
       readAuthToken: () => "session", tournamentPaymentSessionIdentity: value => value,
+      storeTournamentPendingPayment: async () => {},
       apiCreateTournamentVivaTransaction: async () => ({ data: result, error: null }),
       setRegistration: value => registrations.push(value), setRegistrationSessionIdentity: () => {},
       canOpenPaymentAttempt, paymentAttemptFields, PAYMENT_ATTEMPT_CHECK_MESSAGE,

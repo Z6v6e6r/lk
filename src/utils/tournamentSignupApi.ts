@@ -133,6 +133,8 @@ export interface TournamentMechanicsVivaRefreshResult {
 export interface TournamentRegistrationState {
   status: "NONE" | "REGISTERED" | "WAITLIST" | "PAYMENT_PENDING";
   bookingId?: string | null;
+  transactionId?: string | null;
+  paymentAttemptCancelSupported?: boolean;
   placeNumber: number | null;
   waitlistNumber: number | null;
   canRegister: boolean;
@@ -186,6 +188,8 @@ export interface TournamentVivaCheckout {
 export interface TournamentVivaTransactionResult {
   paymentUrl: string | null;
   bookingId: string | null;
+  transactionId?: string | null;
+  paymentAttemptCancelSupported?: boolean;
   toPay: number | null;
   paid: boolean;
   paymentExpiresAt: string | null;
@@ -615,6 +619,7 @@ function normalizeRegistration(value: unknown): TournamentRegistrationState | nu
   return {
     status,
     bookingId: pickString(value, ["bookingId", "id"]),
+    transactionId: pickString(value, ["transactionId", "transactionUuid"]) || pickString(value.transaction, ["id", "transactionId"]),
     placeNumber: pickNumber(value, ["placeNumber", "position", "participantPosition"]),
     waitlistNumber: pickNumber(value, ["waitlistNumber", "waitlistPosition", "queuePosition"]),
     canRegister: value.canRegister !== false && status !== "PAYMENT_PENDING",
@@ -623,7 +628,7 @@ function normalizeRegistration(value: unknown): TournamentRegistrationState | nu
       ? "Запись создана в Viva, ожидается оплата."
       : pickString(value, ["message", "reason", "note"]),
     paymentUrl,
-    paymentAttemptState: paymentAttemptFields(value).paymentAttemptState,
+    ...paymentAttemptFields(value),
     paymentExpiresAt: paymentAttemptFields({ ...value, paymentExpiresAt: pickString(value, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "expiresAt"]) }).paymentExpiresAt,
   };
 }
@@ -1542,6 +1547,7 @@ function normalizeVivaOwnBookingRegistration(value: unknown): TournamentRegistra
   return normalizeRegistration({
     ...value,
     bookingId: pickString(value, ["id", "bookingId"]),
+    transactionId: getVivaBookingTransactionId(value),
     status: hasPendingPaymentStatus(value) ? "PAYMENT_PENDING" : "REGISTERED",
     placeNumber: pickNumber(value, ["spot", "placeNumber", "position"]),
   });
@@ -2859,6 +2865,7 @@ function normalizeServerTournamentTransactionResult(
   return {
     paymentUrl,
     bookingId: extractBookingId(payload),
+    transactionId: extractTransactionId(payload),
     toPay,
     paid: hasPaidPaymentStatus(payload) || (!paymentUrl && toPay != null && toPay <= 0),
     ...paymentAttemptFields(isRecord(payload) ? { ...payload, paymentExpiresAt:
@@ -2948,7 +2955,7 @@ function normalizeConfirmedSubscriptionBookingPayment(payload: unknown): Tournam
       paymentUrl = value.paymentUrl;
     } catch { return null; }
   } else if (!settled && (value.paid !== true || (value.paymentUrl !== null && value.paymentUrl !== undefined))) return null;
-  return { bookingId: value.bookingId, paymentUrl, toPay: minor, paid: minor === 0 || settled,
+  return { bookingId: value.bookingId, ...(typeof value.transactionId === "string" ? { transactionId: value.transactionId } : {}), paymentUrl, toPay: minor, paid: minor === 0 || settled,
     ...paymentAttemptFields(value), raw: payload };
 }
 
@@ -3457,6 +3464,7 @@ export async function apiCreateTournamentVivaTransaction(
     data: {
       paymentUrl,
       bookingId,
+      transactionId,
       toPay,
       paid,
       ...paymentAttemptFields({ ...(isRecord(result.data) ? result.data : {}), paymentExpiresAt }),

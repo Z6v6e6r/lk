@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { buildBookingPaymentCancellationNodes, BOOKING_PAYMENT_CANCEL_PATH } from './lib/bookingPaymentCancellationFlow.mjs';
 import { bookingPaymentAttemptSource } from './lib/eventPaymentSources.mjs';
 import { splitCreateResultFunctionSource } from './lib/splitCreateResultFlow.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
@@ -76,6 +77,13 @@ export function composeBookingPaymentLifecycle(liveBytes, expectedSourceSha256) 
     add('routerGameFind', r.id, 'find', 'lk_games'), add('routerGameUpdate', r.id, 'updateOne', 'lk_games')];
   c.outputs = 8; c.wires = [...c.wires, add('cleanupUpdate', c.id, 'updateOne'), add('cleanupFind', c.id, 'find')];
   a.outputs = 6; a.wires = [...a.wires, add('ackFind', a.id, 'find'), add('ackUpdate', a.id, 'updateOne')];
+  if (candidate.some(n => n.type === 'http in' && n.url === BOOKING_PAYMENT_CANCEL_PATH)) throw Error('PAYMENT_CANCEL_ROUTE_COLLISION');
+  const cancelNodes = buildBookingPaymentCancellationNodes(r.z, template.clientNode, '9508f8e0ae8d282a');
+  for (const n of cancelNodes) {
+    if (by(n.id)) throw Error('PAYMENT_ADDITION_COLLISION');
+    if (n.type === 'function') new Function('msg', 'global', 'env', n.func);
+    candidate.push(n); added.push(n.id);
+  }
   const all = new Set(candidate.map(n => n.id));
   if (candidate.some(n => (n.wires || []).flat().some(id => !all.has(id)))) throw Error('PAYMENT_GRAPH_BROKEN_WIRE');
   const graphIds = [r.id, c.id, a.id];

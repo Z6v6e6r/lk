@@ -203,7 +203,7 @@ const lk1Finish = (ctx) => {
     const result = finishPending(ctx, 'Срок оплаты истёк. Проверяем закрытие предыдущей попытки.', {
       code: 'PAYMENT_ATTEMPT_CLOSING', operationId: ctx.operationId });
     msg.payload = { ...msg.payload, bookingId: ctx.confirmedBookingId, transactionId: payment.transactionId,
-      paymentUrl: null, paymentAttemptState: 'CLOSING',
+      paymentUrl: null, paymentAttemptState: 'CLOSING', paymentAttemptCancelSupported: true,
       paymentExpiresAt: deadline === null ? null : new Date(deadline).toISOString() };
     return result;
   }
@@ -212,6 +212,7 @@ const lk1Finish = (ctx) => {
     transactionId: payment?.transactionId || null, toPayMinor: payment?.toPayMinor || 0,
     toPay: (payment?.toPayMinor || 0) / 100, paid: paid || !payment || payment.toPayMinor === 0,
     paymentAttemptState: paid || !payment ? 'PAID' : 'PAYMENT_REQUIRED',
+    paymentAttemptCancelSupported: !!payment && payment.toPayMinor > 0 && !paid,
     paymentExpiresAt: deadline === null ? null : new Date(deadline).toISOString(),
     deadlineAt: deadline === null ? null : new Date(deadline).toISOString(),
     subscriptionVisitCount: ctx.lk1.decision.subscriptionVisitCount,
@@ -1436,7 +1437,7 @@ if (ctx.step === 'lk1_payment_head_ordinary_receipt') {
   return prepareMongoUpdate(ctx, 'lk1_payment_head_transferred', { _id: head._id,
     $expr: { $eq: ['$$ROOT', { $literal: head }] } }, { $set: {
       kind: 'BOOKING_PAYMENT_HEAD_V1', ownerOperationKey: ctx.operationKey, ownerOperationId: ctx.operationId,
-      updatedAt: new Date().toISOString() }, $unset: { phase: '', payment: '', closure: '', operationId: '' },
+      updatedAt: new Date().toISOString() }, $unset: { phase: '', payment: '', closure: '', operationId: '', cancelRequestedAt: '', cancelRequestedBy: '', cancelRequestKey: '' },
     $push: { history: archived } });
 }
 if (ctx.step === 'lk1_payment_head_transferred') {

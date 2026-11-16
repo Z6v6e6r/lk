@@ -54,7 +54,13 @@ test('real Node-RED 4.0.9 modified-nodes preserves inject/HTTP instances and mak
       // Node-RED distinguishes runtime nodes from config nodes by coordinates.
       for (const node of flow) if (node.type !== 'tab') Object.assign(node, { x: 0, y: 0 });
       await admin('POST', { rev: (await admin('GET'))?.rev, flows: flow });
+      // The deploy event can precede node construction during initial startup.
+      // Require observed instances before attaching listeners or comparing identity.
+      for (let i = 0; i < 500 && !['inject', 'http', 'target'].every(id => RED.nodes.getNode(id)); i++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
       const inject = RED.nodes.getNode('inject'), httpNode = RED.nodes.getNode('http'), fn = RED.nodes.getNode('target');
+      assert.ok(inject && httpNode && fn, 'deployed runtime nodes must exist');
       const syntheticCredentials = { user: 'fixture-user', password: 'fixture-password' };
       RED.nodes.addCredentials('http', syntheticCredentials);
       inject.on('input', () => injectInputs++);

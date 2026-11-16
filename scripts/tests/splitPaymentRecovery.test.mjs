@@ -46,6 +46,14 @@ const PAYMENT_LIFECYCLE_CANDIDATES = {
   }
 };
 
+// Explicit cancellation generation keeps the fifteen-minute generation pins above.
+const PAYMENT_CANCEL_CANDIDATES = {
+  "router": {
+    "business": "43405dca722d0b901939451a6ad5e62bebd29394f1a75ee125e01741d8515d4f",
+    "source": "2ced7efb45007538b7c1a366b444dcf40115c76c91cf7cdee31dcc2cd5a529c5"
+  }
+};
+
 class FixedDate extends Date {
   constructor(...args) { super(...(args.length ? args : ['2026-07-27T12:20:00.000Z'])); }
   static now() { return Date.parse('2026-07-27T12:20:00.000Z'); }
@@ -95,8 +103,8 @@ test('split-payment business preimages and observer candidates remain separately
   for (const [key, [, livePreimage, candidate]] of Object.entries(SOURCES)) {
     assert.notEqual(candidate, livePreimage, key);
     const current = source(key);
-    const currentBusiness = PAYMENT_LIFECYCLE_CANDIDATES[key]?.business || MIDNIGHT_BOUNDARY_CANDIDATES[key]?.business || QUARTER_OWNER_CANDIDATES[key]?.business || candidate;
-    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), PAYMENT_LIFECYCLE_CANDIDATES[key]?.source || MIDNIGHT_BOUNDARY_CANDIDATES[key]?.source || QUARTER_OWNER_CANDIDATES[key]?.source || DIAGNOSTIC_CANDIDATES[key] || candidate, key);
+    const currentBusiness = PAYMENT_CANCEL_CANDIDATES[key]?.business || PAYMENT_LIFECYCLE_CANDIDATES[key]?.business || MIDNIGHT_BOUNDARY_CANDIDATES[key]?.business || QUARTER_OWNER_CANDIDATES[key]?.business || candidate;
+    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), PAYMENT_CANCEL_CANDIDATES[key]?.source || PAYMENT_LIFECYCLE_CANDIDATES[key]?.source || MIDNIGHT_BOUNDARY_CANDIDATES[key]?.source || QUARTER_OWNER_CANDIDATES[key]?.source || DIAGNOSTIC_CANDIDATES[key] || candidate, key);
     if (DIAGNOSTIC_CANDIDATES[key]) {
       assert.ok(current.includes(`sourceHash: "${currentBusiness}"`), key);
       const marker = key === 'join' ? 'const TOKEN_URL_DEFAULT' : 'const ADMIN_API';

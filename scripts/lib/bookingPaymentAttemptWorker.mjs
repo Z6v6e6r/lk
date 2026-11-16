@@ -1,5 +1,5 @@
 import { paymentAttemptBinding, paymentAttemptDeadline, paymentAttemptInstant,
-  paymentAttemptReleased, paymentAttemptTransaction, paymentAttemptBooking } from './bookingPaymentAttempt.mjs';
+  paymentAttemptReleased, paymentAttemptTransaction, paymentAttemptBooking, paymentAttemptCancelRequested, paymentAttemptCancelKey } from './bookingPaymentAttempt.mjs';
 import { lk1FreeSubscription } from './lk1FreeCancellation.mjs';
 import { visitAllowanceRelease } from './subscriptionVisitLifecycle.mjs';
 
@@ -135,12 +135,12 @@ export async function reconcileBookingPaymentAttempt({ op, operations, provider,
   if (current.lk1.paymentAttempt?.phase === 'PAID') return pending('PAID_EVIDENCE_CHANGED');
   if (!['OPEN', 'CLOSED'].includes(tx)) return pending('TRANSACTION_UNVERIFIED');
   const deadline = paymentAttemptDeadline(current.lk1.checkout, current.lk1.transactionAttemptedAt);
-  if (tx === 'OPEN' && Date.parse(now()) < deadline) return { state: 'PAYMENT_REQUIRED' };
+  if (tx === 'OPEN' && !paymentAttemptCancelRequested(current) && Date.parse(now()) < deadline) return { state: 'PAYMENT_REQUIRED' };
   if (mode === 'SHADOW') return { state: 'WOULD_CLOSE' };
   if (tx === 'OPEN') {
     if (current.lk1.paymentAttempt?.expireIntentAt) return pending('EXPIRE_OUTCOME_UNKNOWN');
     const at = now();
-    if (!await save({ 'lk1.paymentAttempt': { phase: 'EXPIRE_INTENT', expireIntentAt: at,
+    if (!await save({ 'lk1.paymentAttempt': { ...current.lk1.paymentAttempt, phase: 'EXPIRE_INTENT', expireIntentAt: at,
       expiresAt: new Date(deadline).toISOString(), binding: paymentAttemptBinding(current) } })) return { state: 'RETRY_STORE' };
     if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
     // Check once more after our durable intent: a boundary payment wins.
@@ -221,8 +221,42 @@ export async function reconcileBookingPaymentAttempt({ op, operations, provider,
     bookingState: 'CANCELLED', transactionState: 'UNPAID_CLOSED',
     creditState: creditProof ? 'RETURN_VERIFIED' : 'NOT_CONSUMED', creditProof };
   const fields = { state: 'RELEASED', 'lk1.paymentAttempt': journal, 'lk1.paymentAttemptRelease': proof,
-    ...(current.state === 'RELEASED' ? {} : { releasedAt: at, releaseReason: 'PAYMENT_ATTEMPT_EXPIRED',
+    ...(current.state === 'RELEASED' ? {} : { releasedAt: at, releaseReason: paymentAttemptCancelRequested(current) ? 'PAYMENT_ATTEMPT_CANCELLED_BY_USER' : 'PAYMENT_ATTEMPT_EXPIRED',
       releaseSource: 'PAYMENT_EXPIRY', releaseBookingId: current.bookingId, releaseOperationId: current.operationId }) };
   return await save(fields) && paymentAttemptReleased(current) && await finishServiceJob()
     ? { state: 'CLOSED' } : { state: 'RETRY_STORE' };
+}
+
+
+// The urgent queue only schedules the existing owner. It cannot perform a
+// provider write itself or reinterpret a pending journal as a successful cancel.
+export async function runBookingPaymentCancelRequest({ job, operations, provider, tenantKey, cohortFrom,
+  mode = 'SHADOW', now = () => new Date().toISOString(), shouldStop = () => false }) {
+  if (mode !== 'ENFORCE_NEW' || shouldStop()) return { state: 'STOPPED' };
+  if (job?.kind !== 'BOOKING_PAYMENT_CANCEL_REQUEST_V1' || job.tenantKey !== tenantKey
+    || !['REQUESTED', 'CLOSING'].includes(job.state)
+    || job._id !== paymentAttemptCancelKey(tenantKey, job.actorClientId, job.bookingId, job.transactionId)
+    || paymentAttemptInstant(cohortFrom) === null) return { state: 'SKIPPED' };
+  const op = await operations.findOne({ _id: job.operationKey });
+  if (!op || !eligiblePaymentAttempt(op) || !paymentAttemptCancelRequested(op)
+    || op.lk1.paymentAttempt.cancelRequest.key !== job._id || op.actorClientId !== job.actorClientId
+    || op.tenantKey !== tenantKey || op.bookingId !== job.bookingId
+    || op.lk1.checkout.transactionId !== job.transactionId
+    || paymentAttemptInstant(op.createdAt) === null || Date.parse(op.createdAt) < Date.parse(cohortFrom)) {
+    return { state: 'SKIPPED', reason: 'CANCEL_REQUEST_BINDING_UNVERIFIED' };
+  }
+  if (shouldStop()) return { state: 'STOPPED' };
+  const result = await reconcileBookingPaymentAttempt({ op, operations, provider, mode, now, shouldStop });
+  if (shouldStop()) return { state: 'STOPPED' };
+  const fresh = await operations.findOne({ _id: op._id });
+  if (!fresh || !eligiblePaymentAttempt(fresh) || !paymentAttemptCancelRequested(fresh)
+    || fresh.lk1.paymentAttempt.cancelRequest.key !== job._id) return { state: 'RETRY_STORE' };
+  const closed = paymentAttemptReleased(fresh)
+    && (!fresh.lk1.paymentAttempt.resourceJobKey || fresh.lk1.paymentAttempt.resourceJobCompleted === true);
+  const paid = fresh?.lk1?.paymentAttempt?.phase === 'PAID';
+  if (shouldStop()) return { state: 'STOPPED' };
+  await operations.updateOne({ _id: job._id, $expr: { $eq: ['$$ROOT', { $literal: job }] } },
+    { $set: { state: closed ? 'CLOSED' : paid ? 'PAID' : 'CLOSING', updatedAt: now(),
+      nextCheckAt: new Date(Date.parse(now()) + 5000).toISOString() } }, options);
+  return result;
 }

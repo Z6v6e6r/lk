@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as contract from '../lib/splitBookingPaymentAttempt.mjs';
 import * as nativePaymentContract from '../lib/bookingPaymentAttempt.mjs';
+import { createBookingPaymentCancellationProtocol } from '../lib/bookingPaymentCancellation.mjs';
+import { fixture as cancellationProtocolFixture, at as cancellationAt, cfg as cancellationConfig } from './fixtures/bookingPaymentCancellationFixtures.mjs';
 
 const now = Date.parse('2026-11-20T10:00:00.000Z');
 const source = name => fs.readFileSync(new URL('../nodered_games_nodes/fn_split_' + name + '.js', import.meta.url), 'utf8');
@@ -179,11 +181,16 @@ test('closed head offers a new identity; only explicit next generation can claim
 });
 test('create checkout URL cannot be returned until exact durable head bind ACK', () => {
   const ctx = { action: 'create', step: 'ordinary_attempt_checkout_saved', paymentMode: 'one_time',
+    trustedPaymentActor: 'actor', ordinaryHeadKey: 'booking-payment-head:fixture',
     operationId: 'ordinary-fixture', ordinaryResponse: { paymentUrl: 'https://pay.vivacrm.ru/fixture',
       bookingId: 'booking', transactionId: 'transaction', expiresAt: '2026-11-20T10:05:00Z' } };
   let r = run('router', { _splitCtx: ctx, payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0 }, statusCode: 200 });
   assert.equal(r.msg.statusCode, 202); assert.equal(r.msg.payload.paymentUrl, null);
   r = run('router', { _splitCtx: ctx, payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 }, statusCode: 200 }, now + 5 * 60000);
+  assert.ok(r.out[5]); assert.ok(!r.out[1]);
+  r = run('router', { _splitCtx: ctx, payload: [{ _id: ctx.ordinaryHeadKey,
+    kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', tenantKey: 'iSkq6G', actorClientId: 'actor',
+    phase: 'PAYMENT_REQUIRED', payment: { bookingId: 'booking', transactionId: 'transaction' } }], statusCode: 200 }, now + 5 * 60000);
   assert.equal(r.msg.statusCode, 202); assert.equal(r.msg.payload.paymentUrl, null);
   assert.equal(r.out[2].payload.paymentUrl, 'https://pay.vivacrm.ru/fixture', 'closed-window locator is preserved for canonical cleanup');
 });
@@ -291,7 +298,7 @@ test('server closure receipt is majority persisted before canonical roster write
 });
 test('normal JOIN durably binds pending finance into existing game without roster authority', () => {
   const f = fixture();
-  const ctx = { action: 'join', step: 'ordinary_attempt_pending_game_found', paymentMode: 'one_time',
+  const ctx = { action: 'join', ordinaryHeadKey: 'booking-payment-head:fixture', step: 'ordinary_attempt_pending_game_found', paymentMode: 'one_time',
     gameId: 'game', exerciseId: 'exercise', trustedPaymentActor: 'actor', operationId: f.payment.operationId,
     ordinaryResponse: { ...f.payment, toPayMinor: 120000, paymentAttemptState: 'PAYMENT_REQUIRED',
       paymentAttemptHeadKey: 'booking-payment-head:fixture', paymentAttemptCreatedAt: f.payment.createdAt,
@@ -311,6 +318,9 @@ test('normal JOIN durably binds pending finance into existing game without roste
   r = run('router', { _splitCtx: ctx, payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 }, statusCode: 200 });
   assert.ok(r.out[7]); assert.ok(!r.out[1]);
   r = run('router', { _splitCtx: ctx, payload: [persisted], statusCode: 200 });
+  assert.ok(r.out[5]); assert.ok(!r.out[1], 'fresh cancellation marker is checked after pending-row persistence');
+  r = run('router', { _splitCtx: ctx, payload: [{ _id: ctx.ordinaryHeadKey, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1',
+    actorClientId: 'actor', tenantKey: 'iSkq6G', phase: 'PAYMENT_REQUIRED', payment: f.payment }], statusCode: 200 });
   assert.equal(r.msg.statusCode, 201); assert.equal(r.msg.payload.paymentUrl, f.payment.paymentUrl);
   assert.deepEqual(persisted.participants, game.participants); assert.deepEqual(persisted.waitlist, game.waitlist);
 });
@@ -376,6 +386,7 @@ test('CLOSED ordinary head accepts a distinct explicit random click and never re
   const key = contract.splitAttemptHeadKey({ action: 'join', exerciseId: 'exercise' }, 'actor');
   const head = { _id: key, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', tenantKey: 'iSkq6G', actorClientId: 'actor',
     phase: 'CLOSED', operationId: 'current-payment', rootOperationId: 'first-payment', generation: 2,
+    cancelRequestedAt: new Date(now).toISOString(), cancelRequestedBy: 'actor', cancelRequestKey: 'cancel-request',
     history: [{ operationId: 'first-payment' }, { operationId: 'second-payment' }] };
   for (const id of ['first-payment', 'second-payment', 'current-payment']) {
     const r = run('router', { _splitCtx: { action: 'join', exerciseId: 'exercise', paymentMode: 'one_time',
@@ -388,6 +399,9 @@ test('CLOSED ordinary head accepts a distinct explicit random click and never re
     payload: [head], statusCode: 200 });
   assert.ok(r.out[6]); assert.equal(r.msg.payload[1].$set.operationId, 'brand-new-random-ref');
   assert.equal(r.msg.payload[1].$set.generation, 3); assert.equal(r.msg.payload[1].$push.history.operationId, head.operationId);
+  assert.equal(r.msg.payload[1].$unset.cancelRequestedAt, '');
+  assert.equal(r.msg.payload[1].$unset.cancelRequestedBy, ''); assert.equal(r.msg.payload[1].$unset.cancelRequestKey, '');
+  assert.equal(r.msg.payload[1].$push.history.cancelRequestKey, head.cancelRequestKey, 'original cancellation remains audited');
 });
 test('UNPAID -> durable CANCEL intent -> PAID -> exact claim preserves canonical paid recovery', () => {
   const ctx = cleanupCtx('CANCEL'); ctx.step = 'split_close_transaction_recheck';
@@ -521,4 +535,210 @@ test('late old-attempt cleanup preserves a player owned by a fresh PAID or pendi
     assert.equal(task.nextSplitPayments[1].status, freshStatus);
     assert.equal(task.nextSplitPayments[1].bookingId, fresh.bookingId);
   }
+});
+
+function cancellationFixture() {
+  const f = fixture();
+  f.payment.paymentAttemptHeadKey = contract.splitAttemptHeadKey({ action: 'join', exerciseId: 'exercise' }, 'actor');
+  const other = { ...f.payment, clientId: 'other', bookingId: 'other-booking', transactionId: 'other-transaction',
+    paymentRef: 'other-ref', operationId: 'other-operation', createdAt: '2026-11-20T09:00:00Z' };
+  const game = { _id: 'game-object', id: 'game', tenantKey: 'iSkq6G', revision: 2, status: 'PAID',
+    settings: { payMode: 'split' }, participants: [{ id: 'actor' }, { id: 'other' }], waitlist: [],
+    metadata: { splitPayment: { enabled: true, exerciseId: 'exercise', payments: [f.payment, other] }, leaveEvents: [] } };
+  const request = { intent: 'cancel_payment', actorClientId: 'actor', tenantKey: 'iSkq6G', gameId: 'game',
+    nowTs: now, nowIso: new Date(now).toISOString(), force: false, dryRun: false, limit: 1,
+    paymentCancellation: { authorized: true, headKey: f.payment.paymentAttemptHeadKey, operationId: f.payment.operationId,
+      bookingId: 'booking', transactionId: 'transaction', actorClientId: 'actor', requestedAt: new Date(now).toISOString() } };
+  return { ...f, game, request };
+}
+test('explicit authenticated cancellation selects exactly its own checkout before 15m and never cancels the game', () => {
+  for (let click = 0; click < 2; click++) {
+    const f = cancellationFixture();
+    const r = run('cleanup_prepare', { payload: [f.game], _splitCleanupRequest: f.request });
+    assert.ok(r.out[0]); const tasks = r.msg.payload;
+    assert.equal(tasks.length, 1); const task = tasks[0];
+    assert.equal(task.mode, 'PARTICIPANT_TIMEOUT'); assert.equal(task.exerciseId, null);
+    assert.deepEqual(plain(task.bookingIds), ['booking']);
+    assert.equal(task.nextSplitPayments[0].status, 'EXPIRED');
+    assert.equal(task.nextSplitPayments[0].cancelReason, 'USER_PAYMENT_CANCELLED');
+    assert.deepEqual(plain(task.nextSplitPayments[1]), f.game.metadata.splitPayment.payments[1]);
+    assert.deepEqual(plain(task.nextParticipants), [{ id: 'other' }]);
+    assert.equal(task.nextLeaveEvents[0].reason, 'USER_PAYMENT_CANCELLED');
+  }
+});
+test('early cancellation rejects untrusted, paid, duplicate, cross-actor and mismatched tuples without a task', () => {
+  const mutations = [
+    f => { delete f.request.paymentCancellation; },
+    f => { f.request.paymentCancellation.authorized = false; },
+    f => { delete f.request.actorClientId; },
+    f => { f.request.paymentCancellation.actorClientId = 'other'; },
+    f => { f.request.paymentCancellation.transactionId = 'different'; },
+    f => { f.request.paymentCancellation.operationId = 'different'; },
+    f => { f.request.paymentCancellation.headKey = 'other-head'; },
+    f => { f.game.metadata.splitPayment.payments[0].status = 'PAID'; },
+    f => { f.game.metadata.splitPayment.payments.push({ ...f.payment }); },
+    f => { f.game.metadata.splitPayment.payments[0].bookingIds = ['booking', 'other-booking']; },
+    f => { f.request.force = true; },
+    f => { f.game.tenantKey = 'other'; },
+  ];
+  for (const mutate of mutations) {
+    const f = cancellationFixture(); mutate(f);
+    const r = run('cleanup_prepare', { payload: [f.game], _splitCleanupRequest: f.request });
+    assert.equal(r.msg.statusCode, 403); assert.ok(!r.out[0]);
+    assert.equal(r.msg.payload.code, 'SPLIT_PAYMENT_CANCEL_BINDING_INVALID');
+  }
+});
+test('cancel marker hides an old metadata checkout after fresh profile and on current-head entry', () => {
+  const f = cancellationFixture();
+  const head = { _id: f.payment.paymentAttemptHeadKey, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1',
+    actorClientId: 'actor', tenantKey: 'iSkq6G', phase: 'PAYMENT_REQUIRED', payment: f.payment,
+    operationId: f.payment.operationId, cancelRequestedAt: new Date(now).toISOString() };
+  const ctx = { action: 'join', step: 'ordinary_attempt_profile', paymentMode: 'one_time',
+    operationId: 'new-click', clientId: 'actor', clientPhone: '79990000000', exerciseId: 'exercise',
+    existingSplitPayments: [f.payment] };
+  let r = run('router', { _splitCtx: ctx, payload: { id: 'actor', phone: '79990000000' }, statusCode: 200 });
+  assert.ok(r.out[5]); assert.ok(!r.out[0], 'metadata checkout cannot bypass fresh head read');
+  r = run('router', { _splitCtx: ctx, payload: [head], statusCode: 200 });
+  assert.ok(r.out[0]); assert.equal(r.msg.method, 'GET', 'a concurrent PAID result may still be read');
+  r = run('router', { _splitCtx: { ...ctx, step: 'ordinary_attempt_head_found' }, payload: [head], statusCode: 200 });
+  assert.ok(r.out[7]); assert.ok(!r.out[0], 'closure-receipt recovery is still allowed without exposing a URL');
+  r = run('router', { _splitCtx: r.msg._splitCtx, payload: [f.game], statusCode: 200 });
+  assert.ok(r.out[0]); assert.equal(r.msg.method, 'GET');
+});
+test('final checkout exposure rechecks cancellation committed while provider or game reads ran', () => {
+  const f = cancellationFixture();
+  for (const cancel of [false, true]) {
+    const ctx = { action: 'create', step: 'ordinary_attempt_transaction', paymentMode: 'one_time',
+      trustedPaymentActor: 'actor', ordinaryHeadKey: f.payment.paymentAttemptHeadKey,
+      exerciseId: 'exercise', ordinaryResumePayment: f.payment, ordinaryResumeBooking: f.booking };
+    let r = run('router', { _splitCtx: ctx, payload: f.transaction, statusCode: 200 });
+    assert.ok(r.out[5]); assert.ok(!r.out[1]);
+    const head = { _id: ctx.ordinaryHeadKey, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', tenantKey: 'iSkq6G',
+      actorClientId: 'actor', phase: 'PAYMENT_REQUIRED', payment: f.payment,
+      ...(cancel ? { cancelRequestedAt: new Date(now).toISOString() } : {}) };
+    r = run('router', { _splitCtx: ctx, payload: [head], statusCode: 200 });
+    assert.equal(r.msg.statusCode, cancel ? 202 : 200);
+    assert.equal(r.msg.payload.paymentUrl, cancel ? null : f.payment.paymentUrl);
+    assert.ok(!r.out[0]); assert.ok(!r.out[6]);
+  }
+});
+
+test('cancellation marker permits exact read-only PAID reconciliation but never reopens an unpaid URL', () => {
+  for (const paid of [false, true]) {
+    const f = cancellationFixture();
+    const head = { _id: f.payment.paymentAttemptHeadKey, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1',
+      actorClientId: 'actor', tenantKey: 'iSkq6G', phase: 'PAYMENT_REQUIRED', payment: f.payment,
+      cancelRequestedAt: new Date(now).toISOString() };
+    const ctx = { action: 'join', step: 'ordinary_attempt_resume_head_found', trustedPaymentActor: 'actor',
+      ordinaryHeadKey: head._id, exerciseId: 'exercise', ordinaryResumePayment: f.payment };
+    let r = run('router', { _splitCtx: ctx, payload: [head], statusCode: 200 });
+    assert.ok(r.out[0]); assert.equal(r.msg.method, 'GET'); assert.match(r.msg.url, /bookings\/booking$/);
+    r = run('router', { _splitCtx: ctx, payload: f.booking, statusCode: 200 });
+    assert.ok(r.out[0]); assert.equal(r.msg.method, 'GET'); assert.match(r.msg.url, /transactions\/transaction$/);
+    if (paid) f.transaction.status = 'PAID';
+    r = run('router', { _splitCtx: ctx, payload: f.transaction, statusCode: 200 });
+    assert.equal(r.msg.statusCode, paid ? 200 : 202);
+    assert.equal(r.msg.payload.paymentAttemptState, paid ? 'PAID' : 'CLOSING');
+    assert.equal(r.msg.payload.paymentUrl, null); assert.ok(!r.out[0]); assert.ok(!r.out[6]); assert.ok(!r.out[8]);
+  }
+});
+
+function nativeEarlyCancellation() {
+  const f = cancellationFixture(), owner = nativeOwner(true);
+  f.game.tenantKey = 'tenant'; f.request.tenantKey = 'tenant';
+  delete f.payment.operationId; delete f.payment.paymentAttemptHeadKey;
+  f.request.paymentCancellation = { authorized: true, nativeRelease: true, nativeOperationKey: owner._id,
+    operationId: owner.operationId, bookingId: owner.bookingId, transactionId: owner.lk1.checkout.transactionId,
+    actorClientId: owner.actorClientId, requestedAt: new Date(now).toISOString() };
+  return { ...f, owner };
+}
+test('native early release finalizes the exact headless canonical row before15m without service or financial HTTP', () => {
+  const f = nativeEarlyCancellation();
+  const prepared = run('cleanup_prepare', { payload: [f.game], _splitCleanupRequest: f.request });
+  assert.ok(prepared.out[0]); const task = prepared.msg.payload[0];
+  assert.equal(task.nativePaymentCancelOnly, true); assert.equal(task.nativePaymentOperationKey, f.owner._id);
+  assert.equal(task.exerciseId, null); assert.equal(task.timedOutPayments[0].paymentAttemptHeadKey, null);
+  assert.deepEqual(plain(task.bookingIds), ['booking']);
+  const lookup = run('cleanup_router', { payload: task });
+  assert.ok(lookup.out[7]); assert.ok(!lookup.out[0], 'even service token/login is unnecessary for roster-only finalization');
+  const done = run('cleanup_router', { ...lookup.out[7], payload: [f.owner], statusCode: 200 });
+  assert.ok(done.out[1]); assert.ok(!done.out[0]); assert.ok(!done.out[6]);
+  const fields = done.out[1].payload.$set;
+  assert.equal(fields['metadata.splitPayment.payments'][0].status, 'EXPIRED');
+  assert.equal(fields['metadata.splitPayment.payments'][0].nativePaymentAttemptClosure.operationKey, f.owner._id);
+  assert.equal(fields['metadata.splitPayment.payments'][0].paymentAttemptClosure, undefined);
+  assert.deepEqual(plain(fields.participants), [{ id: 'other' }]);
+  assert.deepEqual(plain(done.out[1]._splitCleanupWriteAck.paymentAttemptHeadClosures), []);
+});
+test('native-only early roster finalization cannot fall back to ordinary finance or trust a release hint', () => {
+  for (const variant of ['absent', 'active', 'paid', 'ambiguous', 'wrong-key', 'busy-job', 'bad-proof']) {
+    const f = nativeEarlyCancellation();
+    const prepared = run('cleanup_prepare', { payload: [f.game], _splitCleanupRequest: f.request });
+    const lookup = run('cleanup_router', { payload: prepared.msg.payload[0] });
+    if (variant === 'active') f.owner.state = 'CONFIRMED';
+    if (variant === 'paid') f.owner.lk1.paymentAttempt.phase = 'PAID';
+    if (variant === 'wrong-key') lookup.msg._splitCleanupCtx.nativePaymentOperationKey += ':different';
+    if (variant === 'busy-job') f.owner.lk1.paymentAttempt.resourceJobKey = 'incomplete-job';
+    if (variant === 'bad-proof') f.owner.lk1.paymentAttemptRelease.transactionState = 'UNKNOWN';
+    const done = run('cleanup_router', { ...lookup.out[7], payload: variant === 'absent' ? []
+      : variant === 'ambiguous' ? [f.owner, f.owner] : [f.owner], statusCode: 200 });
+    assert.ok(!done.out[0], variant); assert.ok(!done.out[1], variant); assert.ok(!done.out[6], variant);
+    assert.equal(done.msg._splitCleanupCtx.upstreamMutationsAttempted, 0, variant);
+  }
+});
+test('native early cancellation descriptor cannot spoof operation ownership or discard a different row operation', () => {
+  for (const mutate of [f => { f.request.paymentCancellation.nativeOperationKey += ':foreign'; },
+    f => { f.payment.operationId = 'other-native-operation'; },
+    f => { f.request.paymentCancellation.actorClientId = 'other'; }]) {
+    const f = nativeEarlyCancellation(); mutate(f);
+    const r = run('cleanup_prepare', { payload: [f.game], _splitCleanupRequest: f.request });
+    assert.equal(r.msg.statusCode, 403); assert.ok(!r.out[0]);
+  }
+});
+
+test('native early canonical finalization preserves a fresh generation belonging to the same actor', () => {
+  for (const freshStatus of ['PAYMENT_PENDING', 'PAID']) {
+    const f = nativeEarlyCancellation();
+    f.game.metadata.splitPayment.payments.push({ ...f.payment, bookingId: 'new-booking', transactionId: 'new-transaction',
+      paymentRef: 'fresh-generation', operationId: 'new-operation', status: freshStatus });
+    const prepared = run('cleanup_prepare', { payload: [f.game], _splitCleanupRequest: f.request });
+    const task = prepared.msg.payload[0];
+    assert.deepEqual(plain(task.nextParticipants), f.game.participants);
+    assert.deepEqual(plain(task.nextLeaveEvents), []);
+    const lookup = run('cleanup_router', { payload: task });
+    const done = run('cleanup_router', { ...lookup.out[7], payload: [f.owner], statusCode: 200 });
+    assert.ok(done.out[1]); assert.ok(!done.out[0]);
+    const fields = done.out[1].payload.$set;
+    assert.deepEqual(plain(fields.participants), f.game.participants);
+    assert.equal(fields['metadata.splitPayment.payments'][2].status, freshStatus);
+    assert.equal(fields['metadata.splitPayment.payments'][0].status, 'EXPIRED');
+  }
+});
+
+test('actual cancellation controller descriptor drives native early canonical finalization without any provider write', () => {
+  const f = cancellationProtocolFixture(), op = f.op;
+  op.state = 'RELEASED'; op.lk1.paymentAttempt = { phase: 'CLOSED', closedAt: new Date(cancellationAt).toISOString() };
+  op.lk1.paymentAttemptRelease = { schemaVersion: 1, binding: nativePaymentContract.paymentAttemptBinding(op),
+    bookingState: 'CANCELLED', transactionState: 'UNPAID_CLOSED', creditState: 'NOT_CONSUMED', creditProof: null,
+    verifiedAt: op.lk1.paymentAttempt.closedAt };
+  const row = f.game.metadata.splitPayment.payments[0]; delete row.operationId; delete row.paymentAttemptHeadKey;
+  f.game.waitlist = [{ id: 'actor' }];
+  const controller = createBookingPaymentCancellationProtocol(nativePaymentContract);
+  let effect = controller.begin(f.input, { ...cancellationConfig, method: 'POST' }, cancellationAt);
+  effect = controller.step(effect.state, { status: 200, body: { id: 'actor' } }, cancellationAt);
+  effect = controller.step(effect.state, { status: 200, body: [op] }, cancellationAt);
+  assert.equal(effect.effect.kind, 'find'); assert.equal(effect.effect.collection, 'games');
+  effect = controller.step(effect.state, { status: 200, body: [f.game] }, cancellationAt);
+  assert.equal(effect.effect.kind, 'cleanup'); assert.equal(effect.effect.request.paymentCancellation.nativeRelease, true);
+  assert.equal(effect.effect.request.paymentCancellation.nativeOperationKey, op._id);
+  const prepared = run('cleanup_prepare', { payload: [effect.effect.game], _splitCleanupRequest: effect.effect.request }, cancellationAt);
+  assert.ok(prepared.out[0]); const task = prepared.msg.payload[0]; assert.equal(task.nativePaymentCancelOnly, true);
+  const lookup = run('cleanup_router', { payload: task }, cancellationAt);
+  assert.ok(lookup.out[7]); assert.ok(!lookup.out[0]);
+  const done = run('cleanup_router', { ...lookup.out[7], statusCode: 200, payload: [op] }, cancellationAt);
+  assert.ok(done.out[1]); assert.ok(!done.out[0]); assert.ok(!done.out[6]);
+  const fields = done.out[1].payload.$set;
+  assert.equal(fields['metadata.splitPayment.payments'][0].status, 'EXPIRED');
+  assert.equal(fields['metadata.splitPayment.payments'][0].nativePaymentAttemptClosure.operationKey, op._id);
+  assert.deepEqual(plain(fields.waitlist), []);
 });

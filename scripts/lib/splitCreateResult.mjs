@@ -108,7 +108,7 @@ export function createSplitCreateResultProtocol(paymentLifecycle = null) {
       const paid = op.lk1.paymentAttempt?.phase === 'PAID';
       if (amount > 0 && !paid && paymentLifecycle && (op.lk1.paymentAttempt || deadline == null || now >= deadline)) {
         return { state: null, effect: { kind: 'reply', status: 202, body: {
-          state: 'PENDING_CONFIRMATION', paymentAttemptState: 'CLOSING', operationId: op.operationId,
+          state: 'PENDING_CONFIRMATION', paymentAttemptState: 'CLOSING', paymentAttemptCancelSupported: true, operationId: op.operationId,
           bookingId: op.bookingId, transactionId: checkout?.transactionId, paymentUrl: null,
           paymentExpiresAt: deadline == null ? null : new Date(deadline).toISOString(),
           details: { code: 'PAYMENT_ATTEMPT_CLOSING' } } } };
@@ -126,6 +126,7 @@ export function createSplitCreateResultProtocol(paymentLifecycle = null) {
         // Nominal participant share is the stored target tariff, never the organizer's benefit/surcharge.
         shareAmountMinor: op.lk1.target.basePriceMinor, shareAmount: op.lk1.target.basePriceMinor / 100,
         paymentUrl: paid ? null : checkout?.paymentUrl || null, transactionId: checkout?.transactionId || null,
+        paymentAttemptCancelSupported: amount > 0 && !paid,
         paid: paid || amount === 0, paymentAttemptState: paid || amount === 0 ? 'PAID' : 'PAYMENT_REQUIRED',
         paymentExpiresAt: deadline == null ? null : new Date(deadline).toISOString(),
         subscriptionVisitCount: op.lk1.decision.subscriptionVisitCount,

@@ -1,4 +1,5 @@
 import { paymentAttemptFields, isSettledPaymentAttempt } from "./paymentAttemptLifecycle";
+import { bookingPaymentCancellation, setBookingPaymentCancellationSessionReader, type BookingPaymentTarget } from "./bookingPaymentCancellation";
 import { moscowBookingEndIso } from "./bookingEndTime";
 import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
@@ -21,6 +22,7 @@ import {
 import { invalidateSubscriptionSnapshot, readSubscriptionSnapshot, requestChangesSubscriptions } from "./subscriptionSessionCache";
 import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscriptionSnapshotData";
 import { readAuthToken } from "./authTokenStorage";
+setBookingPaymentCancellationSessionReader(readAuthToken);
 import { trackClientError } from "./analytics";
 import { captureSplitLeaveInitiator } from "./splitLeaveDiagnostics";
 import { UUID } from "./errorDiagnosticsCore.mjs";
@@ -3260,10 +3262,13 @@ export interface PadelGameRecord {
     amount: number | null;
     paymentUrl: string | null;
     paid: boolean | null;
+    bookingId?: string | null;
+    transactionId?: string | null;
     paymentExpiresAt?: string | null;
     paymentAttemptState?: "PAYMENT_REQUIRED" | "CLOSING" | "PAID" | null;
     paymentAttemptHeadKey?: string | null;
     paymentAttemptCreatedAt?: string | null;
+    paymentAttemptCancelSupported?: boolean;
   } | null;
 }
 
@@ -3698,6 +3703,7 @@ export interface PaymentUrl {
   paymentAttemptState?: "PAYMENT_REQUIRED" | "CLOSING" | "PAID" | null;
   paymentAttemptHeadKey?: string | null;
   paymentAttemptCreatedAt?: string | null;
+  paymentAttemptCancelSupported?: boolean;
   bookingIds?: string[];
   exerciseId?: string | null;
   vivaExerciseId?: string | null;
@@ -3992,6 +3998,7 @@ export interface PadelSplitPaymentResult {
   paymentAttemptState?: "PAYMENT_REQUIRED" | "CLOSING" | "PAID" | null;
   paymentAttemptHeadKey?: string | null;
   paymentAttemptCreatedAt?: string | null;
+  paymentAttemptCancelSupported?: boolean;
   exerciseId: string | null;
   bookingId: string | null;
   productId: string | null;
@@ -5032,6 +5039,22 @@ function isAlreadyCancelledBookingResponse(
     (text.includes("already") && text.includes("cancel"))
     || text.includes("уже отмен")
   );
+}
+
+export function apiCancelBookingPaymentAttempt(target: BookingPaymentTarget, actorClientId: string, onChange?: () => void) {
+  return bookingPaymentCancellation().cancel(target, actorClientId, {
+    session: readAuthToken, onChange,
+    send: async (method, exactTarget) => {
+      const path = "/lk/games/payment-attempts/cancel";
+      const query = new URLSearchParams(exactTarget);
+      return runWithAbortTimeout(method === "POST" ? 8000 : 5000, signal => request<unknown>(
+        method === "GET" ? `${path}?${query}` : path, {
+          method, auth: true, retries: 0, signal, baseUrl: getServ2Origin() || "",
+          cache: "no-store", dedupe: false,
+          ...(method === "POST" ? { body: JSON.stringify(exactTarget) } : {}),
+        }));
+    },
+  });
 }
 
 export async function apiCancelBooking(
@@ -6604,6 +6627,8 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
       payment: paymentPayload
         ? {
             ...paymentAttemptFields(paymentPayload),
+            bookingId: pickString(paymentPayload, ["bookingId"]),
+            transactionId: pickString(paymentPayload, ["transactionId"]),
             amount: pickNumber(paymentPayload, ["amount", "toPay", "price", "sum"]),
             paymentUrl: pickString(paymentPayload, [
               "paymentUrl",

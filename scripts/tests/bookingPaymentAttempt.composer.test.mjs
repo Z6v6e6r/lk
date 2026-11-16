@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
 import { composeBookingPaymentLifecycle, patchBookingPaymentFunction, splitBookingPaymentAttemptSource, PAYMENT_GRAPH_IDS as ids } from '../prepare_booking_payment_lifecycle.mjs';
+import { BOOKING_PAYMENT_CANCEL_IDS as cancelIds, BOOKING_PAYMENT_CANCEL_PATH } from '../lib/bookingPaymentCancellationFlow.mjs';
 import { bookingPaymentAttemptSource } from '../lib/eventPaymentSources.mjs';
 import { splitCreateResultFunctionSource } from '../lib/splitCreateResultFlow.mjs';
 const targets = JSON.parse(fs.readFileSync(new URL('../lib/bookingPaymentAttemptSourceEdits.json', import.meta.url))).functions;
@@ -35,9 +36,9 @@ function fixture() {
   return nodes;
 }
 const compose = nodes => { const bytes = Buffer.from(JSON.stringify(nodes)); return composeBookingPaymentLifecycle(bytes, sha(bytes)); };
-test('offline complete candidate preserves canonical lanes and source functions, adds eight bound Mongo callbacks', () => {
+test('offline complete candidate preserves canonical lanes and source functions, adds eight bound Mongo callbacks and isolated authenticated cancellation graph', () => {
   const original = fixture(), result = compose(original), next = JSON.parse(result.candidateBytes);
-  assert.equal(next.length, original.length + 8);
+  assert.equal(next.length, original.length + 8 + Object.keys(cancelIds).length);
   for (const owner of [ids.router, ids.cleanup, ids.ack]) {
     const before = original.find(n => n.id === owner), after = next.find(n => n.id === owner);
     assert.deepEqual(after.wires.slice(0, before.wires.length), before.wires);
@@ -49,10 +50,16 @@ test('offline complete candidate preserves canonical lanes and source functions,
     if ([ids.router, ids.cleanup, ids.ack].includes(t.id)) expected = splitBookingPaymentAttemptSource() + expected;
     assert.equal(actual, expected); new Function('msg', 'node', 'global', 'env', 'flow', actual);
   }
-  for (const n of next.slice(original.length)) {
+  for (const n of next.slice(original.length, original.length + 8)) {
     assert.equal(n.type, 'mongodb4'); assert.equal(n.clientNode, 'db');
     assert.equal(n.z, 'tab'); assert.equal(n.wires[0].length, 1);
   }
+  const cancellation = next.filter(n => Object.values(cancelIds).includes(n.id));
+  assert.equal(cancellation.length, Object.keys(cancelIds).length);
+  for (const n of cancellation) { assert.equal(typeof n.x, 'number'); assert.equal(typeof n.y, 'number'); }
+  assert.deepEqual(next.find(n => n.id === cancelIds.handler).wires[4], ['9508f8e0ae8d282a']);
+  assert.deepEqual(cancellation.filter(n => n.type === 'http in').map(n => n.method).sort(), ['get', 'options', 'post']);
+  assert.ok(cancellation.filter(n => n.type === 'http in').every(n => n.url === BOOKING_PAYMENT_CANCEL_PATH));
   assert.equal(result.sourceSha256, sha(Buffer.from(JSON.stringify(original))));
   assert.notEqual(result.candidateSha256, result.sourceSha256);
 });
@@ -77,6 +84,7 @@ for (const [name, mutate] of Object.entries({
   'disabled tab': n => { n[0].disabled = true; },
   'source drift': n => { n.find(n => n.id === ids.router).func = 'return msg;'; },
   'dangling wire': n => { n.find(n => n.id === ids.router).wires[0] = ['missing']; },
+  'cancel route collision': n => n.push({ id: 'other-cancel', type: 'http in', z: 'tab', url: BOOKING_PAYMENT_CANCEL_PATH, method: 'post', wires: [[]] }),
   'new callback collision': n => n.push({ id: ids.routerFind, type: 'debug', wires: [] }),
 })) test('composer rejects ' + name, () => { const n = fixture(); mutate(n); assert.throws(() => compose(n)); });
 test('whole-source drift and reapplication cannot produce another candidate', () => {

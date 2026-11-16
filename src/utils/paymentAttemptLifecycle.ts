@@ -1,3 +1,4 @@
+import { paymentCancellationBlocksAttempt } from "./bookingPaymentCancellation.ts";
 // A restored checkout keeps its original deadline. Local time can stop payment,
 // but only a server release may authorize a successor booking attempt.
 export const PAYMENT_ATTEMPT_TTL_MS = 15 * 60 * 1000;
@@ -26,19 +27,22 @@ export function paymentAttemptDeadline(value: unknown): number | null {
   return ends.length ? Math.min(...ends) : null;
 }
 export function paymentAttemptFields(value: unknown): { paymentExpiresAt: string | null; paymentAttemptState: PaymentAttemptState | null;
-  paymentAttemptHeadKey?: string; paymentAttemptCreatedAt?: string } {
+  paymentAttemptHeadKey?: string; paymentAttemptCreatedAt?: string; paymentAttemptCancelSupported?: boolean } {
   const deadline = paymentAttemptDeadline(value);
   const state = sources(value).map(row => String(row.paymentAttemptState || "").trim().toUpperCase())
     .find(v => ["PAYMENT_REQUIRED", "CLOSING", "PAID"].includes(v));
   const head = sources(value).map(row => row.paymentAttemptHeadKey).find(v => typeof v === "string" && v.trim());
   const created = sources(value).map(row => instant(row.paymentAttemptCreatedAt)).find(v => v !== null);
+  const supported = sources(value).map(row => row.paymentAttemptCancelSupported).filter(v => typeof v === "boolean");
   return { paymentExpiresAt: deadline === null ? null : new Date(deadline).toISOString(),
     paymentAttemptState: state as PaymentAttemptState | undefined || null,
     ...(typeof head === "string" ? { paymentAttemptHeadKey: head } : {}),
+    ...(supported.length ? { paymentAttemptCancelSupported: supported.every(v => v === true) } : {}),
     ...(created != null ? { paymentAttemptCreatedAt: new Date(created).toISOString() } : {}) };
 }
 export function canOpenPaymentAttempt(value: unknown, now = Date.now()): boolean {
   const rows = sources(value);
+  if (rows.some(paymentCancellationBlocksAttempt)) return false;
   const blocked = ["PAID", "CLOSING", "EXPIRED", "CANCELLED", "CANCELED", "RELEASED", "FAILED"];
   if (!Number.isFinite(now) || rows.some(row => row.paid === true
     || [row.paymentAttemptState, row.status, row.state].some(state => blocked.includes(String(state || "").trim().toUpperCase()))

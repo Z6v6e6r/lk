@@ -125,7 +125,9 @@ receipts и heads для сверки; удалять их для разблок
 Существующие маршруты: `POST /lk/games/split/create`,
 `POST /lk/games/:gameId/split/join`, `GET /lk/games/split/create-result`,
 `POST/GET /lk/subscription-bookings` и внутренний split cleanup.
-Новых публичных маршрутов нет. Checkout получает исходное время, конечный
+Новый маршрут `POST/GET/OPTIONS /lk/games/payment-attempts/cancel` принимает и
+проверяет запрос ручной отмены. Он использует существующий proxy-префикс
+`/lk/games/`. Checkout получает исходное время, конечный
 срок и состояние попытки; ответ PAID с исторической положительной суммой
 проверяется по точным booking/exercise/transaction и не содержит paymentUrl.
 
@@ -143,6 +145,78 @@ receipts и heads для сверки; удалять их для разблок
 Композиция хранит только source hunks и их SHA в
 `scripts/lib/bookingPaymentAttemptSourceEdits.json`; private flow, клиентские
 данные, токены и export/import из production в репозиторий не включаются.
-Восемь добавляемых Mongo nodes привязаны к тем же database client и callback
+Восемь добавляемых Mongo callback nodes и изолированный граф ручной отмены привязаны к тем же database client и callback
 владельцам, проверены offline exact graph contract. Рабочие manifests бандлов
 и live release manifests этим PR не публикуются.
+
+
+## Ручная отмена ожидающей оплаты
+
+Кнопка «Отменить оплату» доступна организатору и участнику для managed split
+checkout и нативной доплаты по подписке в игре, тренировке или турнире.
+Явный серверный `paymentAttemptCancelSupported` или managed head определяет
+доступность. Старые оплаты без финансового владельца не получают кнопку и
+не переводятся в legacy DELETE/refund fallback.
+
+Новый authenticated POST принимает только `bookingId`, `transactionId` и
+необязательный `gameId`. GET с той же привязкой сверяет результат. Actor
+получается свежим profile GET, native owner ищется по брони до ordinary head;
+старый bill locator не может скрыть владельца. Тело не задаёт actor, refund,
+лимит, фазу или endpoint финансовой операции.
+
+Native full-preimage CAS добавляет проверяемый `cancelRequest` в журнал;
+он не устанавливает `expireIntentAt`/`cancelIntentAt`. Отдельный durable job
+в том же ops collection только планирует исполнение существующим worker.
+Запрос обходит ожидание 15 минут, но сохраняет проверки оплаты, единственное
+намерение EXPIRE/CANCEL, SERVICE lock, возврат визита и release proof.
+Urgent очередь читает не более одного job по индексируемому `_id`-префиксу
+за две секунды, между обычными строками и во время ожидания следующего цикла;
+повтор неизвестного результата ограничен паузой пять секунд. Длительность
+внешнего запроса и фактическую задержку освобождения лимита нельзя вывести
+из этого интервала опроса.
+
+Ordinary full-preimage CAS сохраняет marker на прежнем head и передаёт одну
+точную оплату существующему canonical cleanup через server-only descriptor.
+Публичный cleanup query не принимает этот descriptor из тела запроса.
+Ранняя отмена не становится отменой всей игры. Сохранённый marker запрещает
+выдавать старый URL; только read-only проверка может подтвердить PAID.
+После закрытия marker архивируется с попыткой, новая generation его не наследует.
+
+Ответ `202 CLOSING` означает приём/сверку, а не освобождение лимита. Даже
+`503 REVIEW` может содержать `accepted:true`, если marker уже подтверждён,
+а последующий шаг недоступен. Неоднозначный POST/503 сохраняет клиентскую
+блокировку ссылки; дальнейшая сверка выполняется GET, без повторной отправки неизвестной финансовой команды.
+Утверждение «Лимит освобождён» разрешено только для точного `200 CLOSED`
+с `cancelled:true`, `limitReleased:true`, actor/booking/transaction binding.
+Native CLOSED дополнительно требует завершённого ресурсного job; ordinary —
+server-only receipt. PAID-проекция игры проверяется отдельным service GET
+транзакции общим строгим classifier, одна metadata не доказывает оплату.
+
+До отдельного согласованного релиза обработчик выключен по умолчанию.
+Он требует в Node-RED `LK1_UNPAID_CANCEL_MODE=ENFORCE_NEW` и тот же корректный
+`LK1_UNPAID_CANCEL_COHORT_FROM`, что у worker; OFF/SHADOW не принимают запрос
+как исполнимый. Включение на Node-RED и установка нового worker должны входить
+в один проверенный релизный план. Изменения env, рестарт и production операции
+не выполняются этим PR. Изменение графа требует обновлённой фактической
+runtime/worker guard binding; старую binding нельзя ослаблять.
+
+Локальная проверка нового графа — Node-RED 4.0.9 в отдельном loopback runtime,
+синтетические profile/Mongo/provider adapters и настоящий HTTP-маршрут.
+Она проверяет отсутствие startup-вызовов, авторизацию, один запрос/один job,
+read-only статус, единственного финансового владельца, полный CLOSED и
+сервисную проверку PAID. Она не обращается к настоящему Viva и не заменяет
+production acceptance.
+
+
+Для native-оплаты игры финансовое CLOSED может предшествовать очистке pending
+строки/waitlist в карточке. Такой GET остаётся `202 CLOSING` и выдаёт
+`financiallyClosed:true`, `needsFinalization:true` только после полного
+native release proof. Клиент допускает один дополнительный POST той же
+отмены для канонического завершения состава, затем обязательно снова GET.
+Этот POST заново проверяет профиль и proof, не создаёт native job и не
+вызывает финансовых команд; cleanup получает native-only capability и
+повторно читает native владельца. Неизвестный ACK в текущем вызове проверяется
+только GET. Это позволяет освободить pending-запись до первоначального
+дедлайна и сохранить новую запись того же игрока. Если старая финансовая
+строка отсутствует, подтверждённое финансовое CLOSED не превращается в
+автоматическое удаление несвязанного orphan roster.
