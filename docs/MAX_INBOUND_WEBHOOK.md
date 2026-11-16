@@ -98,6 +98,40 @@ confirmed in CUP persistence and rendered in the conversations UI; also observe
 new outgoing receipts and verify archive/process/flow/worker fingerprints.
 Historical messages that never reached CUP are not recovered by a new subscription.
 
+## Dispatch pause during an authorized CUP cutover
+
+`/etc/padlhub/max-padlhub-dispatch.pause.json` stops only forwarding from the durable
+inbox to CUP. Webhook authentication, disk/fsync admission and HTTP200 ACK continue.
+The protected root-owned0600 file has exactly `schema:MAX_INBOUND_DISPATCH_PAUSE_V1`,
+an owner `deploymentId` and a fresh64-hex `epoch`. Missing file preserves normal
+dispatch. Unsafe/invalid files fail closed as paused; there is no expiry or automatic
+unpause. Remove only the operator's own file after matching inode/hash/epoch checks.
+
+The loopback `/health` includes `dispatchPaused`, `dispatchPauseState`, pause epoch/hash
+and `dispatcherBusy`. After publishing the pause, require stable matching pause metadata
+and `dispatcherBusy:false`: a POST already started before the pause completes its
+receipt/majority confirmation first. The gate is checked again after awaited readiness,
+before a new dispatch intent. QUEUED records survive restart and resume once; uncertain
+intent/REVIEW records keep the existing no-replay behavior. This pause does not fence
+other CUP producers or prove that the outgoing queue has drained.
+
+The old receiver does not understand this pause file. Its separately authorized upgrade
+uses a short exact503 fence on the existing webhook route, graceful stop/drain, the same
+preserved inbox and the new receiver starting paused. Verify its unit/config,90s media
+POST budget and120s stop budget, readiness, lock and inbox identity before restoring
+the webhook. MAX documents retries for non200/failed delivery (initial60s, then150s,
+375s; up to10 attempts and an8-hour subscription limit). Keep this maintenance bounded;
+do not acknowledge an event that has not reached the durable inbox, change the
+subscription or enable polling. Provider retries may delay the affected event.
+
+Once the webhook is restored, new incoming events stay durable QUEUED while the separate
+exact CUP producer fence/drain and release complete. Keep held/outgoing/archive state
+unchanged, and verify the deleted1041 records remain absent. A real MAX incoming message
+and outgoing delivery receipt are still required after resuming.
+
+Retry contract: [MAX subscriptions](https://dev.max.ru/docs-api/methods/POST/subscriptions)
+and [MAX events](https://dev.max.ru/help/events).
+
 ## Tests
 
 `npm ci --ignore-scripts --prefix scripts/max_inbound_webhook`

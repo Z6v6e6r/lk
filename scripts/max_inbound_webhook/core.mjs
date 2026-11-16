@@ -129,19 +129,24 @@ export class Inbox {
 }
 
 export class Dispatcher {
-  constructor(inbox, { ready, post, confirm }) { Object.assign(this, { inbox, ready, post, confirm }); this.running = false; this.stopping = false; }
+  constructor(inbox, { ready, post, confirm, paused = () => false }) {
+    need(typeof paused === 'function', 'PAUSE_CONFIGURATION');
+    Object.assign(this, { inbox, ready, post, confirm, paused }); this.running = false; this.stopping = false;
+  }
+  isPaused() { try { return this.paused() !== false; } catch { return true; } }
   stop() { this.stopping = true; }
   async tick() {
-    if (this.running || this.stopping) return; this.running = true;
-    try { for (const key of this.inbox.pending()) { if (this.stopping) break; await this.process(key); } }
+    if (this.running || this.stopping || this.isPaused()) return; this.running = true;
+    try { for (const key of this.inbox.pending()) { if (this.stopping || this.isPaused()) break; await this.process(key); } }
     finally { this.running = false; }
   }
   async process(key) {
+    if (this.isPaused()) return;
     let r = this.inbox.read(key);
     // An intent surviving a crash is uncertain. It must never become a second POST.
     if (r.phase === 'DISPATCH_INTENT') { r.phase = 'REVIEW'; r.reason = 'UNKNOWN_DISPATCH'; this.inbox.write(r); return; }
     if (r.phase === 'RECEIPT') { await this.verify(r); return; }
-    if (r.phase !== 'QUEUED' || this.stopping || !await this.ready() || this.stopping) return;
+    if (r.phase !== 'QUEUED' || this.stopping || this.isPaused() || !await this.ready() || this.stopping || this.isPaused()) return;
     r.phase = 'DISPATCH_INTENT'; this.inbox.write(r);
     let receipt;
     try { receipt = await this.post(r.dtos[r.nextPart]); }
