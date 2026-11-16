@@ -100,6 +100,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const allowanceText = (option: PaymentOption) => option.kind === 'pass' ? `Спишем 1 из ${passRemaining} тренировок Энергии 5. После записи останется ${trainingCount(passRemaining - 1)}.` : `Запись использует ${option.freeMinutes ? `${option.freeMinutes} мин` : '1 занятие'} дневного лимита ${option.kind === 'boost' ? 'РАбуста' : 'подписки'}.`;
   const title = (option: PaymentOption) => {
     if (option.mode === 'offer' && option.kind === 'subscription') return `Запись с подпиской${subscriptionFromPrice != null ? ` от ${formatRubles(subscriptionFromPrice)}` : ''}`;
+    if (option.mode === 'offer' && option.kind === 'boost') return 'С РАбуста';
     if (option.mode === 'offer') return `Добавить ${productName(option)}`;
     if (option.withResidency) return `С Резидентством и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
     if (option.withSubscription) return `С подпиской и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
@@ -117,16 +118,18 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     return 'Подписка';
   };
   const detail = (option: PaymentOption) => {
+    if (option.mode === 'offer' && option.kind === 'subscription') return recommendedSubscription?.offer.name || 'Подписка';
+    if (option.mode === 'offer' && option.kind === 'boost') return `Буст ${profile.subscription ? 'подписки' : 'Резидентства'} на 7 дней`;
     if (option.mode === 'offer') {
       const cost = productCost(option);
-      return `${cost == null ? 'Цена продукта уточняется' : `${formatRubles(cost)}${option.kind === 'boost' ? '' : ' за 30 дней'}`} · ${option.amount === 0 ? 'участие включено' : option.amount != null ? `участие ${formatRubles(option.amount)}` : 'стоимость участия уточняется'}${option.kind === 'subscription' ? '. Выберите подходящую подписку в следующем окне. Лимиты профиля сохраняются.' : ''}`;
+      return `${cost == null ? 'Цена продукта уточняется' : `${formatRubles(cost)} за 30 дней`} · ${option.amount === 0 ? 'участие включено' : option.amount != null ? `участие ${formatRubles(option.amount)}` : 'стоимость участия уточняется'}`;
     }
     if (option.reason === 'excluded-group') return option.kind === 'residency' ? 'Резидентство не действует на эту категорию групповых' : 'Подписка не действует на эту категорию групповых';
     if (option.reason === 'training-only') return 'Бесплатная тренировка ещё доступна. Скидки на другие услуги — после использования дневного лимита';
     if (option.reason === 'unknown-price') return 'Стоимость корта уточняется';
     if (option.reason === 'unknown-duration') return 'Нужно уточнить длительность события';
     if (option.mode === 'unavailable') return option.kind === 'subscription' ? 'Тариф подписки не подходит к этому событию' : 'Нет подходящего абонемента с доступными посещениями';
-    if (option.kind === 'full') return isWholeCourt ? 'Оплата всего корта без применения льгот' : 'Оплата без использования абонемента и дневного лимита';
+    if (option.kind === 'full') return isWholeCourt ? 'Оплата всего корта без применения льгот' : '';
     if (option.withResidency && option.benefit === 'discount') return 'Бесплатный лимит РАбуста недоступен · действует скидка Резидентства';
     if (option.kind === 'residency') return `Скидка ${price.discount}%`;
     if (option.withResidency && (option.benefit === 'free-hour' || option.benefit === 'free-event')) return 'Дневной лимит РАбуста доступен';
@@ -142,7 +145,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     }
     return `${passBalanceText(passRemaining)} · спишется 1 тренировка`;
   };
-  const amount = (option: PaymentOption) => option.mode === 'offer' ? offerOrder(option) ? formatRubles(offerOrder(option)!.total) : 'Нужен расчёт' : option.reason === 'unknown-price' ? 'Нужен расчёт' : option.mode === 'unavailable' ? 'Не действует'
+  const amount = (option: PaymentOption) => option.mode === 'offer' && option.kind === 'subscription' ? subscriptionFromPrice != null ? formatRubles(subscriptionFromPrice) : 'Нужен расчёт' : option.mode === 'offer' ? offerOrder(option) ? formatRubles(offerOrder(option)!.total) : 'Нужен расчёт' : option.reason === 'unknown-price' ? 'Нужен расчёт' : option.mode === 'unavailable' ? 'Не действует'
     : option.reason === 'training-only' ? 'Выбрать тариф'
     : option.benefit === 'partial-hour' && option.amount == null ? 'Нужен расчёт'
       : option.kind === 'pass' ? `Остаток: ${trainingCount(passRemaining)}` : option.amount === 0 ? 'Бесплатно' : formatRubles(option.amount!);
@@ -231,8 +234,9 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
           const displayKind = option.withResidency ? 'residency' : option.withSubscription ? 'subscription' : option.kind;
           const showBasePrice = option.mode !== 'offer' && (option.kind === 'residency' || option.kind === 'subscription' || option.kind === 'boost')
             && referenceAmount != null && option.amount != null && option.amount >= 0 && option.amount < referenceAmount;
+          const optionDetail = detail(option);
           const copy = <><span className={`matrix-icon matrix-icon--${displayKind}`}><PaymentIcon kind={displayKind} /></span>
-            <span className="matrix-option-copy"><strong>{title(option)}</strong><span>{detail(option)}</span>{isPersonalGame && option.kind === 'full' && <span className="matrix-option-share">Моя доля 1/4 стоимости</span>}</span>
+            <span className="matrix-option-copy"><strong>{title(option)}</strong>{optionDetail && <span>{optionDetail}</span>}{isPersonalGame && option.kind === 'full' && <span className="matrix-option-share">Моя доля 1/4 стоимости</span>}</span>
             <span className="matrix-option-value">{showBasePrice && <span className="matrix-base-price matrix-option-base-price"><span>Полная цена</span><del>{formatRubles(referenceAmount!)}</del></span>}<strong>{amount(option)}</strong></span></>;
           const classes = `matrix-option matrix-option--${displayKind} ${choice?.kind === option.kind ? 'is-selected' : ''} ${option.mode === 'quote' ? 'is-quote' : ''}`;
           const groupTitle = option.mode === 'offer' && (index === 0 || visible[index - 1].mode !== 'offer') ? <div className="matrix-method-group-label">Записаться с дополнительными опциями</div> : null;

@@ -19,7 +19,7 @@ export function BoostPurchaseOffer({ option, boostPrice, profile, plan, eventDes
   </>}>
     <section className="matrix-purchase-benefits matrix-residency-card" aria-label="Преимущества РАбуста">
       <h2 className="matrix-residency-badge" data-purchase-title tabIndex={-1}>РАбуста</h2>
-      <p className="matrix-residency-price">{boostPrice != null ? <strong>{formatRubles(boostPrice)}</strong> : 'Стоимость РАбуста уточняется'}</p>
+      <p className="matrix-residency-price">{boostPrice != null ? <><strong>{formatRubles(boostPrice)}</strong><span> / 7 дней</span></> : 'Стоимость РАбуста уточняется'}</p>
       <p>В сочетании с вашим продуктом: {base}</p>
       <ul className="matrix-residency-discounts">{benefits.map(benefit => <li key={benefit}><strong aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 4 4L19 6" /></svg></strong><span>{benefit}</span></li>)}</ul>
       <details className="matrix-residency-terms">
