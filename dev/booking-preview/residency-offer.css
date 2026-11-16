@@ -1,5 +1,5 @@
 /* Compact app-card styles from the owner's PadlHub_Resident_UI_updated.html.
- * Scoped to Residency so the supplied demo globals cannot affect other flows.
+ * Scoped to purchase cards so the supplied demo globals cannot affect other flows.
  */
 .matrix-purchase-offer .matrix-purchase-benefits.matrix-residency-card {
   --resident-text: #353436;
@@ -23,6 +23,11 @@
 .matrix-residency-discounts li > strong { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 22px; margin-top: 1px; padding: 0 7px; border-radius: 999px; background: #eee7fd; color: #3e09a4; font: 700 14px/1 Arial, Helvetica, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .matrix-residency-discounts li:nth-child(2) > strong { background: #f0e9fd; color: #7c28c5; }
 .matrix-residency-discounts li > span { font: 400 15px/1.45 Arial, Helvetica, sans-serif; }
+.matrix-purchase-offer .matrix-purchase-benefits.matrix-subscription-card[data-subscription-plan='friendship'] { --resident-divider: #74d199; }
+.matrix-purchase-offer .matrix-subscription-card[data-subscription-plan='friendship-2'] { --resident-divider: #46b675; }
+.matrix-subscription-card .matrix-residency-discounts > li { grid-template-columns: 62px minmax(0, 1fr); }
+.matrix-subscription-card .matrix-residency-discounts li > strong { font-size: 12px; }
+.matrix-subscription-card:not([data-subscription-plan='ra']) .matrix-residency-discounts li > strong { background: #e8f7ee; color: #216c45; }
 .matrix-residency-equipment { margin: 28px 0 0; }
 .matrix-residency-equipment h3 { margin: 0 0 6px; color: #242325; font: 700 13px/20px Arial, Helvetica, sans-serif; letter-spacing: 1px; text-transform: uppercase; }
 .matrix-residency-equipment > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; }

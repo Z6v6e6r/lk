@@ -5,8 +5,8 @@ import ra from '../../src/components/subscription-storefront/assets/plan-art/Ñ€Ð
 
 const badges: Record<string, { src: string; width: number; height: number }> = {
   residency: { src: residency, width: 391, height: 55 },
-  friendship: { src: friendship, width: 826, height: 128 },
-  'friendship-2': { src: friendship2, width: 1033, height: 128 },
+  friendship: { src: friendship, width: 334, height: 55 },
+  'friendship-2': { src: friendship2, width: 416.632, height: 55 },
   ra: { src: ra, width: 72, height: 22 },
 };
 
