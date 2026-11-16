@@ -24,7 +24,10 @@ export function BoostPurchaseOffer({ option, boostPrice, profile, plan, eventDes
       <p className="matrix-purchase-limits">Нужны действующее Резидентство или подписка. Лимиты и уже использованные сегодня занятия учитываются при расчёте. После 8 активных записей остаются скидки, кроме ПРО.</p>
     </section>
     <section className="matrix-purchase-booking" aria-label="Стоимость записи с РАбуста">
-      <h3>Ваша запись</h3><p>{eventDescription}</p>
+      <details className="matrix-purchase-event-details">
+        <summary>Ваша запись<span aria-hidden="true">⌄</span></summary>
+        <p>{eventDescription}</p>
+      </details>
       {option?.benefit === 'partial-hour' && <p className="matrix-purchase-explanation">{option.freeMinutes} мин бесплатно. Доплата за {option.paidMinutes} мин уже учитывает скидку 30%.</p>}
       <dl className="matrix-order-lines"><div><dt>Участие с РАбуста</dt><dd>{option?.amount != null ? formatRubles(option.amount) : 'Нужен расчёт'}</dd></div>
         <div><dt>РАбуста</dt><dd>{boostPrice != null ? formatRubles(boostPrice) : 'Цена уточняется'}</dd></div>

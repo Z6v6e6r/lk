@@ -59,8 +59,10 @@ export function SubscriptionPurchaseOffer({ choices, offer, option, eventName, e
         </details>
       </section>}
       <section className="matrix-purchase-booking" aria-label="Стоимость записи с подпиской">
-        <h3>Ваша запись</h3>
-        <div className="matrix-purchase-event"><strong>{event.when}</strong><span>{event.station}</span><span>{eventName}</span></div>
+        <details className="matrix-purchase-event-details">
+          <summary>Ваша запись<span aria-hidden="true">⌄</span></summary>
+          <div className="matrix-purchase-event"><strong>{event.when}</strong><span>{event.station}</span><span>{eventName}</span></div>
+        </details>
         {option?.reason === 'daily-limit' && <p className="matrix-purchase-explanation">Дневной бесплатный лимит использован. В стоимость участия уже включена скидка подписки.</p>}
         {option?.reason === 'active-limit' && <p className="matrix-purchase-explanation">Лимит активных записей превышен. В стоимость участия уже включена скидка подписки.</p>}
         {option?.benefit === 'partial-hour' && <p className="matrix-purchase-explanation">{option.freeMinutes} мин бесплатно. Доплата за {option.paidMinutes} мин со скидкой 30% — {formatRubles(option.amount!)}.</p>}

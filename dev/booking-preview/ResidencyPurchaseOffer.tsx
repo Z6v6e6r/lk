@@ -44,11 +44,13 @@ export function ResidencyPurchaseOffer({ option, residencyPrice, referenceAmount
       </details>
     </section>
     <section className="matrix-purchase-booking" aria-label="Стоимость записи с Резидентством">
-      <h3>Ваша запись</h3>
-      <div className="matrix-purchase-event">
-        <strong>{event.when}</strong><span>{event.station}</span>
-        <span>{eventName}</span>
-      </div>
+      <details className="matrix-purchase-event-details">
+        <summary>Ваша запись<span aria-hidden="true">⌄</span></summary>
+        <div className="matrix-purchase-event">
+          <strong>{event.when}</strong><span>{event.station}</span>
+          <span>{eventName}</span>
+        </div>
+      </details>
       <dl className="matrix-order-lines">
         {referenceAmount != null && <div><dt>Полная цена участия</dt><dd><del>{formatRubles(referenceAmount)}</del></dd></div>}
         <div><dt>Участие с Резидентством</dt><dd>{participation}</dd></div>
