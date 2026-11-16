@@ -142,3 +142,12 @@ test('ordinary to native transfer requires both closed head and server-only rece
   const forged = run({ _subscriptionBooking: ctx, payload: [{ ...receipt, proposal: { ...proposal, amountMinor: 1 } }] });
   assert.equal(forged.msg.statusCode, 202); assert.equal(forged.output, 4);
 });
+
+
+test('legacy event checkout without the managed cancellation contract does not advertise cancel support', () => {
+  const { ctx } = fixture(); ctx.category = 'tournament'; delete ctx.lk1.checkout.lifecycleVersion;
+  assert.equal(finish(ctx).payload.paymentAttemptCancelSupported, false);
+  assert.equal(finish(ctx, Date.parse('2099-01-01T12:15:00Z')).payload.paymentAttemptCancelSupported, false);
+  ctx.lk1.checkout.lifecycleVersion = 1;
+  assert.equal(finish(ctx).payload.paymentAttemptCancelSupported, true);
+});

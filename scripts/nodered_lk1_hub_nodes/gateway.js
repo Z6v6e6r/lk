@@ -198,12 +198,14 @@ const lk1Finish = (ctx) => {
     return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
   }
   const paid = ctx.lk1.paymentAttempt?.phase === 'PAID';
+  const cancelSupported = !!payment && payment.toPayMinor > 0 && !paid
+    && (payment.lifecycleVersion === 1 || ctx.category === 'open_game');
   const deadline = payment ? bookingPaymentLifecycle.paymentAttemptDeadline(payment, ctx.lk1.transactionAttemptedAt) : null;
   if (payment?.toPayMinor > 0 && !paid && (ctx.lk1.paymentAttempt || deadline === null || Date.now() >= deadline)) {
     const result = finishPending(ctx, 'Срок оплаты истёк. Проверяем закрытие предыдущей попытки.', {
       code: 'PAYMENT_ATTEMPT_CLOSING', operationId: ctx.operationId });
     msg.payload = { ...msg.payload, bookingId: ctx.confirmedBookingId, transactionId: payment.transactionId,
-      paymentUrl: null, paymentAttemptState: 'CLOSING', paymentAttemptCancelSupported: true,
+      paymentUrl: null, paymentAttemptState: 'CLOSING', paymentAttemptCancelSupported: cancelSupported,
       paymentExpiresAt: deadline === null ? null : new Date(deadline).toISOString() };
     return result;
   }
@@ -212,7 +214,7 @@ const lk1Finish = (ctx) => {
     transactionId: payment?.transactionId || null, toPayMinor: payment?.toPayMinor || 0,
     toPay: (payment?.toPayMinor || 0) / 100, paid: paid || !payment || payment.toPayMinor === 0,
     paymentAttemptState: paid || !payment ? 'PAID' : 'PAYMENT_REQUIRED',
-    paymentAttemptCancelSupported: !!payment && payment.toPayMinor > 0 && !paid,
+    paymentAttemptCancelSupported: cancelSupported,
     paymentExpiresAt: deadline === null ? null : new Date(deadline).toISOString(),
     deadlineAt: deadline === null ? null : new Date(deadline).toISOString(),
     subscriptionVisitCount: ctx.lk1.decision.subscriptionVisitCount,
