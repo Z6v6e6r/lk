@@ -3,6 +3,7 @@ import { boostBenefits } from './boostOffers';
 import { formatRubles, type PaymentContext, type PaymentOption, type Privileges } from './paymentMatrix';
 import { SUBSCRIPTION_PLANS } from './privilegeRules';
 import { PurchaseOfferLayout } from './PurchaseOfferLayout';
+import './residency-offer.css';
 
 export function BoostPurchaseOffer({ option, boostPrice, profile, plan, eventDescription, disabled, onContinue }: {
   option?: PaymentOption; boostPrice: number | null; profile: Privileges; plan: PaymentContext['subscriptionPlan'];
@@ -16,12 +17,19 @@ export function BoostPurchaseOffer({ option, boostPrice, profile, plan, eventDes
     <button type="button" className="matrix-confirm" disabled={disabled || !order} onClick={onContinue}>{order ? `Добавить РАбуста · ${formatRubles(order.total)}` : boostPrice == null ? 'Стоимость РАбуста уточняется' : 'Нужен расчёт стоимости записи'}</button>
     <p>{order ? `Участие ${formatRubles(order.bookingAmount)} + РАбуста ${formatRubles(order.productAmount)}` : 'РАбуста и запись — одной оплатой'}</p>
   </>}>
-    <section className="matrix-purchase-benefits" aria-label="Преимущества РАбуста">
-      <h2 data-purchase-title tabIndex={-1}>РАбуста</h2>
-      <p>{boostPrice != null ? `${formatRubles(boostPrice)} · добавляется к записи` : 'Стоимость РАбуста уточняется'}</p>
+    <section className="matrix-purchase-benefits matrix-residency-card" aria-label="Преимущества РАбуста">
+      <h2 className="matrix-residency-badge" data-purchase-title tabIndex={-1}>РАбуста</h2>
+      <p className="matrix-residency-price">{boostPrice != null ? <strong>{formatRubles(boostPrice)}</strong> : 'Стоимость РАбуста уточняется'}</p>
       <p>В сочетании с вашим продуктом: {base}</p>
-      <ul>{benefits.map((benefit, index) => <li key={benefit}><span className="matrix-purchase-benefit-icon" aria-hidden="true">{`0${index + 1}`}</span><span>{benefit}</span></li>)}</ul>
-      <p className="matrix-purchase-limits">Нужны действующее Резидентство или подписка. Лимиты и уже использованные сегодня занятия учитываются при расчёте. После 8 активных записей остаются скидки, кроме ПРО.</p>
+      <ul className="matrix-residency-discounts">{benefits.map(benefit => <li key={benefit}><strong aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 4 4L19 6" /></svg></strong><span>{benefit}</span></li>)}</ul>
+      <details className="matrix-residency-terms">
+        <summary>Условия<span aria-hidden="true">⌄</span></summary>
+        <ul className="matrix-residency-limits" aria-label="Условия РАбуста">
+          <li>Нужны действующее Резидентство или подписка.</li>
+          <li>Лимиты и уже использованные сегодня занятия учитываются при расчёте.</li>
+          <li>После 8 активных записей остаются скидки, кроме ПРО.</li>
+        </ul>
+      </details>
     </section>
     <section className="matrix-purchase-booking" aria-label="Стоимость записи с РАбуста">
       <details className="matrix-purchase-event-details">
