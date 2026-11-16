@@ -1,6 +1,6 @@
 import { replayPlayerRatingEvents, roundPlayerRating, type PlayerRatingEventDocument } from "./ledger.ts";
 
-const BASELINES = new Set(["RATING_INITIAL_IMPORTED", "RATING_BOOTSTRAPPED_FROM_VIVA", "RATING_BOOTSTRAPPED_FROM_TOURNAMENT",
+const BASELINES = new Set(["RATING_INITIAL_ASSIGNED", "RATING_INITIAL_IMPORTED", "RATING_BOOTSTRAPPED_FROM_VIVA", "RATING_BOOTSTRAPPED_FROM_TOURNAMENT",
   "RATING_BOOTSTRAPPED_FROM_GAME_RESULT", "RATING_TOURNAMENT_CANONICAL_RECONCILED"]);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const generated = (event: PlayerRatingEventDocument) => event.source.fprReconciliation === true;

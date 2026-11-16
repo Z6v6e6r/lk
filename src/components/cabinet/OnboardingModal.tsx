@@ -1,11 +1,10 @@
+import { getProfileLevelNumericText } from "../../utils/playerLevel";
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { Modal } from "../UI/Modal";
 import { apiSaveOnboardingLevel } from "../../utils/apiClient";
 import type { UserProfileType } from "../../utils/apiClient";
 import {
-  CUSTOM_FIELD_IDS,
   formatNumericField,
-  getCustomFieldValue,
   getLetterGrade,
 } from "../../utils/customFields";
 import { resolvePreferredLkAssetUrl } from "../../utils/lkAssetBaseUrls";
@@ -323,7 +322,7 @@ export function OnboardingModal({
   tournamentsLink,
   onProfileUpdated,
 }: OnboardingModalProps) {
-  const existingRating = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
+  const existingRating = getProfileLevelNumericText(profile);
   const hasRating = existingRating !== undefined && existingRating !== null && existingRating !== "";
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
@@ -544,13 +543,16 @@ export function OnboardingModal({
     setError(null);
 
     try {
+      if (profile.level?.status === "UNAVAILABLE") throw new Error("Не удалось загрузить уровень ЦУП. Обновите страницу.");
       const res = await apiSaveOnboardingLevel({
         clientId: profile.id,
         phone: profile.phone,
         levelLetter: letterScore,
         levelNumeric: numericScore,
       });
-      if (!res.error && (res.status === 200 || res.status === 204)) {
+      const assigned = res.data?.items?.[0];
+      if (!res.error && res.status === 200 && assigned?.status === "RATED" && assigned.source === "CUP_CANONICAL" && assigned.clientId === profile.id && assigned.ratingNumeric !== null && assigned.rating) {
+        setDoneScore(assigned.rating);
         identifyAnalyticsUser({
           clientId: profile.id,
           phone: profile.phone,
@@ -564,7 +566,7 @@ export function OnboardingModal({
           finalLevelLetter: letterScore,
           finalLevelNumeric: numericScore,
         });
-        onProfileUpdated({ levelLetter: letterScore, levelNumeric: numericScore });
+        onProfileUpdated({ levelLetter: assigned.rating, levelNumeric: String(assigned.ratingNumeric) });
       } else {
         trackClientError(
           "onboarding.save_failed",
@@ -672,7 +674,7 @@ export function OnboardingModal({
           <div className="onboarding-actions">
             <button className="btn-primary" onClick={handleClose}>Закрыть</button>
           </div>
-          {error && <div className="onboarding-error">{error}</div>}
+          {(error || profile.level?.status === "UNAVAILABLE") && <div className="onboarding-error" role="alert">{error || "Не удалось загрузить уровень ЦУП. Обновите страницу."}</div>}
         </div>
       </Modal>
     );
@@ -728,7 +730,7 @@ export function OnboardingModal({
                 Назад
               </button>
               {isLast ? (
-                <button className="btn-primary" onClick={handleFinish} disabled={!canNext || saving}>
+                <button className="btn-primary" onClick={handleFinish} disabled={!canNext || saving || profile.level?.status === "UNAVAILABLE"}>
                   {saving ? "Сохранение..." : "Получить рейтинг"}
                 </button>
               ) : (
@@ -745,7 +747,7 @@ export function OnboardingModal({
         ) : (
           <div className="onboarding-question-loading">Загрузка вопроса...</div>
         )}
-        {error && <div className="onboarding-error">{error}</div>}
+        {(error || profile.level?.status === "UNAVAILABLE") && <div className="onboarding-error" role="alert">{error || "Не удалось загрузить уровень ЦУП. Обновите страницу."}</div>}
       </div>
     </Modal>
   );

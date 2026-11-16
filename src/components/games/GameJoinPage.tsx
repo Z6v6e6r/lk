@@ -1,3 +1,4 @@
+import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { createJoinSubscriptionPriceTarget } from "./subscriptionPricePreview";
 import { useSubscriptionPricePreview } from "./useSubscriptionPricePreview";
 import { JoinSubscriptionOptions } from "./JoinSubscriptionOptions";
@@ -28,8 +29,6 @@ import {
   type RosterSyncLeaveEvent,
 } from "./rosterSyncReconcile";
 import {
-  CUSTOM_FIELD_IDS,
-  getCustomFieldValue,
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
@@ -310,8 +309,8 @@ function removePlayer(players: PadelGamePlayer[], phoneNorm: string, userId: str
 
 function buildMyPlayer(profile: UserProfileType): PadelGamePlayer {
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim();
-  const explicitGrade = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel);
-  const numeric = parseNumericLevel(getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric));
+  const explicitGrade = getProfileLevelGrade(profile);
+  const numeric = parseNumericLevel(getProfileLevelNumericText(profile));
 
   return {
     id: profile.id ?? null,

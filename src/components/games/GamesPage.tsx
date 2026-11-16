@@ -1,3 +1,4 @@
+import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
 import { mergeRosterMetadata } from "./rosterMetadata";
 import { moscowBookingEndIso } from "../../utils/bookingEndTime";
@@ -105,8 +106,6 @@ import {
 } from "../../utils/splitRosterPaymentConfirmation";
 import { recoverGameExerciseId } from "../../utils/gameExerciseIdRecovery";
 import {
-  CUSTOM_FIELD_IDS,
-  getCustomFieldValue,
   getLetterGrade,
   normalizeLevelGradeLabel,
   parseNumericLevel,
@@ -2810,7 +2809,6 @@ function mergePadelPlayerFreshData(
   const nextRating =
     (fresh.rating || "").trim()
     || (freshRatingNumeric != null ? mapNumericToRatingGrade(freshRatingNumeric) : "")
-    || player.rating
     || null;
   const nextPlayer: PadelGamePlayer = {
     ...player,
@@ -2819,7 +2817,7 @@ function mergePadelPlayerFreshData(
     name: fresh.name?.trim() || player.name,
     photo: fresh.photo ?? player.photo ?? null,
     rating: nextRating,
-    ratingNumeric: freshRatingNumeric ?? player.ratingNumeric ?? null,
+    ratingNumeric: freshRatingNumeric,
   };
   return (
     nextPlayer.id === player.id
@@ -2840,7 +2838,6 @@ function mergePadelOrganizerFreshData(
   const nextRating =
     (fresh.rating || "").trim()
     || (freshRatingNumeric != null ? mapNumericToRatingGrade(freshRatingNumeric) : "")
-    || organizer.rating
     || null;
   const nextOrganizer = {
     ...organizer,
@@ -2850,7 +2847,7 @@ function mergePadelOrganizerFreshData(
     name: organizer.name || fresh.name?.trim() || null,
     photo: organizer.photo ?? fresh.photo ?? null,
     rating: nextRating,
-    ratingNumeric: freshRatingNumeric ?? organizer.ratingNumeric ?? null,
+    ratingNumeric: freshRatingNumeric,
   };
   return (
     nextOrganizer.id === organizer.id
@@ -3276,21 +3273,8 @@ function normalizePhoneForGame(value: string | null | undefined): string | null 
   return digits;
 }
 
-function getCommunityActorLevelScore(
-  numericRating: number | null,
-  letterGrade: string | null | undefined,
-): number {
-  if (typeof numericRating === "number" && Number.isFinite(numericRating)) {
-    return Math.max(1.5, Math.min(6, numericRating));
-  }
-
-  const normalizedGrade = String(letterGrade || "").trim().toUpperCase();
-  const matchedIndex = RATING_LABELS.findIndex((item) => item === normalizedGrade);
-  if (matchedIndex >= 0) {
-    return matchedIndex + 1.5;
-  }
-
-  return 3.2;
+function getCommunityActorLevelScore(numericRating: number | null, _letterGrade: string | null | undefined): number | null {
+  return typeof numericRating === "number" && Number.isFinite(numericRating) ? numericRating : null;
 }
 
 function buildCommunityGamePostBody(game: PadelGameRecord) {
@@ -5341,12 +5325,9 @@ export default function GamesPage({
       setProfileName(fullName || "Организатор");
       setProfilePhoto(res.data.photo ?? null);
 
-      const explicitGrade = getCustomFieldValue(
-        res.data,
-        CUSTOM_FIELD_IDS.lkPadelLevel,
-      );
+      const explicitGrade = getProfileLevelGrade(res.data);
       const numericValue = parseNumericLevel(
-        getCustomFieldValue(res.data, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
+        getProfileLevelNumericText(res.data),
       );
       const gradeFallback: Record<string, number> = {
         D: 2.0,
@@ -8067,8 +8048,8 @@ export default function GamesPage({
           phone: normalizePhoneForGame(player.phone),
           name: player.name,
           photo: player.photo ?? null,
-          rating: player.rating ?? null,
-          ratingNumeric: normalizeRatingNumeric(player.ratingNumeric),
+          rating: null,
+          ratingNumeric: null,
         });
       });
 
@@ -10051,9 +10032,9 @@ export default function GamesPage({
 
     if (profileData) {
       const fullName = [profileData.firstName, profileData.lastName].filter(Boolean).join(" ").trim() || "Игрок";
-      const explicitGrade = getCustomFieldValue(profileData, CUSTOM_FIELD_IDS.lkPadelLevel);
+      const explicitGrade = getProfileLevelGrade(profileData);
       const numericValue = parseNumericLevel(
-        getCustomFieldValue(profileData, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
+        getProfileLevelNumericText(profileData),
       );
       const levelScore = getCommunityActorLevelScore(numericValue, explicitGrade);
 
@@ -10061,7 +10042,7 @@ export default function GamesPage({
       setProfilePhone(profileData.phone ?? null);
       setProfileName(fullName || "Организатор");
       setProfilePhoto(profileData.photo ?? null);
-      setProfileGrade(explicitGrade ?? getLetterGrade(levelScore));
+      setProfileGrade(explicitGrade ?? (levelScore === null ? "" : getLetterGrade(levelScore)));
       setProfileRatingNumeric(numericValue);
 
       return {
@@ -10071,7 +10052,7 @@ export default function GamesPage({
         avatar: profileData.photo ?? null,
         role: "MEMBER" as const,
         levelScore,
-        levelLabel: explicitGrade ?? getLetterGrade(levelScore),
+        levelLabel: explicitGrade ?? (levelScore === null ? null : getLetterGrade(levelScore)),
       };
     }
 
@@ -10084,7 +10065,7 @@ export default function GamesPage({
       avatar: profilePhoto ?? null,
       role: "MEMBER" as const,
       levelScore: fallbackLevelScore,
-      levelLabel: profileGrade || getLetterGrade(fallbackLevelScore),
+      levelLabel: profileGrade || (fallbackLevelScore === null ? null : getLetterGrade(fallbackLevelScore)),
     };
   }, [
     profileGrade,

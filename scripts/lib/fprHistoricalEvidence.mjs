@@ -8,7 +8,7 @@ const stable=value=>Array.isArray(value)?value.map(stable):value&&typeof value==
   ? value instanceof Date?value.toISOString():Object.fromEntries(Object.keys(value).sort().map(k=>[k,stable(value[k])])):value;
 const check=(condition,code)=>{if(!condition)throw Error('FPR_DRY_RUN_EVIDENCE_'+code);};
 const at=value=>Date.parse(value);
-const baselineTypes=new Set(['RATING_INITIAL_IMPORTED','RATING_BOOTSTRAPPED_FROM_VIVA','RATING_BOOTSTRAPPED_FROM_TOURNAMENT','RATING_BOOTSTRAPPED_FROM_GAME_RESULT','RATING_TOURNAMENT_CANONICAL_RECONCILED']);
+const baselineTypes=new Set(['RATING_INITIAL_ASSIGNED','RATING_INITIAL_IMPORTED','RATING_BOOTSTRAPPED_FROM_VIVA','RATING_BOOTSTRAPPED_FROM_TOURNAMENT','RATING_BOOTSTRAPPED_FROM_GAME_RESULT','RATING_TOURNAMENT_CANONICAL_RECONCILED']);
 const applies=e=>e.source?.applyToState!==false;
 
 /** Validate the original durable apply chain; receipts bind their numbered plan via apply-intent's packet hash. */

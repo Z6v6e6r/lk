@@ -22,19 +22,19 @@ const nowIso = new Date().toISOString();
 const nowTs = Date.now();
 
 const buildLevelLabel = (score) => {
-  const normalized = Number.isFinite(score) ? score : 3.2;
-  if (normalized >= 5.75) return "A";
-  if (normalized >= 5.25) return "B+";
-  if (normalized >= 4.75) return "B";
-  if (normalized >= 4.25) return "C+";
-  if (normalized >= 3.75) return "C";
-  if (normalized >= 3.25) return "D+";
+  if (!Number.isFinite(score) || score < 1 || score > 7) return null; const normalized = score;
+  if (normalized >= 5.5) return "A";
+  if (normalized >= 4.7) return "B+";
+  if (normalized >= 4) return "B";
+  if (normalized >= 3.5) return "C+";
+  if (normalized >= 3) return "C";
+  if (normalized >= 2) return "D+";
   return "D";
 };
 
 const buildMember = (value, fallbackRole = "MEMBER") => {
   const member = isObj(value) ? value : {};
-  const levelScore = toNum(member.levelScore ?? member.ratingNumeric ?? member.levelNumeric) ?? 3.2;
+  const levelScore = toNum(member.levelScore ?? member.ratingNumeric ?? member.levelNumeric) ?? null;
   return {
     id: toStr(member.id || member.clientId || member.userId || member.uuid),
     phone: normPhone(member.phone || member.phoneNorm || member.phoneNumber || member.mobile),

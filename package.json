@@ -281,7 +281,8 @@
     "build:jump-live": "node --experimental-strip-types scripts/build_padel_jump_live.mjs",
     "test:jump-live": "node --experimental-strip-types --test scripts/tests/padelJump*.test.ts scripts/tests/padelJump*.test.mjs scripts/tests/vivaOAuth.test.ts && python3 scripts/tests/padelJumpDeployment.test.py",
     "test:fpr-canonical-start": "node --experimental-strip-types --test scripts/tests/fprCanonicalStart.test.ts scripts/tests/fprCanonicalStart.nodered.test.mjs scripts/tests/fprCanonicalDryRun.test.mjs",
-    "test:support-photos": "node --experimental-strip-types --test scripts/tests/supportPhotos*.test.mjs scripts/tests/supportEventPayload.apiClient.test.ts"
+    "test:support-photos": "node --experimental-strip-types --test scripts/tests/supportPhotos*.test.mjs scripts/tests/supportEventPayload.apiClient.test.ts",
+    "test:cup-only-level": "node --experimental-strip-types --test scripts/tests/cupPlayerLevel.test.mjs scripts/tests/cupPlayerLevelFlow.test.mjs scripts/tests/onboardingLevelProjection.nodered.test.ts scripts/tests/fprStartVivaLevel.test.mjs scripts/tests/playerRatingState.test.ts scripts/tests/gameResultRatingWorker.test.ts"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",

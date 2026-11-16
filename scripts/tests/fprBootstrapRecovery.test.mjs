@@ -35,7 +35,7 @@ test('restores ledger and open protocol without changing sports, survives comman
   assert.equal(plan.event.change.delta, 2.65432);
   assert.equal(plan.event.occurredAt, '2026-11-01T09:59:00.001Z');
   assert.equal(plan.event.createdAt, input.recordedAt);
-  assert.equal(plan.outbox.status, 'PENDING');
+  assert.equal(plan.outbox, null, 'CUP-only recovery never creates a provider task');
   const old = input.tournament.params.fpr6x25, repaired = plan.tournament.params.fpr6x25;
   assert.deepEqual(repaired.attempts, old.attempts);
   assert.deepEqual(fprStandings(repaired), fprStandings(old));

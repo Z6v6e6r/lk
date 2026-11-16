@@ -85,12 +85,12 @@ function roundRatingDelta(value: number): number {
 
 export function ratingGradeFromNumeric(value: unknown): string {
   const rating = toFiniteRating(value) ?? 1;
-  if (rating >= 6) return "A";
-  if (rating >= 5) return "B+";
-  if (rating >= 4.2) return "B";
+  if (rating >= 5.5) return "A";
+  if (rating >= 4.7) return "B+";
+  if (rating >= 4) return "B";
   if (rating >= 3.5) return "C+";
   if (rating >= 3) return "C";
-  if (rating >= 2.5) return "D+";
+  if (rating >= 2) return "D+";
   return "D";
 }
 
@@ -123,7 +123,8 @@ function parseOccurredAt(event: PlayerRatingEventDocument): number {
 }
 
 function isBaselineEvent(event: PlayerRatingEventDocument): boolean {
-  return event.eventType === "RATING_INITIAL_IMPORTED"
+  return event.eventType === "RATING_INITIAL_ASSIGNED"
+    || event.eventType === "RATING_INITIAL_IMPORTED"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_VIVA"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_TOURNAMENT"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_GAME_RESULT"
@@ -294,7 +295,7 @@ export function buildGameResultRatingEvent(input: {
       gradeAfter: ratingGradeFromNumeric(after),
     },
     formula: input.formula || { version: "game-rating-v1" },
-    projectionIntent: { viva: "REQUIRED_DURING_MIGRATION" },
+    projectionIntent: { viva: "NONE_CUP_ONLY" },
   };
 }
 
@@ -343,7 +344,7 @@ export function buildGameResultCompensationEvent(input: {
       gradeBefore: ratingGradeFromNumeric(canonicalBefore),
       gradeAfter: ratingGradeFromNumeric(canonicalAfter),
     },
-    projectionIntent: { viva: "REQUIRED_DURING_MIGRATION" },
+    projectionIntent: { viva: "NONE_CUP_ONLY" },
   };
 }
 
@@ -433,7 +434,7 @@ export function buildTournamentRatingEvent(input: {
       gradeAfter: ratingGradeFromNumeric(canonicalAfter),
     },
     formula: { version: "tournament-rating-v1", applicationVersion: "canonical-target-after-v1" },
-    projectionIntent: { viva: "REQUIRED_DURING_MIGRATION" },
+    projectionIntent: { viva: "NONE_CUP_ONLY" },
   };
 }
 
@@ -513,7 +514,7 @@ export function buildTournamentStartOverrideEvent(input: {
       version: "tournament-start-override-v1",
       applicationVersion: "canonical-target-after-v1",
     },
-    projectionIntent: { viva: "REQUIRED_DURING_MIGRATION" },
+    projectionIntent: { viva: "NONE_CUP_ONLY" },
   };
 }
 
@@ -560,6 +561,6 @@ export function buildTournamentCompensationEvent(input: {
       gradeBefore: input.event.change.gradeAfter,
       gradeAfter: input.event.change.gradeBefore,
     },
-    projectionIntent: { viva: "REQUIRED_DURING_MIGRATION" },
+    projectionIntent: { viva: "NONE_CUP_ONLY" },
   };
 }
