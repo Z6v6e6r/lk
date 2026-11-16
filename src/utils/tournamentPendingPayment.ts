@@ -1,3 +1,4 @@
+import { canOpenPaymentAttempt } from "./paymentAttemptLifecycle.ts";
 import type { TournamentRegistrationState } from "./tournamentSignupApi";
 
 const PREFIX = "padlhub:tournament-payment:";
@@ -43,13 +44,8 @@ export function clearTournamentPendingPayments(exerciseId?: string): void {
 }
 
 export function canPayTournamentPending(registration: TournamentRegistrationState | null, now = Date.now()): boolean {
-  if (registration?.status !== "PAYMENT_PENDING" || !registration.bookingId || typeof registration.paymentUrl !== "string"
-    || typeof registration.paymentExpiresAt !== "string" || !registration.paymentExpiresAt || Date.parse(registration.paymentExpiresAt) <= now
-    || !Number.isFinite(Date.parse(registration.paymentExpiresAt))) return false;
-  try {
-    const url = new URL(registration.paymentUrl);
-    return url.protocol === "https:" && !url.username && !url.password;
-  } catch { return false; }
+  return registration?.status === "PAYMENT_PENDING" && Boolean(registration.bookingId)
+    && canOpenPaymentAttempt(registration, now);
 }
 
 export async function storeTournamentPendingPayment(token: string | null, exerciseId: string, registration: TournamentRegistrationState) {
@@ -71,7 +67,7 @@ export async function mergeTournamentPendingPayment(token: string | null, exerci
     const name = await key(token, exerciseId, registration.bookingId);
     const raw = name ? storage()?.getItem(name) : null;
     const saved = raw ? JSON.parse(raw) : null;
-    if (saved?.bookingId === registration.bookingId && canPayTournamentPending({ ...registration, ...saved })
+    if (saved?.bookingId === registration.bookingId && canPayTournamentPending({ ...registration, ...saved, paymentAttemptState: registration.paymentAttemptState })
       && (!registration.paymentUrl || registration.paymentUrl === saved.paymentUrl)) {
       result = { ...registration, paymentUrl: registration.paymentUrl || saved.paymentUrl,
         paymentExpiresAt: registration.paymentExpiresAt || saved.paymentExpiresAt };

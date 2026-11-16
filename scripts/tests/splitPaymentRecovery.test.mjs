@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import * as splitAttemptContract from '../lib/splitBookingPaymentAttempt.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
@@ -30,6 +31,21 @@ const MIDNIGHT_BOUNDARY_CANDIDATES = {
   router: { source: 'ed6466d8bd997ad5f1f0db1de581316236f133aa2ce1bb97003c54d618293c7e', business: 'ff078b8842c0b6f9c318769c9a5e54607517a1fba607f833719f7ad035afd2be' },
 };
 
+// Payment lifecycle generation; historical preimage guards above remain unchanged.
+const PAYMENT_LIFECYCLE_CANDIDATES = {
+  "create": {
+    "source": "614bf294d2da5a0a46ee0307be497d1bd07dd6f4209575733695ccb70f8aee8f"
+  },
+  "join": {
+    "business": "155ecc14f23818c4a5f5a34c48c2451b6ee2ae8c1e6c9cee26e95d6ca8537abe",
+    "source": "ab834cc062e9be7d65ebd9a4658673870109d34f5e86a28e810e03b150759825"
+  },
+  "router": {
+    "business": "7c9858c4d12a867038afc659fa2964b4ae7d1991dc43a178be342d4139f38ca6",
+    "source": "c41d70fbfefdc68a6628d9f6b20ae335706bf0e613ad999ee73a62819c72d0e3"
+  }
+};
+
 class FixedDate extends Date {
   constructor(...args) { super(...(args.length ? args : ['2026-07-27T12:20:00.000Z'])); }
   static now() { return Date.parse('2026-07-27T12:20:00.000Z'); }
@@ -49,20 +65,38 @@ function run(key, msg) {
       return undefined;
     },
   };
-  return new Function('msg', 'Date', 'global', 'env', source(key))(
-    msg,
-    FixedDate,
-    globalContext,
-    env,
-  );
+  const execute = new Function('msg', 'Date', 'global', 'env', '__splitBookingPaymentAttempt', source(key));
+  const ctx = msg._splitCtx;
+  if (key === 'router' && ctx?.step === 'token' && ctx.paymentMode === 'one_time') {
+    // Synthetic transport advances the production profile/admission protocol;
+    // tests below still assert the actual subsequent pricing provider request.
+    ctx.userAuthHeader ||= 'Bearer fixture-user';
+    ctx.operationId ||= 'fixture-ordinary-operation';
+    ctx.clientPhone ||= '79990000001';
+  }
+  let out = execute(msg, FixedDate, globalContext, env, splitAttemptContract);
+  for (let hop = 0; hop < 8 && key === 'router'; hop++) {
+    if (ctx?.step === 'ordinary_attempt_profile') {
+      msg.payload = { id: ctx.clientId || 'fixture-client', phone: ctx.clientPhone };
+      msg.statusCode = 200;
+    } else if (out?.[5]) msg.payload = [];
+    else if (out?.[6]) {
+      const update = msg.payload[1];
+      msg.payload = update?.$setOnInsert
+        ? { acknowledged: true, upsertedCount: 1, matchedCount: 0, modifiedCount: 0 }
+        : { acknowledged: true, upsertedCount: 0, matchedCount: 1, modifiedCount: 1 };
+    } else break;
+    out = execute(msg, FixedDate, globalContext, env, splitAttemptContract);
+  }
+  return out;
 }
 
 test('split-payment business preimages and observer candidates remain separately pinned', () => {
   for (const [key, [, livePreimage, candidate]] of Object.entries(SOURCES)) {
     assert.notEqual(candidate, livePreimage, key);
     const current = source(key);
-    const currentBusiness = MIDNIGHT_BOUNDARY_CANDIDATES[key]?.business || QUARTER_OWNER_CANDIDATES[key]?.business || candidate;
-    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), MIDNIGHT_BOUNDARY_CANDIDATES[key]?.source || QUARTER_OWNER_CANDIDATES[key]?.source || DIAGNOSTIC_CANDIDATES[key] || candidate, key);
+    const currentBusiness = PAYMENT_LIFECYCLE_CANDIDATES[key]?.business || MIDNIGHT_BOUNDARY_CANDIDATES[key]?.business || QUARTER_OWNER_CANDIDATES[key]?.business || candidate;
+    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), PAYMENT_LIFECYCLE_CANDIDATES[key]?.source || MIDNIGHT_BOUNDARY_CANDIDATES[key]?.source || QUARTER_OWNER_CANDIDATES[key]?.source || DIAGNOSTIC_CANDIDATES[key] || candidate, key);
     if (DIAGNOSTIC_CANDIDATES[key]) {
       assert.ok(current.includes(`sourceHash: "${currentBusiness}"`), key);
       const marker = key === 'join' ? 'const TOKEN_URL_DEFAULT' : 'const ADMIN_API';
@@ -116,7 +150,7 @@ test('subscription create also resolves the exact server-side campaign before Vi
   assert.equal(outputs[0].requestTimeout, 5000);
 });
 
-test('join preserves the participant deadline and detects singles from stored split state', () => {
+test('join uses the server payment deadline and detects singles from stored split state', () => {
   const msg = {
     _splitJoinBody: { clientPhone: '+7 960 000 00 02', durationMinutes: 1 },
     payload: [{
@@ -127,7 +161,7 @@ test('join preserves the participant deadline and detects singles from stored sp
   };
   const outputs = run('join', msg);
   assert.equal(outputs[0]._splitCtx.shareCount, 2);
-  assert.equal(outputs[0]._splitCtx.deadlineAt, '2026-07-27T12:30:00.000Z');
+  assert.equal(outputs[0]._splitCtx.deadlineAt, '2026-07-27T12:35:00.000Z');
   assert.equal(outputs[0]._splitCtx.vivaDirectionId, 4588);
   assert.equal(outputs[0]._splitCtx.durationMinutes, 120);
   assert.equal(outputs[0]._splitCtx.step, 'token');

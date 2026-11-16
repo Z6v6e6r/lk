@@ -1,3 +1,4 @@
+import { paymentAttemptFields } from "../../src/utils/paymentAttemptLifecycle.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -292,6 +293,7 @@ test("a booking whose nested transactionStatus says UNPAID is not a completed pa
     "readVivaPaymentPaidState",
     "hasPaidPaymentStatus",
     "hasPendingPaymentStatus",
+    "paymentAttemptFields",
     `return ${toRunnableFunctionExpression("function normalizeTournamentVivaPaymentResolution")
       .replace(/: unknown/g, "")
       .replace(/: string \| null/g, "")
@@ -305,6 +307,7 @@ test("a booking whose nested transactionStatus says UNPAID is not a completed pa
     readVivaPaymentPaidState,
     () => true,
     () => false,
+    paymentAttemptFields,
   ) as (value: unknown) => { paymentUrl: string | null; paid: boolean | null } | null;
 
   const booking = {

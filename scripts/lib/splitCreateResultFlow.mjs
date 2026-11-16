@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createSplitCreateResultProtocol } from './splitCreateResult.mjs';
+import { bookingPaymentAttemptSource } from './eventPaymentSources.mjs';
 import { instrumentSplitCreateTimings } from './splitCreateTiming.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from '../nodered_reviewed_flow_deploy/runtime_contract.mjs';
 
@@ -58,7 +59,8 @@ export function splitCreateResultNode(msg, global, protocol) {
   msg.maxRedirects = 0;
   return [msg, null, null];
 }
-export const splitCreateResultFunctionSource = () => `const protocol = (${createSplitCreateResultProtocol.toString()})();\nreturn (${splitCreateResultNode.toString()})(msg, global, protocol);\n`;
+export const splitCreateResultFunctionSource = () => bookingPaymentAttemptSource()
+  + `const protocol = (${createSplitCreateResultProtocol.toString()})(bookingPaymentLifecycle);\nreturn (${splitCreateResultNode.toString()})(msg, global, protocol);\n`;
 
 export function buildSplitCreateResultNodes(tab, clientNode) {
   const i = SPLIT_CREATE_RESULT_IDS;

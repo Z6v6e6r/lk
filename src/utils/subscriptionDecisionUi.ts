@@ -1,3 +1,4 @@
+import { isSettledPaymentAttempt } from "./paymentAttemptLifecycle.ts";
 import type { ApiError, PadelSplitPaymentResult } from "./apiClient";
 import {
   hasDeterministicSubscriptionDecision,
@@ -459,6 +460,11 @@ export function resolveSubscriptionDecisionPresentation({
     };
   }
 
+  if (isSettledPaymentAttempt(result)) return {
+    kind: "SUBSCRIPTION_ALLOWED", title: "Запись и оплата подтверждены",
+    message: "Запись подтверждена сервером, доплата уже оплачена.", reasonCode: "SUBSCRIPTION_PAYMENT_CONFIRMED",
+    retryable: false, subscriptionApplied: true, continueWithoutSubscription: false,
+  };
   const amount = formatMoney(result.toPayMinor);
   if ((result.toPayMinor ?? Math.round(result.toPay * 100)) > 0) {
     return {

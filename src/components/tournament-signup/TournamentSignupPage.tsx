@@ -1,3 +1,4 @@
+import { paymentAttemptFields, PAYMENT_ATTEMPT_CHECK_MESSAGE } from "../../utils/paymentAttemptLifecycle";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isTournamentCapacityError } from "../../utils/tournamentCapacityError";
 import { isSubscriptionBookingReleased } from "../../utils/subscriptionRejoin";
@@ -501,7 +502,6 @@ function shouldShowSubscriptionHint(product: TournamentVivaProduct) {
   return visits === 30;
 }
 
-const PAYMENT_HOLD_MS = 20 * 60 * 1000;
 
 function navigateToExternalUrl(urlRaw: string): boolean {
   if (typeof window === "undefined") return false;
@@ -1574,7 +1574,7 @@ export default function TournamentSignupPage({
           canCancel: true,
           message: "Запись создана в Viva, ожидается оплата.",
           paymentUrl: result.data.paymentUrl,
-          paymentExpiresAt: result.data.paymentExpiresAt ?? new Date(Date.now() + PAYMENT_HOLD_MS).toISOString(),
+          ...paymentAttemptFields(result.data),
         };
         await storeTournamentPendingPayment(paymentToken, selectedExerciseId, nextRegistration);
         if (tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
@@ -1705,7 +1705,7 @@ export default function TournamentSignupPage({
     }
     const paymentUrl = registration?.paymentUrl?.trim();
     if (!isAuthenticated || !registrationSessionIdentity || registrationSessionIdentity !== tournamentPaymentSessionIdentity(readAuthToken()) || !canPayTournamentPending(registration) || !paymentUrl) {
-      setError("Ссылка на оплату пока не найдена. Обновите статус записи.");
+      setError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
       return;
     }
     if (!navigateToExternalUrl(paymentUrl)) {
@@ -2415,6 +2415,13 @@ export default function TournamentSignupPage({
                       </div>
                     )}
 
+                    {!subscriptionUsageShadowEnabled && registration?.status === "PAYMENT_PENDING" && !canPayPending && (
+                      <div className="tournament-signup-muted" role="status" aria-live="polite">
+                        {PAYMENT_ATTEMPT_CHECK_MESSAGE}
+                        <button type="button" className="section-cta" disabled={actionLoading}
+                          onClick={() => selectedId && void loadDetail(selectedId)}>Проверить результат</button>
+                      </div>
+                    )}
                     {!subscriptionUsageShadowEnabled && (canPayPending || canCancel) && (
                       <div className="tournament-signup-actions">
                         {canPayPending && (

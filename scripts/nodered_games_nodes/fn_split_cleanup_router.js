@@ -259,8 +259,12 @@ const classifyTransactionPayload = (payload, expected) => {
     };
   }
   if (status === "PAID") return { kind: "PAID", status, transactionId, bookingIds };
-  if (status === "UNPAID") return { kind: "UNPAID", status, transactionId, bookingIds };
-  if (status === "WAITING") return { kind: "WAITING", status, transactionId, bookingIds };
+  // A currently unpaid bill can still accept a payment. Only the shared strict
+  // closure classifier proves the old online attempt can no longer be paid.
+  const contract = typeof __splitBookingPaymentAttempt === "object" ? __splitBookingPaymentAttempt : null;
+  const state = contract?.splitAttemptTransaction(tx, expected);
+  if (state === "CLOSED") return { kind: "UNPAID", status, transactionId, bookingIds };
+  if (state === "OPEN") return { kind: "WAITING", status, transactionId, bookingIds };
   if (["REFUND", "PARTIALLY_REFUNDED", "PARTIALLY_PAID"].includes(status)) {
     return { kind: "MANUAL_REVIEW", status, reason: "non_terminal_or_refunded_status" };
   }
@@ -280,6 +284,7 @@ const buildTimedOutPaymentByBooking = (values) => {
       role: toStr(item.role),
       paymentRef: toStr(item.paymentRef),
       transactionId: toStr(item.transactionId),
+      paymentAttemptHeadKey: toStr(item.paymentAttemptHeadKey),
       amountMinor: toNumber(item.amountMinor),
       clientId: toStr(item.clientId || item.playerId || item.userId),
       phone: normalizePhone(item.phone || item.phoneNorm || item.clientPhone || item.playerPhone),
@@ -1260,6 +1265,45 @@ const startGenericBookingCancel = (ctx, bookingId, clientId, meta = {}) => {
   return bookingApiRequest(ctx, probeRequest);
 };
 
+// Outputs 7/8 (1-based) persist/read single-dispatch intentions. They are
+// Mongo updateOne/find on lk_subscription_daily_booking_ops, returning here.
+const readTimeoutTransaction = (ctx) => {
+  ctx.step = "check_timeout_transaction";
+  appendTrace(ctx, { step: "check_timeout_transaction_request", bookingId: ctx.currentBookingId,
+    clientId: ctx.currentClientId, transactionId: ctx.currentTimedOutPayment?.transactionId,
+    paymentRef: ctx.currentTimedOutPayment?.paymentRef || null });
+  return adminRequest(ctx, "GET", `/transactions/${encodeURIComponent(ctx.currentTimedOutPayment.transactionId)}`);
+};
+const findNativeTimeoutOwner = (ctx, resumeLeg = "READ") => {
+  const payment = ctx.currentTimedOutPayment;
+  if (!ctx.sourceTenantKey || !ctx.currentClientId || !ctx.currentBookingId || !ctx.paymentExerciseId
+    || !payment?.transactionId || !Number.isSafeInteger(payment.amountMinor) || payment.amountMinor <= 0) {
+    return pushBookingFailureAndContinue(ctx, { bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+      method: "native_payment_owner", unsupportedReason: "Native payment owner binding unavailable" });
+  }
+  ctx.nativePaymentOwnerResumeLeg = resumeLeg; ctx.step = "split_timeout_native_owner_found";
+  msg._splitCleanupCtx = ctx; delete msg.error; msg.statusCode = 200; msg.limit = 2;
+  // Booking ownership is wider than a metadata-derived bill: an old/wrong
+  // transaction locator must find the native owner and fail binding below,
+  // never turn that booking into an apparently unowned ordinary attempt.
+  msg.payload = { tenantKey: ctx.sourceTenantKey, actorClientId: ctx.currentClientId,
+    bookingId: ctx.currentBookingId, category: "open_game" };
+  return [null, null, null, null, null, null, null, msg];
+};
+const claimSplitCloseMutation = (ctx, leg) => {
+  // Also fence restored pre-upgrade contexts that reached a later read stage.
+  if (ctx.nativePaymentOwnerChecked !== true) return findNativeTimeoutOwner(ctx, leg);
+  const contract = typeof __splitBookingPaymentAttempt === "object" ? __splitBookingPaymentAttempt : null;
+  const intent = contract?.splitAttemptCloseIntent(ctx, leg);
+  if (!intent) return pushBookingFailureAndContinue(ctx, { bookingId: ctx.currentBookingId,
+    clientId: ctx.currentClientId, method: "durable_close", unsupportedReason: "Durable close graph unavailable" });
+  ctx.closeIntent = intent; ctx.step = "split_close_intent_written";
+  msg._splitCleanupCtx = ctx; delete msg.error; msg.statusCode = 200;
+  msg.payload = [{ _id: intent._id }, { $setOnInsert: intent },
+    { upsert: true, writeConcern: { w: "majority", j: true } }];
+  return [null, null, null, null, null, null, msg, null];
+};
+
 const nextBookingRequest = (ctx) => {
   if (!Array.isArray(ctx.bookingQueue) || ctx.bookingQueue.length === 0) return null;
   const queueItem = normalizeBookingQueueItem(ctx.bookingQueue.shift(), null);
@@ -1275,6 +1319,10 @@ const nextBookingRequest = (ctx) => {
   const paymentRef = toStr(queueItem.paymentRef) || toStr(timeoutMeta?.paymentRef) || null;
   ctx.currentTransactionUnpaidVerified = false;
   delete ctx.currentTimeoutBookingChecked;
+  delete ctx.currentClosureMoneyRechecked;
+  delete ctx.currentProofReceipt;
+  ctx.nativePaymentOwnerChecked = false;
+  delete ctx.nativePaymentOwnerResumeLeg;
 
   if (ctx.mode === "PARTICIPANT_TIMEOUT") {
     ctx.currentBookingId = bookingId;
@@ -1304,20 +1352,7 @@ const nextBookingRequest = (ctx) => {
         unsupportedReason: "Missing exact Viva transaction id",
       });
     }
-    ctx.step = "check_timeout_transaction";
-    appendTrace(ctx, {
-      step: "check_timeout_transaction_request",
-      bookingId,
-      clientId: effectiveClientId || null,
-      transactionId,
-      paymentRef: paymentRef || null,
-    });
-    return adminRequest(
-      ctx,
-      "GET",
-      `/transactions/${encodeURIComponent(transactionId)}`,
-      undefined,
-    );
+    return findNativeTimeoutOwner(ctx);
   }
 
   return startGenericBookingCancel(ctx, bookingId, effectiveClientId, {
@@ -1391,6 +1426,33 @@ const nextExerciseRequest = (ctx) => {
 };
 
 const pushBookingSuccessAndContinue = (ctx, result) => {
+  if (ctx.mode === "PARTICIPANT_TIMEOUT" && ctx.currentTransactionUnpaidVerified === true
+    && ctx.currentClosureMoneyRechecked !== true) {
+    ctx.pendingBookingSuccess = result;
+    ctx.step = "split_close_final_transaction";
+    return adminRequest(ctx, "GET", `/transactions/${encodeURIComponent(ctx.currentTimedOutPayment.transactionId)}`);
+  }
+  const payment = ctx.currentTimedOutPayment;
+  if (ctx.mode === "PARTICIPANT_TIMEOUT" && ctx.currentClosureMoneyRechecked === true
+    && payment?.paymentAttemptHeadKey) {
+    if (!ctx.currentProofReceipt) {
+      const proposal = {
+        headKey: payment.paymentAttemptHeadKey, tenantKey: ctx.sourceTenantKey, gameId: ctx.gameId,
+        sourceRevision: ctx.sourceRevision, clientId: result.clientId, bookingId: result.bookingId,
+        transactionId: payment.transactionId, amountMinor: payment.amountMinor,
+        transactionState: "UNPAID_CLOSED", bookingState: "CANCELLED", verifiedAt: new Date().toISOString() };
+      proposal.receiptKey = "split-booking-payment-closure:" + JSON.stringify([
+        proposal.tenantKey, proposal.gameId, proposal.clientId, proposal.bookingId, proposal.transactionId]);
+      ctx.pendingClosureProposal = proposal; ctx.pendingBookingSuccess = result;
+      ctx.step = "split_close_receipt_written"; msg._splitCleanupCtx = ctx;
+      delete msg.error; msg.statusCode = 200;
+      msg.payload = [{ _id: proposal.receiptKey }, { $setOnInsert: {
+        _id: proposal.receiptKey, kind: "SPLIT_BOOKING_PAYMENT_CLOSURE_V1", proposal } },
+        { upsert: true, writeConcern: { w: "majority", j: true } }];
+      return [null, null, null, null, null, null, msg, null];
+    }
+    ctx.paymentAttemptHeadClosures = [...(ctx.paymentAttemptHeadClosures || []), ctx.currentProofReceipt];
+  }
   ctx.bookingResults.push({
     bookingId: result.bookingId,
     ok: true,
@@ -1504,11 +1566,17 @@ const buildPersistSet = (ctx, nowIso) => {
     const nextSplitPayments = asArray(ctx.nextSplitPayments).map((item) => {
       if (!item || typeof item !== "object") return item;
       const status = String(item.status || "").trim().toUpperCase();
-      if (status !== "EXPIRED" || String(item.cancelReason || "").trim().toUpperCase() !== "PAYMENT_TIMEOUT") {
+      const closure = ctx.paymentAttemptHeadClosures?.find(p => p.bookingId === item.bookingId
+        && p.transactionId === item.transactionId && p.clientId === item.clientId);
+      const nativeClosure = ctx.nativePaymentCanonicalClosures?.find(p => p.bookingId === item.bookingId
+        && p.transactionId === item.transactionId && p.clientId === item.clientId);
+      if (!closure && !nativeClosure && (status !== "EXPIRED" || String(item.cancelReason || "").trim().toUpperCase() !== "PAYMENT_TIMEOUT")) {
         return item;
       }
       return {
         ...item,
+        ...(closure ? { paymentAttemptClosure: closure } : {}),
+        ...(nativeClosure ? { nativePaymentAttemptClosure: nativeClosure } : {}),
         vivaCancellation: {
           bookingSuccess,
           bookingFailed,
@@ -1704,6 +1772,7 @@ const finalizeTask = (ctx) => {
         ? persistSet["payment.paid"] === true
         : (typeof ctx.paymentPaid === "boolean" ? ctx.paymentPaid : null),
       summaryPayload,
+      paymentAttemptHeadClosures: ctx.paymentAttemptHeadClosures || [],
     },
   });
 
@@ -1874,6 +1943,143 @@ if (!ctxFromMsg) {
 
 const ctx = ctxFromMsg;
 
+if (ctx.step === "split_timeout_native_owner_found") {
+  const rows = Array.isArray(msg.payload) ? msg.payload : null;
+  if (msg.error || !rows || rows.length > 1) return pushBookingFailureAndContinue(ctx, {
+    bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+    method: "native_payment_owner", unsupportedReason: "Native payment owner read is unavailable or ambiguous" });
+  if (rows.length === 0) {
+    ctx.nativePaymentOwnerChecked = true;
+    if (ctx.nativePaymentOwnerResumeLeg === "CANCEL") return claimSplitCloseMutation(ctx, "CANCEL");
+    if (["DISPATCH", "FINAL"].includes(ctx.nativePaymentOwnerResumeLeg)) {
+      ctx.step = ctx.nativePaymentOwnerResumeLeg === "DISPATCH"
+        ? "split_close_transaction_recheck" : "split_close_final_transaction";
+      return adminRequest(ctx, "GET", `/transactions/${encodeURIComponent(ctx.currentTimedOutPayment.transactionId)}`);
+    }
+    return readTimeoutTransaction(ctx);
+  }
+  const owner = rows[0], payment = ctx.currentTimedOutPayment, quote = owner?.lk1;
+  const intent = quote?.transactionIntent, checkout = quote?.checkout;
+  const bound = owner && owner.tenantKey === ctx.sourceTenantKey && owner.actorClientId === ctx.currentClientId
+    && typeof owner.operationId === "string" && owner.operationId.length > 0
+    && owner._id === "lk1-product:" + JSON.stringify([owner.tenantKey, owner.actorClientId, owner.operationId])
+    && owner.category === "open_game" && owner.bookingId === ctx.currentBookingId
+    && (!owner.upstreamBookingId || owner.upstreamBookingId === owner.bookingId)
+    && owner.exerciseId === ctx.paymentExerciseId && quote?.target?.eventId === ctx.paymentExerciseId
+    && quote.target.category === "GAME" && quote.transactionId === payment.transactionId
+    && checkout?.transactionId === payment.transactionId && checkout.toPayMinor === payment.amountMinor
+    && intent?.bookingId === ctx.currentBookingId && intent.actorClientId === ctx.currentClientId
+    && intent.chargeMinor === payment.amountMinor && quote.decision?.benefit?.finalPriceMinor === payment.amountMinor;
+  const lifecycle = typeof bookingPaymentLifecycle === "object" ? bookingPaymentLifecycle : null;
+  if (!bound || !lifecycle?.paymentAttemptReleased?.(owner)) {
+    return pushBookingFailureAndContinue(ctx, { bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+      method: "native_payment_owner", unsupportedReason: bound
+        ? "Native payment lifecycle still owns this booking and credit return" : "Native payment owner binding changed" });
+  }
+  // Native owns every provider write and any credit return. Its complete release
+  // proof grants only this existing canonical roster persistence, never an
+  // ordinary financial command or an ordinary-head closure receipt.
+  ctx.nativePaymentOwnerChecked = true; ctx.currentTransactionUnpaidVerified = false;
+  delete ctx.currentClosureMoneyRechecked; delete ctx.currentProofReceipt;
+  ctx.nativePaymentCanonicalClosures = [...(ctx.nativePaymentCanonicalClosures || []), {
+    operationKey: owner._id, operationId: owner.operationId, bookingId: owner.bookingId,
+    clientId: owner.actorClientId, transactionId: checkout.transactionId, amountMinor: checkout.toPayMinor,
+    verifiedAt: owner.lk1.paymentAttemptRelease.verifiedAt }];
+  return pushBookingSuccessAndContinue(ctx, { bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+    method: "native_payment_release_proof", alreadyCancelled: true });
+}
+if (ctx.step === "split_close_receipt_written") {
+  // Lost insert ACK is reconciled from the immutable receipt, never by provider replay.
+  ctx.step = "split_close_receipt_read"; msg._splitCleanupCtx = ctx;
+  delete msg.error; msg.statusCode = 200; msg.payload = { _id: ctx.pendingClosureProposal.receiptKey }; msg.limit = 2;
+  return [null, null, null, null, null, null, null, msg];
+}
+if (ctx.step === "split_close_receipt_read") {
+  const rows = Array.isArray(msg.payload) ? msg.payload : [];
+  const expected = ctx.pendingClosureProposal;
+  const receipt = rows.length === 1 ? rows[0] : null;
+  const keys = ["headKey", "tenantKey", "gameId", "clientId", "bookingId", "transactionId",
+    "amountMinor", "transactionState", "bookingState", "receiptKey"];
+  if (msg.error || receipt?._id !== expected.receiptKey || receipt.kind !== "SPLIT_BOOKING_PAYMENT_CLOSURE_V1"
+    || keys.some(k => receipt.proposal?.[k] !== expected[k])
+    || !Number.isSafeInteger(receipt.proposal.sourceRevision) || receipt.proposal.sourceRevision > ctx.sourceRevision
+    || !Number.isFinite(Date.parse(receipt.proposal.verifiedAt))) {
+    return pushBookingFailureAndContinue(ctx, { bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+      method: "closure_receipt", unsupportedReason: "Durable closure proof unavailable" });
+  }
+  ctx.currentProofReceipt = receipt.proposal;
+  return pushBookingSuccessAndContinue(ctx, ctx.pendingBookingSuccess);
+}
+if (ctx.step === "split_close_final_transaction") {
+  if (ctx.nativePaymentOwnerChecked !== true) return findNativeTimeoutOwner(ctx, "FINAL");
+  const p = ctx.currentTimedOutPayment;
+  const evidence = isOk(msg.statusCode) ? classifyTransactionPayload(msg.payload, {
+    transactionId: p.transactionId, bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+    exerciseId: ctx.paymentExerciseId, amountMinor: p.amountMinor }) : { kind: "UNKNOWN" };
+  if (evidence.kind !== "UNPAID") {
+    ctx.blockLocalMutation = true;
+    return pushBookingFailureAndContinue(ctx, { bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+      method: "final_payment_readback", unsupportedReason: "Cancelled booking payment requires reconciliation" });
+  }
+  ctx.currentClosureMoneyRechecked = true;
+  return pushBookingSuccessAndContinue(ctx, ctx.pendingBookingSuccess);
+}
+if (ctx.step === "split_close_intent_written") {
+  const ack = msg.payload;
+  const winner = !msg.error && ack?.acknowledged === true && ack.upsertedCount === 1;
+  if (!winner) {
+    ctx.step = "split_close_intent_read";
+    msg._splitCleanupCtx = ctx; delete msg.error; msg.statusCode = 200;
+    msg.payload = { _id: ctx.closeIntent._id }; msg.limit = 2;
+    return [null, null, null, null, null, null, null, msg];
+  }
+  ctx.step = "split_close_transaction_recheck";
+  return adminRequest(ctx, "GET", `/transactions/${encodeURIComponent(ctx.currentTimedOutPayment.transactionId)}`);
+}
+if (ctx.step === "split_close_intent_read") {
+  const rows = Array.isArray(msg.payload) ? msg.payload : [];
+  const expected = ctx.closeIntent;
+  const actual = rows.length === 1 ? rows[0] : null;
+  if (msg.error || !actual || actual._id !== expected?._id || actual.kind !== expected.kind
+    || JSON.stringify(actual.binding) !== JSON.stringify(expected.binding)) {
+    return pushBookingFailureAndContinue(ctx, { bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+      method: "durable_close", unsupportedReason: "Close intent receipt unavailable" });
+  }
+  // An existing intent may have dispatched already. Reconcile by reads only.
+  if (expected.binding.leg === "CANCEL") return startBookingVerification(ctx, ctx.currentBookingId,
+    ctx.currentClientId, { method: "durable_cancel_readback", alreadyCancelled: true });
+  ctx.step = "check_timeout_transaction_after_expire";
+  return adminRequest(ctx, "GET", `/transactions/${encodeURIComponent(ctx.currentTimedOutPayment.transactionId)}`);
+}
+if (ctx.step === "split_close_transaction_recheck") {
+  if (ctx.nativePaymentOwnerChecked !== true) return findNativeTimeoutOwner(ctx, "DISPATCH");
+  const p = ctx.currentTimedOutPayment;
+  const evidence = isOk(msg.statusCode) ? classifyTransactionPayload(msg.payload, {
+    transactionId: p.transactionId, bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+    exerciseId: ctx.paymentExerciseId, amountMinor: p.amountMinor }) : { kind: "UNKNOWN" };
+  if (evidence.kind === "PAID") return startPaymentEvidenceClaim(ctx, p, msg.payload,
+    "durable_close_paid_race", Number(msg.statusCode));
+  if (ctx.closeIntent.binding.leg === "EXPIRE") {
+    if (evidence.kind === "UNPAID") {
+      ctx.currentTransactionUnpaidVerified = true;
+      return startGenericBookingCancel(ctx, ctx.currentBookingId, ctx.currentClientId,
+        { fallback: "durable_expiry_already_closed" });
+    }
+    if (evidence.kind === "WAITING") {
+      ctx.step = "expire_timeout_transaction";
+      ctx.upstreamMutationsAttempted = Number(ctx.upstreamMutationsAttempted || 0) + 1;
+      return adminRequest(ctx, "POST", `/transactions/${encodeURIComponent(p.transactionId)}/expire`, undefined);
+    }
+  } else if (evidence.kind === "UNPAID" && ctx.currentCancelRequest?.refundMethod === "NONE"
+    && ctx.currentTimeoutBookingChecked === true) {
+    ctx.step = "cancel_booking";
+    ctx.upstreamMutationsAttempted = Number(ctx.upstreamMutationsAttempted || 0) + 1;
+    return bookingApiRequest(ctx, ctx.currentCancelRequest);
+  }
+  return pushBookingFailureAndContinue(ctx, { bookingId: ctx.currentBookingId, clientId: ctx.currentClientId,
+    method: "durable_close", unsupportedReason: "Payment changed or closure remains unverified" });
+}
+
 if (ctx.step === "payment_claim_write") {
   const claim = ctx.paymentEvidenceClaim && typeof ctx.paymentEvidenceClaim === "object"
     ? ctx.paymentEvidenceClaim
@@ -1919,6 +2125,15 @@ if (ctx.step === "payment_claim_read") {
     });
     return finalizeTask(ctx);
   }
+  // A verified PAID claim owns this result. Retired unpaid/close context must
+  // not route the recovered participant into the unpaid final-proof branch.
+  ctx.currentTransactionUnpaidVerified = false;
+  delete ctx.currentClosureMoneyRechecked;
+  delete ctx.currentProofReceipt;
+  delete ctx.pendingClosureProposal;
+  delete ctx.pendingBookingSuccess;
+  delete ctx.closeIntent;
+  delete ctx.currentTimeoutBookingChecked;
   recoverPaidTimedOutState(ctx, expected.timeoutMeta, expected.providerPayload || null);
   appendTrace(ctx, {
     step: "payment_claim_verified",
@@ -2029,20 +2244,7 @@ if (ctx.step === "check_timeout_transaction") {
   }
 
   if (evidence.kind === "WAITING") {
-    ctx.step = "expire_timeout_transaction";
-    appendTrace(ctx, {
-      step: "expire_timeout_transaction_request",
-      bookingId,
-      clientId,
-      transactionId,
-      transactionStatus: evidence.status,
-    });
-    return adminRequest(
-      ctx,
-      "POST",
-      `/transactions/${encodeURIComponent(transactionId)}/expire`,
-      undefined,
-    );
+    return claimSplitCloseMutation(ctx, "EXPIRE");
   }
 
   if (evidence.kind !== "UNPAID") {
@@ -2374,6 +2576,9 @@ if (ctx.step === "cancel_booking_probe") {
     scope: cancelRequest.scope,
     refundMethod: cancelRequest.refundMethod || null,
   });
+  if (ctx.mode === "PARTICIPANT_TIMEOUT" && ctx.currentTransactionUnpaidVerified === true) {
+    return claimSplitCloseMutation(ctx, "CANCEL");
+  }
   ctx.upstreamMutationsAttempted = Number(ctx.upstreamMutationsAttempted || 0) + 1;
   return bookingApiRequest(ctx, cancelRequest);
 }

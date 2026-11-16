@@ -25,7 +25,7 @@ const serviceEnvironment = {
   password: process.env.VIVA_SERVICE_PASSWORD,
 };
 const hasServiceEnvironment = Object.values(serviceEnvironment).some(Boolean);
-const intervalMs = 120_000;
+const intervalMs = 30_000;
 const label = key => crypto.createHash('sha256').update(String(key)).digest('hex').slice(0, 12);
 
 if (args.includes('--help') || !args.includes('--run')) {
@@ -100,7 +100,17 @@ try {
         loadRows: afterId => {
           const query = phase === 'FREE' ? { tenantKey, kind: 'LK1_FREE_CANCEL_JOB_V1',
             phase: { $in: lk1FreePending }, ...(afterId ? { _id: { $gt: afterId } } : {}) }
-            : buildLk1UnpaidScanQuery({ tenantKey, cohortFrom: cutoffIso, afterId, phase });
+            : { $or: [buildLk1UnpaidScanQuery({ tenantKey, cohortFrom: cutoffIso, afterId, phase }),
+              { tenantKey, state: { $in: ['CONFIRMED', 'RELEASED'] }, createdAt: { $gte: cutoffIso },
+                category: { $in: ['open_game', 'group_training', 'tournament'] },
+                'lk1.checkout.toPayMinor': { $gt: 0 },
+                $and: [{ $or: [{ 'lk1.paymentAttempt.phase': { $nin: ['CLOSED', 'PAID'] } },
+                  { 'lk1.paymentAttempt.phase': { $in: ['CLOSED', 'PAID'] }, 'lk1.paymentAttempt.resourceJobKey': { $exists: true },
+                    'lk1.paymentAttempt.resourceJobCompleted': { $ne: true } }] }],
+                ...(afterId ? { _id: { $gt: afterId } } : {}),
+                ...(phase === 'INTENT' ? { 'lk1.paymentAttempt': { $exists: true } }
+                  : { 'lk1.paymentAttempt': { $exists: false } }),
+                $or: [{ 'lk1.checkout.lifecycleVersion': 1 }, { category: 'open_game' }] } ] };
           return operations.find(query).sort({ _id: 1 }).limit(limit).toArray();
         },
         visit: async op => {
@@ -123,11 +133,11 @@ try {
     }
   }
   do {
-    // Reconcile outstanding INTENT first. Together the two pages never exceed
-    // 100 rows per cycle, while durable cursors survive PM2/worker restarts.
-    const intents = await scanPhase('INTENT', 20);
-    const free = stopped ? 0 : await scanPhase('FREE', 20);
-    if (!stopped) await scanPhase('UNCLAIMED', 100 - intents - free);
+    // Four shorter cycles retain the previous 100-row/two-minute scan budget.
+    // Closing intents get priority; cursors keep large cohorts fair across restarts.
+    const intents = await scanPhase('INTENT', 10);
+    const free = stopped ? 0 : await scanPhase('FREE', 5);
+    if (!stopped) await scanPhase('UNCLAIMED', 25 - intents - free);
     if (args.includes('--once') || stopped) break;
     // A large cohort is traversed one bounded page per interval. Never burst
     // through the full history with unbounded Viva GET traffic.

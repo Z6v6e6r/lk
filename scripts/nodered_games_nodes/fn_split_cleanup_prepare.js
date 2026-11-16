@@ -211,7 +211,7 @@ const resolveShareCount = (game, splitPayment) => {
 };
 
 const resolvePaymentDeadlineTs = (paymentItem, splitPayment, fallbackTimeoutMs) => {
-  const createdAtTs = parseTs(paymentItem?.createdAt || paymentItem?.updatedAt);
+  const createdAtTs = parseStrictIsoTs(paymentItem?.paymentAttemptCreatedAt || paymentItem?.createdAt);
   const fallbackDeadlineTs = createdAtTs === null ? null : createdAtTs + fallbackTimeoutMs;
   const explicitDeadlineTs = parseTs(
     paymentItem?.deadlineAt
@@ -282,7 +282,7 @@ const actorBookingId = toStr(request.actorBookingId);
 const limit = Math.max(1, Math.min(500, Math.floor(toNumber(request.limit) || 200)));
 const internalScheduler = request.internalScheduler === true;
 const activationCutoffTs = internalScheduler ? parseStrictIsoTs(request.activationCutoffIso) : null;
-const PARTICIPANT_PAYMENT_TIMEOUT_MS = 10 * 60 * 1000;
+const PARTICIPANT_PAYMENT_TIMEOUT_MS = 15 * 60 * 1000;
 
 const tasks = [];
 let authorizationFailure = null;
@@ -333,7 +333,9 @@ rows.forEach((game) => {
   const timedOutPaymentItems = [];
   payments.forEach((paymentItem, index) => {
     const paymentStatus = String(paymentItem.status || "").trim().toUpperCase();
-    if (paymentStatus !== "PAYMENT_PENDING") return;
+    const retiredWithHead = ["LEFT", "CANCELLED", "CANCELED", "EXPIRED"].includes(paymentStatus)
+      && toStr(paymentItem.paymentAttemptHeadKey) && !paymentItem.paymentAttemptClosure && !paymentItem.nativePaymentAttemptClosure;
+    if (paymentStatus !== "PAYMENT_PENDING" && !retiredWithHead) return;
     const paymentAmountMinor = toNumber(paymentItem.amountMinor);
     const paymentAmount = toNumber(paymentItem.amount);
     // Subscription/zero-cost joins can be instantly paid without redirect; do not timeout-remove them.
@@ -372,6 +374,14 @@ rows.forEach((game) => {
   if (timedOutPaymentItems.length > 0 && !explicitForceTarget) {
     const timedOutKeys = new Set(timedOutPaymentItems.map((item) => item.key));
     const timedOutIdentities = timedOutPaymentItems.map((item) => item.identity);
+    // A released attempt may finish its roster cleanup after an explicit new
+    // generation has already booked. Retire the old bill without removing the
+    // player now owned by another live/paid payment row.
+    const protectedIdentities = payments.filter((paymentItem, index) => !timedOutKeys.has(buildPaymentKey(paymentItem, index))
+      && ["PAID", "PAYMENT_PENDING"].includes(String(paymentItem.status || "").trim().toUpperCase()))
+      .map(resolvePaymentIdentity);
+    const protectedIdentity = identity => protectedIdentities.some(other => playerMatchesIdentity(
+      { id: other.clientId, phone: other.phone }, identity));
     const timedOutBookingIds = uniq(timedOutPaymentItems.flatMap((item) => item.bookingIds));
     const timedOutBookingTargets = uniqBookingTargets(
       timedOutPaymentItems.flatMap((item) => (
@@ -383,13 +393,16 @@ rows.forEach((game) => {
     );
     const nextParticipants = participants.filter((player) => (
       !timedOutIdentities.some((identity) => playerMatchesIdentity(player, identity))
+      || protectedIdentities.some((identity) => playerMatchesIdentity(player, identity))
     ));
     const nextWaitlist = waitlist.filter((player) => (
       !timedOutIdentities.some((identity) => playerMatchesIdentity(player, identity))
+      || protectedIdentities.some((identity) => playerMatchesIdentity(player, identity))
     ));
     const nextSplitPayments = payments.map((paymentItem, index) => {
       const key = buildPaymentKey(paymentItem, index);
       if (!timedOutKeys.has(key)) return paymentItem;
+      if (["LEFT", "CANCELLED", "CANCELED", "EXPIRED"].includes(String(paymentItem.status || "").toUpperCase())) return paymentItem;
       return {
         ...paymentItem,
         status: "EXPIRED",
@@ -399,7 +412,8 @@ rows.forEach((game) => {
       };
     });
     const baseLeaveEvents = normalizeLeaveEvents(metadata);
-    const timeoutLeaveEvents = timedOutPaymentItems.map((item) => ({
+    const timeoutLeaveEvents = timedOutPaymentItems.filter(item => item.paymentItem.status === "PAYMENT_PENDING"
+      && item.playerBucket && !protectedIdentity(item.identity)).map((item) => ({
       playerId: item.identity.clientId || null,
       playerPhone: item.identity.phone || null,
       playerName: item.identity.name,
@@ -446,6 +460,7 @@ rows.forEach((game) => {
         role: toStr(item.paymentItem.role),
         paymentRef: toStr(item.paymentItem.paymentRef),
         transactionId: item.transactionId || null,
+        paymentAttemptHeadKey: toStr(item.paymentItem.paymentAttemptHeadKey),
         clientId: item.identity.clientId || null,
         phone: item.identity.phone || null,
         name: item.identity.name,

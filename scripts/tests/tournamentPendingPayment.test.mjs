@@ -5,7 +5,9 @@ import ts from 'typescript';
 import { webcrypto } from 'node:crypto';
 
 const source = fs.readFileSync(new URL('../../src/utils/tournamentPendingPayment.ts', import.meta.url), 'utf8');
-const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+const lifecycle = ts.transpileModule(fs.readFileSync(new URL('../../src/utils/paymentAttemptLifecycle.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+const lifecycleUrl = `data:text/javascript;base64,${Buffer.from(lifecycle).toString('base64')}`;
+const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace('"./paymentAttemptLifecycle.ts"', JSON.stringify(lifecycleUrl));
 const { mergeTournamentPendingPayment: merge, storeTournamentPendingPayment: store,
   clearTournamentPendingPayments: clear, canPayTournamentPending: canPay } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
 const pending = extra => ({ status: 'PAYMENT_PENDING', bookingId: 'booking-A', canRegister: false, canCancel: true,

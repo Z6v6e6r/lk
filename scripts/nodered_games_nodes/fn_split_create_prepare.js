@@ -16,7 +16,7 @@ const TOKEN_REFRESH_LOCK_MS = 10 * 1000;
 const DEFAULT_OPEN_GAME_DIRECTION_ID = 4588;
 const DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_SPLIT_SHARE_COUNT = 4;
-const DEFAULT_PAYMENT_DEADLINE_MINUTES = 25;
+const DEFAULT_PAYMENT_DEADLINE_MINUTES = 15;
 const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
 const MIN_BOOKING_LEAD_MINUTES = 30;
 const TOKEN_REQUEST_TIMEOUT_MS = 10000;
@@ -312,10 +312,8 @@ if (paymentMode === "subscription" && !clientSubscriptionId) {
   });
 }
 const transactionPaymentMethod = toStr(body.transactionPaymentMethod || body.paymentMethod);
-const paymentDeadlineMinutes = Math.max(
-  1,
-  Math.min(180, Math.floor(toNumber(body.paymentDeadlineMinutes) ?? DEFAULT_PAYMENT_DEADLINE_MINUTES)),
-);
+// The server owns the payment window; a retry cannot extend it through request fields.
+const paymentDeadlineMinutes = DEFAULT_PAYMENT_DEADLINE_MINUTES;
 const assembleDeadlineAt = Number.isFinite(startAtTs)
   ? new Date(startAtTs - 24 * 60 * 60 * 1000).toISOString()
   : null;

@@ -1,19 +1,22 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import * as splitAttemptContract from '../lib/splitBookingPaymentAttempt.mjs';
 import { applyReconciledEdits, timeoutPreservationEdits } from '../prepare_reconciled_cancellation_recovery.mjs';
 const raw=fs.readFileSync(new URL('../nodered_games_nodes/fn_split_cleanup_router.js',import.meta.url),'utf8');
 const variants=[['maintained source',raw]];
 if(process.env.LK1_TIMEOUT_CLEANUP_SOURCE)variants.push(['exact installed source',applyReconciledEdits(fs.readFileSync(process.env.LK1_TIMEOUT_CLEANUP_SOURCE,'utf8'),timeoutPreservationEdits())]);
-const ctx=()=>({step:'preflight_actor_booking',mode:'PARTICIPANT_TIMEOUT',token:'fixture-token',gameId:'fixture-game',reason:'PAYMENT_TIMEOUT',
+const ctx=()=>({step:'preflight_actor_booking',nativePaymentOwnerChecked:true,mode:'PARTICIPANT_TIMEOUT',token:'fixture-token',gameId:'fixture-game',reason:'PAYMENT_TIMEOUT',
+  sourceTenantKey:'fixture-tenant',paymentExerciseId:'fixture-exercise',sourceRevision:1,
+  currentTimedOutPayment:{transactionId:'fixture-transaction',amountMinor:70000},
   currentBookingId:'fixture-booking',currentClientId:'fixture-client',currentTransactionUnpaidVerified:true,
   currentProbeRequest:{scope:'admin',method:'GET',path:'/clients/fixture-client/bookings/fixture-booking/cancel',label:'admin_client_cancel_probe'},
   bookingQueue:[],bookingResults:[],initialBookingIds:['fixture-booking'],trace:[],exerciseId:null,exerciseCancelled:true,
   nextParticipants:[],nextWaitlist:[],nextSplitPayments:[],nextLeaveEvents:[],timedOutPayments:[]});
 const row=()=>({id:'fixture-booking',client:{id:'fixture-client'},paymentType:'SUBSCRIPTION',clientSubscriptionId:'fixture-subscription',isCancelled:false,cancelled:false});
 for(const [label,source]of variants){
-  const run=new Function('msg','global','node','env',source);
-  const execute=(c,p,status=200)=>{const m={_splitCleanupCtx:c,payload:p,statusCode:status};run(m,{get(){},set(){}},{warn(){},error(){},send(){}},{get(){}});return m};
+  const run=new Function('msg','global','node','env','__splitBookingPaymentAttempt',source);
+  const execute=(c,p,status=200)=>{const m={_splitCleanupCtx:c,payload:p,statusCode:status};run(m,{get(){},set(){}},{warn(){},error(){},send(){}},{get(){}},splitAttemptContract);return m};
   test(label+': an unpaid surcharge never cancels its active or already-cancelled subscription visit with NONE',()=>{
     for(const cancelled of [false,true]){const c=ctx(),m=execute(c,{...row(),isCancelled:cancelled,cancelled});
       assert.equal(c.blockReason,'timeout_subscription_return_requires_owner');assert.equal(c.blockLocalMutation,true);
@@ -32,11 +35,18 @@ for(const [label,source]of variants){
         .map(change=>({paymentType:'ON_PLACE',clientSubscriptionId:null,...change}))];
     for(const change of changes){const c=ctx(),m=execute(c,{...row(),...change});assert.equal(c.blockLocalMutation,true);assert.notEqual(m.method,'PUT');assert.notEqual(m.method,'DELETE')}
   });
-  test(label+': exact ordinary ON_PLACE retains its previous NONE cancellation after the new read',()=>{
+  test(label+': exact ordinary ON_PLACE requires durable intent and fresh closed transaction before NONE',()=>{
     const c=ctx(),m=execute(c,{...row(),paymentType:'ON_PLACE',clientSubscriptionId:null});
     assert.equal(c.step,'cancel_booking_probe');assert.equal(c.currentTimeoutBookingChecked,true);assert.equal(m.method,'GET');
     const write=execute(c,{bookingId:'fixture-booking',cancellationOptions:{cancellationOnly:{available:true}}});
-    assert.equal(write.method,'PUT');assert.deepEqual(write.payload,{refundMethod:'NONE',cancelExercise:false});
+    assert.equal(c.step,'split_close_intent_written'); assert.notEqual(write.method,'PUT');
+    assert.equal(write.payload[1].$setOnInsert.binding.leg,'CANCEL');
+    const checked=execute(c,{acknowledged:true,upsertedCount:1});
+    assert.equal(checked.method,'GET');assert.match(checked.url,/transactions\/fixture-transaction$/);
+    const closed=execute(c,{id:'fixture-transaction',status:'UNPAID',client:{id:'fixture-client'},
+      exerciseId:'fixture-exercise',toPay:70000,currency:'RUB',products:[{id:'product',paymentBookingIds:['fixture-booking']}],
+      cardPaymentInfo:{status:'REJECTED',declineOutcome:'EXPIRED'}});
+    assert.equal(closed.method,'PUT');assert.deepEqual(closed.payload,{refundMethod:'NONE',cancelExercise:false});
   });
   test(label+': a cancellation option cannot bypass a missing or contradictory booking readback',()=>{
     for(const kind of ['subscription','exercise','money','deposit','settlementAccount']){const c=ctx();c.step='cancel_booking_probe';c.currentTimeoutBookingChecked=true;
@@ -49,7 +59,7 @@ for(const [label,source]of variants){
     const c=ctx();c.step='check_timeout_transaction';delete c.currentTransactionUnpaidVerified;
     c.paymentExerciseId='fixture-exercise';
     c.currentTimedOutPayment={transactionId:'fixture-transaction',bookingIds:['fixture-booking'],clientId:'fixture-client',amountMinor:70000};
-    const m=execute(c,{id:'fixture-transaction',status:'UNPAID',client:{id:'fixture-client'},exerciseId:'fixture-exercise',toPay:70000,currency:'RUB',products:[{bookingIds:['fixture-booking']}]});
+    const m=execute(c,{id:'fixture-transaction',status:'UNPAID',client:{id:'fixture-client'},exerciseId:'fixture-exercise',toPay:70000,currency:'RUB',products:[{id:'product',paymentBookingIds:['fixture-booking']}],cardPaymentInfo:{status:'REJECTED',declineOutcome:'EXPIRED'}});
     assert.equal(m.method,'GET');assert.match(m.url,/\/clients\/fixture-client\/bookings\/fixture-booking$/);assert.equal(c.step,'preflight_actor_booking');
   });
 }

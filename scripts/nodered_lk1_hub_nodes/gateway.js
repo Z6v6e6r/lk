@@ -65,12 +65,13 @@ const lk1Stop = (ctx, code, observed) => finishPending(ctx, "Запись или
   observed === undefined ? { code } : { code, observed });
 const lk1ReadonlyLookup = (value) => {
   const ctx = value._subscriptionBooking;
-  return ctx?.step === "lk1_ingress_operation_find" && ctx.lk1IngressReplay === true
+  const predecessor = ctx?.step === 'lk1_rejoin_predecessor_find' ? lk1RejoinPreviousId(ctx.operationId) : null;
+  return ['lk1_ingress_operation_find', 'lk1_rejoin_predecessor_find'].includes(ctx?.step) && ctx.lk1IngressReplay === true
     && typeof ctx.actorClientId === "string" && Boolean(ctx.actorClientId)
     && typeof ctx.tenantKey === "string" && /^[A-Za-z0-9_-]+$/.test(ctx.tenantKey)
     && /^[A-Za-z0-9._:-]{8,200}$/.test(ctx.operationId || "")
     && isObj(value.payload) && Object.keys(value.payload).length === 1
-    && value.payload._id === `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}`;
+    && value.payload._id === `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, predecessor || ctx.operationId])}`;
 };
 const lk1Find = (ctx, step, query) => {
   ctx.step = step;
@@ -188,7 +189,7 @@ const lk1Quote = (ctx, exercise, owned) => {
   }
   const quote = { rule: configured.rule, purchaseDate: dates.dates[0], target,
     createPayload: ctx.managedAction === "CREATE_GAME" ? ctx.lk1CreatePayload : undefined };
-  return { ...quote, fingerprint: lk1Fingerprint(ctx, quote) };
+  return { ...quote, fingerprint: lk1Fingerprint(ctx, quote), paymentLifecycleVersion: 1 };
 };
 const lk1Finish = (ctx) => {
   if (isObj(ctx.lk1?.unpaidCancellation)) return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
@@ -196,10 +197,23 @@ const lk1Finish = (ctx) => {
   if (!ctx.confirmedBookingId || (ctx.lk1.decision.benefit.finalPriceMinor > 0 && !payment)) {
     return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
   }
+  const paid = ctx.lk1.paymentAttempt?.phase === 'PAID';
+  const deadline = payment ? bookingPaymentLifecycle.paymentAttemptDeadline(payment, ctx.lk1.transactionAttemptedAt) : null;
+  if (payment?.toPayMinor > 0 && !paid && (ctx.lk1.paymentAttempt || deadline === null || Date.now() >= deadline)) {
+    const result = finishPending(ctx, 'Срок оплаты истёк. Проверяем закрытие предыдущей попытки.', {
+      code: 'PAYMENT_ATTEMPT_CLOSING', operationId: ctx.operationId });
+    msg.payload = { ...msg.payload, bookingId: ctx.confirmedBookingId, transactionId: payment.transactionId,
+      paymentUrl: null, paymentAttemptState: 'CLOSING',
+      paymentExpiresAt: deadline === null ? null : new Date(deadline).toISOString() };
+    return result;
+  }
   finishConfirmed(ctx, ctx.confirmedBookingId);
-  msg.payload = { ...msg.payload, paymentUrl: payment?.paymentUrl || null,
+  msg.payload = { ...msg.payload, paymentUrl: paid ? null : payment?.paymentUrl || null,
     transactionId: payment?.transactionId || null, toPayMinor: payment?.toPayMinor || 0,
-    toPay: (payment?.toPayMinor || 0) / 100, paid: !payment || payment.toPayMinor === 0,
+    toPay: (payment?.toPayMinor || 0) / 100, paid: paid || !payment || payment.toPayMinor === 0,
+    paymentAttemptState: paid || !payment ? 'PAID' : 'PAYMENT_REQUIRED',
+    paymentExpiresAt: deadline === null ? null : new Date(deadline).toISOString(),
+    deadlineAt: deadline === null ? null : new Date(deadline).toISOString(),
     subscriptionVisitCount: ctx.lk1.decision.subscriptionVisitCount,
     gameMinutes: ctx.lk1.decision.gameMinutes || null };
   return emit(OUTPUT_FINAL);
@@ -244,7 +258,7 @@ const lk1FenceOperationUpdate = (ctx, step, query) => {
 };
 
 const lk1RejoinIdentity = (id) => {
-  const match = typeof id === "string" && /^(lk-split-join-[a-z0-9]+)(?::rejoin:([1-9]\d{0,3}))?$/.exec(id);
+  const match = typeof id === "string" && /^(lk-split-(?:join|create)-[a-z0-9]+)(?::rejoin:([1-9]\d{0,3}))?$/.exec(id);
   if (!match || Number(match[2] || 0) > 1000) return null;
   return { base: match[1], generation: Number(match[2] || 0) };
 };
@@ -258,6 +272,7 @@ const lk1RejoinPreviousId = (id) => {
     ? (value.generation === 1 ? value.base : `${value.base}:rejoin:${value.generation - 1}`) : null;
 };
 const lk1ReleasedWithoutPayment = (operation) => {
+  if (bookingPaymentLifecycle.paymentAttemptReleased(operation)) return true;
   if (typeof lk1SeatReleasedOperation === "function" && lk1SeatReleasedOperation(operation)) return true;
   if (typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(operation)) return true;
   const presentId = value => typeof value === "string" && value.trim().length > 0;
@@ -284,7 +299,7 @@ const lk1ReplayIdentityMatches = (ctx, operation, operationId = ctx.operationId)
       // already binds the rule, the sale date and the target, and since the plan-rules rollout
       // any product the resolver names can be the enforced one.
       || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)
-      || !action || quote.fingerprint !== lk1Fingerprint(identity, quote)
+      || !action || quote.fingerprint !== lk1Fingerprint({ ...identity, operationId }, quote)
       || (isCreate ? JSON.stringify(quote.createPayload) !== JSON.stringify(ctx.lk1CreatePayload)
         || quote.target.stationId !== ctx.prospectiveTarget?.studioId
         || quote.target.roomId !== ctx.prospectiveTarget?.roomId
@@ -344,7 +359,7 @@ const lk1FreeStart = (ctx, verifyOnly = false) => {
 };
 const lk1FreePrewriteGate = (ctx, continuation) => {
   ctx.lk1FreeGateContinuation = continuation;
-  return lk1Find(ctx, 'lk1_free_cancel_booking_gate', { kind: 'LK1_FREE_CANCEL_JOB_V1',
+  return lk1Find(ctx, 'lk1_free_cancel_booking_gate', { kind: { $in: ['LK1_FREE_CANCEL_JOB_V1', 'BOOKING_PAYMENT_CLOSE_JOB_V1'] },
     tenantKey: ctx.tenantKey, clientSubscriptionId: normalizeId(ctx.clientSubscriptionId),
     phase: { $in: lk1FreePending } });
 };
@@ -383,6 +398,31 @@ const lk1SeatStart = (ctx, owner) => {
   ctx.lk1SeatRecovery = begun.state;
   return lk1SeatApplyEffect(ctx, begun.effect);
 };
+// One actor/target head also fences a changed subscription or payment quote.
+// A head never expires by wall clock: transfer requires its owner's terminal proof.
+const lk1InsertPrepared = (ctx) => {
+  ctx.step = "operation_insert";
+  msg._subscriptionBooking = ctx;
+  const now = new Date().toISOString();
+  const record = { _id: ctx.operationKey, tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
+    clientSubscriptionId: ctx.clientSubscriptionId, operationId: ctx.operationId,
+    exerciseId: ctx.exerciseId, serviceDate: ctx.serviceDate, category: ctx.category,
+    state: "PREPARED", attempts: 0, lk1: JSON.parse(JSON.stringify(ctx.lk1)),
+    ...(ctx.lk1Rejoin ? { rejoinPredecessor: ctx.lk1Rejoin } : {}),
+    createdAt: now, updatedAt: now, leaseUntil: new Date(Date.now() + PREPARED_LEASE_MS).toISOString() };
+  msg.payload = [record, { writeConcern: { w: "majority", j: true } }];
+  return emit(OUTPUT_MONGO_INSERT);
+};
+const lk1ClaimPaymentHead = (ctx) => {
+  if (ctx.lk1.paymentLifecycleVersion !== 1) return lk1InsertPrepared(ctx);
+  const target = ctx.lk1.target;
+  const identity = ctx.managedAction === 'CREATE_GAME'
+    ? ['CREATE', target.stationId, target.roomId, new Date(target.startsAt).toISOString(), target.durationMinutes]
+    : ['EVENT', ctx.exerciseId];
+  ctx.lk1PaymentHeadKey = 'booking-payment-head:' + JSON.stringify([ctx.tenantKey, ctx.actorClientId, identity]);
+  return lk1Find(ctx, 'lk1_payment_head_read', { _id: ctx.lk1PaymentHeadKey });
+};
+
 // HUB_STEPS
 if (ctx.step === 'lk1_seat_recovery') {
   if (!ctx.lk1SeatRecovery || !ctx.lk1SeatContinuation) return lk1Stop(ctx, 'LK1_SEAT_CONTEXT_MISSING');
@@ -503,6 +543,7 @@ const lk1SafeCancelledUnpaidSuccessor = operation => {
       && operation.rejoinPredecessor?.operationId === previousId));
 };
 const lk1HttpReleaseAllowsRejoin = operation => {
+  if (bookingPaymentLifecycle.paymentAttemptReleased(operation)) return true;
   if (lk1SafeCancelledUnpaidSuccessor(operation)) return true;
   const identity = lk1HttpRejoinIdentity(operation.operationId);
   const previous = lk1HttpRejoinPrevious(operation.operationId);
@@ -544,7 +585,8 @@ if (ctx.step === "lk1_ingress_operation_find") {
       return finishError(ctx, 409, "Не удалось проверить предыдущую запись", { code: "SUBSCRIPTION_REJOIN_INVALID" });
     }
     if (previousId) {
-      if (ctx.caller !== "split" || ctx.managedAction !== "JOIN_GAME") {
+      if (!((ctx.caller === "split" && ctx.managedAction === "JOIN_GAME")
+        || (ctx.caller === 'split_create_readonly_preflight' && ctx.managedAction === 'CREATE_GAME'))) {
         return finishError(ctx, 409, "Повторная запись недоступна", { code: "SUBSCRIPTION_REJOIN_INVALID" });
       }
       return lk1Find(ctx, "lk1_rejoin_predecessor_find", {
@@ -565,7 +607,8 @@ if (ctx.step === "lk1_ingress_operation_find") {
         code: "SUBSCRIPTION_BOOKING_RELEASED", operationId: ctx.operationId,
         nextOperationId: `${identity.base}:rejoin:${identity.generation + 1}` });
     }
-    if (operation.state === "RELEASED" && ctx.caller === "split" && ctx.managedAction === "JOIN_GAME") {
+    if (operation.state === "RELEASED" && ((ctx.caller === "split" && ctx.managedAction === "JOIN_GAME")
+      || (ctx.caller === 'split_create_readonly_preflight' && ctx.managedAction === 'CREATE_GAME'))) {
       const nextOperationId = lk1RejoinNextId(ctx.operationId);
       if (!nextOperationId || !lk1ReleasedWithoutPayment(operation)) {
         return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
@@ -779,7 +822,8 @@ if (ctx.step === LK1_CONFIRMED_ORPHAN_RELEASE) {
 if (ctx.step === "lk1_rejoin_predecessor_find") {
   const previousId = lk1RejoinPreviousId(ctx.operationId);
   if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1
-    || ctx.caller !== "split" || ctx.managedAction !== "JOIN_GAME" || !previousId
+    || !((ctx.caller === "split" && ctx.managedAction === "JOIN_GAME")
+      || (ctx.caller === 'split_create_readonly_preflight' && ctx.managedAction === 'CREATE_GAME')) || !previousId
     || !lk1ReplayIdentityMatches(ctx, msg.payload[0], previousId)
     || !lk1ReleasedWithoutPayment(msg.payload[0])) {
     return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
@@ -1324,17 +1368,80 @@ if (ctx.step === "lk1_policy_decision") {
   }
   ctx.lk1.decision = JSON.parse(JSON.stringify(decision));
   ctx.subscriptionVisitCount = decision.subscriptionVisitCount;
-  ctx.step = "operation_insert";
-  msg._subscriptionBooking = ctx;
-  const now = new Date().toISOString();
-  const record = { _id: ctx.operationKey, tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
-    clientSubscriptionId: ctx.clientSubscriptionId, operationId: ctx.operationId,
-    exerciseId: ctx.exerciseId, serviceDate: ctx.serviceDate, category: ctx.category,
-    state: "PREPARED", attempts: 0, lk1: JSON.parse(JSON.stringify(ctx.lk1)),
-    ...(ctx.lk1Rejoin ? { rejoinPredecessor: ctx.lk1Rejoin } : {}),
-    createdAt: now, updatedAt: now, leaseUntil: new Date(Date.now() + PREPARED_LEASE_MS).toISOString() };
-  msg.payload = [record, { writeConcern: { w: "majority", j: true } }];
-  return emit(OUTPUT_MONGO_INSERT);
+  return lk1ClaimPaymentHead(ctx);
+}
+
+if (ctx.step === 'lk1_payment_head_read') {
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) return lk1Stop(ctx, 'PAYMENT_HEAD_UNVERIFIED');
+  const head = msg.payload[0];
+  if (!head) {
+    ctx.step = 'lk1_payment_head_inserted'; msg._subscriptionBooking = ctx;
+    msg.payload = [{ _id: ctx.lk1PaymentHeadKey, kind: 'BOOKING_PAYMENT_HEAD_V1',
+      tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, ownerOperationKey: ctx.operationKey,
+      ownerOperationId: ctx.operationId, createdAt: new Date().toISOString() },
+      { writeConcern: { w: 'majority', j: true } }];
+    return emit(OUTPUT_MONGO_INSERT);
+  }
+  if (!['BOOKING_PAYMENT_HEAD_V1', 'SPLIT_BOOKING_PAYMENT_HEAD_V1'].includes(head.kind)
+    || head.tenantKey !== ctx.tenantKey || head.actorClientId !== ctx.actorClientId
+    || head._id !== ctx.lk1PaymentHeadKey) return lk1Stop(ctx, 'PAYMENT_HEAD_BINDING_INVALID');
+  if (head.kind === 'SPLIT_BOOKING_PAYMENT_HEAD_V1') {
+    if (head.phase !== 'CLOSED' || !head.closure?.receiptKey) return finishPending(ctx,
+      'Уже есть незавершённая попытка записи. Проверьте её оплату.', { code: 'PAYMENT_ATTEMPT_ACTIVE' });
+    ctx.lk1PaymentHead = head;
+    return lk1Find(ctx, 'lk1_payment_head_ordinary_receipt', { _id: head.closure.receiptKey });
+  }
+  if (head.ownerOperationKey === ctx.operationKey && head.ownerOperationId === ctx.operationId) return lk1InsertPrepared(ctx);
+  ctx.lk1PaymentHead = head;
+  return lk1Find(ctx, 'lk1_payment_head_owner', { _id: head.ownerOperationKey });
+}
+if (ctx.step === 'lk1_payment_head_inserted') {
+  // Duplicate insertion and lost ACK both resolve by reading the unique head.
+  delete msg.error;
+  return lk1Find(ctx, 'lk1_payment_head_read', { _id: ctx.lk1PaymentHeadKey });
+}
+if (ctx.step === 'lk1_payment_head_owner') {
+  const owner = Array.isArray(msg.payload) && msg.payload.length === 1 ? msg.payload[0] : null;
+  const head = ctx.lk1PaymentHead;
+  if (msg.error || !owner || owner._id !== head.ownerOperationKey || owner.operationId !== head.ownerOperationId
+    || owner.tenantKey !== ctx.tenantKey || owner.actorClientId !== ctx.actorClientId) return lk1Stop(ctx, 'PAYMENT_HEAD_OWNER_UNVERIFIED');
+  if (!lk1ReleasedWithoutPayment(owner) && !(owner.state === 'FAILED' && lk1ReclaimableAttempt(owner))) {
+    return finishPending(ctx, 'Уже есть незавершённая попытка записи. Проверьте её оплату.', {
+      code: 'PAYMENT_ATTEMPT_ACTIVE', operationId: owner.operationId });
+  }
+  const archived = { ...head }; delete archived.history;
+  return prepareMongoUpdate(ctx, 'lk1_payment_head_transferred', { _id: head._id,
+    $expr: { $eq: ['$$ROOT', { $literal: head }] } }, { $set: {
+      ownerOperationKey: ctx.operationKey, ownerOperationId: ctx.operationId, updatedAt: new Date().toISOString() },
+    $push: { history: archived } });
+}
+if (ctx.step === 'lk1_payment_head_ordinary_receipt') {
+  const head = ctx.lk1PaymentHead, receipt = Array.isArray(msg.payload) && msg.payload.length === 1 ? msg.payload[0] : null;
+  const closure = head?.closure, proposal = receipt?.proposal;
+  const expectedKey = proposal && 'split-booking-payment-closure:' + JSON.stringify([
+    ctx.tenantKey, proposal.gameId, ctx.actorClientId, proposal.bookingId, proposal.transactionId]);
+  const withoutRevision = closure && { ...closure }; if (withoutRevision) delete withoutRevision.rosterRevision;
+  if (msg.error || receipt?.kind !== 'SPLIT_BOOKING_PAYMENT_CLOSURE_V1'
+    || receipt._id !== expectedKey || closure?.receiptKey !== expectedKey
+    || JSON.stringify(proposal) !== JSON.stringify(withoutRevision)
+    || proposal?.tenantKey !== ctx.tenantKey || proposal?.clientId !== ctx.actorClientId
+    || proposal?.headKey !== head._id || head._id !== ctx.lk1PaymentHeadKey
+    || proposal.transactionState !== 'UNPAID_CLOSED' || proposal.bookingState !== 'CANCELLED'
+    || proposal.bookingId !== head.payment?.bookingId || proposal.transactionId !== head.payment?.transactionId
+    || proposal.amountMinor !== head.payment?.amountMinor
+    || !Number.isSafeInteger(closure.rosterRevision) || closure.rosterRevision <= proposal.sourceRevision) {
+    return lk1Stop(ctx, 'PAYMENT_HEAD_ORDINARY_CLOSURE_UNVERIFIED');
+  }
+  const archived = { ...head }; delete archived.history;
+  return prepareMongoUpdate(ctx, 'lk1_payment_head_transferred', { _id: head._id,
+    $expr: { $eq: ['$$ROOT', { $literal: head }] } }, { $set: {
+      kind: 'BOOKING_PAYMENT_HEAD_V1', ownerOperationKey: ctx.operationKey, ownerOperationId: ctx.operationId,
+      updatedAt: new Date().toISOString() }, $unset: { phase: '', payment: '', closure: '', operationId: '' },
+    $push: { history: archived } });
+}
+if (ctx.step === 'lk1_payment_head_transferred') {
+  if (msg.error || lk1MongoMatched(msg.payload) !== 1 || msg.payload.modifiedCount !== 1) return lk1Stop(ctx, 'PAYMENT_HEAD_CHANGED');
+  return lk1InsertPrepared(ctx);
 }
 
 const paymentRoute = lk1EventPaymentRoute(ctx);
@@ -1508,7 +1615,9 @@ if (ctx.step === "lk1_transaction_readback") {
     || (transaction.currency !== undefined && transaction.currency !== "RUB")) {
     return lk1Stop(ctx, "LK1_TRANSACTION_READBACK_MISMATCH");
   }
-  ctx.lk1.checkout = { transactionId: id, paymentUrl, toPayMinor: amount };
+  const timing = bookingPaymentLifecycle.paymentAttemptCheckout(transaction, ctx.lk1.transactionAttemptedAt);
+  if (!timing) return lk1Stop(ctx, 'PAYMENT_ATTEMPT_CLOCK_UNVERIFIED');
+  ctx.lk1.checkout = { transactionId: id, paymentUrl, toPayMinor: amount, ...timing };
   return prepareMongoUpdate(ctx, "lk1_checkout_saved", {
     _id: ctx.operationKey, operationId: ctx.operationId, bookingId: ctx.confirmedBookingId,
     "lk1.transactionId": id, "lk1.transactionAttemptedAt": ctx.lk1.transactionAttemptedAt,

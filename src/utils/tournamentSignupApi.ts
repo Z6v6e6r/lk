@@ -1,3 +1,4 @@
+import { paymentAttemptFields, PAYMENT_ATTEMPT_TTL_MS, isSettledPaymentAttempt } from "./paymentAttemptLifecycle";
 import { isSpanishTrainingExercise } from "./spanishTrainingExclusion";
 import {
   API_BASE,
@@ -139,6 +140,7 @@ export interface TournamentRegistrationState {
   message: string | null;
   paymentUrl?: string | null;
   paymentExpiresAt?: string | null;
+  paymentAttemptState?: "PAYMENT_REQUIRED" | "CLOSING" | "PAID" | null;
 }
 
 export type TournamentVivaProductType =
@@ -187,6 +189,7 @@ export interface TournamentVivaTransactionResult {
   toPay: number | null;
   paid: boolean;
   paymentExpiresAt: string | null;
+  paymentAttemptState?: "PAYMENT_REQUIRED" | "CLOSING" | "PAID" | null;
   raw: unknown;
 }
 
@@ -620,7 +623,8 @@ function normalizeRegistration(value: unknown): TournamentRegistrationState | nu
       ? "Запись создана в Viva, ожидается оплата."
       : pickString(value, ["message", "reason", "note"]),
     paymentUrl,
-    paymentExpiresAt: pickString(value, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "expiresAt"]),
+    paymentAttemptState: paymentAttemptFields(value).paymentAttemptState,
+    paymentExpiresAt: paymentAttemptFields({ ...value, paymentExpiresAt: pickString(value, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "expiresAt"]) }).paymentExpiresAt,
   };
 }
 
@@ -1130,7 +1134,7 @@ interface TournamentVivaPaymentResolution {
 }
 
 function buildPaymentExpiresAt(startedAtMs = Date.now()) {
-  return new Date(startedAtMs + 20 * 60 * 1000).toISOString();
+  return new Date(startedAtMs + PAYMENT_ATTEMPT_TTL_MS).toISOString();
 }
 
 function normalizeTournamentVivaPaymentResolution(value: unknown): TournamentVivaPaymentResolution | null {
@@ -1156,7 +1160,7 @@ function normalizeTournamentVivaPaymentResolution(value: unknown): TournamentViv
     bookingId: pickString(value, ["id", "bookingId"]) || extractBookingId(value),
     toPay,
     paid,
-    paymentExpiresAt: pickString(value, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "expiresAt"]),
+    paymentExpiresAt: paymentAttemptFields({ ...value, paymentExpiresAt: pickString(value, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "expiresAt"]) }).paymentExpiresAt,
     raw: value,
   };
 }
@@ -2857,9 +2861,9 @@ function normalizeServerTournamentTransactionResult(
     bookingId: extractBookingId(payload),
     toPay,
     paid: hasPaidPaymentStatus(payload) || (!paymentUrl && toPay != null && toPay <= 0),
-    paymentExpiresAt: isRecord(payload)
-      ? pickString(payload, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "paymentDueDate", "expiresAt"]) || fallbackPaymentExpiresAt
-      : fallbackPaymentExpiresAt,
+    ...paymentAttemptFields(isRecord(payload) ? { ...payload, paymentExpiresAt:
+      pickString(payload, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "paymentDueDate", "expiresAt"]) || fallbackPaymentExpiresAt }
+      : { paymentExpiresAt: fallbackPaymentExpiresAt }),
     raw: payload,
   };
 }
@@ -2934,7 +2938,8 @@ function normalizeConfirmedSubscriptionBookingPayment(payload: unknown): Tournam
   if (typeof minor !== "number" || !Number.isSafeInteger(minor) || minor < 0
     || (value.toPay !== undefined && value.toPay !== minor / 100)) return null;
   let paymentUrl: string | null = null;
-  if (minor > 0) {
+  const settled = isSettledPaymentAttempt(value);
+  if (minor > 0 && !settled) {
     if (value.paid !== false || typeof value.transactionId !== "string" || !value.transactionId.trim()
       || typeof value.paymentUrl !== "string") return null;
     try {
@@ -2942,9 +2947,9 @@ function normalizeConfirmedSubscriptionBookingPayment(payload: unknown): Tournam
       if (url.protocol !== "https:" || url.username || url.password) return null;
       paymentUrl = value.paymentUrl;
     } catch { return null; }
-  } else if (value.paid !== true || (value.paymentUrl !== null && value.paymentUrl !== undefined)) return null;
-  return { bookingId: value.bookingId, paymentUrl, toPay: minor, paid: minor === 0,
-    paymentExpiresAt: null, raw: payload };
+  } else if (!settled && (value.paid !== true || (value.paymentUrl !== null && value.paymentUrl !== undefined))) return null;
+  return { bookingId: value.bookingId, paymentUrl, toPay: minor, paid: minor === 0 || settled,
+    ...paymentAttemptFields(value), raw: payload };
 }
 
 let tournamentSubscriptionRejoinTracker: SubscriptionRejoinTracker | null = null;
@@ -3071,6 +3076,9 @@ async function apiCreateTournamentVivaBookingFromSubscription(
   }
 
   const payment = normalizeConfirmedSubscriptionBookingPayment(response.data);
+  if (isSettledPaymentAttempt(response.data) && isRecord(response.data) && response.data.exerciseId !== params.exerciseId) {
+    return { data: null, status: 202, error: { status: 202, message: "Оплата требует проверки привязки к занятию.", raw: response.data } };
+  }
   const expectedDiscount = params.product.tournamentDiscountQuote || params.product.groupDiscountQuote;
   if (!payment || (expectedDiscount && (!isRecord(response.data)
     || response.data.toPayMinor !== expectedDiscount.amountMinor || payment.toPay !== expectedDiscount.amountMinor))) {
@@ -3406,7 +3414,8 @@ export async function apiCreateTournamentVivaTransaction(
   const paymentUrl = directPaymentUrl || resolvedPayment?.paymentUrl || null;
   const bookingId = resolvedPayment?.bookingId ?? responseBookingId;
   const toPay = resolvedPayment?.toPay ?? responseToPay;
-  const paymentExpiresAt = resolvedPayment?.paymentExpiresAt ?? (paymentUrl ? buildPaymentExpiresAt(transactionStartedAtMs) : null);
+  const paymentExpiresAt = trialOperationId ? paymentAttemptFields(result.data).paymentExpiresAt
+    : resolvedPayment?.paymentExpiresAt ?? (paymentUrl ? buildPaymentExpiresAt(transactionStartedAtMs) : null);
   const paid = resolvedPayment?.paid === true || (!paymentUrl && toPay != null && toPay <= 0);
   const bookingEvent = !paymentUrl && !paid && bookingWatcher
     ? await Promise.race([
@@ -3450,7 +3459,7 @@ export async function apiCreateTournamentVivaTransaction(
       bookingId,
       toPay,
       paid,
-      paymentExpiresAt,
+      ...paymentAttemptFields({ ...(isRecord(result.data) ? result.data : {}), paymentExpiresAt }),
       raw: result.data,
     },
     error: null,

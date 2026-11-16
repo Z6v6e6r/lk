@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import * as splitAttemptContract from "../lib/splitBookingPaymentAttempt.mjs";
 
 type ContextOptions = {
   globalValues?: Map<string, unknown>;
@@ -26,7 +27,7 @@ function runNodeRedFunction(
       return options.envValues?.[name];
     },
   };
-  return new Function("msg", "env", "global", source)(msg, env, globalContext);
+  return new Function("msg", "env", "global", "__splitBookingPaymentAttempt", source)(msg, env, globalContext, splitAttemptContract);
 }
 
 const splitRouter = "scripts/nodered_games_nodes/fn_split_router.js";
@@ -160,6 +161,7 @@ test("a reused conflicting exercise is never compensated by this operation", () 
 function cleanupContext(step = "check_timeout_transaction") {
   return {
     mode: "PARTICIPANT_TIMEOUT",
+    nativePaymentOwnerChecked: true, // continuation fixture; init lookup covered by scheduler scenarios
     step,
     token: "service-token",
     gameId: "game-1",
@@ -246,7 +248,9 @@ function transaction(status: string, bookingId = "booking-1", exerciseId = "exer
     currency: "RUB",
     client: { id: "client-1" },
     exercise: { id: exerciseId },
-    products: [{ bookingIds: [bookingId] }],
+    products: [{ id: "product-1", bookingIds: [bookingId], paymentBookingIds: [bookingId] }],
+    cardPaymentInfo: status === "UNPAID" ? { status: "REJECTED", declineOutcome: "EXPIRED" }
+      : { status: "NEW" },
   };
 }
 
@@ -408,11 +412,13 @@ test("verified UNPAID accepts the real Viva payment booking binding shape", () =
     payload: {
       id: "transaction-1",
       status: "UNPAID",
+      cardPaymentInfo: { status: "REJECTED", declineOutcome: "EXPIRED" },
       toPay: 37500,
       currency: "RUB",
       client: { id: "client-1" },
       exercise: { id: "exercise-1" },
       products: [{
+        id: "product-1",
         paymentBookingIds: ["booking-1"],
         pricingDetails: [{ clientBookingId: "booking-1" }],
       }],
@@ -431,10 +437,12 @@ test("real Viva binding keys still fail closed when they point to another bookin
     payload: {
       id: "transaction-1",
       status: "UNPAID",
+      cardPaymentInfo: { status: "REJECTED", declineOutcome: "EXPIRED" },
       currency: "RUB",
       client: { id: "client-1" },
       exercise: { id: "exercise-1" },
       products: [{
+        id: "product-1",
         paymentBookingIds: ["booking-other"],
         pricingDetails: [{ clientBookingId: "booking-other" }],
       }],
@@ -458,6 +466,7 @@ test("real Viva toPay must match the exact pending payment amount", () => {
     payload: {
       id: "transaction-1",
       status: "UNPAID",
+      cardPaymentInfo: { status: "REJECTED", declineOutcome: "EXPIRED" },
       toPay: 50000,
       currency: "RUB",
       client: { id: "client-1" },
@@ -630,9 +639,10 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
     ["vivacrm_access_token", "cached-service-token"],
     ["vivacrm_token_expires_at", Date.now() + 60_000],
   ]);
-  const transactionReadback = runNodeRedFunction(cleanupRouter, {
+  const nativeOwnerLookup = runNodeRedFunction(cleanupRouter, {
     payload: task,
   }, { globalValues }) as Array<Record<string, any> | null>;
+  const transactionReadback = noNativeOwnerThenTransaction(nativeOwnerLookup, { globalValues });
   assert.equal(transactionReadback[0]?.method, "GET");
   assert.equal(
     transactionReadback[0]?.url,
@@ -645,11 +655,13 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
     payload: {
       id: "transaction-1",
       status: "UNPAID",
+      cardPaymentInfo: { status: "REJECTED", declineOutcome: "EXPIRED" },
       toPay: 37500,
       currency: "RUB",
       client: { id: "client-1" },
       exercise: { id: "exercise-real-shape" },
       products: [{
+        id: "product-1",
         paymentBookingIds: ["booking-1"],
         pricingDetails: [{ clientBookingId: "booking-1" }],
       }],
@@ -671,7 +683,7 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
   );
   assert.equal(cancelProbe[0]?._splitCleanupCtx?.step, "cancel_booking_probe");
 
-  const cancelRequest = runNodeRedFunction(cleanupRouter, {
+  const cancelIntent = runNodeRedFunction(cleanupRouter, {
     ...cancelProbe[0],
     statusCode: 200,
     payload: {
@@ -680,6 +692,7 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
       },
     },
   }, { globalValues }) as Array<Record<string, any> | null>;
+  const cancelRequest = acknowledgeCloseIntent(cancelIntent, transaction("UNPAID", "booking-1", "exercise-real-shape"), { globalValues });
   assert.equal(cancelRequest[0]?.method, "PUT");
   assert.equal(
     cancelRequest[0]?.url,
@@ -711,9 +724,10 @@ test("real scheduler amount mismatch fails closed before paid promotion", () => 
     ["vivacrm_access_token", "cached-service-token"],
     ["vivacrm_token_expires_at", Date.now() + 60_000],
   ]);
-  const transactionReadback = runNodeRedFunction(cleanupRouter, {
+  const nativeOwnerLookup = runNodeRedFunction(cleanupRouter, {
     payload: prepared[0]?.payload?.[0],
   }, { globalValues }) as Array<Record<string, any> | null>;
+  const transactionReadback = noNativeOwnerThenTransaction(nativeOwnerLookup, { globalValues });
   const out = runNodeRedFunction(cleanupRouter, {
     ...transactionReadback[0],
     statusCode: 200,
@@ -754,12 +768,42 @@ test("verified UNPAID fails closed when Viva offers only refund options", () => 
   assert.equal(summary?.upstreamMutationsAttempted, 0);
 });
 
+function noNativeOwnerThenTransaction(out: Array<Record<string, any> | null>, options: ContextOptions) {
+  assert.equal(out[0], null, "native ownership is checked before any timeout provider request");
+  const lookup = out[7]; assert.ok(lookup);
+  assert.equal(lookup._splitCleanupCtx.step, "split_timeout_native_owner_found");
+  assert.equal(lookup.limit, 2);
+  assert.deepEqual(lookup.payload, { tenantKey: "tenant-test", actorClientId: "client-1", bookingId: "booking-1",
+    category: "open_game" });
+  return runNodeRedFunction(cleanupRouter, { ...lookup, statusCode: 200, payload: [] }, options) as Array<Record<string, any> | null>;
+}
+
+function acknowledgeCloseIntent(
+  out: Array<Record<string, any> | null>,
+  providerTransaction: Record<string, unknown>,
+  options: ContextOptions = {},
+) {
+  assert.equal(out[0], null, "no provider command before the durable intent");
+  const write = out[6];
+  assert.ok(write, "majority durable intent must be emitted");
+  assert.deepEqual(write.payload[2].writeConcern, { w: "majority", j: true });
+  const fresh = runNodeRedFunction(cleanupRouter, { ...write, statusCode: 200,
+    payload: { acknowledged: true, upsertedCount: 1, matchedCount: 0, modifiedCount: 0 } }, options) as Array<Record<string, any> | null>;
+  assert.equal(fresh[0]?.method, "GET");
+  assert.match(fresh[0]?.url || "", /\/transactions\/transaction-1$/);
+  return runNodeRedFunction(cleanupRouter, { ...fresh[0], statusCode: 200,
+    payload: providerTransaction }, options) as Array<Record<string, any> | null>;
+}
+
 test("WAITING transaction is expired and then read back before cancellation", () => {
-  const expire = runNodeRedFunction(cleanupRouter, {
+  const expireIntent = runNodeRedFunction(cleanupRouter, {
     statusCode: 200,
     payload: transaction("WAITING"),
     _splitCleanupCtx: cleanupContext(),
   }) as Array<Record<string, any> | null>;
+  assert.equal(expireIntent[6]?._splitCleanupCtx?.step, "split_close_intent_written");
+  assert.equal(expireIntent[6]?.payload[1].$setOnInsert.binding.leg, "EXPIRE");
+  const expire = acknowledgeCloseIntent(expireIntent, transaction("WAITING"));
   assert.equal(expire[0]?.method, "POST");
   assert.equal(
     expire[0]?.url,
@@ -794,7 +838,7 @@ test("WAITING transaction is expired and then read back before cancellation", ()
       paymentType: "ON_PLACE", isCancelled: false },
   }) as Array<Record<string, any> | null>;
   assert.match(probe[0]?.url || "", /\/bookings\/booking-1\/cancel$/);
-  const cancelRequest = runNodeRedFunction(cleanupRouter, {
+  const cancelIntent = runNodeRedFunction(cleanupRouter, {
     ...probe[0],
     statusCode: 200,
     payload: {
@@ -803,6 +847,7 @@ test("WAITING transaction is expired and then read back before cancellation", ()
       },
     },
   }) as Array<Record<string, any> | null>;
+  const cancelRequest = acknowledgeCloseIntent(cancelIntent, transaction("UNPAID"));
   assert.equal(cancelRequest[0]?.method, "PUT");
   assert.deepEqual(cancelRequest[0]?.payload, {
     refundMethod: "NONE",

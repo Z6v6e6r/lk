@@ -1,3 +1,4 @@
+import { paymentAttemptFields, isSettledPaymentAttempt } from "../../src/utils/paymentAttemptLifecycle.ts";
 import { isSpanishTrainingExercise } from "../../src/utils/spanishTrainingExclusion.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -188,7 +189,7 @@ test("subscription checkout keeps the server money leg unpaid and rejects ambigu
   const compiled = ts.transpileModule(source.slice(start, end), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText;
-  const normalize = new Function(`${compiled}; return normalizeConfirmedSubscriptionBookingPayment;`)();
+  const normalize = new Function("paymentAttemptFields", "isSettledPaymentAttempt", `${compiled}; return normalizeConfirmedSubscriptionBookingPayment;`)(paymentAttemptFields, isSettledPaymentAttempt);
   const legacy = { state: "CONFIRMED", bookingId: "fixture:booking" };
   assert.equal(normalize(legacy).paid, true);
   assert.equal(normalize({ ...legacy, toPayMinor: 0, toPay: 0, paid: true, paymentUrl: null }).paid, true);
@@ -197,6 +198,15 @@ test("subscription checkout keeps the server money leg unpaid and rejects ambigu
   assert.equal(normalize(mixed).paid, false);
   assert.equal(normalize(mixed).toPay, 35_000, "existing checkout consumes minor units");
   assert.equal(normalize(mixed).paymentUrl, mixed.paymentUrl);
+  assert.equal(normalize({ ...mixed, paymentExpiresAt: "2026-11-16T12:15:00Z", paymentAttemptState: "CLOSING" }).paymentExpiresAt,
+    "2026-11-16T12:15:00.000Z");
+  assert.equal(normalize({ ...mixed, paymentAttemptState: "CLOSING" }).paymentAttemptState, "CLOSING");
+  const settled = { ...mixed, exerciseId: "exercise", paymentAttemptState: "PAID", paid: true, paymentUrl: null };
+  assert.equal(normalize(settled).paid, true);
+  assert.equal(normalize(settled).paymentUrl, null);
+  assert.equal(normalize(settled).toPay, mixed.toPayMinor);
+  assert.equal(normalize({ ...settled, exerciseId: null }), null);
+
   for (const delta of [{ paid: true }, { toPay: 700 }, { paymentUrl: null },
     { paymentUrl: "javascript:alert(1)" }, { transactionId: null },
     { state: "PENDING_CONFIRMATION" }, { toPayMinor: -1 }]) {

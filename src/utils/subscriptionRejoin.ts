@@ -1,6 +1,6 @@
 // This hint only selects the next explicit submission. The server must verify
 // the exact released predecessor before permitting any new booking.
-const BASE = /^(lk-(?:split-join|subscription)-[a-z0-9]+)(?::rejoin:([1-9]\d{0,3}))?$/;
+const BASE = /^(lk-(?:split-join|split-create|subscription)-[a-z0-9]+)(?::rejoin:([1-9]\d{0,3}))?$/;
 export function isSubscriptionBookingReleased(raw: unknown): boolean {
   if (!raw || typeof raw !== "object") return false;
   const details = (raw as { details?: { code?: unknown } }).details;

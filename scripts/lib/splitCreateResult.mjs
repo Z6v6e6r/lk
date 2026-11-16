@@ -1,5 +1,5 @@
 // Embedded in a dedicated Node-RED GET reader. Effects are GET/find/reply only.
-export function createSplitCreateResultProtocol() {
+export function createSplitCreateResultProtocol(paymentLifecycle = null) {
   const tenant = 'iSkq6G';
   const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
   const record = value => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -20,7 +20,9 @@ export function createSplitCreateResultProtocol() {
     query: { _id: `lk1-product:${JSON.stringify([tenant, s.actor, s.binding.operationId])}`,
       tenantKey: tenant, actorClientId: s.actor, operationId: s.binding.operationId },
     options: { limit: 2, readConcern: { level: 'majority' }, maxTimeMS: 2000 } } });
-  const operationIdValid = value => typeof value === 'string' && /^lk-split-create-[a-z0-9]{1,100}$/.test(value);
+  const operationIdValid = value => typeof value === 'string'
+    && /^lk-split-create-[a-z0-9]{1,100}(?::rejoin:[1-9]\d{0,3})?$/.test(value)
+    && Number(value.split(':rejoin:')[1] || 0) <= 1000;
   const bindingValid = b => record(b) && operationIdValid(b.operationId)
     && uuid(b.clientSubscriptionId) && uuid(b.studioId) && uuid(b.roomId)
     && /^\d{4}-\d\d-\d\dT\d\d:\d\d:00\+03:00$/.test(b.fromTime)
@@ -86,6 +88,15 @@ export function createSplitCreateResultProtocol() {
         clientSubscriptionId: op?.clientSubscriptionId, studioId: op?.lk1?.target?.stationId,
         roomId: op?.lk1?.target?.roomId, fromTime: moscow(op?.lk1?.createPayload?.timeFrom),
         toTime: moscow(op?.lk1?.createPayload?.timeTo) } };
+      if (bindingValid(s.binding) && op?._id === `lk1-product:${JSON.stringify([tenant, s.actor, s.binding.operationId])}`
+        && op.tenantKey === tenant && op.actorClientId === s.actor && op.operationId === s.binding.operationId
+        && op.category === 'open_game' && paymentLifecycle?.paymentAttemptReleased(op)) {
+        const base = op.operationId.split(':rejoin:')[0], generation = Number(op.operationId.split(':rejoin:')[1] || 0);
+        if (generation >= 1000) return pending(s, 'SPLIT_CREATE_RESULT_GENERATION_LIMIT');
+        return { state: null, effect: { kind: 'reply', status: 409, body: {
+          state: 'RELEASED', details: { code: 'SUBSCRIPTION_BOOKING_RELEASED', operationId: op.operationId,
+            nextOperationId: `${base}:rejoin:${generation + 1}` } } } };
+      }
       if (!bindingValid(s.binding) || !validOperation(s, op)) return pending(s, 'SPLIT_CREATE_RESULT_NOT_CONFIRMED');
       if (s.stage === 'operation') return http({ ...s, op }, 'exercise', `/api/v1/exercises/${encodeURIComponent(op.exerciseId)}`);
       if (op.updatedAt !== s.op.updatedAt || op.bookingId !== s.op.bookingId || op.exerciseId !== s.op.exerciseId
@@ -93,6 +104,15 @@ export function createSplitCreateResultProtocol() {
         || JSON.stringify(op.createReceipt) !== JSON.stringify(s.op.createReceipt)) return pending(s, 'SPLIT_CREATE_RESULT_CHANGED');
       const amount = op.lk1.decision.benefit.finalPriceMinor;
       const checkout = op.lk1.checkout;
+      const deadline = checkout && paymentLifecycle?.paymentAttemptDeadline(checkout, op.lk1.transactionAttemptedAt);
+      const paid = op.lk1.paymentAttempt?.phase === 'PAID';
+      if (amount > 0 && !paid && paymentLifecycle && (op.lk1.paymentAttempt || deadline == null || now >= deadline)) {
+        return { state: null, effect: { kind: 'reply', status: 202, body: {
+          state: 'PENDING_CONFIRMATION', paymentAttemptState: 'CLOSING', operationId: op.operationId,
+          bookingId: op.bookingId, transactionId: checkout?.transactionId, paymentUrl: null,
+          paymentExpiresAt: deadline == null ? null : new Date(deadline).toISOString(),
+          details: { code: 'PAYMENT_ATTEMPT_CLOSING' } } } };
+      }
       // Whitelist only. No actor data, quote, credentials, raw provider row or headers.
       return { state: null, effect: { kind: 'reply', status: 200, body: {
         schemaVersion: 1, recovery: 'SPLIT_CREATE_RESULT_V1', state: 'CONFIRMED', mode: 'create',
@@ -101,13 +121,15 @@ export function createSplitCreateResultProtocol() {
         clientSubscriptionId: s.binding.clientSubscriptionId, studioId: s.binding.studioId, roomId: s.binding.roomId,
         fromTime: s.binding.fromTime, toTime: s.binding.toTime,
         exerciseId: op.exerciseId, bookingId: op.bookingId, spot: s.booking.spot || null,
-        selectedPaymentMode: 'subscription', settlementState: amount ? 'PAYMENT_REQUIRED' : 'CONFIRMED',
+        selectedPaymentMode: 'subscription', settlementState: amount && !paid ? 'PAYMENT_REQUIRED' : 'CONFIRMED',
         toPayMinor: amount, toPay: amount / 100,
         // Nominal participant share is the stored target tariff, never the organizer's benefit/surcharge.
         shareAmountMinor: op.lk1.target.basePriceMinor, shareAmount: op.lk1.target.basePriceMinor / 100,
-        paymentUrl: checkout?.paymentUrl || null, transactionId: checkout?.transactionId || null,
+        paymentUrl: paid ? null : checkout?.paymentUrl || null, transactionId: checkout?.transactionId || null,
+        paid: paid || amount === 0, paymentAttemptState: paid || amount === 0 ? 'PAID' : 'PAYMENT_REQUIRED',
+        paymentExpiresAt: deadline == null ? null : new Date(deadline).toISOString(),
         subscriptionVisitCount: op.lk1.decision.subscriptionVisitCount,
-        deadlineAt: op.createReceipt?.deadlineAt || null,
+        deadlineAt: deadline == null ? op.createReceipt?.deadlineAt || null : new Date(deadline).toISOString(),
         assembleDeadlineAt: new Date(instant(s.binding.fromTime) - 24 * 60 * 60_000).toISOString(),
         directionId: op.lk1.createPayload.directionId, exerciseTypeId: op.lk1.createPayload.typeId,
       } } };

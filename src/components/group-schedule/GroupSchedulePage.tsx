@@ -1,3 +1,7 @@
+import { isSubscriptionBookingReleased } from "../../utils/subscriptionRejoin";
+import { canOpenPaymentAttempt, paymentAttemptFields, paymentAttemptDeadline, PAYMENT_ATTEMPT_CHECK_MESSAGE } from "../../utils/paymentAttemptLifecycle";
+import { readAuthToken } from "../../utils/authTokenStorage";
+import { tournamentPaymentSessionIdentity } from "../../utils/tournamentPendingPayment";
 import { GroupTrainingInfo } from "./GroupTrainingInfo";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../auth/AuthForm";
@@ -389,6 +393,7 @@ export default function GroupSchedulePage({
   const [discountError, setDiscountError] = useState<string | null>(null);
   const registrationRequestIdRef = useRef(0);
   const [registration, setRegistration] = useState<TournamentRegistrationState | null>(null);
+  const [registrationSessionIdentity, setRegistrationSessionIdentity] = useState<string | null>(null);
   const [registrationLoading, setRegistrationLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -545,9 +550,18 @@ export default function GroupSchedulePage({
     return () => controller.abort();
   }, [selectedId]);
 
+  useEffect(() => {
+    const deadline = paymentAttemptDeadline(registration);
+    if (deadline === null || deadline <= Date.now()) return;
+    const timer = window.setTimeout(() => setRegistration(current => current && current === registration ? { ...current } : current),
+      Math.min(deadline - Date.now(), 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [registration]);
+
   const loadRegistrationState = useCallback(async (training: GroupTrainingSummary) => {
     if (!isAuthenticated || isRestoringSession || subscriptionUsageShadowEnabled) return;
     const requestId = ++registrationRequestIdRef.current;
+    const sessionIdentity = tournamentPaymentSessionIdentity(readAuthToken());
     setCheckout(null);
     setCheckoutLoadError(null);
     setRegistrationLoading(true);
@@ -565,7 +579,8 @@ export default function GroupSchedulePage({
       })),
     ]);
 
-    if (registrationRequestIdRef.current !== requestId) return;
+    if (registrationRequestIdRef.current !== requestId || sessionIdentity !== tournamentPaymentSessionIdentity(readAuthToken())) return;
+    setRegistrationSessionIdentity(sessionIdentity);
     setRegistration(registrationResult.data ?? null);
     if (checkoutResult.error || !checkoutResult.data) {
       setCheckout(null);
@@ -926,6 +941,7 @@ export default function GroupSchedulePage({
     setDetailError(null);
     setActionMessage(null);
     const returnUrls = buildPaymentReturnUrls(training);
+    const sessionIdentity = tournamentPaymentSessionIdentity(readAuthToken());
     const result = await apiCreateTournamentVivaTransaction({
       exerciseId: training.id,
       studioId: activeCheckout.studioId,
@@ -940,13 +956,22 @@ export default function GroupSchedulePage({
       failUrl: returnUrls.failUrl,
     });
     setActionLoading(false);
+    if (sessionIdentity !== tournamentPaymentSessionIdentity(readAuthToken())) return;
 
     if (result.error || !result.data) {
+      if (result.status === 409 && isSubscriptionBookingReleased(result.error?.raw)) {
+        await loadRegistrationState(training);
+      }
       setDetailError(getErrorMessage(result.error, "Не удалось создать запись."));
       return;
     }
     if (result.data.paymentUrl) {
-      window.location.href = result.data.paymentUrl;
+      setRegistrationSessionIdentity(sessionIdentity);
+      setRegistration({ status: "PAYMENT_PENDING", bookingId: result.data.bookingId, placeNumber: null,
+        waitlistNumber: null, canRegister: false, canCancel: true, message: "Запись ожидает оплаты.",
+        paymentUrl: result.data.paymentUrl, ...paymentAttemptFields(result.data) });
+      if (!canOpenPaymentAttempt(result.data)) { setDetailError(PAYMENT_ATTEMPT_CHECK_MESSAGE); return; }
+      if (!navigateToExternalUrl(result.data.paymentUrl)) setDetailError("Не удалось открыть страницу оплаты.");
       return;
     }
 
@@ -1360,20 +1385,30 @@ export default function GroupSchedulePage({
                       <div className="group-schedule-success">{actionMessage}</div>
                     )}
                     {!subscriptionUsageShadowEnabled
-                      && registration?.status === "PAYMENT_PENDING"
-                      && registration.paymentUrl && (
+                      && registration?.status === "PAYMENT_PENDING" && (
                       <div className="tournament-signup-payment-hold">
-                        <span>Ожидает оплаты</span>
+                        <span>{canOpenPaymentAttempt(registration) ? "Ожидает оплаты" : PAYMENT_ATTEMPT_CHECK_MESSAGE}</span>
                         <button
                           type="button"
                           className="section-cta"
                           onClick={() => {
-                            window.location.href = registration.paymentUrl || "";
+                            if (!isAuthenticated || !registrationSessionIdentity
+                              || registrationSessionIdentity !== tournamentPaymentSessionIdentity(readAuthToken())
+                              || !canOpenPaymentAttempt(registration)) {
+                              setDetailError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
+                              void loadRegistrationState(selectedTraining);
+                              return;
+                            }
+                            navigateToExternalUrl(registration.paymentUrl || "");
                           }}
-                          disabled={actionLoading}
+                          disabled={actionLoading || !canOpenPaymentAttempt(registration)}
                         >
                           Продолжить оплату
                         </button>
+                        {!canOpenPaymentAttempt(registration) && (
+                          <button type="button" className="section-cta" disabled={actionLoading || registrationLoading}
+                            onClick={() => void loadRegistrationState(selectedTraining)}>Проверить результат</button>
+                        )}
                       </div>
                     )}
                     {!subscriptionUsageShadowEnabled

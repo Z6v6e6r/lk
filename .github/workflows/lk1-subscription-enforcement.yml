@@ -522,6 +522,12 @@ jobs:
           scripts/tests/trialGroupBooking.nodered.test.mjs
           scripts/tests/trialGroupCandidate.test.mjs
           scripts/tests/trialGroupFrontend.test.mjs
+          scripts/tests/bookingPaymentAttempt.test.mjs
+          scripts/tests/bookingPaymentAttempt.gateway.test.mjs
+          scripts/tests/bookingPaymentAttempt.split.test.mjs
+          scripts/tests/bookingPaymentAttempt.ack.test.mjs
+          scripts/tests/bookingPaymentAttempt.composer.test.mjs
+          scripts/tests/paymentAttemptLifecycle.client.test.ts
           scripts/tests/lk1UnpaidBookingCancellation.test.mjs
           scripts/tests/cancelledDayAllowance.test.mjs
           scripts/tests/lk1FreeCancellation.test.mjs

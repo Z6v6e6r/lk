@@ -1,3 +1,4 @@
+import { isSettledPaymentAttempt, canOpenPaymentAttempt, paymentAttemptFields, paymentAttemptDeadline, PAYMENT_ATTEMPT_TTL_MS, PAYMENT_ATTEMPT_CHECK_MESSAGE } from "../../utils/paymentAttemptLifecycle";
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
 import { mergeRosterMetadata } from "./rosterMetadata";
 import { moscowBookingEndIso } from "../../utils/bookingEndTime";
@@ -285,8 +286,7 @@ const MATCH_RESULT_RATING_DEFAULT_PARAMS = {
 };
 const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = true;
 const ENABLE_SPLIT_GAME_PAYMENT = true;
-const SPLIT_PAYMENT_DEADLINE_MINUTES = 25;
-const SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES = 10;
+const SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES = PAYMENT_ATTEMPT_TTL_MS / 60_000;
 const SPLIT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
 const SPLIT_OPEN_GAME_DIRECTION_ID = 4588;
 const PUBLIC_CREATE_SUBSCRIPTION_INFO_URL = "https://padlhub.ru/ab_leto";
@@ -1925,19 +1925,8 @@ function resolveSplitPaymentItemDeadlineTs(
   splitPayment: Record<string, unknown> | null,
 ): number | null {
   if (!item) return null;
-  const explicitDeadlineTs = parseIsoTimestamp(resolveSplitPaymentItemDeadlineAt(item, splitPayment));
-  const createdAtTs = parseIsoTimestamp(
-    typeof item.createdAt === "string"
-      ? item.createdAt
-      : (typeof item.updatedAt === "string" ? item.updatedAt : null),
-  );
-  const fallbackDeadlineTs = createdAtTs == null
-    ? null
-    : createdAtTs + SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES * 60 * 1000;
-  if (explicitDeadlineTs != null) {
-    return fallbackDeadlineTs == null ? explicitDeadlineTs : Math.min(explicitDeadlineTs, fallbackDeadlineTs);
-  }
-  return fallbackDeadlineTs;
+  return paymentAttemptDeadline({ ...item,
+    deadlineAt: resolveSplitPaymentItemDeadlineAt(item, splitPayment) });
 }
 
 function isSplitPaymentPendingExpired(
@@ -8374,8 +8363,9 @@ export default function GamesPage({
   const detailsCurrentUserPendingSplitPayment = useMemo<Record<string, unknown> | null>(() => {
     if (!detailsCurrentUserActiveSplitPayment) return null;
     const status = String(detailsCurrentUserActiveSplitPayment.status || "").trim().toUpperCase();
-    return status === "PAYMENT_PENDING" ? detailsCurrentUserActiveSplitPayment : null;
-  }, [detailsCurrentUserActiveSplitPayment]);
+    return status === "PAYMENT_PENDING" ? { ...detailsCurrentUserActiveSplitPayment,
+      deadlineAt: resolveSplitPaymentItemDeadlineAt(detailsCurrentUserActiveSplitPayment, detailsSplitPaymentMetadata) } : null;
+  }, [detailsCurrentUserActiveSplitPayment, detailsSplitPaymentMetadata]);
   const detailsCurrentUserPendingSplitPaymentDeadlineTs = useMemo(() => (
     resolveSplitPaymentItemDeadlineTs(detailsCurrentUserPendingSplitPayment, detailsSplitPaymentMetadata)
   ), [detailsCurrentUserPendingSplitPayment, detailsSplitPaymentMetadata]);
@@ -11017,6 +11007,9 @@ export default function GamesPage({
     setGamePreparationStage(null);
 
     if (paymentResult.error || !paymentResult.data) {
+      if (paymentResult.status === 409 && isRecordObject(paymentResult.error?.raw)
+        && isRecordObject(paymentResult.error.raw.details)
+        && paymentResult.error.raw.details.code === "SUBSCRIPTION_BOOKING_RELEASED") setGameCreationPending(false);
       const pending = paymentResult.status === 202 && isRecordObject(paymentResult.error?.raw)
         && paymentResult.error.raw.state === "PENDING_CONFIRMATION";
       const dailyLimitMessage = resolvedPaymentMode === "subscription"
@@ -11083,10 +11076,7 @@ export default function GamesPage({
     const resolvedPaymentAmount = paymentResult.data.toPay ?? shareAmount;
     const paidAt = new Date().toISOString();
     const organizerPaymentStatus = paymentResult.data.paymentUrl ? "PAYMENT_PENDING" : "PAID";
-    const recoveredCreate = isRecordObject(paymentResult.data.raw)
-      && paymentResult.data.raw.recovery === "SPLIT_CREATE_RESULT_V1";
-    const splitDeadlineAt = paymentResult.data.deadlineAt
-      ?? (recoveredCreate ? null : new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString());
+    const splitDeadlineAt = paymentAttemptFields(paymentResult.data).paymentExpiresAt;
     const resolvedDirectionId = paymentResult.data.directionId ?? SPLIT_OPEN_GAME_DIRECTION_ID;
     const resolvedExerciseTypeId = paymentResult.data.exerciseTypeId ?? SPLIT_OPEN_GAME_EXERCISE_TYPE_ID;
     const resolvedSplitShareAmount = paymentResult.data.shareAmount ?? shareAmount;
@@ -11137,6 +11127,7 @@ export default function GamesPage({
           bookingId: paymentResult.data.bookingId,
           transactionId: paymentResult.data.transactionId,
           paymentUrl: paymentResult.data.paymentUrl,
+          ...paymentAttemptFields(paymentResult.data),
           amount: resolvedPaymentAmount,
           amountMinor: paymentResult.data.toPayMinor,
           paidAt: organizerPaymentStatus === "PAID" ? paidAt : null,
@@ -11184,9 +11175,10 @@ export default function GamesPage({
       payment: {
         amount: resolvedPaymentAmount,
         paymentUrl: paymentResult.data.paymentUrl,
+        ...paymentAttemptFields(paymentResult.data),
         paymentMethod: "WIDGET",
         baseRedirectUrl,
-        paid: !paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0,
+        paid: !paymentResult.data.paymentUrl && (resolvedPaymentAmount <= 0 || isSettledPaymentAttempt(paymentResult.data)),
         ...(paymentResult.data.paymentUrl ? {} : { paidAt }),
         paymentRef,
         bookingIds: resolvedBookingIds,
@@ -11225,7 +11217,7 @@ export default function GamesPage({
       },
     };
 
-    if (!paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0) {
+    if (!paymentResult.data.paymentUrl && (resolvedPaymentAmount <= 0 || isSettledPaymentAttempt(paymentResult.data))) {
       const directCreateResult = await apiCreatePadelGameRecord({
         ...payload,
         status: "PAID",
@@ -11288,8 +11280,8 @@ export default function GamesPage({
       enqueuePendingPaymentSync(paymentRef, resolvedBookingIds, "split_pay_click");
       pushCabinetFlashNotice(subscriptionDecisionNotice);
 
-      if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
-        setPayError("Не удалось открыть страницу оплаты");
+      if (!canOpenPaymentAttempt(paymentResult.data) || !navigateToExternalUrl(paymentResult.data.paymentUrl)) {
+        setPayError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
         setLoadingPay(false);
       }
       return;
@@ -11480,7 +11472,7 @@ export default function GamesPage({
       resolvedExerciseId = exerciseRecovery.exerciseId;
     }
 
-    if (paymentResult.data && !paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0) {
+    if (paymentResult.data && !paymentResult.data.paymentUrl && (resolvedPaymentAmount <= 0 || isSettledPaymentAttempt(paymentResult.data))) {
       const paidAt = new Date().toISOString();
       const directPayload: PadelGameRecordPayload = {
         paymentRef,
@@ -11639,6 +11631,7 @@ export default function GamesPage({
         payment: {
           amount: resolvedPaymentAmount,
           paymentUrl: paymentResult.data.paymentUrl,
+          ...paymentAttemptFields(paymentResult.data),
           paymentMethod: "WIDGET",
           baseRedirectUrl,
           paid: false,
@@ -11681,8 +11674,8 @@ export default function GamesPage({
       savePendingPaidGameDraft(paymentRef, draftPayload, resolvedBookingIds);
       enqueuePendingPaymentSync(paymentRef, resolvedBookingIds, "pay_click");
 
-      if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
-        setPayError("Не удалось открыть страницу оплаты");
+      if (!canOpenPaymentAttempt(paymentResult.data) || !navigateToExternalUrl(paymentResult.data.paymentUrl)) {
+        setPayError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
         setLoadingPay(false);
       }
       return;
@@ -12295,6 +12288,12 @@ export default function GamesPage({
         return;
       }
 
+      if (!canOpenPaymentAttempt({ ...activeGameRecord?.payment,
+        createdAt: activeGameRecord?.createdAt, paymentUrl: paymentUrlToOpen })) {
+        setGameRecordError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
+        setRetryingPayment(false);
+        return;
+      }
       if (!navigateToExternalUrl(paymentUrlToOpen)) {
         setGameRecordError("Не удалось открыть страницу оплаты");
         setRetryingPayment(false);
@@ -14369,11 +14368,6 @@ export default function GamesPage({
     }
     if (!canCurrentUserJoinSplitGameInDetails || !gameRecordId || !activeGameRecord) return;
     if (joiningSplitPayment) return;
-    if (preferredPaymentMode === "subscription"
-      && detailsJoinPricePreview.bySubscriptionId[String(preferredClientSubscriptionId || "")]?.state !== "available") {
-      setGameRosterError("Сначала проверьте стоимость и лимиты по выбранной подписке");
-      return;
-    }
 
 
     const normalizedProfileId = normalizeComparableId(profileId);
@@ -14397,6 +14391,8 @@ export default function GamesPage({
       if (normalizedPhone && itemPhone && normalizedPhone === itemPhone) return true;
       return false;
     }) ?? null;
+    const pendingAttempt = { ...pendingPayment,
+      deadlineAt: resolveSplitPaymentItemDeadlineAt(pendingPayment, detailsSplitPaymentMetadata) };
     const pendingPaymentStatus = String(pendingPayment?.status || "").trim().toUpperCase();
     const pendingPaymentUrl = typeof pendingPayment?.paymentUrl === "string"
       ? pendingPayment.paymentUrl.trim()
@@ -14404,14 +14400,29 @@ export default function GamesPage({
     const pendingPaymentExpired = isSplitPaymentPendingExpired(
       pendingPayment,
       detailsSplitPaymentMetadata,
-      splitPendingNowTs,
+      Date.now(),
     );
+    if (pendingPaymentStatus === "PAYMENT_PENDING" && !canOpenPaymentAttempt(pendingAttempt)) {
+      setGameRosterError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
+      const checked = await apiFetchPadelGameRecord(gameRecordId);
+      if (checked.data) {
+        setActiveGameRecordStore(checked.data);
+        upsertGameRecordInStores(checked.data, { communityMode: "if_exists" });
+      }
+      return;
+    }
     if (pendingPayment && isSplitPaymentReservationActive(pendingPayment.status) && !pendingPaymentExpired) {
-      if (pendingPaymentStatus === "PAYMENT_PENDING" && pendingPaymentUrl) {
+      if (pendingPaymentStatus === "PAYMENT_PENDING" && pendingPaymentUrl && canOpenPaymentAttempt(pendingAttempt)) {
         navigateToExternalUrl(pendingPaymentUrl);
         return;
       }
       setGameRosterError("Вы уже присоединились к этой игре");
+      return;
+    }
+
+    if (preferredPaymentMode === "subscription"
+      && detailsJoinPricePreview.bySubscriptionId[String(preferredClientSubscriptionId || "")]?.state !== "available") {
+      setGameRosterError("Сначала проверьте стоимость и лимиты по выбранной подписке");
       return;
     }
 
@@ -14598,7 +14609,7 @@ export default function GamesPage({
           clientId: (profile.clientId ?? normalizedProfileId)?.trim() || null,
           createdAt: new Date().toISOString(),
         };
-        const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && paymentResult.data.toPay <= 0;
+        const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && (paymentResult.data.toPay <= 0 || isSettledPaymentAttempt(paymentResult.data));
         const confirmationStored = savePendingSplitRosterPaymentConfirmation(pendingConfirmation);
         if (!confirmationStored && !isPaidWithoutRedirect) {
           setGameRosterError(
@@ -14629,8 +14640,8 @@ export default function GamesPage({
           setGameRosterError("Не удалось получить ссылку на оплату участия");
           return;
         }
-        if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
-          setGameRosterError("Не удалось открыть страницу оплаты");
+        if (!canOpenPaymentAttempt(paymentResult.data) || !navigateToExternalUrl(paymentResult.data.paymentUrl)) {
+          setGameRosterError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
         } else {
           pushCabinetFlashNotice(subscriptionDecisionNotice);
         }
@@ -14693,8 +14704,7 @@ export default function GamesPage({
         pendingPlayer,
       ]);
       const pendingNowIso = new Date().toISOString();
-      const pendingDeadlineAt = paymentResult.data.deadlineAt
-        ?? new Date(Date.now() + SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString();
+      const pendingDeadlineAt = paymentAttemptFields(paymentResult.data).paymentExpiresAt;
       const pendingNextSplitPayment: Record<string, unknown> = {
         ...(pendingSplitPaymentSource ?? {}),
         enabled: true,
@@ -14720,6 +14730,7 @@ export default function GamesPage({
             productId: paymentResult.data.productId ?? null,
             transactionId: paymentResult.data.transactionId ?? null,
             paymentUrl: paymentResult.data.paymentUrl ?? null,
+            ...paymentAttemptFields(paymentResult.data),
             amount: paymentResult.data.toPay ?? null,
             amountMinor: paymentResult.data.toPayMinor ?? null,
             spot: pendingPaymentSpot,
@@ -14756,18 +14767,18 @@ export default function GamesPage({
       }
 
       if (paymentResult.data.paymentUrl) {
-        if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
-          setGameRosterError("Не удалось открыть страницу оплаты");
+        if (!canOpenPaymentAttempt(paymentResult.data) || !navigateToExternalUrl(paymentResult.data.paymentUrl)) {
+          setGameRosterError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
         }
         return;
       }
 
-      if (paymentResult.data.toPay > 0) {
+      if (paymentResult.data.toPay > 0 && !isSettledPaymentAttempt(paymentResult.data)) {
         setGameRosterError("Не удалось получить ссылку на оплату участия");
         return;
       }
 
-      const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && paymentResult.data.toPay <= 0;
+      const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && (paymentResult.data.toPay <= 0 || isSettledPaymentAttempt(paymentResult.data));
       const refreshed = await apiFetchPadelGameRecord(gameRecordId, { retries: 0, cache: "no-store" });
       if (refreshed.error || refreshed.data?.id !== gameRecordId
         || resolveGameVivaExerciseId(refreshed.data) !== (paymentResult.data.exerciseId || exerciseId)) {
@@ -14909,6 +14920,7 @@ export default function GamesPage({
               ),
               amount: paymentResult.data.toPay ?? toFiniteNumber(matchedCurrentSplitPayment?.amount) ?? 0,
               amountMinor: paymentResult.data.toPayMinor ?? toFiniteNumber(matchedCurrentSplitPayment?.amountMinor),
+              ...paymentAttemptFields(paymentResult.data),
               spot: paymentSpot ?? existingSpot,
               deadlineAt: resolvedDeadlineAt,
               expiresAt: resolvedDeadlineAt,
@@ -14965,7 +14977,6 @@ export default function GamesPage({
     profileId,
     profilePhoneNorm,
     profilePhone,
-    splitPendingNowTs,
     detailsSplitPaymentMetadata,
     detailsSplitShareAmount,
     detailsSplitShareCount,
@@ -17348,9 +17359,12 @@ export default function GamesPage({
                     <button
                       className="game-join-split-pay-option game-join-split-pay-option-primary"
                       type="button"
-                      disabled={!detailsCurrentUserPendingSplitPaymentPaymentUrl}
+                      disabled={!canOpenPaymentAttempt(detailsCurrentUserPendingSplitPayment)}
                       onClick={() => {
-                        if (!detailsCurrentUserPendingSplitPaymentPaymentUrl) return;
+                        if (!canOpenPaymentAttempt(detailsCurrentUserPendingSplitPayment)) {
+                          setGameRosterError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
+                          return;
+                        }
                         navigateToExternalUrl(detailsCurrentUserPendingSplitPaymentPaymentUrl);
                       }}
                     >
