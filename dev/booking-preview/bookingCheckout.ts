@@ -72,12 +72,12 @@ export function withPersonalSubscription(options: PaymentOption[], hasSubscripti
     ...options.filter(option => option.kind !== 'full' && option.kind !== 'subscription' && option !== boost)];
 }
 
-export function bookingButtonText(option: PaymentOption | undefined, productPrice?: number | null, productName?: string) {
+export function bookingButtonText(option: PaymentOption | undefined, productPrice?: number | null) {
   if (option?.kind === 'pass') return option.mode === 'book' ? 'Списать 1 тренировку и записаться' : 'Запись по абонементу недоступна';
   if (option?.mode === 'offer') {
     const order = createPreviewOrder(option, option.kind === 'residency' ? productPrice : null,
       option.kind === 'subscription' ? productPrice : null, option.kind === 'boost' ? productPrice : null);
-    return order ? `Добавить ${productName || (option.kind === 'residency' ? 'Резидентство' : option.kind === 'boost' ? 'РАбуста' : 'подписку')} и записаться · ${formatRubles(order.total)}` : 'Уточнить стоимость продукта';
+    return order ? `Записаться за ${formatRubles(order.bookingAmount)} при наличии ${option.kind === 'residency' ? 'Резидентства' : option.kind === 'boost' ? 'РАбуста' : 'подписки'}` : 'Уточнить стоимость продукта';
   }
   if (!option) return 'Стоимость уточняется';
   if (option.amount == null) return option.kind === 'subscription' ? 'Выбрать подписку для записи' : 'Стоимость уточняется';

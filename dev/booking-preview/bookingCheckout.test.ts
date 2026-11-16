@@ -211,13 +211,13 @@ test('default selection skips unavailable residency and retains safe fallbacks',
   assert.deepEqual(defaultPaymentOption(court), full);
 });
 
-test('selecting an unowned residency is possible and shows product plus participation on the primary button', () => {
+test('selecting an unowned residency shows the participation price conditional on residency', () => {
   const options = buildBookingPaymentOptions('training', PRIVILEGE_PROFILES[0], { subscription: false, pass: false });
   const full = options.find(option => option.kind === 'full')!;
   const resident = options.find(option => option.kind === 'residency')!;
   assert.equal(bookingButtonText(full), 'Записаться за 5 500 ₽');
   assert.equal(isSelectableMethod(resident), true);
-  assert.equal(bookingButtonText(resident, 790), 'Добавить Резидентство и записаться · 3 540 ₽');
+  assert.equal(bookingButtonText(resident, 790), 'Записаться за 2 750 ₽ при наличии Резидентства');
   assert.equal(bookingButtonText(resident), 'Уточнить стоимость продукта');
   assert.equal(createPreviewOrder(resident), null, 'The discount offer cannot skip buying residency');
 });
@@ -372,9 +372,12 @@ test('the reported RA daily-used training shows just the subscription discount i
   assert.equal(bookingButtonText(defaultPaymentOption(visible)), 'Записаться за 2 750 ₽');
 });
 
-test('purchase buttons include the entire product and event total, never free for an unowned subscription', () => {
-  assert.equal(bookingButtonText({ kind: 'subscription', mode: 'offer', amount: 0 }, 9800), 'Добавить подписку и записаться · 9 800 ₽');
-  assert.equal(bookingButtonText({ kind: 'boost', mode: 'offer', amount: 233.33 }, 8800), 'Добавить РАбуста и записаться · 9 033,33 ₽');
+test('offer buttons show participation prices and the required product while checkout retains the full total', () => {
+  assert.equal(bookingButtonText({ kind: 'residency', mode: 'offer', amount: 700 }, 790), 'Записаться за 700 ₽ при наличии Резидентства');
+  assert.equal(bookingButtonText({ kind: 'subscription', mode: 'offer', amount: 0 }, 9800), 'Записаться за 0 ₽ при наличии подписки');
+  assert.equal(bookingButtonText({ kind: 'boost', mode: 'offer', amount: 233.33 }, 8800), 'Записаться за 233,33 ₽ при наличии РАбуста');
+  assert.equal(createPreviewOrder({ kind: 'residency', mode: 'offer', amount: 700 }, 790)?.total, 1490);
+  assert.equal(createPreviewOrder({ kind: 'subscription', mode: 'offer', amount: 0 }, null, 9800)?.total, 9800);
   for (const price of [null, NaN, -1, 0]) assert.equal(bookingButtonText({ kind: 'residency', mode: 'offer', amount: 700 }, price), 'Уточнить стоимость продукта');
 });
 

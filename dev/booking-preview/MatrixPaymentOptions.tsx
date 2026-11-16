@@ -143,7 +143,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     : option.reason === 'training-only' ? 'Выбрать тариф'
     : option.benefit === 'partial-hour' && option.amount == null ? 'Нужен расчёт'
       : option.kind === 'pass' ? `Остаток: ${trainingCount(passRemaining)}` : option.amount === 0 ? 'Бесплатно' : formatRubles(option.amount!);
-  const confirmText = bookingButtonText(choice, choice ? productCost(choice) : null, choice ? productName(choice) : undefined);
+  const confirmText = bookingButtonText(choice, choice ? productCost(choice) : null);
   const confirm = async (allowanceConfirmed = false) => {
     const method = allowanceConfirmed ? pendingAllowance : choice;
     if (locked || !method || registered || (!allowanceConfirmed && pendingAllowance)) return;
