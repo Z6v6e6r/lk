@@ -98,6 +98,48 @@ attachments и `mediaRefreshRequired:true`. Сохранённое фото ос
 outgoing graph требует inverse с новым source SHA и worker binding, а не восстановления
 старого полного flow поверх чужих изменений. До E2E и remote parity feature не объявляется live.
 
+## Защищённое native-применение
+
+Фото используют отдельную семью `nodered_support_photos_release.mjs` и
+`nodered_reviewed_flow_deploy/support_photos_*.mjs`. Старые MAX 4+2/8+4 contracts
+не расширяются. Чистый builder выводит все фазы из одного защищённого active
+snapshot с полным raw SHA и pins десяти исходных nodes:
+
+1. `pause`: только два poller `d:false → true`.
+2. `install`: ровно8 existing edits +9 additions, consumers остаются paused.
+3. `resume`: только два poller `d:true → false`, после готовности backend и sender.
+4. Обратный переход: `pause-photo` (два poller), затем `recover` (restore8/remove9).
+   Consumers остаются paused до проверки совместимого backend/worker.
+
+Каждая фаза получает собственный protected stage и один original authenticated
+editor POST с deployment type `nodes`. Root custodian сохраняет source, original,
+candidate, plan, attempt, ACK и общий lease под прежним flock. Successor проверяет
+предыдущие plan/ACK/lease/code/target/original/disk и **точную revision**; одинаковый
+graph с чужой новой revision не принимается. Abort до attempt возвращает точный
+predecessor lease. После неизвестного POST разрешены только reconcile и явная
+adoption наблюдённого результата, без повторной отправки запроса.
+
+Root plan и browser seal закрепляют native disk SHA:4 spaces, без newline.
+Browser проверяет этот SHA до POST, root — actual disk после POST. Canonical graph
+equality не заменяет byte proof для worker. Readback требует загруженный чистый
+редактор. Native request сохраняет opaque auth; исходный GET остаётся внутри вкладки.
+После каждой фазы использовать новый/reloaded dedicated context: consumed guards и
+same-origin attempt markers не удалять и не переиспользовать.
+
+Только `resume` и `recover` могут завершить полный900s soak и освободить lease;
+промежуточные фазы передают custody successor. После `finish(resume)` обратный
+переход разрешён по immutable finish+ACK+plan, только при отсутствии чужого lease
+и свежем совпадении target/disk/native revision. Применение не выполняет CUP restart,
+queue handoff, S3 provisioning или worker start — это отдельные части release-пакета.
+
+Target дополнительно сверяет весь установленный adapter с опубликованными source
+bytes и закрепляет digest protected media config. `nodered_support_photos_worker_rebind.mjs`
+проверяет полный13-file installed baseline и меняет только64-byte whole-flow constant;
+booking gateway, остальные12 файлов, service mode/cohort и текущие cursors сохраняются.
+Forward и paused-recovery bundles используют разные native SHA. Worker остановить и
+drain до первой фазы; после последней — двойная штатная runtime attestation, expected401,
+затем start и полный scan cycle. Старый whole-flow pin не переносится автоматически.
+
 ## Проверки
 
 `npm run test:support-photos`, существующие MAX receipt/rate/lifecycle tests,
