@@ -150,3 +150,22 @@ test('snapshot refresh covers every accepted member alias, autojoin context, and
     else { assert.equal(stale.levelScore, null); assert.equal(stale.levelNumeric, null); assert.equal(stale.level, null); }
   }
 });
+
+test('game list hydration replaces stored levels by exact IDs and clears stale levels on unavailable CUP read', async () => {
+  const source = fs.readFileSync('src/utils/apiClient.ts', 'utf8');
+  const block = source.slice(source.indexOf('async function hydratePadelGameLevels('), source.indexOf('export async function apiFetchPadelGamesByPhone('));
+  const games = [{ id: 'game-1', organizer: { id: 'current-id', name: 'Synthetic', rating: 'A', ratingNumeric: 6 },
+    participants: [{ id: 'old-id', rating: 'A', ratingNumeric: 6 }, { id: 'unrated-id', rating: 'C', ratingNumeric: 3.2 }], waitlist: [], metadata: { keep: true } }];
+  for (const unavailable of [false, true]) {
+    const read = async players => {
+      assert.deepEqual(players.map(player => player.clientId).sort(), ['current-id', 'old-id', 'unrated-id']);
+      return unavailable ? { data: [], error: { message: 'busy' } } : { data: ['current-id', 'old-id'].map(clientId => ({ clientId, source: 'CUP_CANONICAL', rating: 'C+', ratingNumeric: 3.6 })) };
+    };
+    const hydrate = new Function('apiFetchPadelLiveRatings', stripTypeScriptTypes(block) + '; return hydratePadelGameLevels;')(read);
+    const [game] = await hydrate(games);
+    assert.equal(game.organizer.ratingNumeric, unavailable ? null : 3.6);
+    assert.equal(game.participants[0].ratingNumeric, unavailable ? null : 3.6);
+    assert.equal(game.participants[1].ratingNumeric, null); assert.equal(game.participants[1].rating, null);
+    assert.deepEqual(game.metadata, { keep: true }); assert.equal(games[0].organizer.ratingNumeric, 6, 'input historical snapshot stays immutable');
+  }
+});

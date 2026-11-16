@@ -37,6 +37,7 @@ function client({ statuses = [404], networkError = false, fallback = false } = {
     invalidateSubscriptionSnapshot:()=>{}, isLkIdleRequestPausedError:()=>false, trackClientError:()=>{}, captureSplitLeaveInitiator:()=>{},
     UUID:/^fixture-id$/,diagnosticId:()=>'fixture-id',abortCause:()=>null,callerBuild:()=>"UNKNOWN",correlateGameReadRequest:()=>false,
     isRecord:v=>v && typeof v==='object',pickString:(v,keys)=>keys.map(k=>v[k]).find(v=>typeof v==='string'),
+    hydratePadelGameLevels: async records => records, // Level hydration has its own contract suite; keep these transport/CAS tests isolated.
     normalizePadelGameRecord:v=>v?.id ? v : null,normalizePadelGameResultActionResponse:v=>v,
     setTimeout:(fn,delay)=>{delays.push(delay);return setTimeout(fn,delay===300 ? 0 : delay);},clearTimeout,
     fetch:async(url,options)=>{
