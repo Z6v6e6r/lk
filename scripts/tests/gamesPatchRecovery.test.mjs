@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
+import { prepareChanges, replaceOnce } from '../prepare_game_private_projection_candidate.mjs';
 import {
   GAMES_PATCH_CONTRACT,
   PATCH_SOURCE_PATH,
@@ -60,7 +61,10 @@ function run(payload, gameId = 'game-42') {
 }
 
 test('tracked diagnostic candidate preserves the pinned business preimage without widening the release contract', () => {
-  const current = source();
+  // The historical release contract must stay pinned. Invert only the reviewed
+  // projection delta instead of blessing today's source as that old artifact.
+  let current = source();
+  for (const [before, after] of [...prepareChanges].reverse()) current = replaceOnce(current, after, before);
   assert.equal(sha256(current), '04d4565f740ac2179b0bb76756eccad4f7a7e88e2a3569f3a0670f32d3ed672b');
   assert.equal(sha256(current.slice(current.indexOf('const isObj ='))), PATCH_CANDIDATE_SHA256);
   assert.equal(GAMES_PATCH_CONTRACT.wholeFlowSha256, LIVE_FLOW_SHA256);

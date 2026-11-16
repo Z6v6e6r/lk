@@ -1397,7 +1397,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       participants = removePlayer(participants, myPhoneNorm, profile.id ?? null);
       waitlist = removePlayer(waitlist, myPhoneNorm, profile.id ?? null);
 
-      const maxPlayers = resolveMaxPlayers(actualGame);
+      let maxPlayers = resolveMaxPlayers(actualGame);
       const waitlistEnabled = resolveWaitlistEnabled(actualGame);
       let appliedStatus: JoinDecision = "NONE";
 
@@ -1446,11 +1446,11 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         const bookingDurationMinutes = typeof booking?.durationMinutes === "number" && Number.isFinite(booking.durationMinutes)
           ? booking.durationMinutes
           : null;
-        const shareCount = resolveSplitJoinShareCount(
+        let shareCount = resolveSplitJoinShareCount(
           getSplitShareCount(actualGame),
           resolveMaxPlayers(actualGame),
         );
-        const splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
+        let splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
         const organizerUsedSubscription = String(
           splitPaymentMeta.selectedPaymentMode || "",
         ).trim().toLowerCase() === "subscription";
@@ -1496,7 +1496,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           }
           return null;
         })();
-        const currentPayments = Array.isArray(splitPaymentMeta.payments)
+        let currentPayments = Array.isArray(splitPaymentMeta.payments)
           ? splitPaymentMeta.payments.filter((item) => isRecord(item))
           : [];
         const usedSpots = new Set<number>(
@@ -1662,6 +1662,20 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           return;
         }
 
+        const confirmedBase = await apiFetchPadelGameRecord(actualGame.id, { retries: 0, cache: "no-store" });
+        if (confirmedBase.error || confirmedBase.data?.id !== actualGame.id
+          || resolveGameExerciseId(confirmedBase.data) !== (paymentResult.data.exerciseId || exerciseId)) {
+          setSubmitting(null);
+          setDecisionError("Бронь создана, но не удалось обновить состав. Обновите игру перед проверкой участия.");
+          return;
+        }
+        actualGame = confirmedBase.data;
+        maxPlayers = resolveMaxPlayers(actualGame);
+        shareCount = resolveSplitJoinShareCount(getSplitShareCount(actualGame), maxPlayers);
+        participants = removePlayer(dedupePlayers(actualGame.participants ?? []), myPhoneNorm, profile.id ?? null);
+        waitlist = removePlayer(dedupePlayers(actualGame.waitlist ?? []), myPhoneNorm, profile.id ?? null);
+        splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
+        currentPayments = Array.isArray(splitPaymentMeta.payments) ? splitPaymentMeta.payments.filter(isRecord) : [];
         const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && paymentResult.data.toPay <= 0;
         if (!paymentResult.data.paymentUrl && !isPaidWithoutRedirect) {
           setSubmitting(null);
