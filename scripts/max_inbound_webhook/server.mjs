@@ -1,16 +1,44 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { authorized, Inbox, Dispatcher, mapUpdate, need, validSecret, readPrivate, canonical, privateDirectory } from './core.mjs';
+import { authorized, Inbox, Dispatcher, mapUpdate, need, validSecret, readPrivate, canonical, privateDirectory, sha } from './core.mjs';
+
+export const DISPATCH_PAUSE_FILE = '/etc/padlhub/max-padlhub-dispatch.pause.json';
+/** Pauses dispatch only; webhook admission remains durable. No automatic expiry or unpause. */
+export function readDispatchPause(file = DISPATCH_PAUSE_FILE) {
+  try {
+    const parent = path.dirname(file), st = fs.lstatSync(parent);
+    need(st.isDirectory() && !st.isSymbolicLink() && fs.realpathSync(parent) === parent
+      && st.uid === process.getuid() && !(st.mode & 0o022), 'PAUSE_DIRECTORY_CUSTODY');
+    let raw;
+    try { raw = readPrivate(file, 4096); } catch (error) {
+      if (error.code === 'ENOENT') return { paused: false, state: 'absent', epoch: null, sha256: null };
+      throw error;
+    }
+    const value = JSON.parse(raw);
+    need(value && typeof value === 'object' && !Array.isArray(value)
+      && Object.keys(value).sort().join(',') === 'deploymentId,epoch,schema'
+      && value.schema === 'MAX_INBOUND_DISPATCH_PAUSE_V1'
+      && typeof value.deploymentId === 'string' && /^[a-z0-9][a-z0-9-]{1,79}$/.test(value.deploymentId)
+      && typeof value.epoch === 'string' && /^[a-f0-9]{64}$/.test(value.epoch), 'PAUSE_FILE_SHAPE');
+    return { paused: true, state: 'owned', epoch: value.epoch, sha256: sha(raw) };
+  } catch { return { paused: true, state: 'invalid', epoch: null, sha256: null }; }
+}
+export function dispatchHealth(dispatcher, pauseReader = readDispatchPause) {
+  const pause = pauseReader();
+  return { dispatchPaused: pause.paused, dispatchPauseState: pause.state,
+    dispatchPauseEpoch: pause.epoch, dispatchPauseSha256: pause.sha256, dispatcherBusy: dispatcher.running };
+}
 
 export const MAX_BODY = 65_536;
-export function createIngress({ secret, botId, inbox, notify = () => {} }) {
+export function createIngress({ secret, botId, inbox, notify = () => {}, health = () => ({}) }) {
   need(validSecret(secret), 'SECRET_CONFIGURATION');
   return http.createServer(async (req, res) => {
     const reply = (status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
-    if (req.method === 'GET' && req.url === '/health') { reply(200, { ok: true, ...inbox.counts() }); return; }
+    if (req.method === 'GET' && req.url === '/health') { reply(200, { ok: true, ...inbox.counts(), ...health() }); return; }
     if (req.method !== 'POST' || req.url !== '/webhook') { reply(404, { ok: false }); return; }
     if (!authorized(req.rawHeaders, secret)) { req.resume(); reply(401, { ok: false, code: 'UNAUTHORIZED' }); return; }
     if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '') || req.headers['content-encoding']) { req.resume(); reply(415, { ok: false }); return; }
@@ -95,11 +123,13 @@ export async function main() {
   const db = mongo.db(config.mongo.db);
   const inbox = new Inbox('/var/lib/padlhub-max-padlhub-inbound');
   const dispatcher = new Dispatcher(inbox, {
+    paused: () => readDispatchPause().paused,
     ready: async () => { try { return (await jsonFetch('http://127.0.0.1:3000/api/health')).status === 'ok'; } catch { return false; } },
     post: dto => postSupportEvent(config, dto),
     confirm: persistenceConfirmer(db, config.mongo),
   });
-  const server = createIngress({ secret: config.webhookSecret, botId: config.botId, inbox });
+  const server = createIngress({ secret: config.webhookSecret, botId: config.botId, inbox,
+    health: () => dispatchHealth(dispatcher) });
   server.maxConnections = 64; server.keepAliveTimeout = 2000; server.requestTimeout = 15_000; server.headersTimeout = 10_000; server.maxHeadersCount = 32;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(18941, '127.0.0.1', resolve); });
   let stopping = false;

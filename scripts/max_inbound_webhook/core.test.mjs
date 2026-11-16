@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { Inbox, Dispatcher, authorized, mapUpdate, sha } from './core.mjs';
-import { createIngress, persistenceConfirmer } from './server.mjs';
+import { createIngress, persistenceConfirmer, readDispatchPause, dispatchHealth } from './server.mjs';
 
 const secret = 'a'.repeat(64);
 const event = (mid = 'synthetic-mid') => ({ update_type: 'message_created', timestamp: 1794654000000,
@@ -157,4 +157,52 @@ test('real lifetime flock remains held while wrapper forwards repeated stop and 
 
 test('actual production shutdown helper returns one pending promise for repeated signals', async () => {
  const { memoizedStop } = await import('./server.mjs'); let release, calls=0, finished=false; const waiting=new Promise(r=>{release=r}); const stop=memoizedStop(async()=>{calls++;await waiting;finished=true}); const first=stop(),second=stop(); assert.equal(first,second); await Promise.resolve(); assert.equal(calls,1); assert.equal(finished,false); release(); await Promise.all([first,second]); assert.equal(finished,true); assert.equal(calls,1);
+});
+
+function pauseFixture(t) {
+ const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'max-dispatch-pause-')));fs.chmodSync(dir,0o700);t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'pause.json');const value={schema:'MAX_INBOUND_DISPATCH_PAUSE_V1',deploymentId:'synthetic-photo-release',epoch:'a'.repeat(64)};
+ const publish=()=>fs.writeFileSync(file,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});
+ return{dir,file,value,publish};
+}
+test('protected pause survives restart, refuses unsafe shapes/files and never expires automatically',t=>{
+ const p=pauseFixture(t);assert.equal(readDispatchPause(p.file).paused,false);p.publish();const first=readDispatchPause(p.file);
+ assert.equal(first.state,'owned');assert.equal(first.epoch,p.value.epoch);assert.equal(first.sha256,sha(fs.readFileSync(p.file)));assert.deepEqual(readDispatchPause(p.file),first);
+ fs.chmodSync(p.file,0o644);assert.deepEqual(readDispatchPause(p.file),{paused:true,state:'invalid',epoch:null,sha256:null});fs.chmodSync(p.file,0o600);
+ for(const value of [{...p.value,extra:'synthetic'},{...p.value,deploymentId:123},null,{...p.value,epoch:'invalid'}]){
+  fs.writeFileSync(p.file,JSON.stringify(value));assert.equal(readDispatchPause(p.file).state,'invalid');
+ }
+ fs.unlinkSync(p.file);fs.symlinkSync(path.join(p.dir,'missing'),p.file);assert.equal(readDispatchPause(p.file).paused,true);
+ fs.unlinkSync(p.file);assert.equal(readDispatchPause(p.file).state,'absent');
+});
+test('pause after asynchronous readiness preserves QUEUED without creating a dispatch intent',async t=>{
+ const inbox=fixture(t),raw=event('pause-during-ready');inbox.accept(raw,mapUpdate(raw,'333'));let paused=false,release,entered,posts=0;
+ const readyEntered=new Promise(r=>{entered=r});const waiting=new Promise(r=>{release=r});
+ const worker=new Dispatcher(inbox,{paused:()=>paused,ready:async()=>{entered();return waiting},post:async dto=>{posts++;return receipt(dto)},confirm:async()=>true});
+ const running=worker.tick();await readyEntered;paused=true;release(true);await running;
+ assert.equal(posts,0);assert.equal(inbox.counts().QUEUED,1);paused=false;await worker.tick();assert.equal(posts,1);assert.equal(inbox.counts().DELIVERED,1);
+});
+test('pause drains an existing POST and confirmation, but starts no next queued message',async t=>{
+ const inbox=fixture(t);for(const mid of ['pause-first','pause-second']){const raw=event(mid);inbox.accept(raw,mapUpdate(raw,'333'))}
+ let paused=false,release,entered,posts=0;const started=new Promise(r=>{entered=r}),waiting=new Promise(r=>{release=r});
+ const worker=new Dispatcher(inbox,{paused:()=>paused,ready:async()=>true,post:async dto=>{posts++;if(posts===1){entered();await waiting}return receipt(dto)},confirm:async()=>true});
+ const running=worker.tick();await started;paused=true;assert.equal(worker.running,true);release();await running;
+ assert.equal(worker.running,false);assert.equal(posts,1);assert.equal(inbox.counts().DELIVERED,1);assert.equal(inbox.counts().QUEUED,1);
+ paused=false;await worker.tick();assert.equal(posts,2);assert.equal(inbox.counts().DELIVERED,2);
+});
+test('paused HTTP ingress durably ACKs while CUP is unavailable and health exposes only pause/drain metadata',async t=>{
+ const p=pauseFixture(t);p.publish();const inbox=fixture(t);let posts=0,readiness=0;
+ const options={paused:()=>readDispatchPause(p.file).paused,ready:async()=>{readiness++;throw Error('synthetic CUP offline')},post:async()=>{posts++},confirm:async()=>true};
+ const worker=new Dispatcher(inbox,options);const server=createIngress({secret,botId:'333',inbox,health:()=>dispatchHealth(worker,()=>readDispatchPause(p.file))});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));const port=server.address().port;
+ assert.equal((await request(port,JSON.stringify(event('pause-http')),{'content-type':'application/json','x-max-bot-api-secret':secret})).status,200);await worker.tick();assert.equal(posts+readiness,0);
+ const health=await(await fetch(`http://127.0.0.1:${port}/health`)).json();assert.equal(health.dispatchPaused,true);assert.equal(health.dispatcherBusy,false);assert.equal(health.dispatchPauseSha256,sha(fs.readFileSync(p.file)));assert.equal(health.QUEUED,1);assert(!JSON.stringify(health).includes('synthetic incoming'));
+ const restarted=new Dispatcher(new Inbox(inbox.dir,{minFreeBytes:0}),{...options,ready:async()=>true,post:async dto=>{posts++;return receipt(dto)}});
+ await restarted.tick();assert.equal(posts,0);fs.unlinkSync(p.file);await restarted.tick();await restarted.tick();assert.equal(posts,1);assert.equal(restarted.inbox.counts().DELIVERED,1);
+});
+test('unsafe pause and throwing pause gate preserve uncertain records without replay',async t=>{
+ const p=pauseFixture(t);fs.writeFileSync(p.file,'invalid',{mode:0o600});const inbox=fixture(t),raw=event('pause-uncertain'),mapped=mapUpdate(raw,'333');inbox.accept(raw,mapped);
+ const r=inbox.read(mapped.key);r.phase='DISPATCH_INTENT';inbox.write(r);const before=fs.readFileSync(path.join(inbox.dir,mapped.key+'.json'));let posts=0;
+ const worker=new Dispatcher(inbox,{paused:()=>readDispatchPause(p.file).paused,ready:async()=>true,post:async()=>{posts++},confirm:async()=>true});await worker.tick();assert(fs.readFileSync(path.join(inbox.dir,mapped.key+'.json')).equals(before));
+ worker.paused=()=>{throw Error('synthetic unsafe gate')};await worker.tick();assert.equal(posts,0);worker.paused=()=>false;await worker.tick();assert.equal(posts,0);assert.equal(inbox.counts().REVIEW,1);
 });
