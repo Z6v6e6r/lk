@@ -468,6 +468,56 @@ test('Zero Block direct purchases disable retries and retain unknown outcomes, i
   assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
 });
 
+test('Zero Block releases only its own markers when checkout stops before dispatch', async () => {
+  for (const failStorage of [false, true]) {
+    let active = true;
+    let first = true;
+    const sharedKey = 'fixture:' + 'a'.repeat(64);
+    const f = zeroFixture({ recordOrdinarySubscriptionAttempt: async (_id: string, _phone: string, evidence: object) => {
+      f.stored.set(sharedKey, JSON.stringify({ kind: 'ordinary', ...evidence }));
+      if (!first) return;
+      first = false;
+      active = false;
+      if (failStorage) throw new Error('storage verification failed');
+    } });
+    await assert.rejects(f.adapter.createZeroPayment('academy', fixturePhone, 980000, () => active), /не отправлена/);
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.stored.size, 0);
+    active = true;
+    f.setResult({ data: { paymentUrl: 'https://bank.example/zero', toPay: 980000 } });
+    await f.adapter.createZeroPayment('academy', fixturePhone, 980000, () => true);
+    assert.equal(f.writes.length, 1);
+  }
+});
+
+test('Zero Block pre-dispatch cleanup preserves replacement and pre-existing custody', async () => {
+  const zeroKey = 'padlhub_zero_checkout_attempt_v1:academy';
+  const sharedKey = 'fixture:' + 'a'.repeat(64);
+  for (const replaceZero of [false, true]) {
+    const f = zeroFixture({ recordOrdinarySubscriptionAttempt: async () => {
+      f.stored.set(sharedKey, 'replacement-shared');
+      if (replaceZero) f.stored.set(zeroKey, 'replacement-zero');
+      throw new Error('cancelled before dispatch');
+    } });
+    await assert.rejects(f.adapter.createZeroPayment('academy', fixturePhone, 980000, () => true));
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.stored.get(sharedKey), 'replacement-shared');
+    assert.equal(f.stored.get(zeroKey), replaceZero ? 'replacement-zero' : undefined);
+  }
+});
+
+test('Zero Block preserves both guards after a purchase invocation throws', async () => {
+  const sharedKey = 'fixture:' + 'a'.repeat(64);
+  const f = zeroFixture({ recordOrdinarySubscriptionAttempt: async (_id: string, _phone: string, evidence: object) => {
+    f.stored.set(sharedKey, JSON.stringify({ kind: 'ordinary', ...evidence }));
+  } });
+  f.breakTransport();
+  await assert.rejects(f.adapter.createZeroPayment('academy', fixturePhone, 980000, () => true));
+  assert.equal(f.stored.size, 2);
+  await assert.rejects(f.adapter.createZeroPayment('academy', fixturePhone, 980000, () => true));
+  assert.equal(f.writes.length, 1);
+});
+
 test('Zero Block confirmation uses only stored exact ref; missing local evidence and direct plans do not confirm', async () => {
   const f = zeroFixture();
   await f.adapter.confirmZeroPayment('friendship');
