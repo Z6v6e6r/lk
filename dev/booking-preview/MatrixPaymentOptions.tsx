@@ -120,10 +120,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const detail = (option: PaymentOption) => {
     if (option.mode === 'offer' && option.kind === 'subscription') return recommendedSubscription?.offer.name || 'Подписка';
     if (option.mode === 'offer' && option.kind === 'boost') return `Буст ${profile.subscription ? 'подписки' : 'Резидентства'} на 7 дней`;
-    if (option.mode === 'offer') {
-      const cost = productCost(option);
-      return `${cost == null ? 'Цена продукта уточняется' : `${formatRubles(cost)} за 30 дней`} · ${option.amount === 0 ? 'участие включено' : option.amount != null ? `участие ${formatRubles(option.amount)}` : 'стоимость участия уточняется'}`;
-    }
+    if (option.mode === 'offer') return `Скидка ${price.discount}% при оформлении Резидентства`;
     if (option.reason === 'excluded-group') return option.kind === 'residency' ? 'Резидентство не действует на эту категорию групповых' : 'Подписка не действует на эту категорию групповых';
     if (option.reason === 'training-only') return 'Бесплатная тренировка ещё доступна. Скидки на другие услуги — после использования дневного лимита';
     if (option.reason === 'unknown-price') return 'Стоимость корта уточняется';
@@ -149,7 +146,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     if (option.mode === 'offer') {
       if (option.kind === 'subscription') return subscriptionFromPrice != null ? formatRubles(subscriptionFromPrice) : 'Нужен расчёт';
       const order = offerOrder(option);
-      return order ? formatRubles(option.kind === 'boost' ? order.bookingAmount : order.total) : 'Нужен расчёт';
+      return order ? formatRubles(order.bookingAmount) : 'Нужен расчёт';
     }
     return option.reason === 'unknown-price' ? 'Нужен расчёт' : option.mode === 'unavailable' ? 'Не действует'
       : option.reason === 'training-only' ? 'Выбрать тариф'
