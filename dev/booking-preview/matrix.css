@@ -22,6 +22,7 @@
 .matrix-option-copy { display: grid; gap: 4px; flex: 1; min-width: 0; }
 .matrix-option-copy strong { font-size: 13px; font-weight: 650; line-height: 1.3; }
 .matrix-option-copy > span { color: #82788e; font-size: 11px; line-height: 1.4; }
+.matrix-option-copy > .matrix-option-share { color: #777579; }
 .matrix-option-value { text-align: right; display: grid; gap: 4px; flex-shrink: 0; max-width: 35%; }
 .matrix-option-value strong { font-size: 14px; font-weight: 700; white-space: nowrap; }
 .matrix-option-value > span { color: #7650bf; font-size: 10px; }
