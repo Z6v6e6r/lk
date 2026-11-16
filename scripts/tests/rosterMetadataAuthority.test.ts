@@ -67,6 +67,6 @@ test("server still refuses forged organizer, alias takeover and membership mutat
 test("production roster builder uses the merge without reintroducing authority aliases", () => {
   const source = fs.readFileSync("src/components/games/GamesPage.tsx", "utf8");
   const builder = source.slice(source.indexOf("const buildDetailsRosterMetadata ="), source.indexOf("const cancelVivaBookingsForPlayerFromDetails ="));
-  assert.match(builder, /return mergeRosterMetadata\(detailsMetadata,/);
+  assert.match(builder, /return mergeRosterMetadata\(baseMetadata,/);
   assert.doesNotMatch(builder, /organizer(?:Id|Phone|PhoneNorm):/);
 });

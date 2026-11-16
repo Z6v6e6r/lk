@@ -7766,10 +7766,6 @@ export default function GamesPage({
       detailsOrganizerPlayer,
     ],
   );
-  const detailsOrganizerHasIdentity = useMemo(() => Boolean(
-    normalizeComparableId(detailsOrganizerPayload.id)
-    || normalizePhoneForGame(detailsOrganizerPayload.phone),
-  ), [detailsOrganizerPayload.id, detailsOrganizerPayload.phone]);
   const detailsMetadata = useMemo<Record<string, unknown>>(
     () => (isRecordObject(activeGameRecord?.metadata) ? activeGameRecord.metadata : {}),
     [activeGameRecord?.metadata],
@@ -12560,9 +12556,6 @@ export default function GamesPage({
         },
         metadata: nextMetadata,
       };
-      if (detailsOrganizerHasIdentity) {
-        payload.organizer = detailsOrganizerPayload;
-      }
 
       const updateResult = await apiUpdatePadelGameRecord(gameRecordId, payload);
 
@@ -12585,8 +12578,6 @@ export default function GamesPage({
     }
   }, [
     gameRecordId,
-    detailsOrganizerPayload,
-    detailsOrganizerHasIdentity,
     detailsParticipants,
     detailsWaitlist,
     activeGameRecord?.invite?.maxPlayers,
@@ -12762,10 +12753,14 @@ export default function GamesPage({
     nextWaitlistRaw: PadelGamePlayer[],
     options?: {
       metadata?: Record<string, unknown>;
+      baseRecord?: PadelGameRecord;
       fallbackErrorMessage?: string;
     },
   ) => {
     if (!gameRecordId) return;
+    if (options?.baseRecord && options.baseRecord.id !== gameRecordId) return false;
+    const patchBase = options?.baseRecord ?? activeGameRecord;
+    const patchMaxPlayers = options?.baseRecord ? resolveGameDetailsMaxPlayers(options.baseRecord) : detailsMaxPlayers;
 
     const normalizePlayers = (
       players: PadelGamePlayer[],
@@ -12783,8 +12778,12 @@ export default function GamesPage({
       return Array.from(map.values());
     };
 
-    const normalizedParticipants = normalizePlayers(nextParticipantsRaw, "CONFIRMED")
-      .slice(0, detailsMaxPlayers);
+    const requestedParticipants = normalizePlayers(nextParticipantsRaw, "CONFIRMED");
+    if (options?.baseRecord && requestedParticipants.length > patchMaxPlayers) {
+      setGameRosterError("Состав изменился и превышает число мест. Обновите игру перед проверкой участия.");
+      return false;
+    }
+    const normalizedParticipants = requestedParticipants.slice(0, patchMaxPlayers);
     const normalizedWaitlist = excludePlayersAlreadyInRoster(
       normalizePlayers(nextWaitlistRaw, "WAITLIST"),
       normalizedParticipants,
@@ -12793,17 +12792,14 @@ export default function GamesPage({
     setGameRosterError(null);
     try {
       const payload: Parameters<typeof apiUpdatePadelGameRecord>[1] = {
-        expectedUpdatedAt: activeGameRecord?.updatedAt ?? null,
+        expectedUpdatedAt: patchBase?.updatedAt ?? null,
         participants: normalizedParticipants,
         waitlist: normalizedWaitlist,
         invite: {
-          waitlistEnabled: activeGameRecord?.invite?.waitlistEnabled ?? waitlistEnabled,
-          maxPlayers: detailsMaxPlayers,
+          waitlistEnabled: patchBase?.invite?.waitlistEnabled ?? waitlistEnabled,
+          maxPlayers: patchMaxPlayers,
         },
       };
-      if (detailsOrganizerHasIdentity) {
-        payload.organizer = detailsOrganizerPayload;
-      }
       if (options?.metadata) {
         payload.metadata = options.metadata;
       }
@@ -12816,7 +12812,7 @@ export default function GamesPage({
 
       if (updateResult.data?.id) {
         const normalizedRecord = updateResult.data as PadelGameRecord;
-        const mergedRecord = mergePadelGameRecord(activeGameRecord, normalizedRecord);
+        const mergedRecord = mergePadelGameRecord(patchBase, normalizedRecord);
         const recordWithRoster: PadelGameRecord = {
           ...mergedRecord,
           participants: normalizedParticipants,
@@ -12864,8 +12860,6 @@ export default function GamesPage({
   }, [
     gameRecordId,
     detailsMaxPlayers,
-    detailsOrganizerPayload,
-    detailsOrganizerHasIdentity,
     activeGameRecord,
     activeGameRecord?.invite?.maxPlayers,
     activeGameRecord?.invite?.waitlistEnabled,
@@ -12888,8 +12882,10 @@ export default function GamesPage({
       teamSlots?: Array<PadelGamePlayer | null>;
       setPairings?: Array<MatchResultSetPairingSlots | null>;
       extraMetadata?: Record<string, unknown>;
+      baseMetadata?: Record<string, unknown>;
     },
   ): Record<string, unknown> => {
+    const baseMetadata = options?.baseMetadata ?? detailsMetadata;
     const participantPhones = nextParticipants
       .map((player) => normalizePhoneForGame(player.phone))
       .filter((value): value is string => Boolean(value));
@@ -12899,12 +12895,13 @@ export default function GamesPage({
     const organizerPhone = normalizePhoneForGame(detailsOrganizerPayload.phone);
     const splitPaymentSource = isRecordObject(options?.extraMetadata?.splitPayment)
       ? options?.extraMetadata?.splitPayment
-      : (isRecordObject(detailsMetadata.splitPayment) ? detailsMetadata.splitPayment : null);
+      : (isRecordObject(baseMetadata.splitPayment) ? baseMetadata.splitPayment : null);
     const splitPaymentPhones = extractSplitPaymentPhones(splitPaymentSource);
-    return mergeRosterMetadata(detailsMetadata, {
+    return mergeRosterMetadata(baseMetadata, {
       ...(options?.extraMetadata ?? {}),
-      organizerInMatch: options?.organizerInMatch ?? detailsOrganizerInMatch,
-      teamSlots: buildStoredTeamSlots(options?.teamSlots ?? detailsTeamSlots),
+      organizerInMatch: options?.organizerInMatch ?? baseMetadata.organizerInMatch ?? detailsOrganizerInMatch,
+      teamSlots: options?.teamSlots ? buildStoredTeamSlots(options.teamSlots)
+        : (options?.baseMetadata ? baseMetadata.teamSlots ?? [] : buildStoredTeamSlots(detailsTeamSlots)),
       participantPhones,
       waitlistPhones,
       allRelatedPhones: Array.from(new Set([
@@ -14640,6 +14637,14 @@ export default function GamesPage({
         return;
       }
 
+      const pendingBaseResult = await apiFetchPadelGameRecord(gameRecordId, { retries: 0, cache: "no-store" });
+      if (pendingBaseResult.error || pendingBaseResult.data?.id !== gameRecordId
+        || resolveGameVivaExerciseId(pendingBaseResult.data) !== (paymentResult.data.exerciseId || exerciseId)) {
+        setGameRosterError("Бронь создана, но не удалось обновить состав. Обновите игру перед проверкой участия.");
+        return;
+      }
+      const pendingBaseRecord = pendingBaseResult.data;
+      const pendingBaseMetadata = isRecordObject(pendingBaseRecord.metadata) ? pendingBaseRecord.metadata : {};
       const bookingIds = paymentResult.data.bookingId ? [paymentResult.data.bookingId] : [];
       enqueuePendingPaymentSync(paymentRef, bookingIds, "details_split_join_pay_click");
 
@@ -14651,19 +14656,13 @@ export default function GamesPage({
       const pendingPaymentSpot = pendingPaymentSpotRaw != null
         ? Math.max(1, Math.floor(pendingPaymentSpotRaw))
         : null;
-      const pendingSplitPaymentSource = isRecordObject(detailsSplitPaymentMetadata)
-        ? detailsSplitPaymentMetadata
-        : (
-          isRecordObject(activeGameRecord.metadata)
-          && isRecordObject((activeGameRecord.metadata as Record<string, unknown>).splitPayment)
-            ? (activeGameRecord.metadata as Record<string, unknown>).splitPayment as Record<string, unknown>
-            : null
-        );
+      const pendingSplitPaymentSource = isRecordObject(pendingBaseMetadata.splitPayment)
+        ? pendingBaseMetadata.splitPayment : null;
       const pendingCurrentSplitPayments = Array.isArray(pendingSplitPaymentSource?.payments)
         ? pendingSplitPaymentSource.payments.filter((item) => isRecordObject(item))
         : [];
       const pendingCurrentSplitBookingIds = parseBookingIdsFromUnknown(pendingSplitPaymentSource?.bookingIds);
-      const pendingCurrentMetadataBookingIds = parseBookingIdsFromUnknown(detailsMetadata.bookingIds);
+      const pendingCurrentMetadataBookingIds = parseBookingIdsFromUnknown(pendingBaseMetadata.bookingIds);
       const pendingFilteredSplitPayments = pendingCurrentSplitPayments.filter((item) => {
         const itemClientId = normalizeComparableId(item.clientId);
         const itemPhoneNorm = normalizePhoneForGame(
@@ -14687,10 +14686,10 @@ export default function GamesPage({
         status: "PENDING",
       };
       const pendingNextParticipants = dedupePlayersByIdentity(
-        detailsParticipants.filter((player) => !isCurrentUserPlayer(player)),
+        (pendingBaseRecord.participants ?? []).filter((player) => !isCurrentUserPlayer(player)),
       );
       const pendingNextWaitlist = dedupePlayersByIdentity([
-        ...detailsWaitlist.filter((player) => !isCurrentUserPlayer(player)),
+        ...(pendingBaseRecord.waitlist ?? []).filter((player) => !isCurrentUserPlayer(player)),
         pendingPlayer,
       ]);
       const pendingNowIso = new Date().toISOString();
@@ -14700,7 +14699,7 @@ export default function GamesPage({
         ...(pendingSplitPaymentSource ?? {}),
         enabled: true,
         status: "ACTIVE",
-        shareCount: detailsSplitShareCount,
+        shareCount: resolveSplitJoinShareCount(pendingSplitPaymentSource?.shareCount, resolveGameDetailsMaxPlayers(pendingBaseRecord)),
         // The server re-derives the share before charging; persist its value so a
         // browser-side fallback can never become the stored participant price.
         shareAmount: toFiniteNumber(paymentResult.data.shareAmount) ?? shareAmount,
@@ -14740,6 +14739,7 @@ export default function GamesPage({
         pendingNextParticipants,
         pendingNextWaitlist,
         {
+          baseMetadata: pendingBaseMetadata,
           extraMetadata: {
             bookingIds: pendingMetadataBookingIds,
             splitPayment: pendingNextSplitPayment,
@@ -14748,6 +14748,7 @@ export default function GamesPage({
       );
       const pendingSaved = await patchGameRoster(pendingNextParticipants, pendingNextWaitlist, {
         metadata: pendingNextMetadata,
+        baseRecord: pendingBaseRecord,
         fallbackErrorMessage: "Не удалось сохранить ожидающую оплату участия",
       });
       if (!pendingSaved) {
@@ -14767,7 +14768,12 @@ export default function GamesPage({
       }
 
       const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && paymentResult.data.toPay <= 0;
-      const refreshed = await apiFetchPadelGameRecord(gameRecordId);
+      const refreshed = await apiFetchPadelGameRecord(gameRecordId, { retries: 0, cache: "no-store" });
+      if (refreshed.error || refreshed.data?.id !== gameRecordId
+        || resolveGameVivaExerciseId(refreshed.data) !== (paymentResult.data.exerciseId || exerciseId)) {
+        setGameRosterError("Бронь создана, но не удалось проверить актуальный состав. Обновите игру.");
+        return;
+      }
       let resolvedRecord: PadelGameRecord | null = null;
       let resolvedParticipants = detailsParticipants;
       let resolvedWaitlist = detailsWaitlist;
@@ -14791,14 +14797,13 @@ export default function GamesPage({
         const paymentSpot = paymentSpotRaw != null ? Math.max(1, Math.floor(paymentSpotRaw)) : null;
         const nowIso = new Date().toISOString();
         const hasCurrentUserInParticipants = resolvedParticipants.some((player) => isCurrentUserPlayer(player));
-        const hasCurrentUserInWaitlist = resolvedWaitlist.some((player) => isCurrentUserPlayer(player));
-        const shouldJoinAsConfirmed = hasCurrentUserInParticipants
-          ? true
-          : hasCurrentUserInWaitlist
-            ? false
-            : (paymentSpot != null
-              ? paymentSpot <= detailsMaxPlayers
-              : resolvedParticipants.length < detailsMaxPlayers);
+        const hasCurrentUserInWaitlist = resolvedWaitlist.some((player) => (
+          isCurrentUserPlayer(player) && String(player.status || "").toUpperCase() === "WAITLIST"
+        ));
+        const confirmedMaxPlayers = resolveGameDetailsMaxPlayers(resolvedRecord ?? pendingBaseRecord);
+        const shouldJoinAsConfirmed = hasCurrentUserInParticipants || (!hasCurrentUserInWaitlist
+          && resolvedParticipants.length < confirmedMaxPlayers
+          && (paymentSpot == null || paymentSpot <= confirmedMaxPlayers));
 
         const joinPlayerBase: PadelGamePlayer = {
           id: currentClientId,
@@ -14864,7 +14869,7 @@ export default function GamesPage({
           ...(splitPaymentSource ?? {}),
           enabled: true,
           status: "ACTIVE",
-          shareCount: detailsSplitShareCount,
+          shareCount: resolveSplitJoinShareCount(splitPaymentSource?.shareCount, confirmedMaxPlayers),
           shareAmount: toFiniteNumber(paymentResult.data.shareAmount) ?? shareAmount,
           bookingIds: Array.from(new Set([
             ...parseBookingIdsFromUnknown(currentBookingIds),
@@ -14922,7 +14927,7 @@ export default function GamesPage({
           ],
         };
         const nextMetadataBookingIds = Array.from(new Set([
-          ...parseBookingIdsFromUnknown(detailsMetadata.bookingIds),
+          ...parseBookingIdsFromUnknown(isRecordObject(resolvedRecord?.metadata) ? resolvedRecord.metadata.bookingIds : null),
           ...parseBookingIdsFromUnknown(currentBookingIds),
           ...parseBookingIdsFromUnknown(matchedCurrentSplitPayment?.bookingIds),
           matchedCurrentSplitPayment?.bookingId,
@@ -14930,6 +14935,7 @@ export default function GamesPage({
         ].filter(Boolean)));
 
         const nextMetadata = buildDetailsRosterMetadata(nextParticipants, nextWaitlist, {
+          baseMetadata: isRecordObject(resolvedRecord?.metadata) ? resolvedRecord.metadata : {},
           extraMetadata: {
             bookingIds: nextMetadataBookingIds,
             splitPayment: nextSplitPayment,
@@ -14938,6 +14944,7 @@ export default function GamesPage({
 
         await patchGameRoster(nextParticipants, nextWaitlist, {
           metadata: nextMetadata,
+          baseRecord: resolvedRecord ?? pendingBaseRecord,
           fallbackErrorMessage: "Не удалось синхронизировать состав игры после списания абонемента",
         });
       }
@@ -14974,6 +14981,7 @@ export default function GamesPage({
     profileGrade,
     profileRatingNumeric,
     patchGameRoster,
+    buildDetailsRosterMetadata,
     detailsDurationMinutes,
     previewSubscriptionUsageShadow,
     subscriptionUsageShadowJoinPreview,

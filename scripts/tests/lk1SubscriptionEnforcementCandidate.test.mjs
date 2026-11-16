@@ -13,6 +13,7 @@ import { PAYMENT_NODE_IDS } from "../patch_live_game_payment_confirmation.mjs";
 import { applyPaginationEdits, subscriptionBookingPaginationEdits } from "../prepare_subscription_booking_pagination.mjs";
 import { PATRIOTS_PREIMAGE } from "../patch_live_lk1_patriots_friendship.mjs";
 import { applyReconciledEdits, timeoutPreservationEdits } from "../prepare_reconciled_cancellation_recovery.mjs";
+import { prepareChanges, replaceOnce } from "../prepare_game_private_projection_candidate.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -24,6 +25,11 @@ const observerPins = {
 };
 function frozenBusinessHash(file) {
   let text = fs.readFileSync(file, 'utf8');
+  if (file === 'scripts/nodered_games_nodes/fn_patch.js') {
+    // Recover the exact frozen source; this paired successor does not authorize
+    // recomposing or advancing the historical subscription release contract.
+    for (const [before, after] of [...prepareChanges].reverse()) text = replaceOnce(text, after, before);
+  }
   if (file.endsWith('fn_split_cleanup_router.js')) {
     // Verify the preservation successor, then recover the frozen release source.
     // A source-only amendment must never advance an unrecomposed release contract.
