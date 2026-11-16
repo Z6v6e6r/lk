@@ -53,7 +53,7 @@ test('onboarding writes a single immutable baseline and canonical state; same re
 test('orphan client/phone history and ambiguous aliases block initial assignment', async () => {
   for (const row of [ { player: { clientId: 'synthetic-1' } }, { player: { key: 'phone:79990000001' } } ]) {
     const { db, client } = database(); db.collection('rating_events').docs.push(row);
-    await assert.rejects(assign(db, client, { phone: '+7 999 000 00 01' }), /LEVEL_(REBUILD_REQUIRED|IDENTITY_CONFLICT)/);
+    await assert.rejects(assign(db, client, { phone: '79990000001' }), /LEVEL_(REBUILD_REQUIRED|IDENTITY_CONFLICT)/);
     assert.equal(db.collection('player_rating_state').docs.length, 0);
   }
   const { db, client } = database();
