@@ -93,7 +93,6 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     setCheckout(order); setCheckoutOption(option); setCheckoutSubscription(subscription);
   };
 
-  const productName = (option: PaymentOption) => option.kind === 'residency' ? 'Резидентство' : option.kind === 'boost' ? 'РАбуста' : `подписку «${purchaseSubscription?.name || 'Подписка'}»`;
   const productCost = (option: PaymentOption) => option.kind === 'residency' ? residencyPrice : option.kind === 'boost' ? boostPrice : purchaseSubscription?.price ?? null;
   const offerOrder = (option: PaymentOption) => createPreviewOrder(option, residencyPrice, purchaseSubscription?.price ?? null, boostPrice);
   const usesAllowance = (option: PaymentOption) => option.mode === 'book' && (option.kind === 'pass' || ((option.kind === 'subscription' || option.kind === 'boost') && ['free-hour', 'partial-hour', 'free-event', 'free-training'].includes(option.benefit || '')));
@@ -101,7 +100,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const title = (option: PaymentOption) => {
     if (option.mode === 'offer' && option.kind === 'subscription') return `Запись с подпиской${subscriptionFromPrice != null ? ` от ${formatRubles(subscriptionFromPrice)}` : ''}`;
     if (option.mode === 'offer' && option.kind === 'boost') return 'С РАбуста';
-    if (option.mode === 'offer') return `Добавить ${productName(option)}`;
+    if (option.mode === 'offer' && option.kind === 'residency') return 'С Резидентством';
     if (option.withResidency) return `С Резидентством и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
     if (option.withSubscription) return `С подпиской и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
     if (option.kind === 'boost') return option.amount === 0 ? 'С Бустом — бесплатно' : option.benefit === 'partial-hour' ? `С Бустом · ${option.freeMinutes} минут бесплатно` : `С Бустом · скидка ${price.discount}%`;
