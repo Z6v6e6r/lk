@@ -69,7 +69,7 @@ export function withPersonalSubscription(options: PaymentOption[], hasSubscripti
   const full = options.find(option => option.kind === 'full');
   const boost = options.find(option => option.kind === 'boost' && option.mode === 'book' && option.amount != null && option.amount <= subscription.amount!);
   return [...(boost ? [boost] : []), subscription, ...(full ? [{ ...full, mode: 'book' as const }] : []),
-    ...options.filter(option => option.kind !== 'full' && option.kind !== 'subscription' && option !== boost)];
+    ...options.filter(option => option.kind !== 'full' && option !== subscription && option !== boost)];
 }
 
 export function bookingButtonText(option: PaymentOption | undefined, productPrice?: number | null) {

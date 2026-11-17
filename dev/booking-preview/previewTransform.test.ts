@@ -17,6 +17,8 @@ for (const [path, count] of [['games/GamesPage.tsx', 2], ['group-schedule/GroupS
       assert.ok(transformed?.includes('date: dateLabel, time: publicCreateSummaryTimeLabel'));
       assert.ok(transformed?.includes('[studio?.name, studio?.address, selectedCourt?.name]'));
       assert.ok(transformed?.includes('station: studio?.name'));
+      assert.ok(transformed?.includes('court: selectedCourt?.name'));
+      assert.ok(transformed?.includes('court: detailsRoomName'));
       assert.ok(transformed?.includes('station: detailsStudioName'));
       assert.ok(transformed?.includes('date: detailsDateLabel, time: [detailsTimeFrom, detailsTimeTo]'));
     } else if (path === 'group-schedule/GroupSchedulePage.tsx') {

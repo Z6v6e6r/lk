@@ -25,7 +25,7 @@
 .matrix-residency-discounts li > span { font: 400 15px/1.45 Arial, Helvetica, sans-serif; }
 .matrix-purchase-offer .matrix-purchase-benefits.matrix-subscription-card[data-subscription-plan='friendship'] { --resident-divider: #74d199; }
 .matrix-purchase-offer .matrix-subscription-card[data-subscription-plan='friendship-2'] { --resident-divider: #46b675; }
-.matrix-subscription-card .matrix-residency-discounts > li { grid-template-columns: 62px minmax(0, 1fr); }
+.matrix-subscription-card .matrix-residency-discounts > li { grid-template-columns: 76px minmax(0, 1fr); }
 .matrix-subscription-card .matrix-residency-discounts li > strong { font-size: 12px; }
 .matrix-subscription-card:not([data-subscription-plan='ra']) .matrix-residency-discounts li > strong { background: #e8f7ee; color: #216c45; }
 .matrix-residency-equipment { margin: 28px 0 0; }

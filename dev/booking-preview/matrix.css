@@ -145,6 +145,10 @@
 .matrix-product-badge { display: block; width: auto; height: 40px; max-width: 100%; object-fit: contain; object-position: left center; }
 .matrix-purchase-event { display: grid; gap: 6px; margin: 14px 0 20px; font-size: 14px; line-height: 1.5; }
 .matrix-purchase-event > span { color: #787287; }
+.matrix-purchase-game-card { padding: 16px; border: 1px solid #e7e4ed; border-radius: 16px; background: #faf9fc; }
+.matrix-purchase-game-card > .matrix-purchase-event-place { color: #242325; font-weight: 600; }
+.matrix-purchase-game-card > .matrix-purchase-event-scope { justify-self: start; margin-top: 4px; padding: 5px 9px; border-radius: 8px; background: #eee8fb; color: #6642b1; font-size: 12px; }
+.matrix-pass-balance { display: grid; gap: 4px; }
 .matrix-purchase-event-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; list-style: none; cursor: pointer; font-size: 17px; font-weight: 700; }
 .matrix-purchase-event-details > summary::-webkit-details-marker { display: none; }
 .matrix-purchase-event-details > summary > span { font-size: 13px; }

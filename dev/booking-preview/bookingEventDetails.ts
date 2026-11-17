@@ -1,6 +1,6 @@
 import type { GamePaymentScope, ServiceKind } from './paymentMatrix';
 
-export type BookingEventDetails = { date?: string | null; time?: string | null; location?: string | null; station?: string | null };
+export type BookingEventDetails = { date?: string | null; time?: string | null; location?: string | null; station?: string | null; court?: string | null };
 
 // Date-only values stay in the event's calendar day, regardless of browser timezone.
 export function bookingEventLines(details: BookingEventDetails | undefined, service: ServiceKind, scope?: GamePaymentScope) {

@@ -2,7 +2,8 @@ import { createPreviewOrder } from './bookingCheckout';
 import { formatRubles, type GamePaymentScope, type ServiceKind, type PaymentOption } from './paymentMatrix';
 import { PurchaseOfferLayout } from './PurchaseOfferLayout';
 import { ProductBadge } from './ProductBadge';
-import { bookingEventLines, type BookingEventDetails } from './bookingEventDetails';
+import type { BookingEventDetails } from './bookingEventDetails';
+import { PurchaseBookingEvent } from './PurchaseBookingEvent';
 import './residency-offer.css';
 
 export function ResidencyPurchaseOffer({ option, residencyPrice, referenceAmount, eventName, eventDetails, service, gamePaymentScope, disabled, onContinue }: {
@@ -18,7 +19,6 @@ export function ResidencyPurchaseOffer({ option, residencyPrice, referenceAmount
 }) {
   const order = option?.kind === 'residency' && option.mode === 'offer' ? createPreviewOrder(option, residencyPrice) : null;
   const participation = option?.amount != null && Number.isFinite(option.amount) && option.amount >= 0 ? formatRubles(option.amount) : 'Нужен расчёт';
-  const event = bookingEventLines(eventDetails, service, gamePaymentScope);
   return <PurchaseOfferLayout footer={<>
     <button type="button" className="matrix-confirm" disabled={disabled || !order} onClick={onContinue}>{order ? `Добавить Резидентство · ${formatRubles(order.total)}` : residencyPrice == null ? 'Стоимость Резидентства уточняется' : 'Нужен расчёт стоимости записи'}</button>
     <p>{order ? `Участие ${formatRubles(order.bookingAmount)} + Резидентство ${formatRubles(order.productAmount)}` : 'Резидентство и запись — одной оплатой'}</p>
@@ -44,13 +44,7 @@ export function ResidencyPurchaseOffer({ option, residencyPrice, referenceAmount
       </details>
     </section>
     <section className="matrix-purchase-booking" aria-label="Стоимость записи с Резидентством">
-      <details className="matrix-purchase-event-details">
-        <summary>Ваша запись<span aria-hidden="true">⌄</span></summary>
-        <div className="matrix-purchase-event">
-          <strong>{event.when}</strong><span>{event.station}</span>
-          <span>{eventName}</span>
-        </div>
-      </details>
+      <PurchaseBookingEvent details={eventDetails} service={service} scope={gamePaymentScope} name={eventName} />
       <dl className="matrix-order-lines">
         {referenceAmount != null && <div><dt>Полная цена участия</dt><dd><del>{formatRubles(referenceAmount)}</del></dd></div>}
         <div><dt>Участие с Резидентством</dt><dd>{participation}</dd></div>
