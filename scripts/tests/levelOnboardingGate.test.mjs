@@ -193,3 +193,16 @@ test('checkout replacement during level verification stops both event writers be
     requestRef.current += 1; d.resolve(true); await pending; assert.equal(writes, 0);
   }
 });
+
+test('loading is visible, cancelling aborts the read, and its late result cannot hide a newer check', async () => {
+  const first = deferred(), second = deferred(); let calls = 0; let firstSignal;
+  const g = gate(signal => { calls++; if (calls === 1) { firstSignal = signal; return first.promise; } return second.promise; });
+  const old = g.render().checkLevel(restricted, rated.id);
+  const loading = g.render().levelOnboardingDialog;
+  assert.equal(loading.props.title, 'Проверяем уровень');
+  loading.props.onClose(); assert.equal(firstSignal.aborted, true); assert.equal(g.render().levelOnboardingDialog, null);
+  const current = g.render().checkLevel(restricted, rated.id);
+  first.resolve({ data: rated }); assert.equal(await old, false);
+  assert.equal(g.render().levelOnboardingDialog.props.title, 'Проверяем уровень');
+  second.resolve({ data: rated }); assert.equal(await current, true); assert.equal(g.render().levelOnboardingDialog, null);
+});

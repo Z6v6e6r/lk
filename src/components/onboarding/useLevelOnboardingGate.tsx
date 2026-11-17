@@ -10,24 +10,30 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
   const [prompt, setPrompt] = useState<"required" | "unavailable" | null>(null);
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
-  const inFlight = useRef(false);
+  const [checkingLevel, setCheckingLevel] = useState(false);
+  const inFlight = useRef<number | null>(null);
+  const activeRequest = useRef<AbortController | null>(null);
   const generation = useRef(0);
   const levelProfileRef = useRef<UserProfileType | null>(null);
   useEffect(() => {
     generation.current += 1;
-    setPrompt(null); setProfile(null); setOnboardingOpen(false);
-    return () => { generation.current += 1; };
+    activeRequest.current?.abort(); inFlight.current = null;
+    setCheckingLevel(false); setPrompt(null); setProfile(null); setOnboardingOpen(false);
+    return () => { generation.current += 1; activeRequest.current?.abort(); inFlight.current = null; };
   }, [targetKey]);
 
   const checkLevel = useCallback(async (event: unknown, expectedClientId?: string | null) => {
     levelProfileRef.current = null;
     if (!hasLevelRestriction(event)) return true;
-    if (inFlight.current) return false;
-    inFlight.current = true;
+    if (inFlight.current !== null) return false;
     const started = generation.current;
+    inFlight.current = started;
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    setCheckingLevel(true);
     const token = readAuthToken();
     try {
-      const result = await apiFetchProfile();
+      const result = await apiFetchProfile(controller.signal);
       if (started !== generation.current || token !== readAuthToken()) return false;
       const current = result.data;
       if (result.error || !current || (expectedClientId && current.id !== expectedClientId)
@@ -46,10 +52,21 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
     } catch {
       if (started === generation.current) setPrompt("unavailable");
       return false;
-    } finally { inFlight.current = false; }
+    } finally {
+      if (inFlight.current === started) {
+        inFlight.current = null; activeRequest.current = null; setCheckingLevel(false);
+      }
+    }
   }, []);
 
-  const levelOnboardingDialog = onboardingOpen && profile ? (
+  const levelOnboardingDialog = checkingLevel ? (
+    <Modal isOpen title="Проверяем уровень" onClose={() => {
+      generation.current += 1; activeRequest.current?.abort(); inFlight.current = null;
+      setCheckingLevel(false);
+    }}>
+      <div className="onboarding-body"><p className="onboarding-text" role="status">Проверяем ваш уровень перед записью…</p></div>
+    </Modal>
+  ) : onboardingOpen && profile ? (
     <OnboardingModal isOpen returnToEvent onClose={() => setOnboardingOpen(false)} profile={profile}
       gamesLink="#" trainingLink="#" tournamentsLink="#"
       onProfileUpdated={detail => {
