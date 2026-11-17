@@ -1,0 +1,34 @@
+{
+  "slug": "pade_prime",
+  "displayName": "Падел Прайм",
+  "sourceVivaTenant": "iSkq6G",
+  "vivaTenant": "Dvjlor",
+  "pathPrefix": "/pade-prime",
+  "collectionPrefix": "pp_",
+  "timezone": {
+    "sourceOffset": "+03:00",
+    "offset": "+07:00",
+    "sourceIana": "Europe/Moscow",
+    "iana": "Asia/Krasnoyarsk"
+  },
+  "tabs": [
+    "LK Games",
+    "LK Composite game_create2",
+    "LK Communities"
+  ],
+  "reuseConfigNodeIds": [
+    "4e820638cc39c730"
+  ],
+  "dropHttpIn": [
+    "^/lk/subscriptions",
+    "^/lk/subscription-bookings",
+    "^/lk/trial-group",
+    "/split/",
+    "^/lk/internal/staff"
+  ],
+  "globalKeyMap": {},
+  "vivaIds": {
+    "4588": null,
+    "1613": null
+  }
+}
