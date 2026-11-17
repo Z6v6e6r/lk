@@ -100,6 +100,76 @@ outgoing graph требует inverse с новым source SHA и worker binding
 
 ## Защищённое native-применение
 
+Перед flow-фазами адаптер устанавливается отдельным install-only custodian
+`support_photos_adapter_custody.mjs`. Он сохраняет два закрытых raw preimage
+чужого истёкшего lease (вторая копия находится вне userDir) и, по согласованному
+loan, атомарно занимает его собственным persistent v4 `support-media-adapter-install`.
+У этого lease нет TTL release. Оператор держит четыре mutex и предоставляет
+закреплённые reader-функции для identity, inventory, registry и завершения installer;
+сам filesystem-controller npm, HTTP, очереди и сервисы не вызывает.
+
+Одноразовый `support_photos_adapter_upload_guard.mjs` пропускает только исходный
+palette XHR `POST /nodes` с единственным `tarball` и точными name/size/SHA.
+Native auth и multipart body сохраняются. Root attempt записывается до arming;
+Web Lock и общий origin storage запрещают повтор между вкладками и после reload.
+Неизвестный результат не разрешает повтор. Временная
+project `.npmrc` содержит только offline=true и private cache. Её inode закреплён
+до exclusive hard-link publication; удаление допускается только для собственного
+inode после terminal proof либо quiescent cancellation до forwarding.
+
+Успех требует HTTP200, завершившихся installer descendants, точных package/lock/
+registry/module postimages и прежнего runtime/flow. Callback `readPostimage`
+обязан проверять эти факты, включая отсутствие кода optional peers; один npm PID
+или пустой spinner этого не доказывает. После проверки и снятия собственной policy
+custodian возвращает исходные lease bytes с fsync и повторяемым handback.
+Unknown POST, незавершённая registration или failed postcheck сохраняют custody.
+Такая установка не является flow-deploy, запуском worker или CUTOVER ЦУП.
+
+Actual host bindings находятся в `support_photos_adapter_host.mjs`, one-command
+entry — `support_photos_adapter_operator.mjs`, persistent four-flock holder —
+`support_photos_adapter_holder.py`. Holder наследует descriptors в Node child;
+проверка требует root parent epoch, named/FD inode, kernel `FLOCK` в fdinfo и
+отказ fresh-open contender для каждого из четырёх mutex. Смерть одного процесса
+не снимает OFD другого; после гибели обоих сохраняется non-expiring v4 loan.
+Обычный EOF, signal или ошибка не являются командой освобождения.
+
+Root-only immutable host config закрепляет identity процессов Node-RED/ЦУП/
+receiver, flow/settings/credentials/runtime config и owning installer/loader/
+storage/hooks source. Values env/auth не выводятся: проверяются отсутствие npm
+override, root HOME, разрешённые через inherited PATH `node`/`npm` и их hashes.
+Ожидаемые package/lock и полные module inventories берутся из isolated native-path
+rehearsal. Допустимы только восемь опубликованных adapter files и inner lock;
+остальные files/symlinks, registry entries и protected invariants сохраняются.
+
+Terminal proof — bound original upload HTTP200, отсутствие любых Node-RED
+descendants, свежий clean-editor GET `/flows` и GET `/nodes` с точным
+`Accept: application/json`, ровно один ожидаемый node set, version1.1.0 и все
+три types; свойства `err` и `pending_version` должны **отсутствовать**. Штатный
+API не возвращает `loaded`: результат называется `nativeRegistryVerified`,
+а не наблюдённым `loaded:true`. После exact postimage operator отдельно fsync
+все известные installer outputs и их каталоги и повторяет проверки.
+
+Install-hook оценка остаётся source-based: reviewed public source, settings и
+current flow не должны содержать необъяснённой install-hook registration или
+startup/module code. Это trusted-host предпосылка; её нельзя представлять как
+наблюдённый пустой live hooks registry. Unknown terminal result не заменяется
+отсутствием npm по имени или исчезнувшим spinner.
+
+IPC использует root0700 `requests`/`responses`, bounded0600 files, монотонные
+восемь цифр и durable consumed intent до запуска. Auth/native graph остаются
+в редакторе; наружу передаются только закрытые digest/boolean/count metadata.
+Explicit `close` выполняет **новый** полный idempotent handback, затем holder
+сам сверяет dual plan/completion, exact predecessor и отсутствие policy.
+Каждая команда close получает отдельный immutable derived request.
+
+После гибели holder recovery требует SHA последнего holder receipt, отсутствие
+его прежнего epoch, повторный захват четырёх mutex и exact config/source/dual
+plan/loan pins. Старые consumed и unconsumed requests сохраняются и пропускаются.
+Recovery разрешает только inspect/confirm/cancel/removePolicy/handback/close;
+prepare/reserve/publishPolicy/begin запрещены. Неизвестный POST не повторяется.
+Live source drift, чужой lease, живой старый holder или отсутствующие receipts
+останавливают recovery с сохранением данных.
+
 Фото используют отдельную семью `nodered_support_photos_release.mjs` и
 `nodered_reviewed_flow_deploy/support_photos_*.mjs`. Старые MAX 4+2/8+4 contracts
 не расширяются. Чистый builder выводит все фазы из одного защищённого active
