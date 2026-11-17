@@ -2239,6 +2239,24 @@ export async function apiFetchTournamentLevelDecision(
   return { ...result, data: normalizeTournamentLevelDecision(result.data) };
 }
 
+/** CUP server-owned booking; the key is reused for retries of the same attempt. */
+export async function apiCreateTournamentServerBooking(
+  tournamentId: string,
+  idempotencyKey: string,
+): Promise<ApiResult<unknown>> {
+  return request<unknown>(
+    `/tournaments/${encodeURIComponent(tournamentId)}/server-booking`,
+    {
+      ...buildTournamentApiRequestOptions({ allowFallback: false }),
+      method: "POST",
+      auth: true,
+      headers: { ...phabHeaders(), "Idempotency-Key": idempotencyKey },
+      retries: 0,
+      cache: "no-store",
+    },
+  );
+}
+
 export async function apiFetchTournamentMyRegistration(
   tournamentId: string,
 ): Promise<ApiResult<TournamentRegistrationState>> {

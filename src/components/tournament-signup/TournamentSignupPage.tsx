@@ -33,9 +33,16 @@ import {
   type TournamentLevelGateState,
 } from "../../utils/tournamentLevelDecision";
 import {
+  createTournamentServerBookingKey,
+  resolveTournamentServerBookingOutcome,
+  shouldUseTournamentServerBooking,
+} from "../../utils/tournamentServerBooking";
+import { TOURNAMENT_SERVER_BOOKING_ENABLED } from "../../consts/api_config";
+import {
   apiCancelTournamentVivaRegistration,
   apiCreateTournamentVivaTransaction,
   apiFetchTournamentLevelDecision,
+  apiCreateTournamentServerBooking,
   apiFetchTournamentMyRegistration,
   apiFetchTournamentSignupDetail,
   apiFetchTournamentSignupList,
@@ -1013,6 +1020,8 @@ export default function TournamentSignupPage({
   const [registration, setRegistration] = useState<TournamentRegistrationState | null>(null);
   // CUP level decision for the selected tournament; LK1 renders it and never recomputes admission.
   const [levelGate, setLevelGate] = useState<TournamentLevelGateState>({ kind: "OPEN", decision: null });
+  // One idempotency key per tournament attempt, reused when the player retries.
+  const serverBookingKeysRef = useRef(new Map<string, string>());
   const [registrationSessionIdentity, setRegistrationSessionIdentity] = useState<string | null>(null);
   const [loadingList, setLoadingList] = useState(false);
   const [deepLinkLookupPending, setDeepLinkLookupPending] = useState(false);
@@ -1561,6 +1570,56 @@ export default function TournamentSignupPage({
       return;
     }
     try {
+      if (shouldUseTournamentServerBooking({
+        enabled: TOURNAMENT_SERVER_BOOKING_ENABLED,
+        gate: freshLevelGate,
+        productSource: product.source,
+      })) {
+        // CUP checks the level again, books in Viva and issues the payment; LK1 does not write to Viva.
+        const key = serverBookingKeysRef.current.get(selectedId) ?? createTournamentServerBookingKey();
+        serverBookingKeysRef.current.set(selectedId, key);
+        const serverResult = await apiCreateTournamentServerBooking(selectedId, key);
+        if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
+        const outcome = resolveTournamentServerBookingOutcome(serverResult);
+        if (outcome.kind === "REFUSED") {
+          serverBookingKeysRef.current.delete(selectedId);
+          setLevelGate(outcome.gate);
+          setCheckout(null);
+          setError(outcome.message);
+          return;
+        }
+        if (outcome.kind === "PAY") {
+          const serverRegistration: TournamentRegistrationState = {
+            status: "PAYMENT_PENDING",
+            bookingId: outcome.bookingId ?? undefined,
+            placeNumber: null,
+            waitlistNumber: null,
+            canRegister: false,
+            canCancel: true,
+            message: "Запись создана, ожидается оплата.",
+            paymentUrl: outcome.paymentUrl,
+            paymentExpiresAt: new Date(Date.now() + PAYMENT_HOLD_MS).toISOString(),
+          };
+          await storeTournamentPendingPayment(paymentToken, selectedExerciseId, serverRegistration);
+          if (tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
+          setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(paymentToken));
+          setRegistration(serverRegistration);
+          if (!canPayTournamentPending(serverRegistration) || !navigateToExternalUrl(outcome.paymentUrl)) {
+            setError("Не удалось открыть страницу оплаты");
+          }
+          return;
+        }
+        if (outcome.kind === "CONFIRMED") {
+          serverBookingKeysRef.current.delete(selectedId);
+          setCheckout(null);
+          await loadPublicRoster(selectedExerciseId, { force: true });
+          await loadDetail(selectedId);
+          return;
+        }
+        if (outcome.kind === "FAILED" && outcome.retryWithNewKey) serverBookingKeysRef.current.delete(selectedId);
+        setError(outcome.message);
+        return;
+      }
       const result = await apiCreateTournamentVivaTransaction({
         exerciseId: selectedExerciseId,
         studioId: nextCheckout.studioId,
