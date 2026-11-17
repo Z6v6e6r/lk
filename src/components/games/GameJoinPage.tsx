@@ -1,3 +1,4 @@
+import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
 import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { createJoinSubscriptionPriceTarget } from "./subscriptionPricePreview";
 import { useSubscriptionPricePreview } from "./useSubscriptionPricePreview";
@@ -783,6 +784,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const rejectSubscriptionUsageShadowAction = subscriptionUsageShadow.reject;
   const decisionSubmissionInFlightRef = useRef(false);
   const subscriptionOptionsRequestRef = useRef(0);
+  const { checkLevel, levelOnboardingDialog, levelProfileRef } = useLevelOnboardingGate(gameId);
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [game, setGame] = useState<PadelGameRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1360,6 +1362,8 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         return;
       }
 
+      if (!await checkLevel(actualGame, profile.id)) { setSubmitting(null); return; }
+
       if (LEGACY_ROSTER_BRIDGE_ENABLED && !isSplitPaymentGame(actualGame)) {
         const currentParticipants = dedupePlayers(actualGame.participants ?? []);
         const maxPlayers = resolveMaxPlayers(actualGame);
@@ -1388,7 +1392,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         return;
       }
 
-      const myPlayer = buildMyPlayer(profile);
+      const myPlayer = buildMyPlayer(levelProfileRef.current ?? profile);
       let participants = dedupePlayers(actualGame.participants ?? []);
       let waitlist = dedupePlayers(actualGame.waitlist ?? []);
       const exerciseId = resolveGameExerciseId(actualGame);
@@ -1891,6 +1895,8 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       comment,
       game,
       preferredSplitPaymentMode,
+      checkLevel,
+      levelProfileRef,
       previewSubscriptionUsageShadow,
       profile,
       rejectSubscriptionUsageShadowAction,
@@ -2006,6 +2012,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
 
   return (
     <div className="app-container game-container game-join-container">
+      {levelOnboardingDialog}
       <div className="page-header">
         <button className="page-back" type="button" onClick={() => navigateBackFromGameJoin(cabinetUrl)}>
           {canReturnToGameAtlas() ? "Назад к играм" : "В личный кабинет"}

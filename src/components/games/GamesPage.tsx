@@ -1,3 +1,4 @@
+import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
 import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
 import { mergeRosterMetadata } from "./rosterMetadata";
@@ -4953,6 +4954,7 @@ export default function GamesPage({
   const [chatReadMap, setChatReadMap] = useState<Record<string, number>>({});
   const [chatUnreadByGame, setChatUnreadByGame] = useState<Record<string, number>>({});
   const [gameRecordId, setGameRecordId] = useState<string | null>(null);
+  const { checkLevel, levelOnboardingDialog, levelProfileRef } = useLevelOnboardingGate(gameRecordId);
   const [gameRecordStatus, setGameRecordStatus] = useState<string | null>(null);
   const [gamePaymentUrl, setGamePaymentUrl] = useState<string | null>(null);
   const [gamePaid, setGamePaid] = useState<boolean | null>(null);
@@ -14396,6 +14398,9 @@ export default function GamesPage({
       return;
     }
 
+    if (!await checkLevel(activeGameRecord, profileId)) return;
+    const admittedLevel = levelProfileRef.current?.level;
+
     const booking = activeGameRecord.booking;
     const bookingDate = booking?.date?.trim() || "";
     const fromTime = booking?.timeFrom?.trim() || "";
@@ -14661,8 +14666,8 @@ export default function GamesPage({
         name: profileName || "Игрок",
         phone: pendingCurrentClientPhoneNorm ?? pendingCurrentClientPhone,
         photo: profilePhoto ?? null,
-        rating: profileGrade ?? null,
-        ratingNumeric: profileRatingNumeric ?? null,
+        rating: admittedLevel?.rating ?? profileGrade ?? null,
+        ratingNumeric: admittedLevel?.ratingNumeric ?? profileRatingNumeric ?? null,
         source: "INVITE_LINK",
         status: "PENDING",
       };
@@ -14791,8 +14796,8 @@ export default function GamesPage({
           name: profileName || "Игрок",
           phone: currentClientPhoneNorm ?? currentClientPhone,
           photo: profilePhoto ?? null,
-          rating: profileGrade ?? null,
-          ratingNumeric: profileRatingNumeric ?? null,
+          rating: admittedLevel?.rating ?? profileGrade ?? null,
+          ratingNumeric: admittedLevel?.ratingNumeric ?? profileRatingNumeric ?? null,
           source: "INVITE_LINK",
           status: shouldJoinAsConfirmed ? "CONFIRMED" : "WAITLIST",
         };
@@ -14938,6 +14943,8 @@ export default function GamesPage({
       }
     }
   }, [
+    checkLevel,
+    levelProfileRef,
     detailsJoinPricePreview.bySubscriptionId,
     canCurrentUserJoinSplitGameInDetails,
     gameRecordId,
@@ -14974,7 +14981,7 @@ export default function GamesPage({
       await previewSubscriptionUsageShadow(subscriptionUsageShadowJoinPreview);
       return;
     }
-    if (!canCurrentUserJoinGameInDetails || !gameRecordId) return;
+    if (!canCurrentUserJoinGameInDetails || !gameRecordId || !activeGameRecord) return;
 
     const normalizedProfileId = (profileId || "").trim() || null;
     const normalizedPhone = profilePhoneNorm ?? normalizePhoneForGame(profilePhone);
@@ -14987,6 +14994,9 @@ export default function GamesPage({
       setGameRosterError("Свободных мест нет, лист ожидания закрыт.");
       return;
     }
+
+    if (!await checkLevel(activeGameRecord, profileId)) return;
+    const admittedLevel = levelProfileRef.current?.level;
 
     if (LEGACY_ROSTER_BRIDGE_ENABLED) {
       setUpdatingGameRoster(true);
@@ -15031,8 +15041,8 @@ export default function GamesPage({
       name: profileName || "Игрок",
       phone: normalizedPhone,
       photo: profilePhoto ?? null,
-      rating: profileGrade ?? null,
-      ratingNumeric: profileRatingNumeric ?? null,
+      rating: admittedLevel?.rating ?? profileGrade ?? null,
+      ratingNumeric: admittedLevel?.ratingNumeric ?? profileRatingNumeric ?? null,
       source: "INVITE_LINK",
       status: detailsHasFreeSlots ? "CONFIRMED" : "WAITLIST",
     };
@@ -15072,6 +15082,9 @@ export default function GamesPage({
         : "Не удалось добавиться в лист ожидания",
     });
   }, [
+    checkLevel,
+    levelProfileRef,
+    activeGameRecord,
     canCurrentUserJoinGameInDetails,
     gameRecordId,
     profileId,
@@ -16791,6 +16804,7 @@ export default function GamesPage({
 
     return (
       <div className="app-container game-container">
+        {levelOnboardingDialog}
         <div className="page-header">
           <button data-lk-leave-action="GAME_BACK" className="page-back" onClick={onBack} type="button">
             ← Назад
