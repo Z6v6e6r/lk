@@ -27,8 +27,15 @@ import {
 } from "../../utils/apiClient";
 import { getLetterGrade, normalizeLevelGradeLabel } from "../../utils/customFields";
 import {
+  describeTournamentLevelGate,
+  resolveTournamentLevelGate,
+  tournamentLevelLabelFromDecision,
+  type TournamentLevelGateState,
+} from "../../utils/tournamentLevelDecision";
+import {
   apiCancelTournamentVivaRegistration,
   apiCreateTournamentVivaTransaction,
+  apiFetchTournamentLevelDecision,
   apiFetchTournamentMyRegistration,
   apiFetchTournamentSignupDetail,
   apiFetchTournamentSignupList,
@@ -1004,6 +1011,8 @@ export default function TournamentSignupPage({
   const [selectedId, setSelectedId] = useState<string | null>(targetTournamentId);
   const [detail, setDetail] = useState<TournamentSignupDetail | null>(null);
   const [registration, setRegistration] = useState<TournamentRegistrationState | null>(null);
+  // CUP level decision for the selected tournament; LK1 renders it and never recomputes admission.
+  const [levelGate, setLevelGate] = useState<TournamentLevelGateState>({ kind: "OPEN", decision: null });
   const [registrationSessionIdentity, setRegistrationSessionIdentity] = useState<string | null>(null);
   const [loadingList, setLoadingList] = useState(false);
   const [deepLinkLookupPending, setDeepLinkLookupPending] = useState(false);
@@ -1277,12 +1286,14 @@ export default function TournamentSignupPage({
         publicRosterDetailAbortRef.current = null;
       }
     });
-    const [registrationResult, vivaRegistrationResult] = isAuthenticated && !subscriptionUsageShadowEnabled
+    setLevelGate({ kind: "OPEN", decision: null });
+    const [registrationResult, vivaRegistrationResult, levelDecisionResult] = isAuthenticated && !subscriptionUsageShadowEnabled
       ? await Promise.all([
           apiFetchTournamentMyRegistration(tournamentId),
           apiFetchTournamentVivaMyRegistration(exerciseId),
+          apiFetchTournamentLevelDecision(tournamentId),
         ])
-      : [null, null];
+      : [null, null, null];
 
     if (detailResult.error) {
       setError(detailResult.error.message || "Не удалось открыть турнир");
@@ -1300,6 +1311,14 @@ export default function TournamentSignupPage({
     }
     setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(requestToken));
     setRegistration(resolvedRegistration);
+    if (levelDecisionResult) {
+      setLevelGate(resolveTournamentLevelGate({
+        decision: levelDecisionResult.data ?? null,
+        requestFailed: Boolean(levelDecisionResult.error) || !levelDecisionResult.data,
+        notFound: levelDecisionResult.status === 404,
+        levelRestrictedHint: Boolean(detailResult.data?.levelLabel || items.find((item) => item.id === tournamentId)?.levelLabel),
+      }));
+    }
     setRegistrationResolvedFor(`${tournamentId}:${exerciseId}`);
     setLoadingDetail(false);
   }, [isAuthenticated, items, loadPublicRoster, subscriptionUsageShadowEnabled]);
@@ -1524,6 +1543,23 @@ export default function TournamentSignupPage({
     setError(null);
     setSubscriptionConfirmationNotice(null);
     setConfirmingSubscriptionProductKey(subscriptionProductKey);
+    // Fresh server level decision immediately before any Viva write. CUP decides; LK1 only stops
+    // here so a refused player is never sent to payment. This is not a server-side guarantee.
+    const freshLevelDecision = await apiFetchTournamentLevelDecision(selectedId);
+    const freshLevelGate = resolveTournamentLevelGate({
+      decision: freshLevelDecision.data ?? null,
+      requestFailed: Boolean(freshLevelDecision.error) || !freshLevelDecision.data,
+      notFound: freshLevelDecision.status === 404,
+      levelRestrictedHint: Boolean(detail?.levelLabel || selectedTournament?.levelLabel),
+    });
+    if (freshLevelGate.kind === "BLOCKED") {
+      setLevelGate(freshLevelGate);
+      setCheckout(null);
+      setError(describeTournamentLevelGate(freshLevelGate)?.statusLine ?? "Запись на этот турнир сейчас недоступна.");
+      setConfirmingSubscriptionProductKey(null);
+      setActionLoading(false);
+      return;
+    }
     try {
       const result = await apiCreateTournamentVivaTransaction({
         exerciseId: selectedExerciseId,
@@ -1767,7 +1803,12 @@ export default function TournamentSignupPage({
     && registrationSessionIdentity === tournamentPaymentSessionIdentity(readAuthToken()) && canPayTournamentPending(registration);
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const canRegister = !subscriptionConfirmationNotice
-    && canOfferTournamentRegistration(detail?.status, registration);
+    && canOfferTournamentRegistration(detail?.status, registration)
+    && levelGate.kind !== "BLOCKED";
+  const levelNotice = !registration || registration.status === "NONE"
+    ? describeTournamentLevelGate(levelGate)
+    : null;
+  const serverLevelLabel = tournamentLevelLabelFromDecision(levelGate.decision);
   const detailDateParts = getDateParts(selectedTournament?.date ?? null);
   const detailStartTime = formatClock(selectedTournament?.startsAt ?? null);
   const detailEndTime = formatClock(selectedTournament?.endsAt ?? null);
@@ -2264,6 +2305,16 @@ export default function TournamentSignupPage({
                         </button>
                       </div>
                     )}
+                    {!subscriptionUsageShadowEnabled && levelNotice && (
+                      <div
+                        className={`tournament-signup-level-notice tournament-signup-level-notice-${levelNotice.tone}`}
+                        role={levelNotice.tone === "error" || levelNotice.tone === "warning" ? "alert" : "status"}
+                      >
+                        {levelNotice.rangeLine && <p>{levelNotice.rangeLine}</p>}
+                        {levelNotice.toleranceLine && <p>{levelNotice.toleranceLine}</p>}
+                        {levelNotice.statusLine && <p><strong>{levelNotice.statusLine}</strong></p>}
+                      </div>
+                    )}
                     {!subscriptionUsageShadowEnabled && canRegister && (
                       <div className="tournament-signup-auth">
                         <div className="tournament-signup-auth-head">
@@ -2463,7 +2514,9 @@ export default function TournamentSignupPage({
                     )}
                     {selectedTournament.address && <div><span>Адрес</span><strong>{selectedTournament.address}</strong></div>}
                     {selectedTournament.format && <div><span>Формат</span><strong>{selectedTournament.format}</strong></div>}
-                    {selectedTournament.levelLabel && <div><span>Уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
+                    {(serverLevelLabel || selectedTournament.levelLabel) && (
+                      <div><span>Уровень</span><strong>{serverLevelLabel || selectedTournament.levelLabel}</strong></div>
+                    )}
                     {selectedTournament.priceLabel && <div><span>Стоимость</span><strong>{selectedTournament.priceLabel}</strong></div>}
                   </div>
                   {detail?.description && <p className="tournament-signup-copy">{detail.description}</p>}

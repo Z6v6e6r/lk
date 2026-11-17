@@ -306,6 +306,41 @@
   padding: 16px;
 }
 
+.tournament-signup-level-notice {
+  border: 1px solid #e3e3de;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  background: #fff;
+  color: #1f1f1c;
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.tournament-signup-level-notice p {
+  margin: 0;
+}
+
+.tournament-signup-level-notice p + p {
+  margin-top: 4px;
+}
+
+.tournament-signup-level-notice-ok {
+  border-color: #b7dcc0;
+  background: #f1f9f3;
+}
+
+.tournament-signup-level-notice-warning {
+  border-color: #ecd28f;
+  background: #fdf8ea;
+}
+
+.tournament-signup-level-notice-error {
+  border-color: #e7b3ad;
+  background: #fdf1f0;
+}
+
 .tournament-signup-detail > .tournament-signup-auth > .auth-wrapper {
   min-height: 0;
   padding: 0;

@@ -1,4 +1,5 @@
 import { isSpanishTrainingExercise } from "./spanishTrainingExclusion";
+import { normalizeTournamentLevelDecision, type TournamentLevelDecision } from "./tournamentLevelDecision";
 import {
   API_BASE,
   PHAB_API_BASE,
@@ -2215,6 +2216,27 @@ export async function apiFetchTournamentSignupDetail(
     ...result,
     data: normalizeTournamentDetail(result.data),
   };
+}
+
+/**
+ * Server (CUP) level decision for the signed-in player. LK1 never computes admission itself; it
+ * renders this decision and stops before checkout when an enforced decision refuses.
+ */
+export async function apiFetchTournamentLevelDecision(
+  tournamentId: string,
+): Promise<ApiResult<TournamentLevelDecision>> {
+  const result = await request<unknown>(
+    `/tournaments/${encodeURIComponent(tournamentId)}/level-decision`,
+    {
+      ...buildTournamentApiRequestOptions({ allowFallback: false }),
+      method: "GET",
+      auth: true,
+      headers: phabHeaders(),
+      retries: 1,
+      cache: "no-store",
+    },
+  );
+  return { ...result, data: normalizeTournamentLevelDecision(result.data) };
 }
 
 export async function apiFetchTournamentMyRegistration(
