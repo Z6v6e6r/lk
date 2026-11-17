@@ -6,6 +6,7 @@ import * as contract from '../lib/splitBookingPaymentAttempt.mjs';
 import * as nativePaymentContract from '../lib/bookingPaymentAttempt.mjs';
 import { createBookingPaymentCancellationProtocol } from '../lib/bookingPaymentCancellation.mjs';
 import { fixture as cancellationProtocolFixture, at as cancellationAt, cfg as cancellationConfig } from './fixtures/bookingPaymentCancellationFixtures.mjs';
+import { hasDeterministicSubscriptionDecision } from '../../src/utils/subscriptionDecisionContract.ts';
 
 const now = Date.parse('2026-11-20T10:00:00.000Z');
 const source = name => fs.readFileSync(new URL('../nodered_games_nodes/fn_split_' + name + '.js', import.meta.url), 'utf8');
@@ -741,4 +742,113 @@ test('actual cancellation controller descriptor drives native early canonical fi
   assert.equal(fields['metadata.splitPayment.payments'][0].status, 'EXPIRED');
   assert.equal(fields['metadata.splitPayment.payments'][0].nativePaymentAttemptClosure.operationKey, op._id);
   assert.deepEqual(plain(fields.waitlist), []);
+});
+
+// Review fixes: pre-write head release, clean native refusal, replay contract, earliest deadline.
+const joinKey = () => contract.splitAttemptHeadKey({ action: 'join', exerciseId: 'exercise' }, 'actor');
+function ownedPrewriteCtx(extra = {}) {
+  const key = joinKey();
+  return { action: 'join', step: 'managed_create_preflight_complete', paymentMode: 'one_time',
+    operationId: 'ordinary-fixture', trustedPaymentActor: 'actor', ordinaryHeadKey: key, ordinaryHeadOwned: true,
+    ordinaryHead: { _id: key, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', actorClientId: 'actor', tenantKey: 'iSkq6G',
+      operationId: 'ordinary-fixture', rootOperationId: 'ordinary-fixture', generation: 0, phase: 'UPSTREAM_INTENT',
+      createdAt: '2026-11-20T09:59:00.000Z', updatedAt: '2026-11-20T09:59:00.000Z' }, ...extra };
+}
+test('a refusal before any provider write durably releases only its own UPSTREAM_INTENT head, then answers', () => {
+  const ctx = ownedPrewriteCtx();
+  let r = run('router', { _splitCtx: ctx, payload: null, statusCode: 200 });
+  assert.ok(r.out[6]); assert.ok(!r.out[0]); assert.ok(!r.out[1]);
+  const [filter, update, options] = plain(r.msg.payload);
+  assert.deepEqual(filter, { _id: ctx.ordinaryHeadKey, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', actorClientId: 'actor',
+    tenantKey: 'iSkq6G', operationId: 'ordinary-fixture', generation: 0, phase: 'UPSTREAM_INTENT', payment: { $exists: false } });
+  assert.equal(update.$set.phase, 'PREWRITE_FAILED');
+  assert.equal(update.$set.prewriteFailure.code, 'MANAGED_SUBSCRIPTION_PREFLIGHT_CONTEXT_INVALID');
+  assert.deepEqual(options.writeConcern, { w: 'majority', j: true });
+  for (const ack of [{ acknowledged: true, matchedCount: 1, modifiedCount: 1 }, null]) {
+    const c = plain(ctx);
+    r = run('router', { _splitCtx: c, payload: ack, error: ack ? undefined : 'lost', statusCode: 200 });
+    assert.equal(r.msg.statusCode, 409, 'original refusal is returned whatever the ACK');
+    assert.equal(r.msg.payload.details.code, 'MANAGED_SUBSCRIPTION_PREFLIGHT_CONTEXT_INVALID'); assert.ok(!r.out[6]);
+  }
+});
+test('a request that dispatched any provider write, or does not own the head, never releases it', () => {
+  for (const extra of [{ ordinaryProviderWriteAt: '2026-11-20T09:59:30.000Z' }, { ordinaryHeadOwned: false },
+    { operationId: 'other-operation' }]) {
+    const r = run('router', { _splitCtx: ownedPrewriteCtx(extra), payload: null, statusCode: 200 });
+    assert.equal(r.msg.statusCode, 409); assert.ok(!r.out[6]);
+  }
+  // The request builder sets the provider write marker for every non-GET call.
+  const source = fs.readFileSync(new URL('../nodered_games_nodes/fn_split_router.js', import.meta.url), 'utf8');
+  assert.match(source, /if \(method !== "GET" && ctx && !ctx\.ordinaryProviderWriteAt\) ctx\.ordinaryProviderWriteAt = /);
+});
+test('a PREWRITE_FAILED head is reclaimed by exact CAS, even by the refused operation identity', () => {
+  const key = joinKey();
+  const previous = { _id: key, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', tenantKey: 'iSkq6G', actorClientId: 'actor',
+    phase: 'PREWRITE_FAILED', operationId: 'ordinary-fixture', rootOperationId: 'ordinary-fixture', generation: 0,
+    prewriteFailure: { statusCode: 503, code: null, failedAt: '2026-11-20T09:59:01.000Z' } };
+  const ctx = { action: 'join', exerciseId: 'exercise', step: 'ordinary_attempt_head_found', paymentMode: 'one_time',
+    operationId: 'ordinary-fixture', trustedPaymentActor: 'actor', ordinaryHeadKey: key };
+  let r = run('router', { _splitCtx: ctx, payload: [previous], statusCode: 200 });
+  assert.ok(r.out[6]); assert.deepEqual(plain(r.msg.payload[0].$expr.$eq[1].$literal), previous);
+  assert.equal(r.msg.payload[1].$set.phase, 'UPSTREAM_INTENT'); assert.equal(r.msg.payload[1].$set.generation, 1);
+  assert.equal(r.msg.payload[1].$unset.prewriteFailure, '');
+  assert.equal(r.msg.payload[1].$push.history.prewriteFailure.statusCode, 503);
+  for (const forged of [{ ...previous, payment: { bookingId: 'booking' } }, { ...previous, closure: {} }, { ...previous, generation: 999 }]) {
+    r = run('router', { _splitCtx: { ...ctx, step: 'ordinary_attempt_head_found' }, payload: [forged], statusCode: 200 });
+    assert.equal(r.msg.statusCode, 202); assert.ok(!r.out[6]);
+  }
+});
+test('a native subscription owner refused by an explicit provider 4xx permits only the guarded one-time transfer', () => {
+  const key = joinKey();
+  const head = { _id: key, kind: 'BOOKING_PAYMENT_HEAD_V1', actorClientId: 'actor', tenantKey: 'iSkq6G',
+    ownerOperationKey: 'native-key', ownerOperationId: 'native-operation' };
+  const owner = { _id: 'native-key', operationId: 'native-operation', actorClientId: 'actor', tenantKey: 'iSkq6G',
+    exerciseId: 'exercise', state: 'FAILED', attempts: 1, upstreamAttemptedAt: '2026-11-20T09:58:00Z',
+    failedAt: '2026-11-20T09:58:01Z', failure: { statusCode: 422 } };
+  const ctx = () => ({ action: 'join', exerciseId: 'exercise', step: 'ordinary_attempt_native_owner_found',
+    paymentMode: 'one_time', operationId: 'fresh-one-time', trustedPaymentActor: 'actor', ordinaryHeadKey: key, ordinaryNativeHead: head });
+  const notReleased = { nativeReleased: () => false };
+  let r = run('router', { _splitCtx: ctx(), payload: [owner], statusCode: 200 }, now, notReleased);
+  assert.ok(r.out[6]); assert.deepEqual(plain(r.msg.payload[0].$expr.$eq[1].$literal), head);
+  for (const unsafe of [{ failure: { statusCode: 503 } }, { failure: null }, { bookingId: 'booking' }, { upstreamBookingId: 'b' },
+    { acceptedAt: 'x' }, { lk1: { transactionId: 'transaction' } }, { lk1: { checkout: {} } }, { lk1: { bookingAttemptedAt: 'x' } },
+    { attempts: 5 }, { failedAt: null }, { state: 'CONFIRMED' }]) {
+    r = run('router', { _splitCtx: ctx(), payload: [{ ...owner, ...unsafe }], statusCode: 200 }, now, notReleased);
+    assert.equal(r.msg.statusCode, 202, JSON.stringify(unsafe)); assert.ok(!r.out[6]);
+  }
+});
+test('replayed checkout and verified PAID results satisfy the client decision validator', () => {
+  const toClient = raw => ({ selectedPaymentMode: raw.selectedPaymentMode, toPayMinor: raw.toPayMinor, toPay: raw.toPayMinor / 100,
+    paymentRef: raw.paymentRef, operationId: raw.operationId, transactionId: raw.transactionId, exerciseId: raw.exerciseId,
+    gameId: raw.gameId, bookingId: raw.bookingId, paymentUrl: raw.paymentUrl, settlementState: raw.settlementState, raw });
+  const expectedJoin = { action: 'join', paymentRef: 'pay-fixture', operationId: 'ordinary-fixture', gameId: 'game' };
+  const open = fixture();
+  const resumeCtx = f => ({ action: 'join', step: 'ordinary_attempt_transaction', paymentMode: 'one_time', trustedPaymentActor: 'actor',
+    exerciseId: 'exercise', gameId: 'game', ordinaryResumePayment: f.payment, ordinaryResumeBooking: f.booking });
+  const ctx = resumeCtx(open);
+  run('router', { _splitCtx: ctx, payload: open.transaction, statusCode: 200 });
+  const replay = plain(ctx.ordinaryResponse);
+  assert.equal(replay.settlementState, 'PAYMENT_REQUIRED'); assert.equal(replay.mode, 'join');
+  assert.equal(replay.selectedPaymentMode, 'one_time');
+  assert.equal(hasDeterministicSubscriptionDecision(toClient(replay), 'one_time', expectedJoin), true);
+  assert.equal(hasDeterministicSubscriptionDecision(toClient({ ...replay, mode: undefined }), 'one_time', expectedJoin), false,
+    'the previous replay shape is the rejected RESPONSE_CONTRACT_INVALID case');
+  const paid = fixture(); paid.transaction.status = 'PAID';
+  const r = run('router', { _splitCtx: resumeCtx(paid), payload: paid.transaction, statusCode: 200 });
+  assert.equal(r.msg.payload.paymentAttemptState, 'PAID');
+  assert.equal(hasDeterministicSubscriptionDecision(toClient(plain(r.msg.payload)), 'one_time', expectedJoin), true);
+});
+test('the earliest verified deadline wins: transaction readback and persisted expiry only shorten the window', () => {
+  const created = '2026-11-20T09:50:00Z';
+  assert.equal(contract.splitAttemptWindow(null, { createDate: created }, undefined,
+    { createDate: created, paymentDueDate: '2026-11-20T09:55:00Z' }).expiresAt, '2026-11-20T09:55:00.000Z');
+  assert.equal(contract.splitAttemptWindow(null, { createDate: created, paymentDueDate: '2026-11-20T09:57:00Z' }, undefined,
+    { paymentDueDate: '2026-11-20T10:30:00Z' }).expiresAt, '2026-11-20T09:57:00.000Z');
+  const f = fixture();
+  f.payment.expiresAt = '2026-11-20T09:55:00Z'; f.payment.deadlineAt = '2026-11-20T09:55:00Z';
+  delete f.transaction.paymentDueDate;
+  assert.equal(contract.splitAttemptWindow(f.payment, f.transaction).expiresAt, '2026-11-20T09:55:00.000Z');
+  const resumed = contract.splitAttemptResume(f.payment, f.transaction, f.booking, 'actor', 'exercise', now);
+  assert.equal(resumed.state, 'CLOSING', 'a readback without paymentDueDate cannot reopen an expired checkout');
+  assert.equal(resumed.window.expiresAt, '2026-11-20T09:55:00.000Z');
 });

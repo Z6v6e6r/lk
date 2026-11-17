@@ -4,16 +4,35 @@ export const SPLIT_PAYMENT_ATTEMPT_WINDOW_MS = 15 * 60_000;
 export const splitAttemptInstant = value => typeof value === 'string'
   && /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)
   && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
-export function splitAttemptWindow(payment, transaction, attemptedAt) {
+export function splitAttemptWindow(payment, transaction, attemptedAt, readback) {
   // A later provider alias/readback cannot restart a persisted attempt window.
-  const candidates = [transaction?.createDate, transaction?.createdAt,
+  const candidates = [transaction?.createDate, transaction?.createdAt, readback?.createDate, readback?.createdAt,
     payment?.paymentAttemptCreatedAt, payment?.createdAt, attemptedAt]
     .map(splitAttemptInstant).filter(value => value !== null);
   if (!candidates.length) return null;
   const created = Math.min(...candidates);
-  const due = splitAttemptInstant(transaction?.paymentDueDate);
+  // Every verified deadline can only shorten the window: a provider readback
+  // that omits paymentDueDate never reopens a persisted earlier expiry.
+  const dues = [transaction?.paymentDueDate, readback?.paymentDueDate,
+    payment?.paymentExpiresAt, payment?.deadlineAt, payment?.expiresAt]
+    .map(splitAttemptInstant).filter(value => value !== null);
   return { createdAt: new Date(created).toISOString(),
-    expiresAt: new Date(Math.min(created + SPLIT_PAYMENT_ATTEMPT_WINDOW_MS, due ?? Infinity)).toISOString() };
+    expiresAt: new Date(Math.min(created + SPLIT_PAYMENT_ATTEMPT_WINDOW_MS, ...dues)).toISOString() };
+}
+// Mirrors gateway lk1ReclaimableAttempt for a FAILED native owner: an explicit
+// provider 4xx before any booking, accepted write or money leg left nothing to close.
+export function splitAttemptNativeCleanRefusal(operation) {
+  const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const text = value => typeof value === 'string' && value.trim() ? value.trim()
+    : typeof value === 'number' && Number.isFinite(value) ? String(value) : null;
+  if (!record(operation) || operation.state !== 'FAILED' || (Number(operation.attempts) || 0) >= 5) return false;
+  const lk1 = record(operation.lk1) ? operation.lk1 : {};
+  if ([operation.bookingId, operation.upstreamBookingId, operation.acceptedAt, operation.correlationId,
+    lk1.createAttemptedAt, lk1.bookingAttemptedAt, lk1.transactionAttemptedAt, lk1.transactionId].some(text)
+    || [lk1.transactionIntent, lk1.checkout, lk1.visitJob].some(record)) return false;
+  const status = Number(operation.failure?.statusCode);
+  if (!record(operation.failure) || !Number.isInteger(status) || status < 400 || status >= 500) return false;
+  return Boolean(text(operation.upstreamAttemptedAt) && text(operation.failedAt));
 }
 export function splitAttemptTransaction(transaction, expected) {
   const tx = transaction;

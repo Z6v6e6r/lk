@@ -12,7 +12,7 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const targets = JSON.parse(read('./lib/bookingPaymentAttemptSourceEdits.json'));
 const ordinary = read('./lib/splitBookingPaymentAttempt.mjs').replace(/^export /gm, '');
 export const splitBookingPaymentAttemptSource = () => bookingPaymentAttemptSource() + 'const __splitBookingPaymentAttempt = (() => {\n'
-  + ordinary + '\nreturn {splitAttemptWindow,splitAttemptTransaction,splitAttemptResume,splitAttemptHeadKey,splitAttemptCloseIntent,splitAttemptHeadClosure};\n})();\n';
+  + ordinary + '\nreturn {splitAttemptWindow,splitAttemptTransaction,splitAttemptResume,splitAttemptHeadKey,splitAttemptCloseIntent,splitAttemptHeadClosure,splitAttemptNativeCleanRefusal};\n})();\n';
 export const PAYMENT_GRAPH_IDS = Object.freeze({
   router: '8f7bd5b482fe9763', cleanup: 'bcc3dccf8d64f9bb', ack: 'lk_split_cleanup_write_ack_20260826',
   routerFind: 'booking_payment_attempt_router_find_20261116', routerUpdate: 'booking_payment_attempt_router_update_20261116',

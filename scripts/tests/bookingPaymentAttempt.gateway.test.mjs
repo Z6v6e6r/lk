@@ -142,6 +142,25 @@ test('ordinary to native transfer requires both closed head and server-only rece
   const forged = run({ _subscriptionBooking: ctx, payload: [{ ...receipt, proposal: { ...proposal, amountMinor: 1 } }] });
   assert.equal(forged.msg.statusCode, 202); assert.equal(forged.output, 4);
 });
+test('subscription may take over an ordinary head refused before any provider write, by exact CAS', () => {
+  const { ctx, msg } = fixture(); ctx.lk1.paymentLifecycleVersion = 1;
+  helpers(msg).lk1ClaimPaymentHead(ctx);
+  const head = { _id: ctx.lk1PaymentHeadKey, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', tenantKey: ctx.tenantKey,
+    actorClientId: ctx.actorClientId, phase: 'PREWRITE_FAILED', operationId: 'ordinary-op', generation: 0,
+    prewriteFailure: { statusCode: 503, code: null, failedAt: '2099-01-01T12:00:00Z' } };
+  const transfer = run({ _subscriptionBooking: ctx, payload: [head] });
+  assert.equal(transfer.output, 3);
+  assert.deepEqual(transfer.msg.payload[0].$expr.$eq[1].$literal, head);
+  assert.equal(transfer.msg.payload[1].$set.kind, 'BOOKING_PAYMENT_HEAD_V1');
+  assert.equal(transfer.msg.payload[1].$set.ownerOperationId, ctx.operationId);
+  assert.equal(transfer.msg.payload[1].$unset.prewriteFailure, '');
+  assert.equal(transfer.msg.payload[1].$push.history.phase, 'PREWRITE_FAILED');
+  for (const forged of [{ ...head, payment: { bookingId: 'booking' } }, { ...head, closure: { receiptKey: 'x' } }]) {
+    ctx.step = 'lk1_payment_head_read';
+    const r = run({ _subscriptionBooking: ctx, payload: [forged] });
+    assert.equal(r.output, 4); assert.equal(r.msg.payload.details.code, 'PAYMENT_ATTEMPT_ACTIVE');
+  }
+});
 
 
 test('legacy event checkout without the managed cancellation contract does not advertise cancel support', () => {

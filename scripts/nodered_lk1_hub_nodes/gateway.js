@@ -1388,6 +1388,17 @@ if (ctx.step === 'lk1_payment_head_read') {
   if (!['BOOKING_PAYMENT_HEAD_V1', 'SPLIT_BOOKING_PAYMENT_HEAD_V1'].includes(head.kind)
     || head.tenantKey !== ctx.tenantKey || head.actorClientId !== ctx.actorClientId
     || head._id !== ctx.lk1PaymentHeadKey) return lk1Stop(ctx, 'PAYMENT_HEAD_BINDING_INVALID');
+  if (head.kind === 'SPLIT_BOOKING_PAYMENT_HEAD_V1' && head.phase === 'PREWRITE_FAILED') {
+    // The ordinary request was refused before any provider write: no booking or bill exists.
+    if (head.payment || head.closure || !Array.isArray(head.history || [])) return finishPending(ctx,
+      'Уже есть незавершённая попытка записи. Проверьте её оплату.', { code: 'PAYMENT_ATTEMPT_ACTIVE' });
+    const archived = { ...head }; delete archived.history;
+    return prepareMongoUpdate(ctx, 'lk1_payment_head_transferred', { _id: head._id,
+      $expr: { $eq: ['$$ROOT', { $literal: head }] } }, { $set: {
+        kind: 'BOOKING_PAYMENT_HEAD_V1', ownerOperationKey: ctx.operationKey, ownerOperationId: ctx.operationId,
+        updatedAt: new Date().toISOString() }, $unset: { phase: '', operationId: '', prewriteFailure: '' },
+      $push: { history: archived } });
+  }
   if (head.kind === 'SPLIT_BOOKING_PAYMENT_HEAD_V1') {
     if (head.phase !== 'CLOSED' || !head.closure?.receiptKey) return finishPending(ctx,
       'Уже есть незавершённая попытка записи. Проверьте её оплату.', { code: 'PAYMENT_ATTEMPT_ACTIVE' });

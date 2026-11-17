@@ -3,7 +3,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (msg._gameCreateOwner || msg._quarterCreateCapability) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "43405dca722d0b901939451a6ad5e62bebd29394f1a75ee125e01741d8515d4f", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "f661821041a2391735d65f3ef9a570f41a82f3c45c4268f689470efb09dfcb48", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -324,8 +324,32 @@ const extractConflictExerciseId = (value, ctx) => {
     : null;
 };
 
+// A refusal before this request dispatched any provider write leaves no booking
+// or bill. Its own UPSTREAM_INTENT head becomes reclaimable instead of blocking
+// every later checkout; a lost ACK leaves the previous fail-closed head.
+function ordinaryAttemptRetirePrewrite(status, error, details) {
+  const ctx = msg._splitCtx;
+  const head = ctx && typeof ctx === "object" && ctx.ordinaryHeadOwned === true ? ctx.ordinaryHead : null;
+  if (!head || ctx.ordinaryProviderWriteAt || msg._quarterCreateCapability || ctx.managedCreateBinding
+    || head.kind !== "SPLIT_BOOKING_PAYMENT_HEAD_V1" || head.phase !== "UPSTREAM_INTENT" || head.payment
+    || head._id !== ctx.ordinaryHeadKey || !head.operationId || head.operationId !== ctx.operationId
+    || !Number.isSafeInteger(head.generation)) return null;
+  const at = new Date().toISOString();
+  ctx.ordinaryHeadOwned = false;
+  ctx.ordinaryPrewriteFailure = { status, error, details: details || null };
+  ctx.step = "ordinary_attempt_prewrite_released"; msg._splitCtx = ctx;
+  delete msg.error; msg.statusCode = 200;
+  msg.payload = [{ _id: head._id, kind: head.kind, actorClientId: head.actorClientId, tenantKey: head.tenantKey,
+    operationId: head.operationId, generation: head.generation, phase: "UPSTREAM_INTENT", payment: { $exists: false } },
+  { $set: { phase: "PREWRITE_FAILED", updatedAt: at, prewriteFailure: { statusCode: Number(status) || null,
+    code: typeof details?.code === "string" ? details.code : null, failedAt: at } } },
+  { writeConcern: { w: "majority", j: true } }];
+  return [null, null, null, null, null, null, msg, null];
+}
 const fail = (status, error, details) => {
   if (msg._gameCreateOwner) { msg.statusCode = 202; msg.payload = { code: "GAME_CREATE_OWNER_RECONCILIATION_REQUIRED" }; return [null, msg, null, null]; }
+  const retired = ordinaryAttemptRetirePrewrite(status, error, details);
+  if (retired) return retired;
   lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });
   msg.statusCode = status;
   msg.headers = {
@@ -458,6 +482,8 @@ const managedCreatePreflight = (ctx) => {
 };
 
 const adminRequest = (ctx, method, path, payload) => {
+  // Any non-GET may have reached the provider; its outcome is never retired as pre-write.
+  if (method !== "GET" && ctx && !ctx.ordinaryProviderWriteAt) ctx.ordinaryProviderWriteAt = new Date().toISOString();
   msg._splitCtx = ctx;
   msg.method = method;
   msg.url = `${ADMIN_API}${path}`;
@@ -1366,7 +1392,7 @@ const ordinaryAttemptFinish = (ctx, response) => {
     msg.statusCode = 201; msg.payload = response; return [null, msg, msg];
   }
   const contract = ordinaryAttemptContract();
-  const window = contract?.splitAttemptWindow(null, ctx.transaction, ctx.ordinaryHead?.createdAt);
+  const window = contract?.splitAttemptWindow(null, ctx.transaction, ctx.ordinaryHead?.createdAt, ctx.transactionReadback);
   if (!ctx.ordinaryHead || !window || !response.bookingId || !response.transactionId || !response.paymentUrl) {
     return ordinaryAttemptPending(ctx);
   }
@@ -1771,6 +1797,12 @@ if (ctx.step === "ordinary_attempt_resume_head_found" || ctx.step === "ordinary_
   if (exposure) return ordinaryAttemptExposeResponse(ctx);
   return ordinaryAttemptReadProvider(ctx, payment);
 }
+if (ctx.step === "ordinary_attempt_prewrite_released") {
+  // The original refusal is returned whether or not the release ACK arrived.
+  const refusal = ctx.ordinaryPrewriteFailure || { status: 503, error: "Payment attempt state unavailable", details: null };
+  delete ctx.ordinaryPrewriteFailure;
+  return fail(refusal.status, refusal.error, refusal.details);
+}
 if (ctx.step === "ordinary_attempt_head_found") {
   if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) return ordinaryAttemptPending(ctx);
   const previous = msg.payload[0];
@@ -1796,6 +1828,12 @@ if (ctx.step === "ordinary_attempt_head_found") {
     }
     // Closure is only written by verified provider/roster reconciliation. A later
     // explicit generation cannot reuse the retired operation identity.
+    if (previous.phase === "PREWRITE_FAILED") {
+      // The refused request dispatched no provider write: any operation may reclaim by CAS.
+      if (previous.payment || previous.closure || !Number.isSafeInteger(previous.generation) || previous.generation < 0
+        || previous.generation >= 999 || !Array.isArray(previous.history || [])) return ordinaryAttemptPending(ctx);
+      return ordinaryAttemptClaimHead(ctx, previous);
+    }
     if (previous.phase !== "CLOSED" || !Number.isSafeInteger(previous.generation) || previous.generation < 0) return ordinaryAttemptPending(ctx);
     if (!Array.isArray(previous.history || [])) return ordinaryAttemptPending(ctx);
     const retiredIds = [previous.operationId, previous.rootOperationId,
@@ -1821,7 +1859,7 @@ function ordinaryAttemptClaimHead(ctx, previous) {
     return ordinaryAttemptMongo(ctx, "ordinary_attempt_head_claimed", [{ _id: previous._id,
       $expr: { $eq: ["$$ROOT", { $literal: previous }] } },
       { $set: replacement, $unset: { payment: "", closure: "", ownerOperationKey: "", ownerOperationId: "",
-        cancelRequestedAt: "", cancelRequestedBy: "", cancelRequestKey: "" },
+        cancelRequestedAt: "", cancelRequestedBy: "", cancelRequestKey: "", prewriteFailure: "" },
         $push: { history: archived } },
       { writeConcern: { w: "majority", j: true } }], true);
   }
@@ -1847,7 +1885,8 @@ if (ctx.step === "ordinary_attempt_native_owner_found") {
     ...(head?.history || []).flatMap(h => [h.operationId, h.ownerOperationId, h.rootOperationId])].filter(Boolean);
   if (msg.error || !head || !owner || owner._id !== head.ownerOperationKey || owner.operationId !== head.ownerOperationId
     || owner.actorClientId !== ctx.trustedPaymentActor || owner.tenantKey !== "iSkq6G"
-    || ownerHeadKey !== ctx.ordinaryHeadKey || !contract?.nativeReleased?.(owner)
+    || ownerHeadKey !== ctx.ordinaryHeadKey
+    || !(contract?.nativeReleased?.(owner) || ordinaryAttemptContract()?.splitAttemptNativeCleanRefusal?.(owner))
     || retiredIds.includes(ctx.operationId) || !Array.isArray(head.history || [])
     || (head.generation || 0) >= 999) return ordinaryAttemptPending(ctx);
   return ordinaryAttemptClaimHead(ctx, head);
@@ -1909,7 +1948,8 @@ if (ctx.step === "ordinary_attempt_transaction") {
   if (ctx.ordinaryHead?.cancelRequestedAt && result.state !== "CONFIRMED") return ordinaryAttemptPending(ctx);
   msg.statusCode = 200;
   msg.headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
-  msg.payload = { ok: true, gameId: ctx.gameId, exerciseId: ctx.exerciseId,
+  // A replay carries the same client-validated decision contract as a fresh checkout.
+  msg.payload = { ok: true, mode: ctx.action, selectedPaymentMode: "one_time", gameId: ctx.gameId, exerciseId: ctx.exerciseId,
     operationId: payment.operationId || payment.paymentRef, paymentRef: payment.paymentRef,
     bookingId: payment.bookingId, transactionId: payment.transactionId,
     settlementState: result.state, paid: result.state === "CONFIRMED",
@@ -2953,6 +2993,7 @@ if (ctx.step === "available_products") {
 
 if (ctx.step === "transaction") {
   ctx.transaction = msg.payload;
+  delete ctx.transactionReadback;
   const directTransactionIds = exactTransactionIds(msg.payload);
   if (directTransactionIds.length !== 1) {
     return fail(409, "Viva вернула неоднозначный идентификатор транзакции", {
@@ -3000,6 +3041,7 @@ if (ctx.step === "transaction_lookup") {
       actualTransactionIds,
     });
   }
+  ctx.transactionReadback = msg.payload;
   const responsePayload = buildSplitPaymentResponse(ctx, msg.payload, ctx.transaction);
   const amountMismatch = splitProviderAmountMismatch(ctx, msg.payload, null, responsePayload);
   if (amountMismatch) {
