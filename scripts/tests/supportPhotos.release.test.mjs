@@ -45,14 +45,15 @@ async function fixture() {
       editorOrderedGraphSha256: await support_photosOrderedGraphHash(flow), revisionSha256: sha256(revision) };
   };
   let generation = 0;
-  const prepare = async (purpose, prior) => {
+  const prepare = async (purpose, prior, options = {}) => {
     const stage = path.join(root, '.padlhub-support_photos-' + purpose + '-stage-20261116T000000Z-' + ++generation);
     fs.mkdirSync(stage, { mode: 0o700 });
     const op = createSupportPhotosNativeOperation({ stage, purpose, root, uid, gid, getUid: () => uid,
       now: () => now, readTarget: () => target });
     const plan = await op.prepare({ expectedSourceSha256: sha256(fs.readFileSync(live)), expectedTargetSha256: target,
       expectedCodeSha256: support_photosOperationCodeHash(), sourceCommit: commit, originalPins: supportPhotoPins(original),
-      previousStage: prior?.stage, previousPlanSha256: prior?.plan.planSha256, native: await native() });
+      previousStage: prior?.stage, previousPlanSha256: prior?.plan.planSha256,
+      expectedLegacyPredecessor: options.expectedLegacyPredecessor, native: await native() });
     return { stage, op, plan, purpose };
   };
   const reserve = async p => p.op.reserve({ expectedPlanSha256: p.plan.planSha256,
@@ -76,9 +77,11 @@ async function fixture() {
 test('native custody hands off each exact phase and recovery removes only nine additions while consumers stay paused', async () => {
   const f = await fixture();
   try {
+    const predecessor = legacyLease(f);
     let prior;
     for (const purpose of ['pause', 'install', 'resume', 'pause-photo', 'recover']) {
-      const p = await f.prepare(purpose, prior); await f.reserve(p); await f.post(p); prior = p;
+      const p = await f.prepare(purpose, prior, purpose === 'pause' ? predecessor : undefined);
+      await f.reserve(p); await f.post(p); prior = p;
     }
     assert(PHOTO_POLLERS.every(id => JSON.parse(fs.readFileSync(f.live)).find(n => n.id === id).d === true));
     assert.equal(JSON.parse(fs.readFileSync(f.live)).length, JSON.parse(f.original).length);
@@ -104,6 +107,141 @@ test('abort before attempt returns predecessor custody; corrupt/foreign predeces
       confirmation: 'RESERVE_SUPPORT_PHOTOS_INSTALL_NATIVE_NO_RESTART_147', native: await f.native() }));
     assert.deepEqual(fs.readFileSync(f.live), originalFlow);
   } finally { f.cleanup(); }
+});
+
+function legacyLease(f, overrides = {}) {
+  const value = { formatVersion: 2, deploymentId: 'synthetic-previous-release', token: 'synthetic-owner-token',
+    phase: 'soaking', acquiredAtMs: 1, expiresAtMs: 2,
+    sourceSha256: 'c'.repeat(64), candidateSha256: sha256(f.original), ...overrides };
+  const raw = Buffer.from(JSON.stringify(value, null, 3) + '\n');
+  fs.writeFileSync(f.lease, raw, { mode: 0o600 });
+  return { raw, value, expectedLegacyPredecessor: { sha256: sha256(raw), deploymentId: value.deploymentId } };
+}
+
+test('initial pause requires an explicit exact legacy predecessor and abort restores its original bytes idempotently', async () => {
+  const f = await fixture();
+  try {
+    const predecessor = legacyLease(f), flow = fs.readFileSync(f.live);
+    await assert.rejects(f.prepare('pause'), /LEGACY_PREDECESSOR_REQUIRED/);
+    assert.deepEqual(fs.readFileSync(f.lease), predecessor.raw);
+    const p = await f.prepare('pause', undefined, predecessor);
+    await f.reserve(p);
+    assert.deepEqual(fs.readFileSync(path.join(p.stage, 'predecessor.lease.json')), predecessor.raw);
+    for (let i = 0; i < 2; i++) {
+      const result = await p.op.abort({ expectedPlanSha256: p.plan.planSha256, native: await f.native() });
+      assert.equal(result.previousCustodyReturned, true); assert.equal(result.leaseReleased, false);
+      assert.deepEqual(fs.readFileSync(f.lease), predecessor.raw);
+      assert.deepEqual(fs.readFileSync(f.live), flow);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('initial pause refuses a different legacy owner, token, or presence after preparation', async () => {
+  for (const change of ['owner', 'token', 'disappear', 'appear']) {
+    const f = await fixture();
+    try {
+      const predecessor = change === 'appear' ? undefined : legacyLease(f);
+      const p = await f.prepare('pause', undefined, predecessor);
+      if (change === 'disappear') fs.unlinkSync(f.lease);
+      else legacyLease(f, change === 'owner' ? { deploymentId: 'another-owner' }
+        : change === 'token' ? { token: 'another-token' } : {});
+      const current = fs.existsSync(f.lease) ? fs.readFileSync(f.lease) : null;
+      await assert.rejects(f.reserve(p), /LEGACY_PREDECESSOR/);
+      assert.deepEqual(fs.existsSync(f.lease) ? fs.readFileSync(f.lease) : null, current);
+      assert.deepEqual(fs.readFileSync(f.live), f.original);
+      assert.equal(fs.existsSync(path.join(p.stage, 'reserve.json')), false);
+    } finally { f.cleanup(); }
+  }
+});
+
+test('legacy handoff rejects active, wrong-source and non-soaking leases before producing a plan', async () => {
+  for (const override of [{ expiresAtMs: Number.MAX_SAFE_INTEGER }, { candidateSha256: 'd'.repeat(64) },
+    { phase: 'applying' }, { phase: 'rollback-restart-required' }]) {
+    const f = await fixture();
+    try {
+      const predecessor = legacyLease(f, override);
+      await assert.rejects(f.prepare('pause', undefined, predecessor), /LEGACY_PREDECESSOR_DRIFT/);
+      assert.deepEqual(fs.readFileSync(f.lease), predecessor.raw);
+      assert.deepEqual(fs.readFileSync(f.live), f.original);
+    } finally { f.cleanup(); }
+  }
+});
+
+test('legacy abort never returns corrupt custody or a lease after a consumed attempt', async () => {
+  for (const mode of ['corrupt-backup', 'consumed-attempt', 'foreign-live-lease']) {
+    const f = await fixture();
+    try {
+      const predecessor = legacyLease(f), p = await f.prepare('pause', undefined, predecessor);
+      await f.reserve(p);
+      if (mode === 'corrupt-backup') fs.writeFileSync(path.join(p.stage, 'predecessor.lease.json'), predecessor.raw + ' ');
+      if (mode === 'consumed-attempt') await p.op.begin({ expectedPlanSha256: p.plan.planSha256, native: await f.native() });
+      if (mode === 'foreign-live-lease') legacyLease(f, { token: 'new-foreign-token' });
+      const lease = fs.readFileSync(f.lease);
+      await assert.rejects(p.op.abort({ expectedPlanSha256: p.plan.planSha256, native: await f.native() }),
+        /LEGACY_PREDECESSOR_DRIFT|ATTEMPT_MAY_HAVE_EFFECT|LEASE_BINDING/);
+      assert.deepEqual(fs.readFileSync(f.lease), lease);
+      assert.deepEqual(fs.readFileSync(f.live), f.original);
+      assert.equal(fs.existsSync(path.join(p.stage, 'abort.json')), false);
+    } finally { f.cleanup(); }
+  }
+});
+
+test('reserve pins the captured predecessor even if its file changes between validation reads', async () => {
+  const f = await fixture(), readFile = fs.readFileSync;
+  try {
+    const predecessor = legacyLease(f), p = await f.prepare('pause', undefined, predecessor);
+    const inode = fs.statSync(f.lease).ino; let reads = 0, swapped = false;
+    fs.readFileSync = function (file, ...args) {
+      const data = readFile.call(fs, file, ...args);
+      if (typeof file === 'number' && fs.fstatSync(file).ino === inode && ++reads === 2) {
+        legacyLease(f, { token: 'changed-between-reads' }); swapped = true;
+      }
+      return data;
+    };
+    await assert.rejects(f.reserve(p), /PREDECESSOR_DRIFT/);
+    fs.readFileSync = readFile;
+    assert.equal(swapped, true);
+    assert.equal(fs.existsSync(path.join(p.stage, 'predecessor.lease.json')), false);
+    assert.equal(JSON.parse(fs.readFileSync(f.lease)).token, 'changed-between-reads');
+    assert.deepEqual(fs.readFileSync(f.live), f.original);
+  } finally { fs.readFileSync = readFile; f.cleanup(); }
+});
+
+test('retry cannot claim returned legacy custody when its lease is missing', async () => {
+  const f = await fixture();
+  try {
+    const predecessor = legacyLease(f), p = await f.prepare('pause', undefined, predecessor);
+    await f.reserve(p);
+    await p.op.abort({ expectedPlanSha256: p.plan.planSha256, native: await f.native() });
+    fs.unlinkSync(f.lease);
+    await assert.rejects(p.op.abort({ expectedPlanSha256: p.plan.planSha256, native: await f.native() }),
+      /PREDECESSOR_RETURN_MISSING/);
+    assert.equal(fs.existsSync(f.lease), false);
+  } finally { f.cleanup(); }
+});
+
+test('handback retry fsyncs the restored lease directory after an interrupted rename durability step', async () => {
+  const f = await fixture(), fsync = fs.fsyncSync;
+  try {
+    const predecessor = legacyLease(f), p = await f.prepare('pause', undefined, predecessor);
+    await f.reserve(p); let failed = false;
+    fs.fsyncSync = function (fd) {
+      if (!failed && fs.fstatSync(fd).isDirectory() && fs.readFileSync(f.lease).equals(predecessor.raw)) {
+        failed = true; throw Error('SYNTHETIC_DIRECTORY_FSYNC');
+      }
+      return fsync.call(fs, fd);
+    };
+    await assert.rejects(p.op.abort({ expectedPlanSha256: p.plan.planSha256, native: await f.native() }),
+      /SYNTHETIC_DIRECTORY_FSYNC/);
+    assert.equal(failed, true); assert.deepEqual(fs.readFileSync(f.lease), predecessor.raw);
+    let synced = false;
+    fs.fsyncSync = function (fd) {
+      if (fs.fstatSync(fd).isDirectory()) synced = true;
+      return fsync.call(fs, fd);
+    };
+    assert.equal((await p.op.abort({ expectedPlanSha256: p.plan.planSha256, native: await f.native() })).previousCustodyReturned, true);
+    assert.equal(synced, true); assert.deepEqual(fs.readFileSync(f.lease), predecessor.raw);
+  } finally { fs.fsyncSync = fsync; f.cleanup(); }
 });
 
 test('lost ACK is observed without replay; explicit adoption starts a new complete soak and a consumed attempt cannot retry', async () => {
