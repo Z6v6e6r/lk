@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetchProfile, type UserProfileType } from "../../utils/apiClient";
-import { hasLevelRestriction } from "../../utils/levelAdmission";
+import { hasLevelRestriction, getEventAllowedLevelLabel } from "../../utils/levelAdmission";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { Modal } from "../UI/Modal";
 import { OnboardingModal } from "../cabinet/OnboardingModal";
@@ -11,6 +11,7 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [checkingLevel, setCheckingLevel] = useState(false);
+  const [allowedLevel, setAllowedLevel] = useState<string | null>(null);
   const inFlight = useRef<number | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
   const generation = useRef(0);
@@ -18,7 +19,7 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
   useEffect(() => {
     generation.current += 1;
     activeRequest.current?.abort(); inFlight.current = null;
-    setCheckingLevel(false); setPrompt(null); setProfile(null); setOnboardingOpen(false);
+    setCheckingLevel(false); setAllowedLevel(null); setPrompt(null); setProfile(null); setOnboardingOpen(false);
     return () => { generation.current += 1; activeRequest.current?.abort(); inFlight.current = null; };
   }, [targetKey]);
 
@@ -26,6 +27,7 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
     levelProfileRef.current = null;
     if (!hasLevelRestriction(event)) return true;
     if (inFlight.current !== null) return false;
+    setAllowedLevel(getEventAllowedLevelLabel(event));
     const started = generation.current;
     inFlight.current = started;
     const controller = new AbortController();
@@ -75,6 +77,7 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
   ) : prompt ? (
     <Modal isOpen onClose={() => setPrompt(null)} title={prompt === "required" ? "Сначала определите уровень" : "Не удалось проверить уровень"}>
       <div className="onboarding-body">
+        {allowedLevel && <p className="onboarding-text">Допустимый уровень: <strong>{allowedLevel}</strong></p>}
         <p className="onboarding-text" role="status">{prompt === "required"
           ? "У этого события есть ограничение по уровню. Пройдите онбординг: укажите известный уровень или определите его по анкете. После сохранения вернитесь к записи."
           : "Уровень ЦУП сейчас недоступен. Закройте это окно и повторите запись для новой проверки."}</p>

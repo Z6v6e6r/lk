@@ -1,3 +1,4 @@
+import { EventAllowedLevel } from "../UI/EventAllowedLevel";
 import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
 import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
@@ -16238,6 +16239,7 @@ export default function GamesPage({
                 </div>
                 <div className="details-time details-time-strong">{detailsRoomName}</div>
                 <div className="details-time">{detailsStudioName}</div>
+                <EventAllowedLevel event={activeGameRecord} />
                 {detailsGameTitle && (
                   <div className="details-match-custom-title">{detailsGameTitle}</div>
                 )}

@@ -8,10 +8,9 @@ function isLevel(value: unknown): boolean {
   return /^(?:[ABCDАВСД]\+?(?:\s*[1-4])?|[1-7](?:[.,]\d+)?)(?:\s*[/–—-]\s*(?:[ABCDАВСД]\+?(?:\s*[1-4])?|[1-7](?:[.,]\d+)?))*$/.test(text);
 }
 
-/** Only explicit event admission metadata counts; rating calculation parameters do not. */
-export function hasLevelRestriction(value: unknown): boolean {
+function eventLevelStates(value: unknown): Record<string, unknown>[] {
   const root = record(value);
-  if (!root) return false;
+  if (!root) return [];
   const states: Record<string, unknown>[] = [];
   const pending = [root], seen = new Set<object>();
   while (pending.length && states.length < 100) {
@@ -23,7 +22,12 @@ export function hasLevelRestriction(value: unknown): boolean {
       if (nested) pending.push(nested);
     }
   }
-  for (const state of states) {
+  return states;
+}
+
+/** Only explicit event admission metadata counts; rating calculation parameters do not. */
+export function hasLevelRestriction(value: unknown): boolean {
+  for (const state of eventLevelStates(value)) {
     if (["minRating", "maxRating", "ratingFrom", "ratingTo", "ratingMin", "ratingMax", "levelFrom", "levelTo", "levelLabel", "ratingLabel", "ratingRange", "level"].some(key => isLevel(state[key]))) return true;
     const precise = record(record(state.metadata)?.ratingRangePrecise);
     if (precise && (isLevel(precise.minGrade) || isLevel(precise.maxGrade))) return true;
@@ -34,6 +38,53 @@ export function hasLevelRestriction(value: unknown): boolean {
     }
   }
   return false;
+}
+
+function displayLevel(value: unknown): string | null {
+  if (!isLevel(value)) return null;
+  const text = String(value).trim();
+  const numeric = Number(text.replace(",", "."));
+  if (Number.isFinite(numeric)) return numeric >= 1 && numeric <= 7 ? String(numeric).replace(".", ",") : null;
+  return text.toUpperCase().replace(/[АВСД]/g, letter => ({ А: "A", В: "B", С: "C", Д: "D" })[letter]!)
+    .replace(/\s*[–—-]\s*/g, "–").replace(/\s*\/\s*/g, " / ").replace(/([ABCD]\+?)\s+([1-4])/g, "$1$2");
+}
+
+/** Display event admission settings, never player levels or calculation bounds. */
+export function getEventAllowedLevelLabel(value: unknown): string | null {
+  const states = eventLevelStates(value);
+  for (const state of states) {
+    const precise = record(record(state.metadata)?.ratingRangePrecise);
+    if (!precise) continue;
+    const bound = (side: "min" | "max") => {
+      const grade = displayLevel(precise[`${side}Grade`]);
+      if (!grade || !/^[ABCD]\+?$/.test(grade)) return null;
+      const division = precise[`${side}Level`];
+      return grade ? grade + (Number.isInteger(division) && Number(division) >= 1 && Number(division) <= 4 ? division : "") : null;
+    };
+    const min = bound("min"), max = bound("max");
+    if (min || max) return min && max ? min === max ? min : `${min}–${max}` : min ? `от ${min}` : `до ${max}`;
+  }
+  for (const state of states) {
+    for (const key of ["levelLabel", "ratingLabel", "ratingRange", "level"]) {
+      const label = displayLevel(state[key]);
+      if (label) return label;
+    }
+    const first = (keys: string[]) => keys.map(key => displayLevel(state[key])).find(Boolean);
+    const min = first(["minRating", "ratingFrom", "ratingMin", "levelFrom"]);
+    const max = first(["maxRating", "ratingTo", "ratingMax", "levelTo"]);
+    if (min || max) return min && max ? min === max ? min : `${min}–${max}` : min ? `от ${min}` : `до ${max}`;
+    if (Array.isArray(state.accessLevels)) {
+      const levels = [...new Set(state.accessLevels.map(displayLevel).filter((label): label is string => label !== null))];
+      if (levels.length) return levels.join(" / ");
+    }
+  }
+  for (const state of states) for (const key of ["title", "name"]) {
+    if (typeof state[key] !== "string") continue;
+    const match = state[key].match(/уров(?:ень|ня)\s*[:：]?\s*((?:[ABCDАВСД]\+?(?:\s*[1-4])?(?![a-zа-я])|[1-7](?:[.,]\d+)?)(?:\s*[/–—-]\s*(?:[ABCDАВСД]\+?(?:\s*[1-4])?(?![a-zа-я])|[1-7](?:[.,]\d+)?))*)/i);
+    const label = displayLevel(match?.[1]);
+    if (label) return label;
+  }
+  return null;
 }
 
 export function parseDeclaredLevel(value: string): number | null {

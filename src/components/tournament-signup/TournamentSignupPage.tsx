@@ -1,3 +1,4 @@
+import { EventAllowedLevel } from "../UI/EventAllowedLevel";
 import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isTournamentCapacityError } from "../../utils/tournamentCapacityError";
@@ -2127,6 +2128,7 @@ export default function TournamentSignupPage({
                     </div>
                     <div className="details-time details-time-strong">{selectedTournament.title}</div>
                     <div className="details-time">{detailTournamentTypeLabel}</div>
+                    <EventAllowedLevel event={detail ?? selectedTournament} />
                   </div>
                   <CalendarDateBadge
                     monthLabel={detailDateParts.month}
@@ -2470,7 +2472,7 @@ export default function TournamentSignupPage({
                     )}
                     {selectedTournament.address && <div><span>Адрес</span><strong>{selectedTournament.address}</strong></div>}
                     {selectedTournament.format && <div><span>Формат</span><strong>{selectedTournament.format}</strong></div>}
-                    {selectedTournament.levelLabel && <div><span>Уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
+                    {selectedTournament.levelLabel && <div><span>Допустимый уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
                     {selectedTournament.priceLabel && <div><span>Стоимость</span><strong>{selectedTournament.priceLabel}</strong></div>}
                   </div>
                   {detail?.description && <p className="tournament-signup-copy">{detail.description}</p>}

@@ -1,3 +1,4 @@
+import { EventAllowedLevel } from "../UI/EventAllowedLevel";
 import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
 import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { createJoinSubscriptionPriceTarget } from "./subscriptionPricePreview";
@@ -2028,6 +2029,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
               <div className="details-time">{timeLabel}</div>
               <div className="details-time details-time-strong">{courtLabel}</div>
               <div className="details-time">{stationLabel}</div>
+              <EventAllowedLevel event={game} />
             </div>
           </div>
         </div>

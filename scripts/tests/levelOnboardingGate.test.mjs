@@ -206,3 +206,25 @@ test('loading is visible, cancelling aborts the read, and its late result cannot
   assert.equal(g.render().levelOnboardingDialog.props.title, 'Проверяем уровень');
   second.resolve({ data: rated }); assert.equal(await current, true); assert.equal(g.render().levelOnboardingDialog, null);
 });
+
+test('allowed-level labels show exact event bounds, precise divisions and sparse access lists', () => {
+  const label = helpers.getEventAllowedLevelLabel;
+  assert.equal(label({ levelLabel: 'C–C+' }), 'C–C+');
+  assert.equal(label({ levelLabel: 'C/A' }), 'C / A');
+  assert.equal(label(restricted), 'C–B+');
+  assert.equal(label({ settings: { minRating: 3.25, maxRating: 4 } }), '3,25–4');
+  assert.equal(label({ settings: { minRating: 'C' } }), 'от C');
+  assert.equal(label({ settings: { maxRating: 'B' } }), 'до B');
+  assert.equal(label({ raw: { skin: { accessLevels: ['C', 'A', 'C'] } } }), 'C / A');
+  assert.equal(label({ levelLabel: 'C–B', metadata: { ratingRangePrecise: { minGrade: 'C', minLevel: 2, maxGrade: 'B', maxLevel: 3 } } }), 'C2–B3');
+  assert.equal(label({ name: 'Тренировка, уровень D–D+' }), 'D–D+');
+  for (const value of [{}, { levelLabel: 'Уровень уточняется' }, { params: { minRating: 1, maxRating: 7 } }]) assert.equal(label(value), null);
+});
+test('event information and the onboarding prompt display the same allowed level', async () => {
+  const { EventAllowedLevel } = load('components/UI/EventAllowedLevel.tsx', { '../../utils/levelAdmission': helpers });
+  assert.match(text(EventAllowedLevel({ event: restricted })), /Допустимый уровень:\s*C–B\+/);
+  assert.equal(EventAllowedLevel({ event: {} }), null);
+  const g = gate(async () => ({ data: unrated }));
+  await g.render().checkLevel(restricted, unrated.id);
+  assert.match(text(g.render().levelOnboardingDialog), /Допустимый уровень:\s*C–B\+/);
+});

@@ -7,6 +7,8 @@ on:
       - 'src/utils/levelAdmission.ts'
       - 'src/components/onboarding/**'
       - 'src/components/cabinet/OnboardingModal.tsx'
+      - 'src/components/UI/EventAllowedLevel.tsx'
+      - 'src/components/group-schedule/GroupTrainingInfo.tsx'
       - 'src/components/games/GameJoinPage.tsx'
       - 'src/components/games/GamesPage.tsx'
       - 'src/components/group-schedule/GroupSchedulePage.tsx'
