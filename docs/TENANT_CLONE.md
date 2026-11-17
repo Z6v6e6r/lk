@@ -95,6 +95,51 @@ npm run tenant:clone-flow -- \
 0 ошибок, 0 предупреждений, 5 замен словаря применены. `deployable=false` остаётся
 только из-за блокера: у клуба нет направления/типа открытой игры.
 
+## Применение на 147 (additive, без правки живых узлов)
+
+```bash
+# 1. свежий live-преimage + фрагмент
+npm run nodered:modular:pull-147 -- /abs/private/ws
+npm run tenant:clone-flow -- --source /abs/private/ws/input/source.flow.json \
+  --profile tenants/pade_prime.json --out /abs/private/ws/fragment.json --report /abs/private/ws/report.json
+
+# 2. кандидат = живой flow + фрагмент, контракт только на добавления
+node scripts/tenant_assemble_candidate.mjs --live /abs/private/ws/input/source.flow.json \
+  --fragment /abs/private/ws/fragment.json --out /abs/private/ws/candidate.final.json \
+  --contract /abs/private/ws/contract.json --deployment-id <id>
+
+# 3. стейдж 0700 на 147 + preflight, затем apply со --stamp
+#    (apply без --stamp падает: safeTimestamp требует YYYYMMDDTHHMMSS+ZZZZ)
+node deploy_reviewed_flow_147_remote.mjs preflight --candidate … --contract … --deployment-id <id>
+node deploy_reviewed_flow_147_remote.mjs apply     --candidate … --contract … --deployment-id <id> --stamp 20261117T123500+0300
+```
+
+`preflight` печатает `changedNodeCount: 0` и `addedNodeCount: N` — любое изменение живого
+узла там же и обрывает применение. После `apply` скрипт сам делает бэкап, рестарт и
+откат при сбое; успешный apply оставляет `soaking`-лиз на ~15 минут, который блокирует
+следующий preflight.
+
+### nginx
+
+Маршрут `/pade-prime` — копия проверенного `/seliger`:
+
+- 147: `location ^~ /pade-prime/ { proxy_pass http://127.0.0.1:1880; … CORS … }`;
+- 89: `location ~ ^/pade-prime(/|$) { … proxy_pass https://padlhub.su; }` → цепочка
+  89 → padlhub.su → 147 → Node-RED.
+
+Обязательно `(/|$)` без `?`: иначе `/pade-prime-test/` попадает под тот же regex и
+тестовая страница начинает отдавать 404 из чужого контура. Бэкап конфига держать
+**вне** `sites-enabled` — файлы оттуда тоже грузятся и дают duplicate server_name.
+
+### Что проверять после применения
+
+| Проверка | Ожидание |
+| --- | --- |
+| `GET /lk/games?public=find&limit=1` (прод) | тот же статус и размер, что до применения |
+| `GET /pade-prime/lk/games?public=find&limit=1` | `200`, `total: 0` (данные клуба пустые) |
+| `GET /pade-prime/lk/chats/by-phone?phone=…` | `401 CHAT_AUTH_TOKEN_REQUIRED` |
+| узлы в табах клона | 0 `mongodb4` без префикса `pp_`, 0 `http in` без `/pade-prime`, 0 `inject` |
+
 ## Что остаётся сделать вручную
 
 1. Словарные id Viva нового клуба (направление клубной игры, тип занятия) — читаются
