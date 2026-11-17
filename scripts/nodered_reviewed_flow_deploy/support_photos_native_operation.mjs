@@ -152,6 +152,19 @@ export function createSupportPhotosNativeOperation({ stage, purpose = 'install',
     return value;
   };
   const writeLease = value => atomicWrite(leasePath, bytes(value), { uid, gid });
+  const legacyPredecessor = (raw, p) => {
+    const prior = JSON.parse(raw);
+    check(purpose === 'pause' && hex(p.legacyPredecessor?.sha256)
+      && sha256(raw) === p.legacyPredecessor.sha256
+      && prior.formatVersion === 2 && prior.phase === 'soaking'
+      && prior.deploymentId === p.legacyPredecessor.deploymentId
+      && typeof prior.token === 'string' && prior.token.trim().length > 0
+      && Number.isSafeInteger(prior.acquiredAtMs) && Number.isSafeInteger(prior.expiresAtMs)
+      && prior.expiresAtMs > prior.acquiredAtMs && prior.expiresAtMs <= now()
+      && hex(prior.sourceSha256) && prior.candidateSha256 === p.sourceSha256,
+    'PHOTON_LEGACY_PREDECESSOR_DRIFT');
+    return prior;
+  };
   const target = expected => {
     const actual = readTarget(); check(hex(actual) && (!expected || actual === expected), 'PHOTON_TARGET_DRIFT'); return actual;
   };
@@ -286,7 +299,7 @@ export function createSupportPhotosNativeOperation({ stage, purpose = 'install',
   };
   return {
     inspect() { return { sourceSha256: sha256(live()), targetSha256: target(), codeSha256: codeHash(), authority: 'native-editor-root-custody' }; },
-    async prepare({ expectedSourceSha256, expectedTargetSha256, expectedCodeSha256, sourceCommit, originalPins, previousStage, previousPlanSha256, native }) {
+    async prepare({ expectedSourceSha256, expectedTargetSha256, expectedCodeSha256, sourceCommit, originalPins, previousStage, previousPlanSha256, expectedLegacyPredecessor, native }) {
       check(hex(expectedSourceSha256) && hex(expectedTargetSha256) && hex(expectedCodeSha256)
         && codeHash() === expectedCodeSha256 && /^[a-f0-9]{40}$/.test(sourceCommit), 'PHOTON_PREPARE_PINS');
       target(expectedTargetSha256); const source = live(); check(sha256(source) === expectedSourceSha256, 'PHOTON_SOURCE_DRIFT');
@@ -312,7 +325,18 @@ export function createSupportPhotosNativeOperation({ stage, purpose = 'install',
         editorOrderedGraphSha256: native.editorOrderedGraphSha256,
         candidateGraphSha256: await support_photosGraphHash(built.flow), preRevisionSha256: native.revisionSha256,
         preparedAtMs: now(), contract, browserGuardSha256: sha256(buildSupportPhotosBrowserGuard()) };
-      if (purpose !== 'pause') {
+      if (purpose === 'pause') {
+        const prior = readLease();
+        if (prior) {
+          check(expectedLegacyPredecessor && Object.keys(expectedLegacyPredecessor).sort().join(',') === 'deploymentId,sha256',
+            'PHOTON_LEGACY_PREDECESSOR_REQUIRED');
+          p.legacyPredecessor = structuredClone(expectedLegacyPredecessor);
+          legacyPredecessor(read(leasePath), p);
+        } else {
+          check(!expectedLegacyPredecessor, 'PHOTON_LEGACY_PREDECESSOR_ABSENT');
+          p.legacyPredecessor = null;
+        }
+      } else {
         if (fs.existsSync(leasePath)) {
           const priorRaw = read(leasePath); await validatePreviousLease(p, JSON.parse(priorRaw));
           p.predecessorLeaseSha256 = sha256(priorRaw);
@@ -338,17 +362,25 @@ export function createSupportPhotosNativeOperation({ stage, purpose = 'install',
           await validatePreviousLease(p, previous);
           check(hex(p.predecessorLeaseSha256) && sha256(read(leasePath)) === p.predecessorLeaseSha256, 'PHOTON_PREDECESSOR_DRIFT');
         }
-      } else if (previous) {
-        check(previous.formatVersion === 2 && previous.phase === 'soaking' && Number.isSafeInteger(previous.expiresAtMs)
-          && previous.expiresAtMs <= now() && previous.candidateSha256 === p.sourceSha256, 'PHOTON_EXISTING_LEASE');
+      } else {
+        check(Boolean(previous) === Boolean(p.legacyPredecessor), 'PHOTON_LEGACY_PREDECESSOR_PRESENCE');
+        if (previous) legacyPredecessor(read(leasePath), p);
       }
-      if (previous) writeFileExclusiveDurable(file('predecessor.lease.json'), read(leasePath), protection);
+      const predecessorRaw = previous ? read(leasePath) : null;
+      if (previous) {
+        check(sha256(predecessorRaw) === (purpose === 'pause' ? p.legacyPredecessor.sha256 : p.predecessorLeaseSha256),
+          'PHOTON_PREDECESSOR_DRIFT');
+        writeFileExclusiveDurable(file('predecessor.lease.json'), predecessorRaw, protection);
+      }
       write('reserve.json', { kind: KIND, planSha256: expectedPlanSha256, sourceSha256: p.sourceSha256,
         candidateSha256: p.candidateSha256, targetSha256: p.targetSha256, reservedAtMs: now() });
       const lease = { formatVersion: 4, kind: KIND, stage, phase: 'reserved', planSha256: expectedPlanSha256,
         codeSha256: p.codeSha256, targetSha256: p.targetSha256, sourceSha256: p.sourceSha256,
         candidateSha256: p.candidateSha256, acquiredAtMs: now(), expiresAtMs: now() + SOAK };
-      if (previous) writeLease(lease); else writeFileExclusiveAtomicDurable(leasePath, bytes(lease), protection);
+      if (previous) {
+        check(sha256(read(leasePath)) === sha256(predecessorRaw), 'PHOTON_PREDECESSOR_DRIFT');
+        writeLease(lease);
+      } else writeFileExclusiveAtomicDurable(leasePath, bytes(lease), protection);
       try { await pre(p, native); } catch { writeLease({ ...lease, phase: 'owner-decision' }); throw new Error('PHOTON_RESERVATION_DRIFT_RETAINED'); }
       return { status: 'RESERVED', liveFlowWritten: false, nodeRedRestarted: false };
     },
@@ -433,13 +465,17 @@ export function createSupportPhotosNativeOperation({ stage, purpose = 'install',
     },
     async abort({ expectedPlanSha256, native }) {
       const p = await plan(expectedPlanSha256), lease = readLease();
-      let prior = null;
-      if (purpose !== 'pause' && !p.previousFinishedSha256) {
-        const priorRaw = read(file('predecessor.lease.json'));
+      let prior = null, priorRaw = null;
+      if (purpose === 'pause' && p.legacyPredecessor) {
+        priorRaw = read(file('predecessor.lease.json'));
+        prior = legacyPredecessor(priorRaw, p);
+      } else if (purpose !== 'pause' && !p.previousFinishedSha256) {
+        priorRaw = read(file('predecessor.lease.json'));
         check(hex(p.predecessorLeaseSha256) && sha256(priorRaw) === p.predecessorLeaseSha256, 'PHOTON_PREDECESSOR_DRIFT');
         prior = JSON.parse(priorRaw); await validatePreviousLease(p, prior);
       }
-      const returned = prior && fs.existsSync(file('abort.json')) && JSON.stringify(prior) === JSON.stringify(lease);
+      const returned = prior && lease && fs.existsSync(file('abort.json')) && read(leasePath).equals(priorRaw);
+      check(!prior || lease, 'PHOTON_PREDECESSOR_RETURN_MISSING');
       if (lease && !returned) owns(p); else check(returned || fs.existsSync(file('abort.json')), 'PHOTON_LEASE_ABSENT');
       check(!fs.existsSync(file('attempt.json')), 'PHOTON_ATTEMPT_MAY_HAVE_EFFECT'); await pre(p, native);
       const receipt = { kind: KIND, planSha256: expectedPlanSha256, sourceSha256: p.sourceSha256, targetSha256: p.targetSha256 };
@@ -449,10 +485,12 @@ export function createSupportPhotosNativeOperation({ stage, purpose = 'install',
       if (lease && !returned) {
         owns(p);
         if (prior) {
-          await validatePreviousLease(p, prior);
-          writeLease(prior);
+          if (purpose === 'pause') legacyPredecessor(priorRaw, p);
+          else await validatePreviousLease(p, prior);
+          atomicWrite(leasePath, priorRaw, { uid, gid });
         } else { fs.unlinkSync(leasePath); syncDirectory(root); }
       }
+      syncDirectory(root);
       return { status: 'ABORTED_BEFORE_ATTEMPT', leaseReleased: !prior, previousCustodyReturned: Boolean(prior) };
     },
   };

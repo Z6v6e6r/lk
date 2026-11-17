@@ -119,6 +119,14 @@ graph с чужой новой revision не принимается. Abort до 
 predecessor lease. После неизвестного POST разрешены только reconcile и явная
 adoption наблюдённого результата, без повторной отправки запроса.
 
+Первый `pause` принимает истёкший legacy v2 `soaking` lease только при явном
+`expectedLegacyPredecessor: { sha256, deploymentId }` в `prepare`. Полный digest
+закрепляет исходные bytes, включая token; candidate предыдущего релиза должен
+совпадать с текущим source. План также закрепляет отсутствие lease, если его нет.
+Смена владельца, token или наличия lease до `reserve` отклоняется. При отмене
+до attempt сохранённый legacy lease возвращается атомарно в исходных bytes;
+повторный abort проверяет тот же receipt и не удаляет возвращённый lease.
+
 Root plan и browser seal закрепляют native disk SHA:4 spaces, без newline.
 Browser проверяет этот SHA до POST, root — actual disk после POST. Canonical graph
 equality не заменяет byte proof для worker. Readback требует загруженный чистый
