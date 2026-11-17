@@ -438,21 +438,29 @@ const prepareManagedHttp = (ctx, step, method, url, payload, headers = {}) => {
 // decision of the authenticated player before a NEW booking operation is created. Existing
 // operations (retries, confirmations, recovery) are never re-gated. Off unless the operator sets
 // global `tournament_level_gate_enabled` to true; CUP must already serve `level-decision`.
-const TOURNAMENT_LEVEL_DECISION_DEFAULT_BASE = "https://padlhub.su/api";
+// The CUP origin reuses the managed runtime base (no new endpoint literal); an operator override
+// must be https. No resolvable base with the gate on fails closed.
 const tournamentLevelGateEnabled = () => readGlobal("tournament_level_gate_enabled") === "true";
 const tournamentLevelDecisionBase = () => {
   const configured = readGlobal("tournament_level_decision_api_base");
-  return /^https:\/\/[a-z0-9.-]+(?::\d+)?\/[a-z0-9/_-]*$/i.test(configured || "")
-    ? configured.replace(/\/+$/, "")
-    : TOURNAMENT_LEVEL_DECISION_DEFAULT_BASE;
+  if (/^https:\/\/[a-z0-9.-]+(?::\d+)?\/[a-z0-9/_-]*$/i.test(configured || "")) {
+    return configured.replace(/\/+$/, "");
+  }
+  return MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT[MANAGED_RUNTIME_EXPECTED_ENVIRONMENT] || null;
 };
 const prepareTournamentLevelDecision = (ctx, operationRows) => {
+  const base = tournamentLevelDecisionBase();
+  if (!base) {
+    return finishError(ctx, 503, "Проверка уровня временно недоступна. Попробуйте позже.", {
+      code: "LEVEL_CHECK_UNAVAILABLE",
+    });
+  }
   ctx.tournamentLevelGateRows = operationRows;
   const output = prepareHttp(
     ctx,
     "tournament_level_decision",
     "GET",
-    `${tournamentLevelDecisionBase()}/tournaments/${encodeURIComponent(ctx.exerciseId)}/level-decision`,
+    `${base}/tournaments/${encodeURIComponent(ctx.exerciseId)}/level-decision`,
     undefined,
     {
       Authorization: ctx.authHeader,
