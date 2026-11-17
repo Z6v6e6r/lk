@@ -852,3 +852,105 @@ test('the earliest verified deadline wins: transaction readback and persisted ex
   assert.equal(resumed.state, 'CLOSING', 'a readback without paymentDueDate cannot reopen an expired checkout');
   assert.equal(resumed.window.expiresAt, '2026-11-20T09:55:00.000Z');
 });
+
+// Fence for the FAILED-native transfer: the gateway can restart a FAILED attempt
+// (lk1ReclaimableAttempt) after reading its still-native head.
+function fencedTransfer() {
+  const key = joinKey();
+  const head = { _id: key, kind: 'BOOKING_PAYMENT_HEAD_V1', actorClientId: 'actor', tenantKey: 'iSkq6G',
+    ownerOperationKey: 'native-key', ownerOperationId: 'native-operation', createdAt: '2026-11-20T09:57:00Z' };
+  const owner = { _id: 'native-key', operationId: 'native-operation', actorClientId: 'actor', tenantKey: 'iSkq6G',
+    exerciseId: 'exercise', state: 'FAILED', attempts: 1, upstreamAttemptedAt: '2026-11-20T09:58:00Z',
+    failedAt: '2026-11-20T09:58:01Z', failure: { statusCode: 422 }, lk1: { target: { eventId: 'exercise' } } };
+  const ctx = { action: 'join', exerciseId: 'exercise', step: 'ordinary_attempt_native_owner_found',
+    paymentMode: 'one_time', operationId: 'fresh-one-time', trustedPaymentActor: 'actor', ordinaryHeadKey: key, ordinaryNativeHead: head };
+  const notReleased = { nativeReleased: () => false };
+  const claim = run('router', { _splitCtx: ctx, payload: [plain(owner)], statusCode: 200 }, now, notReleased);
+  assert.ok(claim.out[6]); assert.ok(ctx.ordinaryNativeFence);
+  const won = run('router', { _splitCtx: ctx, payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 }, statusCode: 200 }, now, notReleased);
+  return { key, head, owner, ctx, won, notReleased };
+}
+test('FAILED-native transfer re-reads the exact owner before it may own the head or reach the provider', () => {
+  const { owner, ctx, won, notReleased } = fencedTransfer();
+  assert.ok(won.out[5]); assert.deepEqual(plain(won.msg.payload), { _id: 'native-key' });
+  assert.notEqual(ctx.ordinaryHeadOwned, true, 'no ownership, so no pre-write retirement, before the fence');
+  // Unchanged owner (field order is irrelevant) releases the fence.
+  const reordered = Object.fromEntries(Object.entries(plain(owner)).reverse());
+  const r = run('router', { _splitCtx: ctx, payload: [reordered], statusCode: 200 }, now, notReleased);
+  assert.equal(ctx.ordinaryNativeFence, undefined);
+  assert.ok(ctx.step !== 'ordinary_attempt_native_fence_restored');
+  assert.ok(!(r.out[6] && r.msg.payload?.[1]?.$pop), 'the head is not handed back');
+});
+test('a gateway restart racing the transfer hands the head back exactly and answers pending', () => {
+  for (const changed of [o => ({ ...o, state: 'PREPARED', attempts: 2, reclaimedAt: '2026-11-20T09:59:30Z' }), () => null, 'error']) {
+    const { key, head, owner, ctx, notReleased } = fencedTransfer();
+    const claimed = plain(ctx.ordinaryHead);
+    const message = changed === 'error' ? { _splitCtx: ctx, error: 'unavailable', payload: null, statusCode: 503 }
+      : { _splitCtx: ctx, payload: changed(plain(owner)) ? [changed(plain(owner))] : [], statusCode: 200 };
+    let r = run('router', message, now, notReleased);
+    assert.ok(r.out[6]); assert.notEqual(ctx.ordinaryHeadOwned, true);
+    const [filter, update, options] = plain(r.msg.payload);
+    assert.deepEqual(filter, { _id: key, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', operationId: 'fresh-one-time',
+      generation: claimed.generation, phase: 'UPSTREAM_INTENT', payment: { $exists: false } });
+    assert.deepEqual(update.$set, Object.fromEntries(Object.entries(head).filter(([k]) => k !== '_id')));
+    for (const k of ['operationId', 'rootOperationId', 'generation', 'phase', 'updatedAt']) assert.equal(update.$unset[k], '', k);
+    assert.deepEqual(update.$pop, { history: 1 }); assert.deepEqual(options.writeConcern, { w: 'majority', j: true });
+    // Applying the restore to the stored transfer result reproduces the native head.
+    const stored = { ...claimed, history: [head] }; delete stored.history[0].history;
+    for (const k of Object.keys(update.$unset)) delete stored[k];
+    Object.assign(stored, update.$set); stored.history.pop();
+    assert.deepEqual({ ...stored, history: undefined }, { ...head, history: undefined });
+    for (const ack of [{ acknowledged: true, matchedCount: 1, modifiedCount: 1 }, null]) {
+      r = run('router', { _splitCtx: { ...ctx }, payload: ack, error: ack ? undefined : 'lost', statusCode: 200 }, now, notReleased);
+      assert.equal(r.msg.statusCode, 202); assert.equal(r.msg.payload.paymentUrl, null); assert.ok(!r.out[0]); assert.ok(!r.out[6]);
+    }
+  }
+});
+test('a lost transfer ACK is resolved by reading our own head, then the same owner fence', () => {
+  const key = joinKey();
+  const { ctx, notReleased } = (() => {
+    const f = fencedTransfer(); return f; })();
+  const generation = ctx.ordinaryNativeFence.generation;
+  ctx.step = 'ordinary_attempt_head_found';
+  const stored = { ...plain(ctx.ordinaryHead), history: [{ kind: 'BOOKING_PAYMENT_HEAD_V1' }] };
+  const r = run('router', { _splitCtx: ctx, payload: [stored], statusCode: 200 }, now, notReleased);
+  assert.equal(ctx.step, 'ordinary_attempt_native_fence_read'); assert.ok(r.out[5]);
+  assert.equal(ctx.ordinaryNativeFence.generation, generation); assert.equal(stored._id, key);
+  // A head with any other identity drops the fence and stays on the ordinary rules.
+  const other = { ...stored, operationId: 'someone-else' };
+  ctx.step = 'ordinary_attempt_head_found';
+  const o = run('router', { _splitCtx: ctx, payload: [other], statusCode: 200 }, now, notReleased);
+  assert.equal(o.msg.statusCode, 202); assert.equal(ctx.ordinaryNativeFence, undefined);
+});
+test('a terminal native release keeps the direct transfer without an owner fence', () => {
+  const key = joinKey();
+  const head = { _id: key, kind: 'BOOKING_PAYMENT_HEAD_V1', actorClientId: 'actor', tenantKey: 'iSkq6G',
+    ownerOperationKey: 'native-key', ownerOperationId: 'native-operation' };
+  const owner = { _id: 'native-key', operationId: 'native-operation', actorClientId: 'actor', tenantKey: 'iSkq6G',
+    exerciseId: 'exercise', state: 'RELEASED' };
+  const ctx = { action: 'join', exerciseId: 'exercise', step: 'ordinary_attempt_native_owner_found', paymentMode: 'one_time',
+    operationId: 'fresh-one-time', trustedPaymentActor: 'actor', ordinaryHeadKey: key, ordinaryNativeHead: head };
+  const released = { nativeReleased: op => op.state === 'RELEASED' };
+  run('router', { _splitCtx: ctx, payload: [owner], statusCode: 200 }, now, released);
+  assert.equal(ctx.ordinaryNativeFence, undefined);
+  run('router', { _splitCtx: ctx, payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 }, statusCode: 200 }, now, released);
+  assert.notEqual(ctx.step, 'ordinary_attempt_native_fence_read');
+});
+test('the clean-refusal rule stays identical to the gateway reclaim rule for FAILED attempts', () => {
+  const g = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
+  const start = g.indexOf('const lk1ReclaimIsRecord');
+  const end = g.indexOf('\n};', g.indexOf('const lk1ReclaimableAttempt')) + 3;
+  assert.ok(start > 0 && end > start);
+  const gateway = new Function(g.slice(start, end) + '\nreturn lk1ReclaimableAttempt;')();
+  const base = { state: 'FAILED', attempts: 1, upstreamAttemptedAt: 't', failedAt: 't', failure: { statusCode: 422 } };
+  const variants = [{}, { attempts: 4 }, { attempts: 5 }, { attempts: '9' }, { failure: { statusCode: 400 } }, { failure: { statusCode: 499 } },
+    { failure: { statusCode: 500 } }, { failure: { statusCode: '409' } }, { failure: { statusCode: 409.5 } }, { failure: null }, { failure: [] },
+    { failedAt: '' }, { upstreamAttemptedAt: null }, { upstreamAttemptedAt: 5 }, { bookingId: 'b' }, { bookingId: 0 }, { bookingId: ' ' },
+    { upstreamBookingId: 'b' }, { acceptedAt: 'x' }, { correlationId: 'c' }, { lk1: { createAttemptedAt: 'x' } },
+    { lk1: { bookingAttemptedAt: 'x' } }, { lk1: { transactionAttemptedAt: 'x' } }, { lk1: { transactionId: 7 } },
+    { lk1: { transactionIntent: {} } }, { lk1: { checkout: {} } }, { lk1: { visitJob: {} } }, { lk1: { checkout: [] } }, { lk1: 'x' }];
+  for (const v of variants) {
+    const op = { ...base, ...v };
+    assert.equal(contract.splitAttemptNativeCleanRefusal(op), gateway(op), JSON.stringify(v));
+  }
+});

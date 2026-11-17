@@ -49,8 +49,8 @@ const PAYMENT_LIFECYCLE_CANDIDATES = {
 // Explicit cancellation generation keeps the fifteen-minute generation pins above.
 const PAYMENT_CANCEL_CANDIDATES = {
   "router": {
-    "business": "f661821041a2391735d65f3ef9a570f41a82f3c45c4268f689470efb09dfcb48",
-    "source": "6ec27a0b424e40e1c701b712e67b7f6a919bd8317326618d9350e0ec51951f0d"
+    "business": "670e84a0db865d8b2fdb1f333b0a22c2fe181e32736777efa2c2170341fbe091",
+    "source": "5b3ffa5f88bc73a333d83e2c23c06d191a19d7ee7bc9e48654e18944a07b4c45"
   }
 };
 

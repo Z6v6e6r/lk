@@ -3,7 +3,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (msg._gameCreateOwner || msg._quarterCreateCapability) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "f661821041a2391735d65f3ef9a570f41a82f3c45c4268f689470efb09dfcb48", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "670e84a0db865d8b2fdb1f333b0a22c2fe181e32736777efa2c2170341fbe091", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -1816,6 +1816,14 @@ if (ctx.step === "ordinary_attempt_head_found") {
     }
     if (previous.kind !== "SPLIT_BOOKING_PAYMENT_HEAD_V1") return ordinaryAttemptPending(ctx);
     ctx.ordinaryHead = previous;
+    const fence = ctx.ordinaryNativeFence;
+    delete ctx.ordinaryNativeFence;
+    if (fence && previous.phase === "UPSTREAM_INTENT" && previous.operationId === ctx.operationId
+      && previous.generation === fence.generation && !previous.payment) {
+      // Our transfer CAS applied but its ACK was lost: the same owner fence decides.
+      ctx.ordinaryNativeFence = fence;
+      return ordinaryAttemptNativeFenceRead(ctx);
+    }
     if (previous.phase === "PAYMENT_REQUIRED") {
       ctx.step = "ordinary_attempt_game_readback"; msg._splitCtx = ctx;
       msg.payload = { tenantKey: previous.tenantKey, "metadata.splitPayment.payments": { $elemMatch: {
@@ -1889,7 +1897,48 @@ if (ctx.step === "ordinary_attempt_native_owner_found") {
     || !(contract?.nativeReleased?.(owner) || ordinaryAttemptContract()?.splitAttemptNativeCleanRefusal?.(owner))
     || retiredIds.includes(ctx.operationId) || !Array.isArray(head.history || [])
     || (head.generation || 0) >= 999) return ordinaryAttemptPending(ctx);
-  return ordinaryAttemptClaimHead(ctx, head);
+  const claim = ordinaryAttemptClaimHead(ctx, head);
+  // FAILED is not terminal: the gateway may restart the same native attempt and,
+  // having read its still-native head, book it. Only an unchanged owner re-read
+  // after our head CAS lets this one-time attempt reach the provider.
+  if (!contract?.nativeReleased?.(owner)) ctx.ordinaryNativeFence = { owner, head, generation: ctx.ordinaryHead.generation };
+  return claim;
+}
+const ordinaryAttemptCanonical = value => JSON.stringify(value, (key, v) => v && typeof v === "object" && !Array.isArray(v)
+  ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+function ordinaryAttemptNativeFenceRead(ctx) {
+  return ordinaryAttemptMongo(ctx, "ordinary_attempt_native_fence_read", { _id: ctx.ordinaryNativeFence.owner._id });
+}
+// Hands the head back to the native owner exactly as read. Only this request's own
+// pre-write UPSTREAM_INTENT generation matches; nothing reached the provider.
+function ordinaryAttemptRestoreNativeHead(ctx) {
+  const fence = ctx.ordinaryNativeFence, claimed = ctx.ordinaryHead, native = fence?.head;
+  if (!native || !claimed || claimed._id !== native._id) return ordinaryAttemptReview(ctx);
+  const set = {}, unset = {};
+  for (const [key, value] of Object.entries(native)) if (key !== "_id" && key !== "history") set[key] = value;
+  for (const key of Object.keys(claimed)) if (key !== "_id" && key !== "history" && !(key in native)) unset[key] = "";
+  return ordinaryAttemptMongo(ctx, "ordinary_attempt_native_fence_restored", [{ _id: claimed._id,
+    kind: "SPLIT_BOOKING_PAYMENT_HEAD_V1", operationId: ctx.operationId, generation: fence.generation,
+    phase: "UPSTREAM_INTENT", payment: { $exists: false } },
+  { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}), $pop: { history: 1 } },
+  { writeConcern: { w: "majority", j: true } }], true);
+}
+if (ctx.step === "ordinary_attempt_native_fence_read") {
+  const fence = ctx.ordinaryNativeFence;
+  const rows = Array.isArray(msg.payload) ? msg.payload : null;
+  if (fence && !msg.error && rows?.length === 1
+    && ordinaryAttemptCanonical(rows[0]) === ordinaryAttemptCanonical(fence.owner)) {
+    delete ctx.ordinaryNativeFence;
+    ctx.ordinaryHeadOwned = true;
+    return continueSplitAfterToken(ctx);
+  }
+  // Changed, missing or unreadable owner: the gateway may be booking it now.
+  return ordinaryAttemptRestoreNativeHead(ctx);
+}
+if (ctx.step === "ordinary_attempt_native_fence_restored") {
+  // Restored or not, this request stops; a lost restore leaves a fail-closed head.
+  delete ctx.ordinaryNativeFence;
+  return ordinaryAttemptPending(ctx);
 }
 if (ctx.step === "ordinary_attempt_game_readback") {
   if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) return ordinaryAttemptPending(ctx);
@@ -1927,6 +1976,7 @@ if (ctx.step === "ordinary_attempt_head_claimed") {
     && (ack.upsertedCount === 1 || ack.matchedCount === 1 && ack.modifiedCount === 1 && !ack.upsertedCount);
   // A loser reads the winner's durable head; it never executes the upstream leg.
   if (!won) return ordinaryAttemptMongo(ctx, "ordinary_attempt_head_found", { _id: ctx.ordinaryHeadKey });
+  if (ctx.ordinaryNativeFence) return ordinaryAttemptNativeFenceRead(ctx);
   ctx.ordinaryHeadOwned = true;
   return continueSplitAfterToken(ctx);
 }
