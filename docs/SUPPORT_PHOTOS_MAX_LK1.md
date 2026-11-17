@@ -132,6 +132,10 @@ same-origin attempt markers не удалять и не переиспользо
 и свежем совпадении target/disk/native revision. Применение не выполняет CUP restart,
 queue handoff, S3 provisioning или worker start — это отдельные части release-пакета.
 
+Target получает identity работающего Node-RED через listener1880 и /proc:
+root PID, kernel start ticks, entry/version, executable, cwd и hash command line.
+PM2 CLI не вызывается: отказ чтения не должен запускать daemon. Start ticks
+сверяются до и после чтения; смена процесса блокирует текущий release-план.
 Target дополнительно сверяет весь установленный adapter с опубликованными source
 bytes и закрепляет digest protected media config. `nodered_support_photos_worker_rebind.mjs`
 проверяет полный13-file installed baseline и меняет только64-byte whole-flow constant;

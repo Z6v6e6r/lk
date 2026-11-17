@@ -33,19 +33,59 @@ export function support_photosOperationCodeHash() {
 const predecessors = { install: ['pause'], resume: ['install'], 'pause-photo': ['resume'], recover: ['install', 'pause-photo'] };
 const contractInputs = (source, candidate, purpose) => purpose === 'recover'
   ? { liveBytes: candidate, candidateBytes: source } : { liveBytes: source, candidateBytes: candidate };
+function readRootProcessFile(file, limit) {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const st = fs.fstatSync(fd);
+    check(st.isFile() && st.uid === 0 && st.nlink === 1 && !(st.mode & 0o022)
+      && st.size <= limit, 'PHOTON_PROCESS_FILE');
+    const buffer = Buffer.alloc(limit + 1); let size = 0, n;
+    while (size <= limit && (n = fs.readSync(fd, buffer, size, buffer.length - size, null)) > 0) size += n;
+    check(size <= limit, 'PHOTON_PROCESS_FILE_LIMIT');
+    return buffer.subarray(0, size);
+  } finally { fs.closeSync(fd); }
+}
+// No lifecycle-manager client: even a failed query must not start a PM2 daemon.
+export function readSupportPhotosProcessIdentity({ io = {
+  listeners: () => execFileSync('ss', ['-ltnpH'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }),
+  stat: file => fs.lstatSync(file), read: readRootProcessFile,
+  realpath: file => fs.realpathSync(file), readlink: file => fs.readlinkSync(file),
+} } = {}) {
+  const listeners = io.listeners().split('\n').filter(line => /:1880\s/.test(line));
+  check(listeners.length === 1, 'PHOTON_LISTENER_OWNER');
+  const owners = [...listeners[0].matchAll(/pid=(\d+),/g)];
+  check(owners.length === 1, 'PHOTON_LISTENER_OWNER');
+  const pid = Number(owners[0][1]), proc = '/proc/' + pid;
+  check(Number.isSafeInteger(pid) && pid > 1, 'PHOTON_PROCESS');
+  const directory = io.stat(proc);
+  check(directory.isDirectory() && !directory.isSymbolicLink() && directory.uid === 0, 'PHOTON_PROCESS_OWNER');
+  const epoch = () => {
+    const raw = io.read(proc + '/stat', 65536).toString('utf8');
+    check(raw.startsWith(pid + ' (') && raw.lastIndexOf(') ') > 0, 'PHOTON_PROCESS_STAT');
+    const ticks = raw.slice(raw.lastIndexOf(') ') + 2).trim().split(/\s+/)[19];
+    check(typeof ticks === 'string' && /^[1-9]\d*$/.test(ticks), 'PHOTON_PROCESS_STAT');
+    return ticks;
+  };
+  const startTicks = epoch();
+  const entries = io.read(proc + '/environ', 2 * 1024 * 1024).toString('utf8')
+    .split('\0').filter(value => value.startsWith('pm_exec_path='));
+  check(entries.length === 1, 'PHOTON_PROCESS_ENTRY');
+  const rawEntry = entries[0].slice('pm_exec_path='.length);
+  check(path.isAbsolute(rawEntry) && rawEntry.length <= 4096 && !/[\r\n]/.test(rawEntry), 'PHOTON_PROCESS_ENTRY');
+  const entry = io.realpath(rawEntry), info = io.stat(entry);
+  check(info.isFile() && !info.isSymbolicLink() && info.uid === 0 && info.nlink === 1
+    && !(info.mode & 0o022), 'PHOTON_PROCESS_ENTRY');
+  const pkg = JSON.parse(io.read(path.join(path.dirname(entry), 'package.json'), 1024 * 1024));
+  check(pkg.name === 'node-red' && pkg.version === '4.0.9', 'PHOTON_RUNTIME_VERSION');
+  const identity = { pid, startTicks, executable: io.readlink(proc + '/exe'), cwd: io.readlink(proc + '/cwd'),
+    command: sha256(io.read(proc + '/cmdline', 65536)), entry, version: pkg.version };
+  check(epoch() === startTicks, 'PHOTON_PROCESS_EPOCH');
+  return identity;
+}
 export function readSupportPhotosTarget() {
-  const list = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] }));
-  const found = list.filter(p => p.name === 'node-red'); check(found.length === 1, 'PHOTON_PROCESS');
-  const p = found[0], env = p.pm2_env;
-  check(env.status === 'online' && Number.isSafeInteger(p.pid) && p.pid > 0
-    && Number.isSafeInteger(env.restart_time) && fs.statSync(`/proc/${p.pid}`).uid === 0, 'PHOTON_PROCESS_OWNER');
-  const listeners = execFileSync('ss', ['-ltnpH'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] })
-    .split('\n').filter(l => /:1880\s/.test(l));
-  check(listeners.length === 1 && listeners[0].includes(`pid=${p.pid},`), 'PHOTON_LISTENER_OWNER');
+  const processIdentity = readSupportPhotosProcessIdentity();
   const settings = `${ROOT}/settings.js`, st = fs.lstatSync(settings);
   check(st.isFile() && !st.isSymbolicLink() && st.uid === 0 && st.nlink === 1 && !(st.mode & 0o022), 'PHOTON_SETTINGS');
-  const entry = fs.realpathSync(env.pm_exec_path), version = JSON.parse(fs.readFileSync(path.join(path.dirname(entry), 'package.json'))).version;
-  check(version === '4.0.9', 'PHOTON_RUNTIME_VERSION');
   const adapter = path.join(ROOT, 'node_modules/node-red-contrib-padlhub-max-outbox');
   const adapterDir = fs.lstatSync(adapter);
   check(adapterDir.isDirectory() && !adapterDir.isSymbolicLink() && fs.realpathSync(adapter) === adapter
@@ -66,9 +106,8 @@ export function readSupportPhotosTarget() {
     && fs.realpathSync(path.dirname(mediaFile)) === path.dirname(mediaFile)
     && mediaParent.isDirectory() && !mediaParent.isSymbolicLink() && mediaParent.uid === 0
     && !(mediaParent.mode & 0o022), 'PHOTON_MEDIA_CONFIG_CUSTODY');
-  return sha256(bytes({ machine: sha256(fs.readFileSync('/etc/machine-id')), pid: p.pid, restarts: env.restart_time,
-    executable: fs.readlinkSync(`/proc/${p.pid}/exe`), cwd: fs.readlinkSync(`/proc/${p.pid}/cwd`),
-    command: sha256(fs.readFileSync(`/proc/${p.pid}/cmdline`)), entry, settings: sha256(fs.readFileSync(settings)), version,
+  return sha256(bytes({ machine: sha256(fs.readFileSync('/etc/machine-id')), ...processIdentity,
+    settings: sha256(fs.readFileSync(settings)),
     adapter: adapterHashes, mediaConfigSha256: sha256(fs.readFileSync(mediaFile)) }));
 }
 
