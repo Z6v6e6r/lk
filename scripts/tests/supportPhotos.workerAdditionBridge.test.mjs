@@ -91,6 +91,29 @@ test('missing/wrong independent pins and contract files cannot authorize a new b
     input => { input.publishingSourceCommit = input.trustedBaseline.sourceCommit; },
   ]) { const input = fixture();mutate(input);assert.throws(() => build(input)); }
 });
+test('reviewed additions can cross the exact native4 and source2 serialization boundary', () => {
+  const input = fixture();
+  input.beforeFlow = Buffer.from(JSON.stringify(JSON.parse(input.beforeFlow), null, 2) + '\n');
+  assert.throws(() => build(input), /ADDITION_BRIDGE_FLOW_DIGEST/);
+  repinCandidate(input);
+  const states = buildSupportPhotoStates(input.beforeFlow, input.originalPins);
+  for (const purpose of ['forward', 'paused-recovery']) {
+    const result = build({ ...input, purpose });
+    assert.equal(result.provenance.beforeFlowSha256, sha256(input.beforeFlow));
+    assert.equal(result.provenance.originalBeforeFlowSha256, sha256(input.originalBeforeFlow));
+    assert.equal(result.provenance.preservedAdditionCount, 3);
+    assert.equal(result.provenance.unchangedFileCount, 12);
+    assert.equal(result.provenance.nativeDiskSha256,
+      sha256(native(purpose === 'forward' ? states.photoActive : states.originalPaused)));
+  }
+  for (const encode of [flow => JSON.stringify(flow), flow => JSON.stringify(flow, null, 2),
+    flow => JSON.stringify(flow, null, 4) + '\n',
+    flow => (JSON.stringify(flow, null, 2) + '\n').replaceAll('\n', '\r\n')]) {
+    const wrong = fixture();wrong.beforeFlow = Buffer.from(encode(JSON.parse(wrong.beforeFlow)));
+    repinCandidate(wrong);
+    assert.throws(() => build(wrong), /ADDITION_BRIDGE_NATIVE_ENCODING/);
+  }
+});
 test('old-node mutations, removals and reordering fail even after superficial flow pins are recomputed', () => {
   for (const mutate of [
     flow => { flow.find(node => node.id === GATEWAY).func += '\nreturn null;'; },

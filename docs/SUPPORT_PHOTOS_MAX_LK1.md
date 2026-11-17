@@ -231,8 +231,13 @@ drain до первой фазы; после последней — двойна
 Контракт проверяется существующим `validateExactGraphContract`: ноль изменений
 старых nodes, точные ID/type/hash additions, сохранение порядка и appended suffix.
 Дополнительно запрещены новые nodes в старых tabs и wires/links из additions в
-старые nodes. Whole-flow bytes должны совпадать с native4-space/no-newline encoding;
-raw contract — с его canonical2-space/newline encoding. Пересчёт доверенных pins
+старые nodes. Whole-flow bytes должны совпадать с одной из двух точных сериализаций:
+native4-space/no-newline или source2-space/newline. Это позволяет использовать
+исторический native baseline и raw candidate из source-driven release без их
+пересериализации; независимые raw SHA и exact owner contract сохраняются.
+Это форматы входных сохранённых файлов; конечные worker bindings по-прежнему
+закрепляют только native4-space/no-newline photo graphs.
+Raw contract должен совпадать с его canonical2-space/newline encoding. Пересчёт доверенных pins
 вместо независимого review не является допустимым способом устранить отказ.
 
 Shared config references и function initializers могут присутствовать в approved

@@ -16,7 +16,8 @@ function nativeFlow(raw) {
   need(Buffer.isBuffer(raw), 'ADDITION_BRIDGE_RAW_BYTES_REQUIRED');
   const flow = JSON.parse(raw.toString('utf8'));
   need(Array.isArray(flow) && flow.length > 0
-    && Buffer.from(JSON.stringify(flow, null, 4)).equals(raw), 'ADDITION_BRIDGE_NATIVE_ENCODING');
+    && (Buffer.from(JSON.stringify(flow, null, 4)).equals(raw)
+      || Buffer.from(JSON.stringify(flow, null, 2) + '\n').equals(raw)), 'ADDITION_BRIDGE_NATIVE_ENCODING');
   const ids = flow.map(node => node?.id);
   need(ids.every(id => typeof id === 'string' && id.length > 0)
     && new Set(ids).size === ids.length, 'ADDITION_BRIDGE_NODE_IDS');
