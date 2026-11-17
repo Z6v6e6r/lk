@@ -15,7 +15,7 @@ function hook(name, dependencies) {
   dependencies = { isSubscriptionBookingReleased, resolveTournamentLevelGate, describeTournamentLevelGate,
     // CUP without a level rule for the fixture tournament: the gate stays open.
     apiFetchTournamentLevelDecision: async () => ({ status: 404, data: null, error: { status: 404, message: 'not found' } }),
-    setLevelGate: () => {}, ...dependencies };
+    setLevelGate: () => {}, TOURNAMENT_SERVER_BOOKING_ENABLED: false, shouldUseTournamentServerBooking: () => false, ...dependencies };
   let callback;
   function visit(node) {
     if (ts.isVariableDeclaration(node) && node.name.getText(source) === name) {
