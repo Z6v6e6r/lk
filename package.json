@@ -157,6 +157,7 @@
     "test:tff-publication-validation": "node --experimental-strip-types --test scripts/tests/tffPublicationValidation.nodered.test.mjs",
     "test:tournament-community-context": "node --experimental-strip-types --test scripts/tests/tournamentCommunityContext.test.mjs scripts/tests/tournamentCommunityContext.nodered.test.mjs scripts/tests/timeForFriendsRuntimeRoster.test.mjs",
     "test:tournament-signup-availability": "node --experimental-strip-types --test scripts/tests/tournamentSignupAvailability.test.ts scripts/tests/tournamentSignupVivaBookingIdentity.test.ts",
+    "test:tournament-level-decision": "node --experimental-strip-types --test scripts/tests/tournamentLevelDecision.test.ts",
     "test:mexicano-classic": "node --experimental-strip-types --test scripts/tests/mexicanoClassic.test.ts scripts/tests/mexicanoRecoveryIntegration.test.ts",
     "test:nodered-tournament-finished-at": "node --experimental-strip-types --test scripts/tests/tournamentFinishedAtIdempotency.nodered.test.ts",
     "test:nodered-tournament-history-limit": "node --experimental-strip-types --test scripts/tests/tournamentHistoryLimit.nodered.test.ts",
