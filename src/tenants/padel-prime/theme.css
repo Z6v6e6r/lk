@@ -1,0 +1,176 @@
+/*
+ * Падел Прайм · тема ЛК1.
+ *
+ * Токены из согласованного UI-кита (Padel Prime / white label) + маппинг на
+ * переменные LK1 (`:root` в MyApp.css), чтобы не переписывать 21k строк стилей.
+ * Все правила скоупятся `html[data-theme="padel-prime"]`, поэтому сборка
+ * ПадлХАБа и других клубов не меняется.
+ */
+
+html[data-theme="padel-prime"] {
+  /* --- токены кита --- */
+  --pp-brand: #d8f044;
+  --pp-brand-hover: #c5dd30;
+  --pp-ink: #171b19;
+  --pp-muted: #69716b;
+  --pp-surface: #ffffff;
+  --pp-canvas: #f5f6f2;
+  --pp-border: #e0e4dc;
+  --pp-soft: #eff5d8;
+  --pp-danger: #b83d3d;
+  --pp-success: #28784a;
+  --pp-radius: 14px;
+
+  /* --- маппинг на переменные LK1 --- */
+  --purple: var(--pp-ink);
+  --purple-dark: #0f1211;
+  --purple-light: var(--pp-soft);
+  --community-primary-gradient: linear-gradient(135deg, #171b19 0%, #2b332c 100%);
+  --orange: #c98a12;
+  --bg: var(--pp-canvas);
+  --white: var(--pp-surface);
+  --text: var(--pp-ink);
+  --text-secondary: var(--pp-muted);
+  --border: var(--pp-border);
+  --red: var(--pp-danger);
+  --green: var(--pp-success);
+  --radius: var(--pp-radius);
+  --shadow: 0 2px 12px rgba(23, 27, 25, 0.08);
+  --friendship-accent: var(--pp-brand);
+  --friendship-tint: rgba(216, 240, 68, 0.18);
+  --friendship-tint-strong: rgba(216, 240, 68, 0.32);
+  --friendship-border: rgba(176, 197, 58, 0.42);
+  --friendship-surface: #fbfdf3;
+  --subscription-bubble-fill: var(--pp-soft);
+  --ui-font: Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* --- кнопки: акцент кита на главном действии --- */
+html[data-theme="padel-prime"] .btn-primary {
+  background: var(--pp-brand);
+  color: var(--pp-ink);
+  font-weight: 750;
+  border-radius: 10px;
+}
+html[data-theme="padel-prime"] .btn-primary:hover {
+  background: var(--pp-brand-hover);
+}
+html[data-theme="padel-prime"] .btn-secondary {
+  background: var(--pp-ink);
+  color: var(--pp-surface);
+  border: none;
+  border-radius: 10px;
+  font-weight: 750;
+}
+html[data-theme="padel-prime"] .btn-cancel.outline {
+  border-color: var(--pp-border);
+  color: var(--pp-ink);
+}
+html[data-theme="padel-prime"] .btn-cancel.primary {
+  background: var(--pp-brand);
+  color: var(--pp-ink);
+}
+html[data-theme="padel-prime"] .btn-cancel.danger {
+  background: var(--pp-danger);
+}
+
+/* --- карточки игр и поверхностей --- */
+html[data-theme="padel-prime"] .game-card,
+html[data-theme="padel-prime"] .game-station-card {
+  border-color: var(--pp-border);
+  border-radius: var(--pp-radius);
+  background: var(--pp-surface);
+}
+html[data-theme="padel-prime"] .game-card.selected,
+html[data-theme="padel-prime"] .game-station-card.selected {
+  border-color: var(--pp-ink);
+  background: #fafcee;
+}
+html[data-theme="padel-prime"] .game-input,
+html[data-theme="padel-prime"] .form-input-textarea {
+  border-color: var(--pp-border);
+  border-radius: 10px;
+  background: var(--pp-surface);
+  color: var(--pp-ink);
+}
+html[data-theme="padel-prime"] .game-input:focus {
+  border-color: var(--pp-ink);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(216, 240, 68, 0.45);
+}
+
+/* --- пилюли/статусы --- */
+html[data-theme="padel-prime"] .pill,
+html[data-theme="padel-prime"] .game-card-badge,
+html[data-theme="padel-prime"] .game-status-badge {
+  background: var(--pp-soft);
+  color: var(--pp-ink);
+  border-radius: 7px;
+  font-weight: 700;
+}
+
+/* --- фон страницы кабинета --- */
+html[data-theme="padel-prime"] body {
+  background: var(--pp-canvas);
+  color: var(--pp-ink);
+}
+
+/* --- подпись бренда в шапке (только тестовая версия клуба) --- */
+html[data-theme="padel-prime"] .lk-brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 12px;
+  color: var(--pp-ink);
+}
+html[data-theme="padel-prime"] .lk-brand-mark::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--pp-brand);
+}
+
+/* --- экран входа: бренд клуба вместо унаследованного логотипа --- */
+html[data-theme="padel-prime"] .auth-brand-logo {
+  display: none;
+}
+html[data-theme="padel-prime"] .auth-brand-lockup::before {
+  content: "ПАДЕЛ ПРАЙМ";
+  display: block;
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: var(--pp-brand);
+  color: var(--pp-ink);
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  font-size: 13px;
+}
+html[data-theme="padel-prime"] .auth-card {
+  max-width: 400px;
+  padding: 24px;
+  background: var(--pp-surface);
+  border: 1px solid var(--pp-border);
+  border-radius: var(--pp-radius);
+}
+html[data-theme="padel-prime"] .auth-oauth-btn {
+  border-radius: 10px;
+  border-color: var(--pp-border);
+}
+html[data-theme="padel-prime"] .auth-oauth-btn:hover {
+  border-color: var(--pp-ink);
+  background: #fbfdf3;
+}
+html[data-theme="padel-prime"] .auth-input {
+  border-radius: 10px;
+}
+html[data-theme="padel-prime"] .auth-input:focus {
+  border-color: var(--pp-ink);
+  box-shadow: 0 0 0 3px rgba(216, 240, 68, 0.45);
+}
+html[data-theme="padel-prime"] .auth-consent__checkbox {
+  accent-color: var(--pp-ink);
+}
