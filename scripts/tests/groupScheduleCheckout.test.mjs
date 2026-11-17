@@ -244,6 +244,7 @@ test("booking callback forwards the promo unchanged and cannot bypass trial elig
   for (const blocked of [false, true]) {
     const calls = [];
     const complete = callback("completeRegistration", {
+      checkLevel: async () => true, registrationRequestIdRef: { current: 1 },
       subscriptionUsageShadowEnabled: false, selectedId: training.id,
       TRIAL_GROUP_CHECKOUT_ENABLED: true, isTrialGroupTraining: () => true,
       trialBookingBlocked: blocked, trialEligibilityKey: `${profile.id}:${training.id}`,

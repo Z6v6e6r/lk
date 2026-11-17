@@ -4994,7 +4994,7 @@ export default function GamesPage({
   const [profileId, setProfileId] = useState<string | null>(null);
   const [profilePhone, setProfilePhone] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("Организатор");
-  const [profileGrade, setProfileGrade] = useState("D+");
+  const [profileGrade, setProfileGrade] = useState<string | null>(null);
   const [profileRatingNumeric, setProfileRatingNumeric] = useState<number | null>(null);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [communityAutopublishStationTarget, setCommunityAutopublishStationTarget] =
@@ -5355,6 +5355,8 @@ export default function GamesPage({
         setProfileGrade(explicitGrade);
       } else if (numeric !== null) {
         setProfileGrade(getLetterGrade(numeric));
+      } else {
+        setProfileGrade(null);
       }
 
       setParticipants([
