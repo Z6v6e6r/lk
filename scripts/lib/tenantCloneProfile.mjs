@@ -72,6 +72,20 @@ export function parseTenantProfile(raw) {
 
   const vivaIds = isObject(raw.vivaIds) ? raw.vivaIds : {};
 
+  const bodyReplacements = Array.isArray(raw.bodyReplacements)
+    ? raw.bodyReplacements.map((item, index) => {
+      if (!isObject(item)) throw new Error(`tenant profile bodyReplacements[${index}] must be an object`);
+      const find = String(item.find || "");
+      if (!find.trim()) throw new Error(`tenant profile bodyReplacements[${index}].find is required`);
+      const replace = typeof item.replace === "string" ? item.replace : "";
+      return Object.freeze({ find, replace, required: item.required !== false });
+    })
+    : [];
+
+  const blockers = Array.isArray(raw.blockers)
+    ? raw.blockers.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+
   const reuseConfigNodeIds = Array.isArray(raw.reuseConfigNodeIds)
     ? raw.reuseConfigNodeIds.map((item) => String(item).trim()).filter(Boolean)
     : [];
@@ -96,6 +110,8 @@ export function parseTenantProfile(raw) {
     dropHttpIn: Object.freeze(dropHttpIn),
     globalKeyMap: Object.freeze({ ...globalKeyMap }),
     vivaIds: Object.freeze({ ...vivaIds }),
+    bodyReplacements: Object.freeze(bodyReplacements),
+    blockers: Object.freeze(blockers),
     reuseConfigNodeIds: Object.freeze(reuseConfigNodeIds),
   });
 }

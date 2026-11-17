@@ -127,3 +127,60 @@ test("rejects a profile whose identifiers are unsafe", () => {
   assert.throws(() => parseTenantProfile({ slug: "ok_slug", vivaTenant: "Dvjlor", pathPrefix: "/pade", collectionPrefix: "prefix", timezone: { offset: "+07:00", iana: "Asia/Krasnoyarsk" }, tabs: ["LK Games"] }), /collectionPrefix/);
   assert.throws(() => parseTenantProfile({ slug: "ok_slug", vivaTenant: "Dvjlor", pathPrefix: "/pade", collectionPrefix: "pp_", timezone: { offset: "+07:00", iana: "Asia/Krasnoyarsk" }, tabs: [] }), /at least one source tab/);
 });
+
+test("applies exact body replacements for tenant dictionary constants", () => {
+  const dictionaryProfile = parseTenantProfile({
+    slug: "pade_prime",
+    vivaTenant: "Dvjlor",
+    pathPrefix: "/pade-prime",
+    collectionPrefix: "pp_",
+    timezone: { offset: "+07:00", iana: "Asia/Krasnoyarsk" },
+    tabs: ["LK Games"],
+    reuseConfigNodeIds: [CLIENT],
+    bodyReplacements: [
+      { find: "const dictIds = [4588];", replace: "const dictIds = [];" },
+      { find: "const dictTypes = [605, 847];", replace: "const dictTypes = [524];" },
+    ],
+    vivaIds: {},
+  });
+  const flow = buildFlow();
+  const fn = flow.find((node) => node.id === "2222222222222222");
+  fn.func = `${fn.func}\nconst dictIds = [4588];\nconst dictTypes = [605, 847];`;
+  const { candidate, report } = analyzeFlow({ flow, profile: dictionaryProfile });
+  const body = candidate.find((node) => node.type === "function" && node.func.includes("const dictIds")).func;
+  assert.match(body, /const dictIds = \[\];/);
+  assert.match(body, /const dictTypes = \[524\];/);
+  assert.equal(report.appliedBodyReplacements, 2);
+  assert.equal(report.errors.length, 0, report.errors.join("\n"));
+});
+
+test("fails when a required body replacement is missing from the live source", () => {
+  const staleProfile = parseTenantProfile({
+    slug: "pade_prime",
+    vivaTenant: "Dvjlor",
+    pathPrefix: "/pade-prime",
+    collectionPrefix: "pp_",
+    timezone: { offset: "+07:00", iana: "Asia/Krasnoyarsk" },
+    tabs: ["LK Games"],
+    bodyReplacements: [{ find: "const gone = [9999];", replace: "const gone = [];" }],
+    vivaIds: {},
+  });
+  const { report } = analyzeFlow({ flow: buildFlow(), profile: staleProfile });
+  assert.ok(report.errors.some((error) => error.includes("required body replacement")), report.errors.join("\n"));
+});
+
+test("a declared owner blocker keeps the candidate non-deployable", () => {
+  const blockedProfile = parseTenantProfile({
+    slug: "pade_prime",
+    vivaTenant: "Dvjlor",
+    pathPrefix: "/pade-prime",
+    collectionPrefix: "pp_",
+    timezone: { offset: "+07:00", iana: "Asia/Krasnoyarsk" },
+    tabs: ["LK Games"],
+    vivaIds: {},
+    blockers: ["нет направления открытой игры в Viva"],
+  });
+  const { report } = analyzeFlow({ flow: buildFlow(), profile: blockedProfile });
+  assert.deepEqual(report.blockers, ["нет направления открытой игры в Viva"]);
+  assert.equal(report.deployable, false);
+});

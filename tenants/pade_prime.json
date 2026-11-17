@@ -27,8 +27,30 @@
     "^/lk/internal/staff"
   ],
   "globalKeyMap": {},
-  "vivaIds": {
-    "4588": null,
-    "1613": null
-  }
+  "vivaIds": {},
+  "bodyReplacements": [
+    {
+      "find": "const OPEN_GAME_DIRECTION_IDS = [4588];",
+      "replace": "const OPEN_GAME_DIRECTION_IDS = [];"
+    },
+    {
+      "find": "const OPEN_GAME_TYPE_IDS = [1613];",
+      "replace": "const OPEN_GAME_TYPE_IDS = [];"
+    },
+    {
+      "find": "const GROUP_TRAINING_TYPE_IDS = [605, 847, 963, 1208];",
+      "replace": "const GROUP_TRAINING_TYPE_IDS = [524];"
+    },
+    {
+      "find": "const TOURNAMENT_DIRECTION_IDS = [2617, 3284, 4769];",
+      "replace": "const TOURNAMENT_DIRECTION_IDS = [1578, 1580, 2433, 2434, 2435, 2436, 6775];"
+    },
+    {
+      "find": "const TOURNAMENT_TYPE_IDS = [839, 1013];",
+      "replace": "const TOURNAMENT_TYPE_IDS = [];"
+    }
+  ],
+  "blockers": [
+    "В Viva тенанта Dvjlor нет направления и типа для клубной (открытой) игры: списки классификации OPEN_GAME_* оставлены пустыми, иначе наследуются чужие id 4588/1613. Нужно создать направление «Открытая игра» и тип занятия в админке Viva, затем вписать их id в bodyReplacements и пересобрать кандидат."
+  ]
 }

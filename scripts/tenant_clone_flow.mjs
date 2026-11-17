@@ -209,6 +209,8 @@ export const analyzeFlow = ({ flow, profile }) => {
   const rewriteCollection = (collection) =>
     collection.startsWith(profile.collectionPrefix) ? collection : `${profile.collectionPrefix}${collection}`;
 
+  const appliedBodyReplacements = new Set();
+
   const cloned = emitted.map((id) => {
     const source = byId.get(id);
     const node = JSON.parse(JSON.stringify(source));
@@ -226,7 +228,14 @@ export const analyzeFlow = ({ flow, profile }) => {
     if (node.type === "http in" && typeof node.url === "string") node.url = rewriteUrlPrefix(node.url);
     if (node.type === "mongodb4" && typeof node.collection === "string") node.collection = rewriteCollection(node.collection);
     for (const field of BODY_FIELDS) {
-      if (typeof node[field] === "string") node[field] = applyBodyRules(node[field], profile);
+      if (typeof node[field] !== "string") continue;
+      let body = node[field];
+      for (const [index, rule] of profile.bodyReplacements.entries()) {
+        if (!body.includes(rule.find)) continue;
+        body = body.split(rule.find).join(rule.replace);
+        appliedBodyReplacements.add(index);
+      }
+      node[field] = applyBodyRules(body, profile);
     }
     for (const [key, value] of Object.entries(node)) {
       if (typeof value === "string" && value.includes(profile.sourceVivaTenant)) {
@@ -304,6 +313,10 @@ export const analyzeFlow = ({ flow, profile }) => {
   if (unresolvedVivaIds.length) {
     warnings.push(`unresolved Viva dictionary id(s): ${unresolvedVivaIds.join(", ")} — the clone must not be applied before they are mapped for this tenant`);
   }
+  for (const [index, rule] of profile.bodyReplacements.entries()) {
+    if (!rule.required || appliedBodyReplacements.has(index)) continue;
+    errors.push(`required body replacement was not found in the source flow: ${JSON.stringify(rule.find.slice(0, 120))}`);
+  }
   if (crossTabDependencies.size) {
     warnings.push(`${crossTabDependencies.size} cross-tab reference(s) point outside the cloned tabs`);
   }
@@ -331,9 +344,12 @@ export const analyzeFlow = ({ flow, profile }) => {
     collections,
     crossTabDependencies: [...crossTabDependencies].sort(),
     unresolvedVivaIds,
+    appliedBodyReplacements: appliedBodyReplacements.size,
+    bodyReplacements: profile.bodyReplacements.length,
+    blockers: [...profile.blockers],
     errors,
     warnings,
-    deployable: errors.length === 0 && warnings.length === 0,
+    deployable: errors.length === 0 && warnings.length === 0 && profile.blockers.length === 0,
   };
 
   return { candidate: cloned, report };
