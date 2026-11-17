@@ -154,6 +154,7 @@ test('subscription may take over an ordinary head refused before any provider wr
   assert.equal(transfer.msg.payload[1].$set.kind, 'BOOKING_PAYMENT_HEAD_V1');
   assert.equal(transfer.msg.payload[1].$set.ownerOperationId, ctx.operationId);
   assert.equal(transfer.msg.payload[1].$unset.prewriteFailure, '');
+  assert.equal(transfer.msg.payload[1].$unset.claimToken, '', 'a dead ordinary claim token never survives on a native head');
   assert.equal(transfer.msg.payload[1].$push.history.phase, 'PREWRITE_FAILED');
   for (const forged of [{ ...head, payment: { bookingId: 'booking' } }, { ...head, closure: { receiptKey: 'x' } }]) {
     ctx.step = 'lk1_payment_head_read';

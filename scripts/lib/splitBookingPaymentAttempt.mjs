@@ -35,8 +35,10 @@ export function splitAttemptNativeCleanRefusal(operation) {
   if ([operation.bookingId, operation.upstreamBookingId, operation.acceptedAt, operation.correlationId,
     lk1.createAttemptedAt, lk1.bookingAttemptedAt, lk1.transactionAttemptedAt, lk1.transactionId].some(text)
     || [lk1.transactionIntent, lk1.checkout, lk1.visitJob].some(record)) return false;
-  if ([operation.transactionId, operation.managedEntitlementOperationId, operation.managedJoinV2,
-    lk1.unpaidCancellation, lk1.freeCancellationReturn, lk1.paymentAttempt].some(present)) return false;
+  // Same untouched-refusal fields as lk1DailyGuardRepair, plus cancellation/return traces.
+  if ([operation.transactionId, operation.managedEntitlementOperationId, operation.managedSubscriptionInstanceId,
+    operation.managedJoinV2, operation.lk2LegacyJoin, lk1.unpaidCancellation, lk1.freeCancellationReturn,
+    lk1.paymentAttempt].some(present) || operation.activationState === 'PENDING') return false;
   const status = Number(operation.failure?.statusCode);
   if (!record(operation.failure) || !SPLIT_NATIVE_CLEAN_REFUSAL_STATUSES.includes(status)) return false;
   return Boolean(text(operation.upstreamAttemptedAt) && text(operation.failedAt));

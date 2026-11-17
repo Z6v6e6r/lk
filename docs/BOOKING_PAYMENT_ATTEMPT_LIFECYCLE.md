@@ -99,7 +99,9 @@ native требует terminal native proof; перенос из ordinary — CL
   отказе провайдера (400, 401, 403, 404, 405, 410, 415, 422), с
   `upstreamAttemptedAt` и `failedAt`, без брони, accepted write, транзакции,
   checkout, visit job, managed entitlement (`managedEntitlementOperationId`,
-  `managedJoinV2`) и следов отмены/возврата. 408/409/429, прочие 4xx, 5xx и
+  `managedSubscriptionInstanceId`, `managedJoinV2`, `activationState: PENDING`),
+  legacy-LK2 записи (`lk2LegacyJoin`) и следов отмены/возврата — те же поля,
+  что у «нетронутого отказа» в `lk1DailyGuardRepair`. 408/409/429, прочие 4xx, 5xx и
   неизвестный исход остаются на сверке: конфликт может означать уже созданную
   бронь. Правило строго уже `lk1ReclaimableAttempt` в gateway (это закреплено тестом).
   `FAILED` не терминален: gateway может перезапустить ту же native-попытку и

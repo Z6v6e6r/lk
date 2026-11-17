@@ -3,7 +3,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (msg._gameCreateOwner || msg._quarterCreateCapability) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "de245280bac22122ac8fac99d67d1c6b205d4c772a7a1dcfaf99750d92aa457b", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "b04bc74b504687adc49609919005fd0ce49a14c3265b7e28bb2de8a364315725", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -327,7 +327,14 @@ const extractConflictExerciseId = (value, ctx) => {
 // A server nonce, never the client paymentRef/operationId, proves that a head
 // claim belongs to this request: duplicates of one operation get distinct tokens.
 function ordinaryAttemptNewClaimToken() {
-  const c = typeof crypto === "object" && crypto && typeof crypto.randomUUID === "function" ? crypto : null;
+  // Function-node sandboxes expose crypto only through global context (as other
+  // nodes here read it). The token needs uniqueness, not secrecy: it never leaves the server.
+  let c = null;
+  try {
+    const provided = typeof global === "object" && global && typeof global.get === "function" ? global.get("crypto") : null;
+    c = provided && typeof provided.randomUUID === "function" ? provided
+      : typeof crypto === "object" && crypto && typeof crypto.randomUUID === "function" ? crypto : null;
+  } catch { c = null; }
   return "claim:" + (c ? c.randomUUID() : [Date.now().toString(36), Math.random().toString(36).slice(2),
     Math.random().toString(36).slice(2), Math.random().toString(36).slice(2)].join(":"));
 }

@@ -983,7 +983,10 @@ test('the clean-refusal rule is never wider than the gateway reclaim rule, and i
     { failure: { statusCode: 451 } }, { transactionId: 'transaction' }, { managedEntitlementOperationId: 'entitlement' },
     { managedJoinV2: true }, { managedJoinV2: { id: 'x' } }, { lk1: { unpaidCancellation: { at: 'x' } } },
     { lk1: { freeCancellationReturn: { at: 'x' } } }, { lk1: { paymentAttempt: { state: 'X' } } },
-    { state: 'PREPARED', upstreamAttemptedAt: null }];
+    { state: 'PREPARED', upstreamAttemptedAt: null },
+    // Canonical untouched-refusal fields (lk1DailyGuardRepair): legacy-LK2 and managed lines own these.
+    { lk2LegacyJoin: true }, { managedSubscriptionInstanceId: 'instance' }, { activationState: 'PENDING' }];
+  // 408/409/429/451 stay ambiguous exactly as booking_create keeps them (fn_subscription_booking_router.js).
   for (const v of [...variants, ...narrower]) {
     const op = { ...base, ...v };
     if (contract.splitAttemptNativeCleanRefusal(op)) assert.equal(gateway(op), true, 'wider than gateway: ' + JSON.stringify(v));
@@ -1061,4 +1064,21 @@ test('restore matches only our untouched claim: every other head writer changes 
     closure: { ...ours, phase: 'CLOSED' },
   };
   for (const [name, doc] of Object.entries(writers)) assert.equal(matchesFilter(filter, doc), false, name);
+});
+
+test('claim tokens use the sandbox crypto from global context when present, else a unique fallback', async () => {
+  const { webcrypto } = await import('node:crypto');
+  const claim = globals => {
+    const key = joinKey();
+    const ctx = { action: 'join', step: 'ordinary_attempt_head_found', paymentMode: 'one_time',
+      operationId: 'ordinary-fixture', trustedPaymentActor: 'actor', ordinaryHeadKey: key, exerciseId: 'exercise' };
+    run('router', { _splitCtx: ctx, payload: [], statusCode: 200 }, now, nativePaymentContract, globals);
+    return ctx.ordinaryClaimToken;
+  };
+  assert.match(claim({ crypto: webcrypto }), /^claim:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  const fallback = new Set(Array.from({ length: 200 }, () => claim({})));
+  assert.equal(fallback.size, 200);
+  for (const token of fallback) assert.match(token, /^claim:[0-9a-z]+:[0-9a-z]+:[0-9a-z]+:[0-9a-z]+$/);
+  const throwing = new Proxy({}, { get() { throw new Error('context store unavailable'); } });
+  assert.match(claim(throwing), /^claim:/);
 });
