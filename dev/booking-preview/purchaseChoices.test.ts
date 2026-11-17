@@ -8,7 +8,7 @@ import type { PaymentContext, PaymentOption, Privileges } from './paymentMatrix.
 
 const resident: Privileges = { residency: true, subscription: false, pass: false };
 const subscriber: Privileges = { residency: false, subscription: true, pass: false };
-const context: PaymentContext = { subscriptionPlan: 'friendship', dailyQuota: 'available', dailyUsage: 'none', durationMinutes: 90 };
+const context: PaymentContext = { subscriptionPlan: 'friendship', dailyQuota: 'available', dailyUsage: 'none', durationMinutes: 90, excludedGroups: false };
 const fits = { subscription: true, pass: false };
 
 test('one subscription picker groups a seven-day Boost without changing its quote or charging the base again', () => {
