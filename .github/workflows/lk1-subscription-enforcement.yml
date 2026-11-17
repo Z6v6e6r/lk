@@ -522,6 +522,14 @@ jobs:
           scripts/tests/trialGroupBooking.nodered.test.mjs
           scripts/tests/trialGroupCandidate.test.mjs
           scripts/tests/trialGroupFrontend.test.mjs
+          scripts/tests/bookingPaymentCancellation.client.test.ts
+          scripts/tests/bookingPaymentCancellation.test.mjs
+          scripts/tests/bookingPaymentAttempt.test.mjs
+          scripts/tests/bookingPaymentAttempt.gateway.test.mjs
+          scripts/tests/bookingPaymentAttempt.split.test.mjs
+          scripts/tests/bookingPaymentAttempt.ack.test.mjs
+          scripts/tests/bookingPaymentAttempt.composer.test.mjs
+          scripts/tests/paymentAttemptLifecycle.client.test.ts
           scripts/tests/lk1UnpaidBookingCancellation.test.mjs
           scripts/tests/cancelledDayAllowance.test.mjs
           scripts/tests/lk1FreeCancellation.test.mjs
@@ -651,7 +659,7 @@ jobs:
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         run: |
           npm install --prefix "$RUNNER_TEMP/function98-runtime" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund node-red@4.0.9
-          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/function98NativeRuntime.test.mjs
+          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/function98NativeRuntime.test.mjs scripts/tests/bookingPaymentCancellationRuntime.test.mjs
           NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/splitCreateResultRuntime.test.mjs
           NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/gamePrivateProjection.runtime.test.mjs
 

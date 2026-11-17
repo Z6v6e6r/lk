@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import * as splitAttemptContract from "../lib/splitBookingPaymentAttempt.mjs";
 
 function runNodeRedFunction(
   file: string,
@@ -28,7 +29,61 @@ function runNodeRedFunctionSource(
     get(name: string) { return values.get(name); },
     set(name: string, value: unknown) { values.set(name, value); },
   };
-  return new Function("msg", "env", "global", source)(msg, env, globalContext);
+  const execute = new Function("msg", "env", "global", "__splitBookingPaymentAttempt", source);
+  const ctx = msg._splitCtx as { step?: string; paymentMode?: string; userAuthHeader?: string;
+    operationId?: string; clientPhone?: string; clientId?: string; trustedPaymentActor?: string;
+    bookingId?: string; gameId?: string; exerciseId?: string; paymentRef?: string;
+    ordinaryHeadKey?: string; ordinaryHead?: Record<string, unknown>; ordinaryClaimToken?: string } | undefined;
+  if (ctx?.step === "token" && ctx.paymentMode === "one_time") {
+    // Fixture transports drive the real profile + durable admission stages before
+    // assertions about subsequent pricing/location requests. No source bypass.
+    ctx.userAuthHeader ||= "Bearer fixture-user";
+    ctx.operationId ||= "fixture-ordinary-operation";
+    ctx.clientPhone ||= "79990000001";
+  }
+  if (ctx && ["transaction", "transaction_lookup"].includes(ctx.step) && ctx.paymentMode === "one_time") {
+    // These continuation fixtures represent an already journaled booking leg.
+    ctx.clientId ||= "fixture-client";
+    ctx.trustedPaymentActor ||= ctx.clientId;
+    ctx.operationId ||= "fixture-ordinary-operation";
+    ctx.bookingId ||= "fixture-booking";
+    ctx.gameId ||= "fixture-game"; ctx.exerciseId ||= "fixture-exercise"; ctx.paymentRef ||= "fixture-payment-ref";
+    ctx.ordinaryHeadKey ||= "booking-payment-head:fixture";
+    // Ownership is always proven by the server claim token written at claim time.
+    ctx.ordinaryClaimToken ||= "claim:fixture";
+    ctx.ordinaryHead ||= { _id: ctx.ordinaryHeadKey, kind: "SPLIT_BOOKING_PAYMENT_HEAD_V1",
+      actorClientId: ctx.trustedPaymentActor, tenantKey: "iSkq6G", operationId: ctx.operationId,
+      claimToken: ctx.ordinaryClaimToken, phase: "UPSTREAM_INTENT", createdAt: new Date().toISOString() };
+  }
+  let fixtureHead = ctx?.ordinaryHead;
+  let fixtureGame: Record<string, unknown> | null = null;
+  let out = execute(msg, env, globalContext, splitAttemptContract);
+  for (let hop = 0; hop < 14; hop++) {
+    if (ctx?.step === "ordinary_attempt_profile") {
+      msg.payload = { id: ctx.clientId || "fixture-client", phone: ctx.clientPhone };
+      msg.statusCode = 200;
+    } else if (out?.[5]) {
+      msg.payload = ctx?.step === "ordinary_attempt_exposure_head_found" && fixtureHead ? [fixtureHead] : [];
+    } else if (out?.[6]) {
+      const update = (msg.payload as Array<{ $setOnInsert?: Record<string, unknown>; $set?: Record<string, unknown> }>)?.[1];
+      fixtureHead = update?.$setOnInsert || { ...fixtureHead, ...update?.$set };
+      msg.payload = update?.$setOnInsert
+        ? { acknowledged: true, upsertedCount: 1, matchedCount: 0, modifiedCount: 0 }
+        : { acknowledged: true, upsertedCount: 0, matchedCount: 1, modifiedCount: 1 };
+    } else if (out?.[7]) {
+      fixtureGame ||= { _id: "fixture-game-object", id: ctx?.gameId, tenantKey: "iSkq6G", revision: 1,
+        booking: { exerciseId: ctx?.exerciseId }, metadata: { splitPayment: { payments: [] } } };
+      msg.payload = [fixtureGame];
+    } else if (out?.[8]) {
+      const update = (msg.payload as Array<{ $set: Record<string, unknown> }>)?.[1];
+      const payments = update.$set["metadata.splitPayment.payments"];
+      fixtureGame = { ...fixtureGame, revision: Number(fixtureGame?.revision) + 1,
+        metadata: { splitPayment: { payments } } };
+      msg.payload = { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
+    } else break;
+    out = execute(msg, env, globalContext, splitAttemptContract);
+  }
+  return out;
 }
 
 function devEnvironmentSplitRouterSource(apiBase: string | null = null) {

@@ -1,3 +1,6 @@
+import { paymentAttemptFields, PAYMENT_ATTEMPT_CHECK_MESSAGE } from "../../utils/paymentAttemptLifecycle";
+import { BookingPaymentCancelButton } from "../UI/BookingPaymentCancelButton";
+import { bookingPaymentTarget, canCancelBookingPaymentAttempt, PAYMENT_CANCELLATION_CLOSED, PAYMENT_CANCELLATION_PAID } from "../../utils/bookingPaymentCancellation";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isTournamentCapacityError } from "../../utils/tournamentCapacityError";
 import { isSubscriptionBookingReleased } from "../../utils/subscriptionRejoin";
@@ -501,7 +504,6 @@ function shouldShowSubscriptionHint(product: TournamentVivaProduct) {
   return visits === 30;
 }
 
-const PAYMENT_HOLD_MS = 20 * 60 * 1000;
 
 function navigateToExternalUrl(urlRaw: string): boolean {
   if (typeof window === "undefined") return false;
@@ -1028,6 +1030,7 @@ export default function TournamentSignupPage({
   const [inviteFeedback, setInviteFeedback] = useState<"shared" | "copied" | null>(null);
   const [confirmingSubscriptionProductKey, setConfirmingSubscriptionProductKey] = useState<string | null>(null);
   const [subscriptionConfirmationNotice, setSubscriptionConfirmationNotice] = useState<string | null>(null);
+  const [paymentCancellationNotice, setPaymentCancellationNotice] = useState<string | null>(null);
   const [registrationResolvedFor, setRegistrationResolvedFor] = useState<string | null>(null);
   const [checkoutPreparedFor, setCheckoutPreparedFor] = useState<string | null>(null);
   const [pendingPaymentProduct, setPendingPaymentProduct] = useState<TournamentVivaProduct | null>(null);
@@ -1262,6 +1265,7 @@ export default function TournamentSignupPage({
   }, [loadList, subscriptionUsageShadowEnabled]);
 
   const loadDetail = useCallback(async (tournamentId: string) => {
+    setPaymentCancellationNotice(null);
     const requestToken = readAuthToken();
     setLoadingDetail(true);
     setError(null);
@@ -1568,13 +1572,14 @@ export default function TournamentSignupPage({
         const nextRegistration: TournamentRegistrationState = {
           status: "PAYMENT_PENDING",
           bookingId: result.data.bookingId,
+          transactionId: result.data.transactionId,
           placeNumber: null,
           waitlistNumber: null,
           canRegister: false,
           canCancel: true,
           message: "Запись создана в Viva, ожидается оплата.",
           paymentUrl: result.data.paymentUrl,
-          paymentExpiresAt: result.data.paymentExpiresAt ?? new Date(Date.now() + PAYMENT_HOLD_MS).toISOString(),
+          ...paymentAttemptFields(result.data),
         };
         await storeTournamentPendingPayment(paymentToken, selectedExerciseId, nextRegistration);
         if (tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
@@ -1705,7 +1710,7 @@ export default function TournamentSignupPage({
     }
     const paymentUrl = registration?.paymentUrl?.trim();
     if (!isAuthenticated || !registrationSessionIdentity || registrationSessionIdentity !== tournamentPaymentSessionIdentity(readAuthToken()) || !canPayTournamentPending(registration) || !paymentUrl) {
-      setError("Ссылка на оплату пока не найдена. Обновите статус записи.");
+      setError(PAYMENT_ATTEMPT_CHECK_MESSAGE);
       return;
     }
     if (!navigateToExternalUrl(paymentUrl)) {
@@ -2071,6 +2076,7 @@ export default function TournamentSignupPage({
               {subscriptionConfirmationNotice}
             </div>
           )}
+          {!loadingDetail && paymentCancellationNotice && <div className="tournament-signup-notice" role="status" aria-live="polite">{paymentCancellationNotice}</div>}
           {!loadingDetail && selectedTournament && (
             <>
               {!subscriptionUsageShadowEnabled
@@ -2415,6 +2421,25 @@ export default function TournamentSignupPage({
                       </div>
                     )}
 
+                    {!subscriptionUsageShadowEnabled && registration?.status === "PAYMENT_PENDING" && !canPayPending && (
+                      <div className="tournament-signup-muted" role="status" aria-live="polite">
+                        {PAYMENT_ATTEMPT_CHECK_MESSAGE}
+                        <button type="button" className="section-cta" disabled={actionLoading}
+                          onClick={() => selectedId && void loadDetail(selectedId)}>Проверить результат</button>
+                      </div>
+                    )}
+                    {!subscriptionUsageShadowEnabled && registration?.status === "PAYMENT_PENDING" && (
+                      <BookingPaymentCancelButton target={canCancelBookingPaymentAttempt(registration) ? bookingPaymentTarget(registration) : null} actorClientId={checkout?.profile?.id}
+                        onChange={() => setRegistration(current => current ? { ...current } : current)}
+                        onSettled={async (state, isCurrent) => {
+                          setPaymentCancellationNotice(state === "CLOSED" ? PAYMENT_CANCELLATION_CLOSED : PAYMENT_CANCELLATION_PAID);
+                          if (selectedExerciseId) {
+                            const refreshed = await apiFetchTournamentVivaMyRegistration(selectedExerciseId);
+                            if (!isCurrent()) return;
+                            if (refreshed.data) setRegistration(refreshed.data);
+                          }
+                        }} />
+                    )}
                     {!subscriptionUsageShadowEnabled && (canPayPending || canCancel) && (
                       <div className="tournament-signup-actions">
                         {canPayPending && (
@@ -2427,7 +2452,7 @@ export default function TournamentSignupPage({
                             Оплатить
                           </button>
                         )}
-                        {canCancel && (
+                        {canCancel && registration?.status !== "PAYMENT_PENDING" && (
                           <button
                             className="tournament-signup-danger"
                             type="button"

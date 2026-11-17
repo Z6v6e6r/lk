@@ -1,3 +1,4 @@
+import { paymentAttemptFields, isSettledPaymentAttempt, canOpenPaymentAttempt, PAYMENT_ATTEMPT_CHECK_MESSAGE } from "../../src/utils/paymentAttemptLifecycle.ts";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -36,6 +37,7 @@ function scenario({ getFailure = 0, changedBinding = false, conflictPatch = 0, f
   canonical.updatedAt = '2099-11-15T10:01:00.000Z';
   canonical.invite.maxPlayers = capacity;
   const scope = {
+    paymentAttemptFields, isSettledPaymentAttempt, canOpenPaymentAttempt, PAYMENT_ATTEMPT_CHECK_MESSAGE,
     gameRecordId: canonical.id, activeGameRecord: stale,
     detailsParticipants: stale.participants, detailsWaitlist: stale.waitlist, detailsMetadata: stale.metadata,
     detailsOrganizerPayload: stale.organizer, detailsOrganizerInMatch: true, detailsTeamSlots: [],

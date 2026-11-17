@@ -106,11 +106,13 @@ test('already-native baseline inverse preserves all payload bytes and still reje
   assert.throws(() => buildMaxOutboxWorkerInverse(bad), /BASELINE_FILE_DIGEST_MISMATCH/);
 });
 
-test('fixed baseline closure agrees with the standard bundle verifier and builder', () => {
+test('historical rebind closure stays fixed while the new booking worker adds its explicit modules', () => {
   const verifier = readFileSync(new URL('../lk1_unpaid_cancel_service/verify_bundle.mjs', import.meta.url), 'utf8');
   const literal = verifier.match(/export const BUNDLE_FILES = (\[[\s\S]*?\]);/)[1];
   const declared = [...literal.matchAll(/'([^']+)'/g)].map((match) => match[1]);
-  assert.deepEqual(files, declared);
+  const added = ['lib/bookingPaymentAttempt.mjs', 'lib/bookingPaymentAttemptWorker.mjs', 'lib/subscriptionVisitLifecycle.mjs'];
+  assert.deepEqual(declared.filter(file => !added.includes(file)), files);
+  assert.deepEqual(declared.filter(file => added.includes(file)), added);
   const builder = readFileSync(new URL('../lk1_unpaid_cancel_service/build_bundle.mjs', import.meta.url), 'utf8');
   assert.ok(builder.includes('for (const file of BUNDLE_FILES)'));
   assert.equal(files.length, 13);

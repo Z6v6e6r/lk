@@ -1,3 +1,4 @@
+import { paymentAttemptFields, isSettledPaymentAttempt, canOpenPaymentAttempt, PAYMENT_ATTEMPT_CHECK_MESSAGE } from "../../src/utils/paymentAttemptLifecycle.ts";
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -30,6 +31,7 @@ function harness(stage) {
   const state = { error: null, profileReads: 0, slotReads: 0, writes: 0, profileUpdates: 0, slotUpdates: 0, signal: null,
     cardPayloads: [], completed: [], step: null };
   const context = {
+    paymentAttemptFields, isSettledPaymentAttempt, canOpenPaymentAttempt, PAYMENT_ATTEMPT_CHECK_MESSAGE,
     AbortController, Promise, Date, Math, Set, isRequestTimeoutError, runWithAbortTimeout,
     subscriptionUsageShadowEnabled: false, studioId: 'studio', selectedDate: new Date('2030-01-01'),
     courtId: 'court', time: '20:00', duration: 60, selectedSlotId: 'slot', studioMasterServiceId: 'master',

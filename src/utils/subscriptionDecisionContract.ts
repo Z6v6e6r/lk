@@ -1,3 +1,4 @@
+import { isSettledPaymentAttempt } from "./paymentAttemptLifecycle.ts";
 export type SubscriptionRequestedPaymentMode = "subscription" | "one_time" | null | undefined;
 
 export interface SubscriptionDecisionResultEvidence {
@@ -104,6 +105,9 @@ const hasDeterministicOneTimeDecision = (
   }
 
   if (amountMinor > 0) {
+    if (settlementState === "CONFIRMED" && isSettledPaymentAttempt(result)) {
+      return Boolean(transactionId) && readConsistentText(result.raw, ["transactionId"]) === transactionId;
+    }
     return settlementState === "PAYMENT_REQUIRED" && Boolean(transactionId && paymentUrl);
   }
   return settlementState === "CONFIRMED";

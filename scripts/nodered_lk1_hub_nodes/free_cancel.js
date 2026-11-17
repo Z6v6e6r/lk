@@ -44,7 +44,7 @@ const lk1FreeStart = (ctx, verifyOnly = false) => {
 };
 const lk1FreePrewriteGate = (ctx, continuation) => {
   ctx.lk1FreeGateContinuation = continuation;
-  return lk1Find(ctx, 'lk1_free_cancel_booking_gate', { kind: 'LK1_FREE_CANCEL_JOB_V1',
+  return lk1Find(ctx, 'lk1_free_cancel_booking_gate', { kind: { $in: ['LK1_FREE_CANCEL_JOB_V1', 'BOOKING_PAYMENT_CLOSE_JOB_V1'] },
     tenantKey: ctx.tenantKey, clientSubscriptionId: normalizeId(ctx.clientSubscriptionId),
     phase: { $in: lk1FreePending } });
 };

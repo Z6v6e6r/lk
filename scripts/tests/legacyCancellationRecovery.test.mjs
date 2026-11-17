@@ -1,3 +1,4 @@
+import { bookingPaymentAttemptSource } from '../lib/eventPaymentSources.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -51,7 +52,7 @@ test('bare RELEASED, money, adjustment and modern cancellation paths cannot use 
 // CI fixture runs the actual maintained guard, protocol and new dispatch fragment.
 // No production flow or customer data is checked into this synthetic graph.
 function syntheticRouter() {
-  return `const ctx = msg._subscriptionBooking;
+  return bookingPaymentAttemptSource() + `const ctx = msg._subscriptionBooking;
 const normalizeId = x => typeof x === 'string' ? x.toLowerCase() : null;
 const isValidDateKey = x => /^\\d{4}-\\d{2}-\\d{2}$/.test(x);
 const OUTPUT_MONGO_UPDATE = 3, VIVA_API_BASE = 'https://fixture.invalid';

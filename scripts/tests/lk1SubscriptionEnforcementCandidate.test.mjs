@@ -16,6 +16,19 @@ import { applyReconciledEdits, timeoutPreservationEdits } from "../prepare_recon
 import { prepareChanges, replaceOnce } from "../prepare_game_private_projection_candidate.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+const paymentLifecycleEdits = JSON.parse(fs.readFileSync(
+  new URL('../lib/bookingPaymentAttemptSourceEdits.json', import.meta.url), 'utf8')).functions;
+function restorePrePaymentLifecycle(text, file) {
+  const target = paymentLifecycleEdits.find(item => item.file === file);
+  if (!target) return text;
+  assert.equal(sha256(text), target.afterSha256, file);
+  for (const { before, after } of [...target.edits].reverse()) {
+    assert.equal(text.split(after).length, 2, 'inverse payment lifecycle anchor: ' + file);
+    text = text.replace(after, () => before);
+  }
+  assert.equal(sha256(text), target.beforeSha256, file);
+  return text;
+}
 
 // Preserve frozen release contracts while separately pinning observer-only sources.
 const observerPins = {
@@ -24,7 +37,7 @@ const observerPins = {
   'scripts/nodered_games_nodes/fn_game_payment_confirm_router.js': ['d5606ece01b42d4275e5d53b7a40fb5fb78be015b92d9675d41ae8f984226e16', 'const TOKEN_URL'],
 };
 function frozenBusinessHash(file) {
-  let text = fs.readFileSync(file, 'utf8');
+  let text = restorePrePaymentLifecycle(fs.readFileSync(file, 'utf8'), file);
   if (file === 'scripts/nodered_games_nodes/fn_patch.js') {
     // Recover the exact frozen source; this paired successor does not authorize
     // recomposing or advancing the historical subscription release contract.

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
+import os from 'node:os';
+import pathModule from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -252,12 +254,28 @@ test('current referral metadata admission accepts only exact observed identities
 });
 test('guarded source application rejects drift/ambiguous identity without modifying supplied flow', () => {
   const path = Object.keys(hooks)[0], func = execFileSync('git', ['show', `91b016eb84be8269abc2b21d05a791dbfb87f4c3:${path}`], { encoding: 'utf8' }), flow = [{ id: 'synthetic', type: 'function', z: 'tab', func, wires: [['unchanged']] }, { id: 'route', type: 'http in', z: 'tab', url: '/lk/games/split/create', wires: [['synthetic']] }];
-  const attestation = { id: 'synthetic', path, preimageHash: sha(func), candidateHash: sha(read(path)), routeId: 'route', routeHash: sha(JSON.stringify(flow[1])) };
-  const candidate = applySourceHooks(flow, [attestation]);
-  assert.equal(flow[0].func, func); assert.deepEqual(candidate[0].wires, flow[0].wires);
-  assert.throws(() => applySourceHooks(flow, [{ ...attestation, preimageHash: 'wrong' }]), /DRIFT/);
-  assert.throws(() => applySourceHooks([...flow, ...flow], [attestation]), /DIAGNOSTIC_ROUTE_BINDING_REQUIRED/);
-  assert.throws(() => applySourceHooks(flow, [{ ...attestation, routeId: 'missing' }]), /BINDING/);
+  // Rehearse this historical observer on its exact reviewed pre-lifecycle source.
+  // The production guard must continue to reject mixing the two generations.
+  const target = JSON.parse(read('scripts/lib/bookingPaymentAttemptSourceEdits.json')).functions.find(t => t.file === path);
+  let historical = read(path);
+  assert.equal(sha(historical), target.afterSha256);
+  for (const { before, after } of [...target.edits].reverse()) {
+    assert.equal(historical.split(after).length, 2);
+    historical = historical.replace(after, () => before);
+  }
+  assert.equal(sha(historical), target.beforeSha256);
+  const attestation = { id: 'synthetic', path, preimageHash: sha(func), candidateHash: sha(historical), routeId: 'route', routeHash: sha(JSON.stringify(flow[1])) };
+  const root = fs.mkdtempSync(pathModule.join(os.tmpdir(), 'booking-payment-observer-fixture-'));
+  try {
+    fs.mkdirSync(pathModule.dirname(pathModule.join(root, path)), { recursive: true });
+    fs.writeFileSync(pathModule.join(root, path), historical);
+    const candidate = applySourceHooks(flow, [attestation], root);
+    assert.equal(flow[0].func, func); assert.deepEqual(candidate[0].wires, flow[0].wires);
+    assert.throws(() => applySourceHooks(flow, [attestation]), /DIAGNOSTIC_SOURCE_DRIFT/);
+    assert.throws(() => applySourceHooks(flow, [{ ...attestation, preimageHash: 'wrong' }], root), /DRIFT/);
+    assert.throws(() => applySourceHooks([...flow, ...flow], [attestation], root), /DIAGNOSTIC_ROUTE_BINDING_REQUIRED/);
+    assert.throws(() => applySourceHooks(flow, [{ ...attestation, routeId: 'missing' }], root), /BINDING/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 test('MAX both bot routes observe SDK output/errors without extra send/ACK/retry wires', () => {
   for (const connector of ['MAX_BOT', 'MAX_ACADEMY_BOT']) {

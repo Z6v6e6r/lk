@@ -42,6 +42,43 @@ if (!ctx?.gameId || !ctx?.tenantKey || !Number.isSafeInteger(ctx?.expectedNextRe
   return recover(ctx, "SPLIT_CLEANUP_ACK_CONTEXT_MISSING", "Cleanup write acknowledgement context is missing");
 }
 
+const nextPaymentHead = () => {
+  const proposal = ctx.paymentAttemptHeadClosures?.[ctx.paymentHeadIndex || 0];
+  if (!proposal) return response(ctx, true);
+  if (!proposal.receiptKey || !proposal.headKey) return recover(ctx, 'PAYMENT_HEAD_PROOF_MISSING', 'Payment closure proof is missing');
+  ctx.step = 'payment_head_receipt_read'; msg._splitCleanupWriteAck = ctx;
+  delete msg.error; msg.payload = { _id: proposal.receiptKey }; msg.limit = 2;
+  return [null, null, null, null, msg, null];
+};
+if (ctx.step === 'payment_head_receipt_read') {
+  const rows = asArray(msg.payload), proposal = ctx.paymentAttemptHeadClosures?.[ctx.paymentHeadIndex || 0];
+  const contract = typeof __splitBookingPaymentAttempt === 'object' ? __splitBookingPaymentAttempt : null;
+  const command = !msg.error && rows.length === 1
+    ? contract?.splitAttemptHeadClosure(proposal, ctx.paymentHeadCanonicalRecord, rows[0]) : null;
+  if (!command) return recover(ctx, 'PAYMENT_HEAD_PROOF_UNVERIFIED', 'Payment closure proof could not be verified');
+  ctx.step = 'payment_head_write_ack'; msg._splitCleanupWriteAck = ctx;
+  msg.payload = command; delete msg.error;
+  return [null, null, null, null, null, msg];
+}
+if (ctx.step === 'payment_head_write_ack') {
+  // A lost update ACK and an already-closed head are both resolved by a read.
+  const proposal = ctx.paymentAttemptHeadClosures[ctx.paymentHeadIndex || 0];
+  ctx.step = 'payment_head_verify'; msg._splitCleanupWriteAck = ctx;
+  delete msg.error; msg.payload = { _id: proposal.headKey }; msg.limit = 2;
+  return [null, null, null, null, msg, null];
+}
+if (ctx.step === 'payment_head_verify') {
+  const rows = asArray(msg.payload), head = rows.length === 1 ? rows[0] : null;
+  const proposal = ctx.paymentAttemptHeadClosures[ctx.paymentHeadIndex || 0];
+  if (msg.error || head?._id !== proposal.headKey || head.phase !== 'CLOSED'
+    || head.actorClientId !== proposal.clientId || head.closure?.receiptKey !== proposal.receiptKey
+    || head.closure.bookingId !== proposal.bookingId || head.closure.transactionId !== proposal.transactionId) {
+    return recover(ctx, 'PAYMENT_HEAD_CLOSURE_UNVERIFIED', 'Payment closure readback failed');
+  }
+  ctx.paymentHeadIndex = (ctx.paymentHeadIndex || 0) + 1;
+  return nextPaymentHead();
+}
+
 if (ctx.step === "write_ack") {
   const acknowledged = msg.payload?.acknowledged === true;
   const matchedCount = Number(msg.payload?.matchedCount);
@@ -79,4 +116,6 @@ const exact = (
 if (!exact) {
   return recover(ctx, "SPLIT_CLEANUP_READBACK_MISMATCH", "Cleanup state was not durably applied");
 }
-return response(ctx, true);
+ctx.paymentHeadCanonicalRecord = record;
+ctx.paymentHeadIndex = 0;
+return nextPaymentHead();

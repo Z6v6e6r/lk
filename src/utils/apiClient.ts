@@ -1,3 +1,5 @@
+import { paymentAttemptFields, isSettledPaymentAttempt } from "./paymentAttemptLifecycle";
+import { bookingPaymentCancellation, setBookingPaymentCancellationSessionReader, type BookingPaymentTarget } from "./bookingPaymentCancellation";
 import { moscowBookingEndIso } from "./bookingEndTime";
 import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
@@ -20,6 +22,7 @@ import {
 import { invalidateSubscriptionSnapshot, readSubscriptionSnapshot, requestChangesSubscriptions } from "./subscriptionSessionCache";
 import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscriptionSnapshotData";
 import { readAuthToken } from "./authTokenStorage";
+setBookingPaymentCancellationSessionReader(readAuthToken);
 import { trackClientError } from "./analytics";
 import { captureSplitLeaveInitiator } from "./splitLeaveDiagnostics";
 import { UUID } from "./errorDiagnosticsCore.mjs";
@@ -3259,6 +3262,13 @@ export interface PadelGameRecord {
     amount: number | null;
     paymentUrl: string | null;
     paid: boolean | null;
+    bookingId?: string | null;
+    transactionId?: string | null;
+    paymentExpiresAt?: string | null;
+    paymentAttemptState?: "PAYMENT_REQUIRED" | "CLOSING" | "PAID" | null;
+    paymentAttemptHeadKey?: string | null;
+    paymentAttemptCreatedAt?: string | null;
+    paymentAttemptCancelSupported?: boolean;
   } | null;
 }
 
@@ -3689,6 +3699,11 @@ export interface PaymentUrl {
   transactionId?: string;
   toPay: number;
   paymentUrl: string | null;
+  paymentExpiresAt?: string | null;
+  paymentAttemptState?: "PAYMENT_REQUIRED" | "CLOSING" | "PAID" | null;
+  paymentAttemptHeadKey?: string | null;
+  paymentAttemptCreatedAt?: string | null;
+  paymentAttemptCancelSupported?: boolean;
   bookingIds?: string[];
   exerciseId?: string | null;
   vivaExerciseId?: string | null;
@@ -3969,6 +3984,7 @@ export interface PadelSplitPaymentResult {
   gameId?: string | null;
   settlementState?: string | null;
   paymentUrl: string | null;
+  paid?: boolean;
   toPay: number;
   toPayMinor: number | null;
   shareAmount: number | null;
@@ -3978,6 +3994,11 @@ export interface PadelSplitPaymentResult {
   discountAmount: number | null;
   discountAmountMinor: number | null;
   deadlineAt: string | null;
+  paymentExpiresAt?: string | null;
+  paymentAttemptState?: "PAYMENT_REQUIRED" | "CLOSING" | "PAID" | null;
+  paymentAttemptHeadKey?: string | null;
+  paymentAttemptCreatedAt?: string | null;
+  paymentAttemptCancelSupported?: boolean;
   exerciseId: string | null;
   bookingId: string | null;
   productId: string | null;
@@ -5018,6 +5039,22 @@ function isAlreadyCancelledBookingResponse(
     (text.includes("already") && text.includes("cancel"))
     || text.includes("уже отмен")
   );
+}
+
+export function apiCancelBookingPaymentAttempt(target: BookingPaymentTarget, actorClientId: string, onChange?: () => void) {
+  return bookingPaymentCancellation().cancel(target, actorClientId, {
+    session: readAuthToken, onChange,
+    send: async (method, exactTarget) => {
+      const path = "/lk/games/payment-attempts/cancel";
+      const query = new URLSearchParams(exactTarget);
+      return runWithAbortTimeout(method === "POST" ? 8000 : 5000, signal => request<unknown>(
+        method === "GET" ? `${path}?${query}` : path, {
+          method, auth: true, retries: 0, signal, baseUrl: getServ2Origin() || "",
+          cache: "no-store", dedupe: false,
+          ...(method === "POST" ? { body: JSON.stringify(exactTarget) } : {}),
+        }));
+    },
+  });
 }
 
 export async function apiCancelBooking(
@@ -6589,6 +6626,9 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
         : null,
       payment: paymentPayload
         ? {
+            ...paymentAttemptFields(paymentPayload),
+            bookingId: pickString(paymentPayload, ["bookingId"]),
+            transactionId: pickString(paymentPayload, ["transactionId"]),
             amount: pickNumber(paymentPayload, ["amount", "toPay", "price", "sum"]),
             paymentUrl: pickString(paymentPayload, [
               "paymentUrl",
@@ -8888,6 +8928,7 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
     gameId: pickString(data, ["gameId"]) ?? null,
     settlementState: pickString(data, ["settlementState"]) ?? null,
     paymentUrl: extractPaymentUrl(data),
+    paid: isSettledPaymentAttempt(data),
     toPay,
     toPayMinor,
     shareAmount: pickNumeric(data, ["shareAmount"]) ?? null,
@@ -8896,7 +8937,8 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
     baseShareAmountMinor: pickNumeric(data, ["baseShareAmountMinor"]) ?? null,
     discountAmount: pickNumeric(data, ["discountAmount"]) ?? null,
     discountAmountMinor: pickNumeric(data, ["discountAmountMinor"]) ?? null,
-    deadlineAt: pickString(data, ["deadlineAt"]) ?? null,
+    ...paymentAttemptFields(data),
+    deadlineAt: paymentAttemptFields(data).paymentExpiresAt,
     exerciseId: pickString(data, ["exerciseId", "vivaExerciseId"]) ?? null,
     bookingId: pickString(data, ["bookingId"]) ?? null,
     productId: pickString(data, ["productId"]) ?? null,
@@ -9021,9 +9063,7 @@ function buildPadelSplitRequest(
   gameId?: string | null,
 ) {
   const operationId = params.paymentMode === "subscription"
-    ? (scope === "join"
-      ? getSubscriptionRejoinTracker().resolve(buildPadelSplitIdempotencyKey(scope, params, gameId))
-      : buildPadelSplitIdempotencyKey(scope, params, gameId))
+    ? getSubscriptionRejoinTracker().resolve(buildPadelSplitIdempotencyKey(scope, params, gameId))
     : String(params.paymentRef || "").trim();
   if (params.paymentMode !== "subscription") {
     return { path, options: { auth: true as const }, operationId };
@@ -9238,7 +9278,7 @@ function getSplitCreateAttempts(): SplitCreateAttempts {
 type SplitCreateIdentity = Pick<PadelSplitPaymentParams, "date" | "fromTime" | "toTime" | "roomId"
   | "clientId" | "clientPhone" | "clientSubscriptionId" | "spot">;
 export function hasPendingPadelSplitCreate(params: SplitCreateIdentity): boolean {
-  return getSplitCreateAttempts().has(buildPadelSplitIdempotencyKey("create", params as PadelSplitPaymentParams));
+  return getSplitCreateAttempts().has(getSubscriptionRejoinTracker().resolve(buildPadelSplitIdempotencyKey("create", params as PadelSplitPaymentParams)));
 }
 export function completePadelSplitCreate(operationId: string | null | undefined): void {
   if (operationId) getSplitCreateAttempts().complete(operationId);
@@ -9271,7 +9311,9 @@ async function requestPadelSplitCreateWithPendingPoll(
   }
   if (readAuthToken() !== session || options?.signal?.aborted) return stopped();
   if (!isAmbiguousSplitCreate(response)) {
-    if (response.error) splitCreateAttempts.complete(splitRequest.operationId);
+    if (getSubscriptionRejoinTracker().rememberReleased(splitRequest.operationId, response.status, response.error?.raw)) {
+      splitCreateAttempts.complete(splitRequest.operationId);
+    } else if (response.error) splitCreateAttempts.complete(splitRequest.operationId);
     return response;
   }
   options?.onRecovery?.();
@@ -9288,6 +9330,9 @@ async function requestPadelSplitCreateWithPendingPoll(
     }), options?.signal), {
     signal: options?.signal, session: readAuthToken, delaysMs: options?.delaysMs, wait: options?.wait,
   });
+  if (getSubscriptionRejoinTracker().rememberReleased(splitRequest.operationId, recovered.status, recovered.error?.raw)) {
+    splitCreateAttempts.complete(splitRequest.operationId);
+  }
   if (!recovered.error && recovered.status === 200 && isRecord(recovered.data)
     && typeof recovered.data.paymentRef === "string") splitCreateAttempts.adopt(splitRequest.operationId, recovered.data.paymentRef);
   return recovered;
@@ -9425,6 +9470,9 @@ export async function apiCreatePadelSplitParticipantPayment(
     };
   }
 
+  if (isSettledPaymentAttempt(response.data) && isRecord(response.data)
+    && response.data.exerciseId !== exerciseId) return { data: null, status: 202,
+      error: { status: 202, message: "Оплата требует проверки привязки к игре.", raw: response.data } };
   const pendingError = resolvePadelSplitPendingError(response.data, response.status);
   if (pendingError) {
     return {
@@ -10269,6 +10317,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
         return {
           data: {
             paymentUrl: txPaymentUrl,
+            ...paymentAttemptFields(txResult.data),
             toPay: txToPay,
             bookingIds: txBookingIds,
             exerciseId: txExerciseId,
@@ -10330,6 +10379,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
   return {
     data: {
       paymentUrl,
+      ...paymentAttemptFields(payResult.data),
       toPay,
       bookingIds,
       exerciseId,

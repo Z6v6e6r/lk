@@ -1,3 +1,5 @@
+import { eligiblePaymentAttempt, reconcileBookingPaymentAttempt } from './bookingPaymentAttemptWorker.mjs';
+
 // LK1 money bookings are Viva ON_PLACE carriers, but only a durable LK1 SMS
 // checkout can make one eligible for automatic unpaid cancellation.
 const text = value => typeof value === 'string' ? value.trim() : '';
@@ -221,6 +223,12 @@ async function markReview(op, operations, attemptedAt, reason, now, shouldStop) 
 // A crash or unknown PUT response is reconciled by exact readback, never a second PUT.
 export async function reconcileLk1UnpaidBooking({ op, operations, provider, cohortFrom,
   mode = 'SHADOW', now = nowIso, shouldStop = () => false }) {
+  if (eligiblePaymentAttempt(op)) {
+    if (iso(cohortFrom) === null || iso(op.createdAt) === null || iso(op.createdAt) < iso(cohortFrom)) {
+      return { state: 'SKIPPED', reason: 'BEFORE_COHORT' };
+    }
+    return reconcileBookingPaymentAttempt({ op, operations, provider, mode, now, shouldStop });
+  }
   if (!['SHADOW', 'ENFORCE_NEW'].includes(mode)) return { state: 'OFF' };
   if (shouldStop()) return { state: 'STOPPED' };
   const prior = op?.lk1?.unpaidCancellation;
@@ -341,7 +349,7 @@ export function createLk1VivaCancellationProvider({ token, baseUrl = 'https://ap
   async function request(method, path, body, shouldStop) {
     const credential = await token();
     if (!text(credential) || /[\r\n]/.test(credential)) throw new Error('VIVA_TOKEN_UNAVAILABLE');
-    if (method === 'PUT' && shouldStop?.()) return { status: 0, stopped: true };
+    if (method !== 'GET' && shouldStop?.()) return { status: 0, stopped: true };
     const response = await fetchImpl(new URL(path, base), { method, redirect: 'error',
       signal: AbortSignal.timeout(timeoutMs), headers: { Authorization: `Bearer ${credential}`, Accept: 'application/json',
         'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
@@ -382,8 +390,17 @@ export function createLk1VivaCancellationProvider({ token, baseUrl = 'https://ap
       if (result.status !== 200 || !record(result.payload)) throw new Error('CANCEL_OPTIONS_UNAVAILABLE');
       return result.payload;
     },
-    async cancelBooking(op, shouldStop) {
-      return request('PUT', `${bookingPath(op)}/cancel`, { refundMethod: 'NONE', cancelExercise: false }, shouldStop);
+    async expireTransaction(op, shouldStop) {
+      return request('POST', `/api/v1/transactions/${encodeURIComponent(op.lk1.checkout.transactionId)}/expire`, undefined, shouldStop);
+    },
+    async readSubscriptions(op) {
+      const result = await request('GET', `/api/v1/clients/${encodeURIComponent(op.actorClientId)}/subscriptions?includeFinished=true&size=200&page=0`);
+      if (result.status !== 200 || !record(result.payload)) throw new Error('SUBSCRIPTIONS_READ_UNAVAILABLE');
+      return result.payload;
+    },
+    async cancelBooking(op, shouldStop, refundMethod = 'NONE') {
+      if (!['NONE', 'SERVICE'].includes(refundMethod)) throw new Error('REFUND_METHOD_INVALID');
+      return request('PUT', `${bookingPath(op)}/cancel`, { refundMethod, cancelExercise: false }, shouldStop);
     },
   };
 }

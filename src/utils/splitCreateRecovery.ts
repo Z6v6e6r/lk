@@ -1,3 +1,5 @@
+import { isSettledPaymentAttempt } from "./paymentAttemptLifecycle.ts";
+import { isSubscriptionBookingReleased } from "./subscriptionRejoin.ts";
 import type { ApiResult } from './apiClient';
 
 export interface SplitCreateResultBinding {
@@ -36,6 +38,7 @@ export function confirmedSplitCreateResult(value: unknown, binding: SplitCreateR
     || value.shareAmountMinor < 0 || value.shareAmountMinor > 1_000_000 || value.shareAmount !== value.shareAmountMinor / 100
     || value.toPayMinor < 0 || value.toPayMinor > 1_000_000 || value.toPay !== value.toPayMinor / 100) return false;
   if (value.toPayMinor === 0) return value.settlementState === 'CONFIRMED' && !value.paymentUrl && !value.transactionId;
+  if (isSettledPaymentAttempt(value)) return value.settlementState === 'CONFIRMED' && uuid(value.transactionId);
   try {
     const url = new URL(String(value.paymentUrl));
     return value.settlementState === 'PAYMENT_REQUIRED' && uuid(value.transactionId)
@@ -79,7 +82,8 @@ export async function recoverSplitCreateResult(
     try { result = await read(Math.min(10000, Math.max(1, deadline - now()))); }
     catch { if (!current()) return stopped(); continue; }
     if (!current()) return stopped();
-    if (result.status === 401 || result.status === 403) return result;
+    if (result.status === 401 || result.status === 403
+      || result.status === 409 && isSubscriptionBookingReleased(result.error?.raw)) return result;
     if (!result.error && result.status === 200 && confirmedSplitCreateResult(result.data, binding)) {
       const data = result.data as Record<string, unknown>;
       return { ...result, data: { ...data, paymentRef: data.referenceSource === 'STORED_RECEIPT' ? data.paymentRef : binding.paymentRef } };

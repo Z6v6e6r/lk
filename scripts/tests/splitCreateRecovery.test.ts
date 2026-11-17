@@ -1,3 +1,4 @@
+import { SubscriptionRejoinTracker } from "../../src/utils/subscriptionRejoin.ts";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -30,6 +31,9 @@ test('recovery accepts only a fully bound, explicit and consistent success', () 
     paymentUrl: 'https://payments.example.test', transactionId: id(9) };
   assert.equal(confirmedSplitCreateResult(paid, binding), true);
   assert.equal(confirmedSplitCreateResult({ ...paid, paymentUrl: 'javascript:alert(1)' }, binding), false);
+  assert.equal(confirmedSplitCreateResult({ ...paid, paymentUrl: null, paid: true, paymentAttemptState: 'PAID', settlementState: 'CONFIRMED' }, binding), true);
+  assert.equal(confirmedSplitCreateResult({ ...paid, paymentUrl: null, paid: true, settlementState: 'CONFIRMED' }, binding), false);
+
 });
 
 test('bounded reads recover pending/failed status attempts without accepting an unbound result', async () => {
@@ -73,6 +77,7 @@ function harness() {
     URLSearchParams, AbortController, readAuthToken: () => session, splitCreateAttempts: new SplitCreateAttempts(),
     isRecord: (value: unknown) => !!value && typeof value === 'object',
     getSplitCreateAttempts: () => context.splitCreateAttempts,
+    getSubscriptionRejoinTracker: () => new SubscriptionRejoinTracker(null),
     isAmbiguousSplitCreate, recoverSplitCreateResult, pendingSplitCreateResult, moscowBookingEndIso,
     runWithAbortTimeout: async (_ms: number, run: (signal: AbortSignal) => unknown) => run(new AbortController().signal),
     requestPadelSplitPayment: async (_request: unknown, _base: string, params: { paymentRef: string }) => {

@@ -1,3 +1,4 @@
+import { canOpenPaymentAttempt, paymentAttemptFields, PAYMENT_ATTEMPT_CHECK_MESSAGE } from "../../src/utils/paymentAttemptLifecycle.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -251,6 +252,7 @@ test("booking callback forwards the promo unchanged and cannot bypass trial elig
       setDetailError: () => {}, setActionLoading: () => {}, setActionMessage: () => {},
       buildPaymentReturnUrls: () => ({ successUrl: "fixture-success", failUrl: "fixture-fail" }),
       getErrorMessage,
+      readAuthToken: () => "fixture-session", tournamentPaymentSessionIdentity: value => value,
       apiCreateTournamentVivaTransaction: async params => {
         calls.push(params);
         return { data: null, error: { message: "fixture stop" } };
@@ -290,5 +292,29 @@ test("actual trial transaction preserves the promo and owned visit source throug
     assert.deepEqual(JSON.parse(calls[0].options.body), {
       exerciseId: training.id, productId: params.product.id, source, promoCode: params.promoCode,
     });
+  }
+});
+
+
+test("group checkout opens the same active attempt URL but never an expired or closing response", async () => {
+  for (const state of ["PAYMENT_REQUIRED", "EXPIRED", "CLOSING"]) {
+    const opened = [], registrations = [], errors = [];
+    const result = { paymentUrl: "https://pay.example.test/same-attempt", bookingId: "booking",
+      paymentExpiresAt: new Date(Date.now() + 60_000).toISOString(), paymentAttemptState: state };
+    const complete = callback("completeRegistration", {
+      subscriptionUsageShadowEnabled: false, selectedId: training.id, TRIAL_GROUP_CHECKOUT_ENABLED: false,
+      isTrialGroupTraining: () => false, setDetailError: value => errors.push(value), setActionLoading: () => {}, setActionMessage: () => {},
+      buildPaymentReturnUrls: () => ({ successUrl: "fixture-success", failUrl: "fixture-fail" }),
+      readAuthToken: () => "session", tournamentPaymentSessionIdentity: value => value,
+      storeTournamentPendingPayment: async () => {},
+      apiCreateTournamentVivaTransaction: async () => ({ data: result, error: null }),
+      setRegistration: value => registrations.push(value), setRegistrationSessionIdentity: () => {},
+      canOpenPaymentAttempt, paymentAttemptFields, PAYMENT_ATTEMPT_CHECK_MESSAGE,
+      navigateToExternalUrl: url => { opened.push(url); return true; },
+    });
+    await complete(training, checkout(), product());
+    assert.equal(registrations[0].status, "PAYMENT_PENDING");
+    assert.deepEqual(opened, state === "PAYMENT_REQUIRED" ? [result.paymentUrl] : []);
+    if (state !== "PAYMENT_REQUIRED") assert.equal(errors.at(-1), PAYMENT_ATTEMPT_CHECK_MESSAGE);
   }
 });

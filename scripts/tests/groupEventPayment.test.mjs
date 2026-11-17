@@ -169,7 +169,8 @@ test('split game readback accepts the real Viva transaction evidence shape', () 
   const accepted = call(gameCtx(), transaction);
   assert.equal(accepted.result.step, 'lk1_checkout_saved');
   assert.deepEqual(accepted.result.update.$set['lk1.checkout'],
-    { transactionId: 'fixture-transaction', paymentUrl: 'https://pay.tbank.ru/fixture', toPayMinor: 210000 });
+    { transactionId: 'fixture-transaction', paymentUrl: 'https://pay.tbank.ru/fixture', toPayMinor: 210000,
+      lifecycleVersion: 1, createdAt: '2026-09-15T12:26:00.000Z', expiresAt: '2026-09-15T12:36:00.000Z' });
   // Nested provider echoes are read exactly like the legacy split lookup reads them.
   for (const echoed of [
     { bookingIds: ['fixture-booking'] },

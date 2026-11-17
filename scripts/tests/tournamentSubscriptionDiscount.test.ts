@@ -1,3 +1,4 @@
+import { paymentAttemptFields, isSettledPaymentAttempt } from "../../src/utils/paymentAttemptLifecycle.ts";
 import { isSpanishTrainingExercise } from "../../src/utils/spanishTrainingExclusion.ts";
 import { SubscriptionRejoinTracker } from "../../src/utils/subscriptionRejoin.ts";
 import assert from "node:assert/strict";
@@ -333,12 +334,13 @@ function bookingGateway(response: unknown, requests: { url: string; body: unknow
   const tracker = new SubscriptionRejoinTracker(null);
   return loadFunction("apiCreateTournamentVivaBookingFromSubscription", {
     getTournamentSubscriptionRejoinTracker: () => tracker,
+    isSettledPaymentAttempt,
     ...identityDependencies,
     resolveSubscriptionCategoryDailyLimitDateFromEvent: () => "2026-09-20",
     getServ2Origin: () => "https://fixture.invalid",
     isRecord: (value: unknown) => Boolean(value) && typeof value === "object" && !Array.isArray(value),
     pickString: (value: Record<string, unknown>, keys: string[]) => keys.map(key => value[key]).find(item => typeof item === "string") || null,
-    normalizeConfirmedSubscriptionBookingPayment: loadFunction("normalizeConfirmedSubscriptionBookingPayment"),
+    normalizeConfirmedSubscriptionBookingPayment: loadFunction("normalizeConfirmedSubscriptionBookingPayment", { paymentAttemptFields, isSettledPaymentAttempt }),
     pollSubscriptionBookingConfirmation: (request: () => Promise<never>) => pollSubscriptionBookingConfirmation(request, { delaysMs: [0], wait: async () => {} }),
     request: async (url: string, options: { retries: number; body: string }) => {
       assert.equal(options.retries, 0);

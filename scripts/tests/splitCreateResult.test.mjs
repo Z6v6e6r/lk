@@ -1,3 +1,4 @@
+import * as paymentLifecycle from '../lib/bookingPaymentAttempt.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
@@ -35,9 +36,9 @@ function fixture(amount = 0) {
     paymentType: amount ? 'ON_PLACE' : 'SUBSCRIPTION', ...(amount ? {} : { clientSubscriptionId: id(2) }), spot: 1 };
   return { binding, op, exercise, booking };
 }
-function run(f, mutate = () => {}) {
-  const p = createSplitCreateResultProtocol(), effects = [];
-  let next = p.begin({ operationId: f.binding.operationId }, now);
+function run(f, mutate = () => {}, lifecycle = null, at = now) {
+  const p = createSplitCreateResultProtocol(lifecycle), effects = [];
+  let next = p.begin({ operationId: f.binding.operationId }, at);
   for (let count = 0; count < 15; count++) {
     effects.push(next.effect);
     if (next.effect.kind === 'reply') return { ...next.effect, effects };
@@ -47,7 +48,7 @@ function run(f, mutate = () => {}) {
         : { content: [structuredClone(f.booking)], last: true, number: 0, totalElements: 1 };
     const event = { status: 200, body };
     mutate(stage, event, next.state);
-    next = p.step(next.state, event, now + count);
+    next = p.step(next.state, event, at + count);
   }
   assert.fail('unbounded protocol');
 }
@@ -186,4 +187,29 @@ test('legacy free rows keep no invented payment deadline; legacy paid rows remai
   assert.equal(r.body.referenceSource, 'LEGACY_OPERATION'); assert.equal(r.body.deadlineAt, null);
   const paid = fixture(10000); delete paid.op.createReceipt;
   assert.equal(run(paid).status, 202);
+});
+
+
+test('money CREATE GET keeps original link until15m and returns CLOSING at boundary without provider writes', () => {
+  const f = fixture(75000);
+  f.op.lk1.checkout = { ...f.op.lk1.checkout, ...paymentLifecycle.paymentAttemptCheckout(
+    { id: id(7), paymentDueDate: new Date(now + 25 * 60000).toISOString() }, new Date(now).toISOString()) };
+  const active = run(f, () => {}, paymentLifecycle, now + 14 * 60000);
+  assert.equal(active.status, 200); assert.equal(active.body.paymentUrl, f.op.lk1.checkout.paymentUrl);
+  assert.equal(active.body.paymentExpiresAt, new Date(now + 15 * 60000).toISOString());
+  const expired = run(f, () => {}, paymentLifecycle, now + 15 * 60000);
+  assert.equal(expired.status, 202); assert.equal(expired.body.paymentAttemptState, 'CLOSING');
+  assert.equal(expired.body.paymentUrl, null);
+  for (const effect of expired.effects) if (effect.kind === 'http') assert.equal(effect.method, 'GET');
+});
+test('money CREATE GET uses a server-proved explicit next generation only after terminal release', () => {
+  const f = fixture(75000), op = f.op;
+  op.state = 'RELEASED'; op.lk1.paymentAttempt = { phase: 'CLOSED', closedAt: new Date(now + 15 * 60000).toISOString() };
+  op.lk1.paymentAttemptRelease = { schemaVersion: 1, binding: paymentLifecycle.paymentAttemptBinding(op),
+    bookingState: 'CANCELLED', transactionState: 'UNPAID_CLOSED', creditState: 'NOT_CONSUMED', creditProof: null,
+    verifiedAt: op.lk1.paymentAttempt.closedAt };
+  const closed = run(f, () => {}, paymentLifecycle, now + 16 * 60000);
+  assert.equal(closed.status, 409); assert.equal(closed.body.details.code, 'SUBSCRIPTION_BOOKING_RELEASED');
+  assert.equal(closed.body.details.nextOperationId, f.binding.operationId + ':rejoin:1');
+  assert.equal(closed.effects.filter(e => e.kind === 'http').length, 1);
 });
