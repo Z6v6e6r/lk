@@ -174,3 +174,8 @@ html[data-theme="padel-prime"] .auth-input:focus {
 html[data-theme="padel-prime"] .auth-consent__checkbox {
   accent-color: var(--pp-ink);
 }
+
+/* Чужие клубные промо-блоки не показываем в ЛК клуба */
+html[data-theme="padel-prime"] .pj-native-entry {
+  display: none;
+}
