@@ -222,6 +222,35 @@ Forward и paused-recovery bundles используют разные native SHA.
 drain до первой фазы; после последней — двойная штатная runtime attestation, expected401,
 затем start и полный scan cycle. Старый whole-flow pin не переносится автоматически.
 
+Если между installed worker baseline и текущим flow был отдельно проверенный
+релиз только с additions, использовать отдельный pure builder
+`nodered_support_photos_worker_addition_bridge.mjs`. Прежний strict builder не
+расширяется и по-прежнему отклоняет несовпадение его baseline с `beforeFlow`.
+Новый builder принимает исходные raw bytes baseline, текущие raw bytes, полный
+13-file baseline и независимо закреплённый raw owner contract v2 `exact-graph`.
+Контракт проверяется существующим `validateExactGraphContract`: ноль изменений
+старых nodes, точные ID/type/hash additions, сохранение порядка и appended suffix.
+Дополнительно запрещены новые nodes в старых tabs и wires/links из additions в
+старые nodes. Whole-flow bytes должны совпадать с native4-space/no-newline encoding;
+raw contract — с его canonical2-space/newline encoding. Пересчёт доверенных pins
+вместо независимого review не является допустимым способом устранить отказ.
+
+Shared config references и function initializers могут присутствовать в approved
+additions. Их безопасность проверяет владелец exact contract; отсутствие wires
+само по себе не доказывает изоляцию. Builder эти функции не исполняет и не делает
+filesystem/network/worker operations. Он сразу выводит конечный photo bundle из
+исходного настоящего baseline: только64 ASCII bytes flow constant меняются,
+остальные12 файлов и gateway constant сохраняются. Промежуточный synthetic
+manifest не выдаётся за installed baseline или исторический source commit.
+
+Forward и paused-recovery строятся из одной пары baseline/owner contract и
+текущего flow. Recovery возвращает paused graph с сохранением всех чужих additions,
+а не исходный flow до чужого релиза. Composed provenance закрепляет оба raw flow
+SHA, owner contract SHA, original baseline, publishing source commit и обе native
+привязки. Private flow/contract/baseline inputs остаются вне Git. Новый publisher
+должен использовать фактический проверенный source commit; builder не заменяет
+fresh disk/runtime/editor parity, owner handoff или readiness/authority перед start.
+
 ## Проверки
 
 `npm run test:support-photos`, существующие MAX receipt/rate/lifecycle tests,
