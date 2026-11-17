@@ -434,6 +434,82 @@ const prepareManagedHttp = (ctx, step, method, url, payload, headers = {}) => {
   return output;
 };
 
+// Tournament level admission (CUP decision). Node-RED never evaluates levels; it asks CUP for the
+// decision of the authenticated player before a NEW booking operation is created. Existing
+// operations (retries, confirmations, recovery) are never re-gated. Off unless the operator sets
+// global `tournament_level_gate_enabled` to true; CUP must already serve `level-decision`.
+const TOURNAMENT_LEVEL_DECISION_DEFAULT_BASE = "https://padlhub.su/api";
+const tournamentLevelGateEnabled = () => readGlobal("tournament_level_gate_enabled") === "true";
+const tournamentLevelDecisionBase = () => {
+  const configured = readGlobal("tournament_level_decision_api_base");
+  return /^https:\/\/[a-z0-9.-]+(?::\d+)?\/[a-z0-9/_-]*$/i.test(configured || "")
+    ? configured.replace(/\/+$/, "")
+    : TOURNAMENT_LEVEL_DECISION_DEFAULT_BASE;
+};
+const prepareTournamentLevelDecision = (ctx, operationRows) => {
+  ctx.tournamentLevelGateRows = operationRows;
+  const output = prepareHttp(
+    ctx,
+    "tournament_level_decision",
+    "GET",
+    `${tournamentLevelDecisionBase()}/tournaments/${encodeURIComponent(ctx.exerciseId)}/level-decision`,
+    undefined,
+    {
+      Authorization: ctx.authHeader,
+      Accept: "application/json",
+      "X-PadlHub-Auth-Source": "lk-keycloak",
+      "X-PadlHub-Tenant-Key": ctx.tenantKey,
+      "X-Correlation-Id": ctx.operationId,
+    },
+  );
+  msg.requestTimeout = 8000;
+  return output;
+};
+const TOURNAMENT_LEVEL_REASONS = new Set([
+  "LEVEL_NOT_RESTRICTED", "LEVEL_ALLOWED", "LEVEL_ALLOWED_WITH_TOLERANCE", "LEVEL_NOT_ALLOWED",
+  "PLAYER_LEVEL_REQUIRED", "PLAYER_LEVEL_UNKNOWN", "LEVEL_CHECK_UNAVAILABLE", "ACTIVITY_LEVEL_INVALID",
+  "LEVEL_GATE_DISABLED", "LEVEL_GATE_LEGACY",
+]);
+/** Returns null to continue, or a finished refusal. Unreadable answers fail closed. */
+const applyTournamentLevelDecision = (ctx) => {
+  const status = Number(msg.statusCode);
+  const body = isObj(msg.payload) ? msg.payload : null;
+  if (status === 404 && body && !/^cannot get/i.test(toStr(body.message))) {
+    ctx.tournamentLevelDecision = { outcome: "NO_CUP_RULE" };
+    return null;
+  }
+  if (!isHttpOk(status) || !body || typeof body.allowed !== "boolean"
+    || !TOURNAMENT_LEVEL_REASONS.has(toStr(body.reasonCode))) {
+    return finishError(ctx, 503, "Проверка уровня временно недоступна. Попробуйте позже.", {
+      code: "LEVEL_CHECK_UNAVAILABLE",
+    });
+  }
+  const summary = {
+    allowed: body.allowed,
+    enforced: body.enforced === true,
+    reasonCode: toStr(body.reasonCode),
+    ruleVersion: toStr(body.ruleVersion) || null,
+  };
+  ctx.tournamentLevelDecision = summary;
+  if (!summary.enforced || summary.allowed) return null;
+  const unavailable = summary.reasonCode === "LEVEL_CHECK_UNAVAILABLE";
+  return finishError(
+    ctx,
+    unavailable ? 503 : 409,
+    toStr(body.message) || "Запись на этот турнир недоступна по уровню.",
+    {
+      code: summary.reasonCode,
+      levelDecision: {
+        ...summary,
+        baseRange: isObj(body.baseRange) ? body.baseRange : null,
+        levelTolerance: typeof body.levelTolerance === "number" ? body.levelTolerance : 0,
+        effectiveRange: isObj(body.effectiveRange) ? body.effectiveRange : null,
+        playerLevel: typeof body.playerLevel === "number" ? body.playerLevel : null,
+      },
+    },
+  );
+};
+
 const prepareUserGet = (ctx, step, path) => prepareHttp(
   ctx,
   step,
@@ -3353,6 +3429,16 @@ if (ctx.step === "operation_full_price_fallback") {
   return finishFullPriceFallback(ctx, ctx.fullPriceFallbackBlockers);
 }
 
+if (ctx.step === "tournament_level_decision") {
+  const refusal = applyTournamentLevelDecision(ctx);
+  if (refusal) return refusal;
+  ctx.tournamentLevelGateChecked = true;
+  msg.payload = ctx.tournamentLevelGateRows;
+  delete ctx.tournamentLevelGateRows;
+  delete msg.error;
+  ctx.step = "operation_find";
+}
+
 if (ctx.step === "operation_find") {
   if (msg.error || !Array.isArray(msg.payload) || msg.payload.some((row) => !isObj(row))
     || (ctx.action !== "release" && msg.payload.length > 1)) {
@@ -3551,6 +3637,10 @@ if (ctx.step === "operation_find") {
     operation,
     ctx.cancelledSubscriptionBookings,
   );
+  if (!operation && ctx.action === "book" && ctx.category === "tournament"
+    && !ctx.tournamentLevelGateChecked && tournamentLevelGateEnabled()) {
+    return prepareTournamentLevelDecision(ctx, rows);
+  }
   if (!operation) {
     ctx.step = "operation_insert";
     msg._subscriptionBooking = ctx;
