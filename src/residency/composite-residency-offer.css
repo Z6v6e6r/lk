@@ -1,0 +1,13 @@
+.ph-composite-residency { box-sizing: border-box; display: grid; gap: 12px; margin: 16px 0; padding: 16px; border: 1px solid #d9c6ff; border-radius: 16px; background: #faf6ff; color: #363636; font: 15px/1.4 Arial, sans-serif; }
+.ph-composite-residency-consent { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+.ph-composite-residency-consent input { flex: 0 0 auto; width: 22px; height: 22px; margin: 1px 0 0; accent-color: #7e2bc4; }
+.ph-composite-residency-consent input:focus-visible { outline: 3px solid #7353d9; outline-offset: 2px; }
+.ph-composite-residency-consent > span { display: grid; gap: 2px; }
+.ph-composite-residency-consent strong { color: #222; font-weight: 700; }
+.ph-composite-residency-lines { display: grid; gap: 8px; margin: 0; padding: 12px 0 0; border-top: 1px solid #e6d9ff; }
+.ph-composite-residency-lines > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.ph-composite-residency-lines dt { margin: 0; }
+.ph-composite-residency-lines dd { margin: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ph-composite-residency-lines s { color: #8a8a8a; }
+.ph-composite-residency-total { padding-top: 8px; border-top: 1px solid #e6d9ff; font-weight: 700; color: #222; }
+.ph-composite-residency-note { margin: 12px 0; padding: 12px 16px; border-radius: 12px; background: #f4f4f4; color: #363636; font: 15px/1.4 Arial, sans-serif; }

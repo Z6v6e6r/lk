@@ -22,3 +22,11 @@ export const RESIDENCY_CHECK_URL =
 
 /** Optional gateway origin override; by default the gateway lives on the SERV2 origin. */
 export const RESIDENCY_GATEWAY_BASE_URL = (ENV.VITE_RESIDENCY_PASS_API_BASE || "").trim();
+
+/**
+ * Composite order: participation + residency in one payment (owner decision 2026-11-17).
+ * Off by default. Owner: LK1 residency. Enable only after PROVIDER evidence that Viva accepts and
+ * reads back the composite transaction, CUP composite evidence is on, and the server-side
+ * composite checkout is deployed. Review: when the composite checkout is accepted or dropped.
+ */
+export const COMPOSITE_RESIDENCY_ENABLED = readBoolean(ENV.VITE_LK1_COMPOSITE_RESIDENCY_ENABLED, false);
