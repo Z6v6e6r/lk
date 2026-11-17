@@ -59,7 +59,7 @@ export function getEventAllowedLevelLabel(value: unknown): string | null {
       const grade = displayLevel(precise[`${side}Grade`]);
       if (!grade || !/^[ABCD]\+?$/.test(grade)) return null;
       const division = precise[`${side}Level`];
-      return grade ? grade + (Number.isInteger(division) && Number(division) >= 1 && Number(division) <= 4 ? division : "") : null;
+      return grade + (Number.isInteger(division) && Number(division) >= 0 && Number(division) <= 4 ? division : "");
     };
     const min = bound("min"), max = bound("max");
     if (min || max) return min && max ? min === max ? min : `${min}–${max}` : min ? `от ${min}` : `до ${max}`;
