@@ -6,9 +6,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { patchVskTournamentEvaluator } from '../lib/vskTournamentDiscount.mjs';
 
 const EVALUATOR_FILE = new URL('../nodered_lk1_hub_nodes/evaluator.js', import.meta.url);
-const evaluatorSource = fs.readFileSync(EVALUATOR_FILE, 'utf8');
+const evaluatorSource = patchVskTournamentEvaluator(fs.readFileSync(EVALUATOR_FILE, 'utf8'));
 
 const HUB_PRODUCT_ID = 'db7a5250-7369-4f43-8ac5-9111be24bc74';
 // A plan product (РА) the evaluator must treat exactly like any other UUID.

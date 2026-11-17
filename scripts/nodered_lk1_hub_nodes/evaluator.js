@@ -356,18 +356,6 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
     selectedRule = { ruleId: `lk1-patriots-${category.toLowerCase()}`,
       kind: "PERCENT_DISCOUNT", percentage: category === "GROUP_TRAINING"
         ? rule.groupTrainingDiscountPercent : rule.tournamentDiscountPercent };
-  } else if (category === "TOURNAMENT"
-    && target?.eventId === "732d1932-4133-48c3-aed4-5ad1abf94e79"
-    && target?.externalEventTypeId === "viva:direction:6977:type:2349") {
-    // This VSK tournament has a monetary benefit, including the first event of the day.
-    // Ownership, lifecycle and event scope are still verified by the gateway; only a
-    // policy that already includes the 50% tournament benefit qualifies here.
-    decision.subscriptionVisitCount = 0;
-    if (rule.tournamentDiscountPercent !== 50) {
-      block("EVENT_NOT_INCLUDED", "Подписка не включает скидку на этот турнир");
-    } else {
-      selectedRule = { ruleId: "lk1-vsk-tournament", kind: "PERCENT_DISCOUNT", percentage: 50 };
-    }
   } else if (["GROUP_TRAINING", "TOURNAMENT"].includes(category)) {
     // The first covered event of the subscription's local service day is carried by the plan
     // itself: one visit is consumed and nothing is charged. Every later event that day, and
