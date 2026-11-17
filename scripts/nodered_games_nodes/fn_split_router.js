@@ -3,7 +3,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (msg._gameCreateOwner || msg._quarterCreateCapability) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "670e84a0db865d8b2fdb1f333b0a22c2fe181e32736777efa2c2170341fbe091", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "de245280bac22122ac8fac99d67d1c6b205d4c772a7a1dcfaf99750d92aa457b", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -324,15 +324,24 @@ const extractConflictExerciseId = (value, ctx) => {
     : null;
 };
 
-// A refusal before this request dispatched any provider write leaves no booking
-// or bill. Its own UPSTREAM_INTENT head becomes reclaimable instead of blocking
-// every later checkout; a lost ACK leaves the previous fail-closed head.
+// A server nonce, never the client paymentRef/operationId, proves that a head
+// claim belongs to this request: duplicates of one operation get distinct tokens.
+function ordinaryAttemptNewClaimToken() {
+  const c = typeof crypto === "object" && crypto && typeof crypto.randomUUID === "function" ? crypto : null;
+  return "claim:" + (c ? c.randomUUID() : [Date.now().toString(36), Math.random().toString(36).slice(2),
+    Math.random().toString(36).slice(2), Math.random().toString(36).slice(2)].join(":"));
+}
+// A refusal before this request dispatched any business write to the provider
+// (adminRequest non-GET) leaves no booking or bill. Its own UPSTREAM_INTENT head
+// becomes reclaimable instead of blocking every later checkout; a lost ACK leaves
+// the previous fail-closed head. The service-token POST is not a business write.
 function ordinaryAttemptRetirePrewrite(status, error, details) {
   const ctx = msg._splitCtx;
   const head = ctx && typeof ctx === "object" && ctx.ordinaryHeadOwned === true ? ctx.ordinaryHead : null;
   if (!head || ctx.ordinaryProviderWriteAt || msg._quarterCreateCapability || ctx.managedCreateBinding
     || head.kind !== "SPLIT_BOOKING_PAYMENT_HEAD_V1" || head.phase !== "UPSTREAM_INTENT" || head.payment
     || head._id !== ctx.ordinaryHeadKey || !head.operationId || head.operationId !== ctx.operationId
+    || typeof ctx.ordinaryClaimToken !== "string" || head.claimToken !== ctx.ordinaryClaimToken
     || !Number.isSafeInteger(head.generation)) return null;
   const at = new Date().toISOString();
   ctx.ordinaryHeadOwned = false;
@@ -340,7 +349,8 @@ function ordinaryAttemptRetirePrewrite(status, error, details) {
   ctx.step = "ordinary_attempt_prewrite_released"; msg._splitCtx = ctx;
   delete msg.error; msg.statusCode = 200;
   msg.payload = [{ _id: head._id, kind: head.kind, actorClientId: head.actorClientId, tenantKey: head.tenantKey,
-    operationId: head.operationId, generation: head.generation, phase: "UPSTREAM_INTENT", payment: { $exists: false } },
+    operationId: head.operationId, generation: head.generation, claimToken: ctx.ordinaryClaimToken,
+    phase: "UPSTREAM_INTENT", payment: { $exists: false } },
   { $set: { phase: "PREWRITE_FAILED", updatedAt: at, prewriteFailure: { statusCode: Number(status) || null,
     code: typeof details?.code === "string" ? details.code : null, failedAt: at } } },
   { writeConcern: { w: "majority", j: true } }];
@@ -482,7 +492,7 @@ const managedCreatePreflight = (ctx) => {
 };
 
 const adminRequest = (ctx, method, path, payload) => {
-  // Any non-GET may have reached the provider; its outcome is never retired as pre-write.
+  // Any business-API non-GET may have reached the provider; it is never retired as pre-write.
   if (method !== "GET" && ctx && !ctx.ordinaryProviderWriteAt) ctx.ordinaryProviderWriteAt = new Date().toISOString();
   msg._splitCtx = ctx;
   msg.method = method;
@@ -1402,8 +1412,9 @@ const ordinaryAttemptFinish = (ctx, response) => {
     paymentAttemptHeadKey: ctx.ordinaryHead._id };
   ctx.ordinaryResponse = { ...response, paymentAttemptCancelSupported: true, paymentAttemptState: "PAYMENT_REQUIRED", paymentAttemptCreatedAt: window.createdAt,
     deadlineAt: window.expiresAt, expiresAt: window.expiresAt, paymentAttemptHeadKey: ctx.ordinaryHead._id };
+  if (typeof ctx.ordinaryClaimToken !== "string") return ordinaryAttemptPending(ctx);
   return ordinaryAttemptMongo(ctx, "ordinary_attempt_checkout_saved", [{ _id: ctx.ordinaryHead._id,
-    operationId: ctx.operationId, phase: "UPSTREAM_INTENT" }, { $set: {
+    operationId: ctx.operationId, claimToken: ctx.ordinaryClaimToken, phase: "UPSTREAM_INTENT" }, { $set: {
     phase: "PAYMENT_REQUIRED", payment, updatedAt: new Date().toISOString() } },
     { writeConcern: { w: "majority", j: true } }], true);
 };
@@ -1818,11 +1829,17 @@ if (ctx.step === "ordinary_attempt_head_found") {
     ctx.ordinaryHead = previous;
     const fence = ctx.ordinaryNativeFence;
     delete ctx.ordinaryNativeFence;
-    if (fence && previous.phase === "UPSTREAM_INTENT" && previous.operationId === ctx.operationId
-      && previous.generation === fence.generation && !previous.payment) {
-      // Our transfer CAS applied but its ACK was lost: the same owner fence decides.
-      ctx.ordinaryNativeFence = fence;
-      return ordinaryAttemptNativeFenceRead(ctx);
+    // Only this request's server claim token proves that a lost-ACK claim is ours;
+    // a duplicate with the same operationId and generation holds another token.
+    if (previous.phase === "UPSTREAM_INTENT" && !previous.payment && typeof ctx.ordinaryClaimToken === "string"
+      && previous.claimToken === ctx.ordinaryClaimToken && previous.operationId === ctx.operationId) {
+      if (fence) {
+        // Our transfer CAS applied but its ACK was lost: the same owner fence decides.
+        ctx.ordinaryNativeFence = fence;
+        return ordinaryAttemptNativeFenceRead(ctx);
+      }
+      ctx.ordinaryHeadOwned = true;
+      return continueSplitAfterToken(ctx);
     }
     if (previous.phase === "PAYMENT_REQUIRED") {
       ctx.step = "ordinary_attempt_game_readback"; msg._splitCtx = ctx;
@@ -1859,8 +1876,9 @@ function ordinaryAttemptClaimHead(ctx, previous) {
     actorClientId: ctx.trustedPaymentActor, tenantKey: "iSkq6G", operationId: ctx.operationId,
     rootOperationId: previous?.rootOperationId || previous?.ownerOperationId || ctx.operationId,
     generation: previous ? (previous.generation || 0) + 1 : 0,
-    phase: "UPSTREAM_INTENT", createdAt: now, updatedAt: now };
+    claimToken: ordinaryAttemptNewClaimToken(), phase: "UPSTREAM_INTENT", createdAt: now, updatedAt: now };
   ctx.ordinaryHead = head;
+  ctx.ordinaryClaimToken = head.claimToken;
   if (previous) {
     const archived = { ...previous }; delete archived.history;
     const replacement = { ...head }; delete replacement._id;
@@ -1909,17 +1927,21 @@ const ordinaryAttemptCanonical = value => JSON.stringify(value, (key, v) => v &&
 function ordinaryAttemptNativeFenceRead(ctx) {
   return ordinaryAttemptMongo(ctx, "ordinary_attempt_native_fence_read", { _id: ctx.ordinaryNativeFence.owner._id });
 }
-// Hands the head back to the native owner exactly as read. Only this request's own
-// pre-write UPSTREAM_INTENT generation matches; nothing reached the provider.
+// Hands the head back to the native owner: its fields as read are set again, our
+// claim fields are removed and our history entry is popped (a native head that had
+// no history keeps []). Only this request's claim token matches, and every other
+// head writer changes kind/phase/claimToken, so the $pop removes only our entry.
+// Nothing reached the provider.
 function ordinaryAttemptRestoreNativeHead(ctx) {
   const fence = ctx.ordinaryNativeFence, claimed = ctx.ordinaryHead, native = fence?.head;
-  if (!native || !claimed || claimed._id !== native._id) return ordinaryAttemptReview(ctx);
+  if (!native || !claimed || claimed._id !== native._id || typeof ctx.ordinaryClaimToken !== "string"
+    || claimed.claimToken !== ctx.ordinaryClaimToken) return ordinaryAttemptReview(ctx);
   const set = {}, unset = {};
   for (const [key, value] of Object.entries(native)) if (key !== "_id" && key !== "history") set[key] = value;
   for (const key of Object.keys(claimed)) if (key !== "_id" && key !== "history" && !(key in native)) unset[key] = "";
   return ordinaryAttemptMongo(ctx, "ordinary_attempt_native_fence_restored", [{ _id: claimed._id,
     kind: "SPLIT_BOOKING_PAYMENT_HEAD_V1", operationId: ctx.operationId, generation: fence.generation,
-    phase: "UPSTREAM_INTENT", payment: { $exists: false } },
+    claimToken: ctx.ordinaryClaimToken, phase: "UPSTREAM_INTENT", payment: { $exists: false } },
   { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}), $pop: { history: 1 } },
   { writeConcern: { w: "majority", j: true } }], true);
 }

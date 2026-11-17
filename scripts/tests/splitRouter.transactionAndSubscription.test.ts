@@ -33,7 +33,7 @@ function runNodeRedFunctionSource(
   const ctx = msg._splitCtx as { step?: string; paymentMode?: string; userAuthHeader?: string;
     operationId?: string; clientPhone?: string; clientId?: string; trustedPaymentActor?: string;
     bookingId?: string; gameId?: string; exerciseId?: string; paymentRef?: string;
-    ordinaryHeadKey?: string; ordinaryHead?: Record<string, unknown> } | undefined;
+    ordinaryHeadKey?: string; ordinaryHead?: Record<string, unknown>; ordinaryClaimToken?: string } | undefined;
   if (ctx?.step === "token" && ctx.paymentMode === "one_time") {
     // Fixture transports drive the real profile + durable admission stages before
     // assertions about subsequent pricing/location requests. No source bypass.
@@ -49,9 +49,11 @@ function runNodeRedFunctionSource(
     ctx.bookingId ||= "fixture-booking";
     ctx.gameId ||= "fixture-game"; ctx.exerciseId ||= "fixture-exercise"; ctx.paymentRef ||= "fixture-payment-ref";
     ctx.ordinaryHeadKey ||= "booking-payment-head:fixture";
+    // Ownership is always proven by the server claim token written at claim time.
+    ctx.ordinaryClaimToken ||= "claim:fixture";
     ctx.ordinaryHead ||= { _id: ctx.ordinaryHeadKey, kind: "SPLIT_BOOKING_PAYMENT_HEAD_V1",
       actorClientId: ctx.trustedPaymentActor, tenantKey: "iSkq6G", operationId: ctx.operationId,
-      phase: "UPSTREAM_INTENT", createdAt: new Date().toISOString() };
+      claimToken: ctx.ordinaryClaimToken, phase: "UPSTREAM_INTENT", createdAt: new Date().toISOString() };
   }
   let fixtureHead = ctx?.ordinaryHead;
   let fixtureGame: Record<string, unknown> | null = null;

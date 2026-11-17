@@ -19,19 +19,26 @@ export function splitAttemptWindow(payment, transaction, attemptedAt, readback) 
   return { createdAt: new Date(created).toISOString(),
     expiresAt: new Date(Math.min(created + SPLIT_PAYMENT_ATTEMPT_WINDOW_MS, ...dues)).toISOString() };
 }
-// Mirrors gateway lk1ReclaimableAttempt for a FAILED native owner: an explicit
-// provider 4xx before any booking, accepted write or money leg left nothing to close.
+// Explicit provider refusals only. 408/409/429 and other 4xx stay ambiguous, as
+// in booking_create: a conflict may mean the booking already exists.
+export const SPLIT_NATIVE_CLEAN_REFUSAL_STATUSES = Object.freeze([400, 401, 403, 404, 405, 410, 415, 422]);
+// Strictly narrower than gateway lk1ReclaimableAttempt for a FAILED native owner:
+// an explicit refusal before any booking, accepted write, money leg, managed
+// entitlement or cancellation/return job left nothing to close.
 export function splitAttemptNativeCleanRefusal(operation) {
   const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const text = value => typeof value === 'string' && value.trim() ? value.trim()
     : typeof value === 'number' && Number.isFinite(value) ? String(value) : null;
+  const present = value => value != null && value !== '' && value !== false;
   if (!record(operation) || operation.state !== 'FAILED' || (Number(operation.attempts) || 0) >= 5) return false;
   const lk1 = record(operation.lk1) ? operation.lk1 : {};
   if ([operation.bookingId, operation.upstreamBookingId, operation.acceptedAt, operation.correlationId,
     lk1.createAttemptedAt, lk1.bookingAttemptedAt, lk1.transactionAttemptedAt, lk1.transactionId].some(text)
     || [lk1.transactionIntent, lk1.checkout, lk1.visitJob].some(record)) return false;
+  if ([operation.transactionId, operation.managedEntitlementOperationId, operation.managedJoinV2,
+    lk1.unpaidCancellation, lk1.freeCancellationReturn, lk1.paymentAttempt].some(present)) return false;
   const status = Number(operation.failure?.statusCode);
-  if (!record(operation.failure) || !Number.isInteger(status) || status < 400 || status >= 500) return false;
+  if (!record(operation.failure) || !SPLIT_NATIVE_CLEAN_REFUSAL_STATUSES.includes(status)) return false;
   return Boolean(text(operation.upstreamAttemptedAt) && text(operation.failedAt));
 }
 export function splitAttemptTransaction(transaction, expected) {

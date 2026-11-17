@@ -1396,7 +1396,7 @@ if (ctx.step === 'lk1_payment_head_read') {
     return prepareMongoUpdate(ctx, 'lk1_payment_head_transferred', { _id: head._id,
       $expr: { $eq: ['$$ROOT', { $literal: head }] } }, { $set: {
         kind: 'BOOKING_PAYMENT_HEAD_V1', ownerOperationKey: ctx.operationKey, ownerOperationId: ctx.operationId,
-        updatedAt: new Date().toISOString() }, $unset: { phase: '', operationId: '', prewriteFailure: '' },
+        updatedAt: new Date().toISOString() }, $unset: { phase: '', operationId: '', prewriteFailure: '', claimToken: '' },
       $push: { history: archived } });
   }
   if (head.kind === 'SPLIT_BOOKING_PAYMENT_HEAD_V1') {

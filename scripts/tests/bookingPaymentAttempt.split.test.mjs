@@ -119,10 +119,37 @@ test('ordinary head insertion winner proceeds; another tab only reads the same o
   let r = run('router', { _splitCtx: ctx, payload: [], statusCode: 200 });
   assert.ok(r.out[6]); assert.equal(r.msg.payload[1].$setOnInsert.phase, 'UPSTREAM_INTENT');
   const head = plain(ctx.ordinaryHead);
-  r = run('router', { _splitCtx: ctx, payload: { acknowledged: true, upsertedCount: 0, matchedCount: 1, modifiedCount: 0 }, statusCode: 200 });
+  assert.match(head.claimToken, /^claim:/);
+  // Another tab with the same client operationId lost the insert: it holds its own token.
+  const other = { action: 'join', step: 'ordinary_attempt_head_found', paymentMode: 'one_time',
+    operationId: 'ordinary-fixture', trustedPaymentActor: 'actor', ordinaryHeadKey: ctx.ordinaryHeadKey, exerciseId: 'exercise' };
+  r = run('router', { _splitCtx: other, payload: [], statusCode: 200 });
+  r = run('router', { _splitCtx: other, payload: { acknowledged: true, upsertedCount: 0, matchedCount: 1, modifiedCount: 0 }, statusCode: 200 });
   assert.ok(r.out[5]); assert.ok(!r.out[0]);
-  r = run('router', { _splitCtx: ctx, payload: [head], statusCode: 200 });
+  assert.notEqual(other.ordinaryClaimToken, head.claimToken);
+  r = run('router', { _splitCtx: other, payload: [head], statusCode: 200 });
   assert.equal(r.msg.statusCode, 202); assert.equal(r.msg.payload.paymentUrl, null);
+  assert.notEqual(other.ordinaryHeadOwned, true);
+});
+test('our own lost insert ACK is recognised only by our server claim token and resumes ownership', () => {
+  const key = contract.splitAttemptHeadKey({ action: 'join', exerciseId: 'exercise' }, 'actor');
+  const ctx = { action: 'join', step: 'ordinary_attempt_head_found', paymentMode: 'one_time',
+    operationId: 'ordinary-fixture', trustedPaymentActor: 'actor', ordinaryHeadKey: key, exerciseId: 'exercise' };
+  run('router', { _splitCtx: ctx, payload: [], statusCode: 200 });
+  const stored = plain(ctx.ordinaryHead);
+  run('router', { _splitCtx: ctx, error: 'lost', payload: null, statusCode: 503 });
+  assert.equal(ctx.step, 'ordinary_attempt_head_found');
+  const own = run('router', { _splitCtx: ctx, payload: [stored], statusCode: 200 });
+  // Ownership resumed: this minimal ctx then refuses before any write and retires
+  // exactly its own head by claim token, which only an owner can do.
+  assert.notEqual(own.msg.payload?.state, 'PENDING_CONFIRMATION');
+  assert.ok(own.out[6]); assert.equal(own.msg.payload[0].claimToken, stored.claimToken);
+  assert.equal(own.msg.payload[1].$set.phase, 'PREWRITE_FAILED');
+  for (const forged of [{ ...stored, claimToken: 'claim:other' }, { ...stored, claimToken: undefined }, { ...stored, payment: { bookingId: 'b' } }]) {
+    const c = { ...ctx, step: 'ordinary_attempt_head_found', ordinaryHeadOwned: undefined };
+    const r = run('router', { _splitCtx: c, payload: [plain(forged)], statusCode: 200 });
+    assert.notEqual(c.ordinaryHeadOwned, true); assert.equal(r.msg.statusCode, 202);
+  }
 });
 test('resume after deadline returns stable locator without old payment URL', () => {
   const f = fixture();
@@ -750,8 +777,9 @@ function ownedPrewriteCtx(extra = {}) {
   const key = joinKey();
   return { action: 'join', step: 'managed_create_preflight_complete', paymentMode: 'one_time',
     operationId: 'ordinary-fixture', trustedPaymentActor: 'actor', ordinaryHeadKey: key, ordinaryHeadOwned: true,
+    ordinaryClaimToken: 'claim:fixture',
     ordinaryHead: { _id: key, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', actorClientId: 'actor', tenantKey: 'iSkq6G',
-      operationId: 'ordinary-fixture', rootOperationId: 'ordinary-fixture', generation: 0, phase: 'UPSTREAM_INTENT',
+      operationId: 'ordinary-fixture', rootOperationId: 'ordinary-fixture', generation: 0, claimToken: 'claim:fixture', phase: 'UPSTREAM_INTENT',
       createdAt: '2026-11-20T09:59:00.000Z', updatedAt: '2026-11-20T09:59:00.000Z' }, ...extra };
 }
 test('a refusal before any provider write durably releases only its own UPSTREAM_INTENT head, then answers', () => {
@@ -760,7 +788,8 @@ test('a refusal before any provider write durably releases only its own UPSTREAM
   assert.ok(r.out[6]); assert.ok(!r.out[0]); assert.ok(!r.out[1]);
   const [filter, update, options] = plain(r.msg.payload);
   assert.deepEqual(filter, { _id: ctx.ordinaryHeadKey, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', actorClientId: 'actor',
-    tenantKey: 'iSkq6G', operationId: 'ordinary-fixture', generation: 0, phase: 'UPSTREAM_INTENT', payment: { $exists: false } });
+    tenantKey: 'iSkq6G', operationId: 'ordinary-fixture', generation: 0, claimToken: 'claim:fixture',
+    phase: 'UPSTREAM_INTENT', payment: { $exists: false } });
   assert.equal(update.$set.phase, 'PREWRITE_FAILED');
   assert.equal(update.$set.prewriteFailure.code, 'MANAGED_SUBSCRIPTION_PREFLIGHT_CONTEXT_INVALID');
   assert.deepEqual(options.writeConcern, { w: 'majority', j: true });
@@ -891,9 +920,9 @@ test('a gateway restart racing the transfer hands the head back exactly and answ
     assert.ok(r.out[6]); assert.notEqual(ctx.ordinaryHeadOwned, true);
     const [filter, update, options] = plain(r.msg.payload);
     assert.deepEqual(filter, { _id: key, kind: 'SPLIT_BOOKING_PAYMENT_HEAD_V1', operationId: 'fresh-one-time',
-      generation: claimed.generation, phase: 'UPSTREAM_INTENT', payment: { $exists: false } });
+      generation: claimed.generation, claimToken: claimed.claimToken, phase: 'UPSTREAM_INTENT', payment: { $exists: false } });
     assert.deepEqual(update.$set, Object.fromEntries(Object.entries(head).filter(([k]) => k !== '_id')));
-    for (const k of ['operationId', 'rootOperationId', 'generation', 'phase', 'updatedAt']) assert.equal(update.$unset[k], '', k);
+    for (const k of ['operationId', 'rootOperationId', 'generation', 'claimToken', 'phase', 'updatedAt']) assert.equal(update.$unset[k], '', k);
     assert.deepEqual(update.$pop, { history: 1 }); assert.deepEqual(options.writeConcern, { w: 'majority', j: true });
     // Applying the restore to the stored transfer result reproduces the native head.
     const stored = { ...claimed, history: [head] }; delete stored.history[0].history;
@@ -936,7 +965,7 @@ test('a terminal native release keeps the direct transfer without an owner fence
   run('router', { _splitCtx: ctx, payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 }, statusCode: 200 }, now, released);
   assert.notEqual(ctx.step, 'ordinary_attempt_native_fence_read');
 });
-test('the clean-refusal rule stays identical to the gateway reclaim rule for FAILED attempts', () => {
+test('the clean-refusal rule is never wider than the gateway reclaim rule, and is strictly narrower where ambiguous', () => {
   const g = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
   const start = g.indexOf('const lk1ReclaimIsRecord');
   const end = g.indexOf('\n};', g.indexOf('const lk1ReclaimableAttempt')) + 3;
@@ -948,9 +977,88 @@ test('the clean-refusal rule stays identical to the gateway reclaim rule for FAI
     { failedAt: '' }, { upstreamAttemptedAt: null }, { upstreamAttemptedAt: 5 }, { bookingId: 'b' }, { bookingId: 0 }, { bookingId: ' ' },
     { upstreamBookingId: 'b' }, { acceptedAt: 'x' }, { correlationId: 'c' }, { lk1: { createAttemptedAt: 'x' } },
     { lk1: { bookingAttemptedAt: 'x' } }, { lk1: { transactionAttemptedAt: 'x' } }, { lk1: { transactionId: 7 } },
-    { lk1: { transactionIntent: {} } }, { lk1: { checkout: {} } }, { lk1: { visitJob: {} } }, { lk1: { checkout: [] } }, { lk1: 'x' }];
-  for (const v of variants) {
+    { lk1: { transactionIntent: {} } }, { lk1: { checkout: {} } }, { lk1: { visitJob: {} } }, { lk1: { checkout: [] } }, { lk1: 'x' },
+    { state: 'PREPARED' }, { state: 'PREPARED', upstreamAttemptedAt: null }, { state: 'CONFIRMED' }, { state: 'RELEASED' }];
+  const narrower = [{ failure: { statusCode: 408 } }, { failure: { statusCode: 409 } }, { failure: { statusCode: 429 } },
+    { failure: { statusCode: 451 } }, { transactionId: 'transaction' }, { managedEntitlementOperationId: 'entitlement' },
+    { managedJoinV2: true }, { managedJoinV2: { id: 'x' } }, { lk1: { unpaidCancellation: { at: 'x' } } },
+    { lk1: { freeCancellationReturn: { at: 'x' } } }, { lk1: { paymentAttempt: { state: 'X' } } },
+    { state: 'PREPARED', upstreamAttemptedAt: null }];
+  for (const v of [...variants, ...narrower]) {
     const op = { ...base, ...v };
-    assert.equal(contract.splitAttemptNativeCleanRefusal(op), gateway(op), JSON.stringify(v));
+    if (contract.splitAttemptNativeCleanRefusal(op)) assert.equal(gateway(op), true, 'wider than gateway: ' + JSON.stringify(v));
   }
+  for (const v of narrower) assert.equal(contract.splitAttemptNativeCleanRefusal({ ...base, ...v }), false, JSON.stringify(v));
+  for (const status of contract.SPLIT_NATIVE_CLEAN_REFUSAL_STATUSES) {
+    assert.equal(contract.splitAttemptNativeCleanRefusal({ ...base, failure: { statusCode: status } }), true, String(status));
+  }
+});
+
+// Review F1: ownership is a server claim token, so a duplicate request with the
+// same client operationId/paymentRef and the same generation can never own the head.
+const matchesFilter = (filter, doc) => Object.entries(filter).every(([k, v]) =>
+  v && typeof v === 'object' && '$exists' in v ? (doc[k] !== undefined) === v.$exists : JSON.stringify(doc[k]) === JSON.stringify(v));
+test('duplicate requests with one operationId: exactly one reaches the provider, the loser cannot fence, restore or retire', () => {
+  const key = joinKey();
+  const nativeHead = { _id: key, kind: 'BOOKING_PAYMENT_HEAD_V1', actorClientId: 'actor', tenantKey: 'iSkq6G',
+    ownerOperationKey: 'native-key', ownerOperationId: 'native-operation' };
+  const owner = { _id: 'native-key', operationId: 'native-operation', actorClientId: 'actor', tenantKey: 'iSkq6G',
+    exerciseId: 'exercise', state: 'FAILED', attempts: 1, upstreamAttemptedAt: '2026-11-20T09:58:00Z',
+    failedAt: '2026-11-20T09:58:01Z', failure: { statusCode: 422 } };
+  const notReleased = { nativeReleased: () => false };
+  const start = () => ({ action: 'join', exerciseId: 'exercise', step: 'ordinary_attempt_native_owner_found',
+    paymentMode: 'one_time', operationId: 'same-payment-ref', trustedPaymentActor: 'actor', ordinaryHeadKey: key, ordinaryNativeHead: nativeHead });
+  const A = start(), B = start();
+  run('router', { _splitCtx: A, payload: [plain(owner)], statusCode: 200 }, now, notReleased);
+  run('router', { _splitCtx: B, payload: [plain(owner)], statusCode: 200 }, now, notReleased);
+  assert.equal(A.ordinaryHead.generation, B.ordinaryHead.generation, 'same generation: only the token differs');
+  assert.notEqual(A.ordinaryClaimToken, B.ordinaryClaimToken);
+  const liveA = { ...plain(A.ordinaryHead), history: [nativeHead] };
+  // A wins the transfer CAS; B loses and reads A's live head.
+  run('router', { _splitCtx: A, payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 }, statusCode: 200 }, now, notReleased);
+  let r = run('router', { _splitCtx: B, payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0 }, statusCode: 200 }, now, notReleased);
+  assert.ok(r.out[5]);
+  r = run('router', { _splitCtx: B, payload: [plain(liveA)], statusCode: 200 }, now, notReleased);
+  assert.equal(r.msg.statusCode, 202); assert.ok(!r.out[6]); assert.ok(!r.out[0]);
+  assert.notEqual(B.ordinaryHeadOwned, true); assert.notEqual(B.step, 'ordinary_attempt_native_fence_read');
+  // A passes its fence and owns the head.
+  run('router', { _splitCtx: A, payload: [plain(owner)], statusCode: 200 }, now, notReleased);
+  assert.equal(A.ordinaryHeadOwned === true || A.step === 'ordinary_attempt_prewrite_released', true);
+  // Even a forced B restore or retire could not match A's live head.
+  const forcedB = { ...B, ordinaryHead: plain(B.ordinaryHead), ordinaryNativeFence: { owner, head: nativeHead, generation: B.ordinaryHead.generation },
+    step: 'ordinary_attempt_native_fence_read' };
+  const neverHitsLiveA = (res, label) => assert.ok(!res.out[6] || !matchesFilter(plain(res.msg.payload[0]), liveA), label);
+  // B now holds A's head as read: the token guard refuses before any filter is built.
+  r = run('router', { _splitCtx: forcedB, payload: [], statusCode: 200 }, now, notReleased);
+  neverHitsLiveA(r, 'restore never touches the live head'); assert.ok(!r.out[6]);
+  // Even with B's own claimed head object, the claim-token filter misses A's head.
+  const forcedOwnB = { ...forcedB, ordinaryHead: { ...plain(liveA), claimToken: B.ordinaryClaimToken }, step: 'ordinary_attempt_native_fence_read' };
+  r = run('router', { _splitCtx: forcedOwnB, payload: [], statusCode: 200 }, now, notReleased);
+  assert.ok(r.out[6]); neverHitsLiveA(r, 'restore filter misses the live head');
+  for (const head of [plain(liveA), { ...plain(liveA), claimToken: B.ordinaryClaimToken }]) {
+    const retiringB = { ...ownedPrewriteCtx(), operationId: 'same-payment-ref', ordinaryHeadKey: key,
+      ordinaryClaimToken: B.ordinaryClaimToken, ordinaryHead: head };
+    r = run('router', { _splitCtx: retiringB, payload: null, statusCode: 200 });
+    neverHitsLiveA(r, 'retire never touches the live head');
+  }
+  // A's own commands match its live head.
+  const retiringA = { ...ownedPrewriteCtx(), operationId: 'same-payment-ref', ordinaryHeadKey: key,
+    ordinaryClaimToken: A.ordinaryClaimToken, ordinaryHead: { ...plain(A.ordinaryHead) } };
+  r = run('router', { _splitCtx: retiringA, payload: null, statusCode: 200 });
+  assert.equal(matchesFilter(plain(r.msg.payload[0]), liveA), true);
+});
+test('restore matches only our untouched claim: every other head writer changes a filtered field', () => {
+  const { ctx, notReleased } = fencedTransfer();
+  const ours = { ...plain(ctx.ordinaryHead), history: [{ kind: 'BOOKING_PAYMENT_HEAD_V1' }] };
+  const r = run('router', { _splitCtx: ctx, payload: [], statusCode: 200 }, now, notReleased);
+  const filter = plain(r.msg.payload[0]);
+  assert.equal(matchesFilter(filter, ours), true);
+  const writers = {
+    anotherClaim: { ...ours, claimToken: 'claim:other', generation: ours.generation + 1, history: [...ours.history, { x: 1 }] },
+    checkoutSaved: { ...ours, phase: 'PAYMENT_REQUIRED', payment: { bookingId: 'b' } },
+    prewriteRetired: { ...ours, phase: 'PREWRITE_FAILED' },
+    gatewayTransfer: { ...ours, kind: 'BOOKING_PAYMENT_HEAD_V1', phase: undefined, history: [...ours.history, { y: 1 }] },
+    closure: { ...ours, phase: 'CLOSED' },
+  };
+  for (const [name, doc] of Object.entries(writers)) assert.equal(matchesFilter(filter, doc), false, name);
 });
