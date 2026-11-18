@@ -5,7 +5,8 @@ import { composeFreeCancellation, applyFreeCancellationOwnedSource } from '../pa
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { runLk1FreeCancellationJob } from '../lib/lk1FreeCancellationWorker.mjs';
 import { lk1FreeReturnedOperation } from '../lib/lk1FreeCancellation.mjs';
-import { fixture, jobOf } from './fixtures/lk1FreeCancellationFixtures.mjs';
+import { composeExhaustedPreparedCancel } from '../prepare_lk1_exhausted_prepared_cancel.mjs';
+import { exhaustedPrepared, fixture, jobOf } from './fixtures/lk1FreeCancellationFixtures.mjs';
 const read = file => fs.readFileSync(new URL(file, import.meta.url), 'utf8');
 const prepared = applyFreeCancellationOwnedSource(read('../nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js'),
   'scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js');
@@ -25,6 +26,57 @@ test('prepared public action carries only an authenticated exact-booking intent'
     { managedSelfLeave: {} }, { freeCancellationJob: {} }]) {
     assert.equal(prepareMessage(body)[1].statusCode, 400);
   }
+});
+
+test('exhausted-attempt composer rejects a different embedded protocol', () => {
+  const source = Buffer.from(JSON.stringify([{ id: 'lk_subscription_booking_router_20260804',
+    type: 'function', outputs: 8, func: '// Native, zero-money subscription cancellation.\nvoid 0;\n// lk1Free* pure protocol' }]));
+  assert.throws(() => composeExhaustedPreparedCancel(source), /protocol preimage drift/);
+});
+
+const exhaustedPreparedSource = process.env.LK1_EXHAUSTED_PREPARED_LIVE_SOURCE;
+test('exact active-router candidate closes exhausted PREPARED before the mocked SERVICE intent', {
+  skip: !exhaustedPreparedSource && 'private live source is not stored in Git',
+}, async () => {
+  const liveBytes = fs.readFileSync(exhaustedPreparedSource);
+  const { candidateBytes } = composeExhaustedPreparedCancel(liveBytes);
+  const candidate = JSON.parse(candidateBytes).find(n => n.id === 'lk_subscription_booking_router_20260804');
+  const changed = JSON.parse(liveBytes);
+  changed.find(n => n.id === candidate.id).func += '\n// unreviewed change outside embedded protocol';
+  assert.throws(() => composeExhaustedPreparedCancel(Buffer.from(JSON.stringify(changed))), /router preaccept preimage drift/);
+  const handle = new Function('msg', 'node', 'global', 'env', 'flow', candidate.func);
+  const f = fixture();
+  const old = exhaustedPrepared(f.op);
+  old.createdAt = '2026-11-12T06:07:00.000Z';
+  old.updatedAt = old.reclaimedAt = '2026-11-12T06:16:00.000Z';
+  f.db.rows.set(old._id, old);
+  const token = 'fixture.' + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url') + '.fixture';
+  const globals = { get: key => key === 'vivacrm_access_token' ? token : undefined };
+  let msg = { _subscriptionBooking: { step: 'lk1_profile_continue', action: 'cancel-free', caller: 'http',
+    tenantKey: f.op.tenantKey, actorClientId: f.op.actorClientId, releaseBookingId: f.op.bookingId,
+    operationId: 'fixture-cancel-request' }, payload: { id: f.op.actorClientId } };
+  for (let hop = 0; hop < 60; hop++) {
+    const out = handle(msg, node, globals, host, host), port = out.findIndex(Boolean);
+    msg = out[port];
+    if (port === 4) {
+      assert.equal(msg.statusCode, 200);
+      assert.equal(msg.payload.state, 'RELEASED');
+      assert.equal(f.db.rows.get(old._id).state, 'FAILED');
+      assert.equal(f.provider.calls.filter(c => c.method === 'PUT').length, 1);
+      return;
+    }
+    if (port === 0) {
+      const url = new URL(msg.url);
+      if (msg.method === 'PUT') assert.equal(f.db.rows.get(old._id).state, 'FAILED');
+      const r = await f.provider.request({ method: msg.method, path: url.pathname + url.search, body: msg.payload });
+      msg.payload = r.payload;
+      msg.statusCode = r.status;
+      msg.responseUrl = msg.url;
+    } else if (port === 1) msg.payload = await f.db.find(msg.payload).limit(1001).toArray();
+    else if (port === 3) msg.payload = await f.db.updateOne(...msg.payload);
+    else assert.fail('Unexpected runtime port ' + port);
+  }
+  assert.fail('Runtime hop limit');
 });
 const livePath = process.env.LK1_FREE_CANCEL_LIVE_SOURCE
   || '/private/tmp/lk1-free-visit-cancel-release-20261111/live-final/input/source.flow.json';

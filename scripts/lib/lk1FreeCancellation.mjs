@@ -34,6 +34,28 @@ export const lk1FreeBinding = op => ({ tenantKey: op.tenantKey, actorClientId: o
   clientSubscriptionId: op.clientSubscriptionId, bookingId: op.bookingId || null, exerciseId: op.exerciseId,
   operationKey: op._id, operationId: op.operationId, serviceDate: op.serviceDate,
   fingerprint: op.lk1.fingerprint });
+
+// The booking gateway exhausts reclaim at five attempts. Each reclaim increments
+// both counters, but preaccept increments only attempts before any provider write.
+// Accept only the old quote/reclaim shape, so added fields (including any lease,
+// booking, debit or managed operation evidence) require separate reconciliation.
+const exhaustedPreparedFields = new Set(['_id', 'tenantKey', 'actorClientId', 'clientSubscriptionId',
+  'operationId', 'exerciseId', 'serviceDate', 'category', 'state', 'attempts', 'lk1', 'createdAt',
+  'updatedAt', 'previousFailure', 'previousFailureAt', 'reclaimCount', 'reclaimedAt']);
+const exhaustedPreparedLk1Fields = new Set(['rule', 'purchaseDate', 'target', 'fingerprint',
+  'dailyVisitPolicyVersion', 'decision']);
+const exhaustedPreparedCode = 'LK1_PREPARED_ATTEMPTS_EXHAUSTED';
+export function lk1FreeExhaustedPrepared(o, binding, at) {
+  if (o?.state !== 'PREPARED' || o.tenantKey !== binding.tenantKey || o.actorClientId !== binding.actorClientId
+    || o.clientSubscriptionId !== binding.clientSubscriptionId || o.attempts !== 5 || o.reclaimCount !== 5
+    || o.previousFailure !== null || o.previousFailureAt !== null || o.reclaimedAt !== o.updatedAt
+    || !Object.keys(o).every(k => exhaustedPreparedFields.has(k))
+    || !lk1FreeNativeOperation({ ...o, bookingId: 'not-dispatched' })
+    || !Object.keys(o.lk1).every(k => exhaustedPreparedLk1Fields.has(k))) return false;
+  const created = Date.parse(o.createdAt), updated = Date.parse(o.updatedAt);
+  return Number.isFinite(created) && created <= updated && Date.parse(at) - updated >= 30 * 60_000;
+}
+
 export const lk1FreeSame = (a, b) => lk1FreeObject(a) && lk1FreeObject(b)
   && Object.keys(a).sort().join(',') === Object.keys(b).sort().join(',')
   && Object.keys(a).every(k => a[k] === b[k]);
@@ -116,7 +138,7 @@ export function lk1SeatCandidate(op) {
   const noDispatch = ['bookingId', 'upstreamBookingId', 'acceptedAt', 'correlationId', 'visitJob',
     'transactionId', 'managedEntitlementOperationId', 'managedJoinV2', 'lk2LegacyJoin']
     .every(k => op?.[k] == null);
-  return !!(op?.state === 'FAILED' && noDispatch
+  return !!(op?.state === 'FAILED' && noDispatch && op.failure?.rawCode !== exhaustedPreparedCode
     && Number.isInteger(op.failure?.statusCode) && op.failure.statusCode >= 400 && op.failure.statusCode < 500
     && ['createAttemptedAt', 'bookingAttemptedAt', 'transactionAttemptedAt', 'transactionId',
       'transactionIntent', 'checkout', 'visitJob'].every(k => op.lk1?.[k] == null)
@@ -199,6 +221,8 @@ export function lk1FreeStep(s, input, at = new Date().toISOString()) {
     return get('booking_page', `/api/v1/exercises/${encodeURIComponent(s.binding.exerciseId)}/bookings?showCancelled=true&size=200&page=0`);
   };
   const finalizeJob = () => update('done_ack', jobQuery(), { $set: { phase: 'DONE', updatedAt: at, completedAt: at } });
+  const pendingOperations = () => find('pending_operations', { tenantKey: s.tenantKey,
+    clientSubscriptionId: s.binding.clientSubscriptionId, 'lk1.decision.subscriptionVisitCount': 1 });
   const seatBooking = () => {
     if (s.bookingId) return get('seat_booking', `/api/v1/clients/${encodeURIComponent(s.actorClientId)}/bookings/${encodeURIComponent(s.bookingId)}`);
     s.seatPage = { page: 0, count: 0 };
@@ -325,8 +349,7 @@ export function lk1FreeStep(s, input, at = new Date().toISOString()) {
     s.lock = v[0];
     if (s.lock.ownerJobKey === s.job._id && s.seatOnly) return find('seat_guard', {
       _id: `lk1-daily-visit:${JSON.stringify([s.tenantKey, s.binding.clientSubscriptionId.toLowerCase(), s.binding.serviceDate])}` });
-    if (s.lock.ownerJobKey === s.job._id) return find('pending_operations', { tenantKey: s.tenantKey,
-      clientSubscriptionId: s.binding.clientSubscriptionId, 'lk1.decision.subscriptionVisitCount': 1 });
+    if (s.lock.ownerJobKey === s.job._id) return pendingOperations();
     return find('lock_owner', { _id: s.lock.ownerJobKey });
   }
   if (s.stage === 'lock_owner') {
@@ -342,22 +365,48 @@ export function lk1FreeStep(s, input, at = new Date().toISOString()) {
       && guard.ownerOperationId === s.op.operationId && guard.tenantKey === s.tenantKey
       && guard.clientSubscriptionId === s.binding.clientSubscriptionId.toLowerCase()
       && guard.serviceDate === s.binding.serviceDate;
-    return find('pending_operations', { tenantKey: s.tenantKey,
-      clientSubscriptionId: s.binding.clientSubscriptionId, 'lk1.decision.subscriptionVisitCount': 1 });
+    return pendingOperations();
   }
   if (s.stage === 'pending_operations') {
-    if (!Array.isArray(v) || v.length > 1000) return pending('LK1_FREE_CANCEL_LEDGER_INCOMPLETE');
+    if (!Array.isArray(v) || v.length > 1000 || !v.every(lk1FreeObject)) return pending('LK1_FREE_CANCEL_LEDGER_INCOMPLETE');
     const reservation = o => s.seatOnly && s.seatGuardOwned && o.state === 'PREPARED'
       && o.actorClientId === s.actorClientId && o.serviceDate === s.binding.serviceDate
       && !o.upstreamAttemptedAt && !o.bookingId && !o.upstreamBookingId
       && ['createAttemptedAt', 'bookingAttemptedAt', 'transactionAttemptedAt', 'visitJob'].every(k => !o.lk1?.[k]);
-    const unsafe = v.some(o => o._id !== s.op._id && !reservation(o) && (!['CONFIRMED', 'RELEASED', 'FAILED'].includes(o.state)
+    const unsafe = v.filter(o => o._id !== s.op._id && !reservation(o) && (!['CONFIRMED', 'RELEASED', 'FAILED'].includes(o.state)
       || o.lk1?.visitJob && !['DEBIT_CONFIRMED', 'RETURN_CONFIRMED', 'DEBIT_REJECTED', 'CANCELLED_BEFORE_DEBIT'].includes(o.lk1.visitJob.phase)
       || o.state === 'FAILED' && o.upstreamAttemptedAt && !(o.failure?.statusCode >= 400 && o.failure.statusCode < 500)));
-    if (unsafe) return decline('LK1_FREE_CANCEL_VISIT_IN_FLIGHT');
+    if (unsafe.length) {
+      if (s.seatOnly || s.job.phase !== 'QUEUED' || (s.preparedClosures || 0) >= 8
+        || unsafe.some(o => !lk1FreeExhaustedPrepared(o, s.binding, at))) return decline('LK1_FREE_CANCEL_VISIT_IN_FLIGHT');
+      const o = unsafe[0];
+      s.exhaustedPrepared = o;
+      return find('exhausted_prepared_guard', {
+        _id: `lk1-daily-visit:${JSON.stringify([o.tenantKey, o.clientSubscriptionId.toLowerCase(), o.serviceDate])}`,
+      });
+    }
     if (s.seatOnly && s.op.lk1?.transactionId) return get('seat_transaction', `/api/v1/transactions/${encodeURIComponent(s.op.lk1.transactionId)}`);
     if (s.seatOnly) return seatBooking();
     return get('options', `/api/v1/clients/${encodeURIComponent(s.actorClientId)}/bookings/${encodeURIComponent(s.bookingId)}/cancel`);
+  }
+  if (s.stage === 'exhausted_prepared_guard') {
+    if (!Array.isArray(v) || v.length > 1) return pending('LK1_FREE_CANCEL_LEDGER_INCOMPLETE');
+    if (v.length) return decline('LK1_FREE_CANCEL_VISIT_IN_FLIGHT');
+    const o = s.exhaustedPrepared;
+    // The provider path must win its own PREPARED CAS before sending anything.
+    // Seal this exact preimage so a concurrent continuation cannot do so.
+    return update('exhausted_prepared_ack', { _id: o._id, $expr: { $eq: ['$$ROOT', { $literal: o }] } }, {
+      $set: { state: 'FAILED', updatedAt: at, failedAt: at, failure: {
+        statusCode: 409, rawCode: exhaustedPreparedCode,
+        message: 'Попытки записи исчерпаны до отправки запроса в Viva.',
+      } },
+    });
+  }
+  if (s.stage === 'exhausted_prepared_ack') {
+    if (!ack(v)) return pending('LK1_FREE_CANCEL_READ_UNAVAILABLE');
+    s.preparedClosures = (s.preparedClosures || 0) + 1;
+    delete s.exhaustedPrepared;
+    return pendingOperations();
   }
   if (s.stage === 'seat_transaction') {
     const l = s.op.lk1, t = l.transactionIntent;

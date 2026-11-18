@@ -94,3 +94,21 @@ export async function drive(f, begun = lk1FreeBegin({ tenantKey: 'fixture', acto
   throw Error('HOP_LIMIT');
 }
 export const jobOf = (f, request = requestId) => f.db.rows.get(lk1FreeJobKey(lk1FreeBinding(f.op), request));
+
+export function exhaustedPrepared(op, suffix = 'old') {
+  const old = {
+    ...structuredClone(op),
+    operationId: 'lk-subscription-' + suffix,
+    exerciseId: 'exercise-' + suffix,
+    state: 'PREPARED',
+    attempts: 5,
+    reclaimCount: 5,
+    reclaimedAt: op.updatedAt,
+    previousFailure: null,
+    previousFailureAt: null,
+  };
+  old._id = 'lk1-product:' + JSON.stringify([old.tenantKey, old.actorClientId, old.operationId]);
+  old.lk1.target.eventId = old.exerciseId;
+  delete old.bookingId;
+  return old;
+}
