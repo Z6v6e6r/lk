@@ -69,14 +69,14 @@ test("a record without a resolvable direction is not PRO", () => {
 test("the group schedule requests monetary quotes for PRO while preserving Energy visits", () => {
   assert.match(groupSchedulePageSource, /import \{ isProTraining \} from "\.\.\/\.\.\/utils\/proTrainingExclusion";/);
   assert.match(groupSchedulePageSource, /const proTrainingSelected = useMemo\(\s*\(\) => Boolean\(selectedDetail && isProTraining\(selectedDetail\)\),/);
-  assert.match(groupSchedulePageSource, /if \(spanishTrainingSelected \|\| topokratyExcluded\) \{/);
+  assert.match(groupSchedulePageSource, /if \(spanishTrainingSelected \|\| kidsAcademyTrainingSelected \|\| topokratyExcluded\) \{/);
   assert.doesNotMatch(groupSchedulePageSource, /if \(proTrainingSelected \|\| topokratyExcluded\)/);
   assert.match(groupSchedulePageSource, /const fetchDiscounts = patriotsTournamentSelected\s*\? apiFetchTournamentSubscriptionDiscounts : apiFetchGroupSubscriptionDiscounts/);
   assert.match(groupSchedulePageSource, /fetchDiscounts\(selectedId, controller\.signal\)/);
   assert.match(groupSchedulePageSource, /: spanishTrainingSelected \|\| proTrainingSelected \|\| topokratyExcluded \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
   assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout && !spanishTrainingSelected\s*\?\s*proTrainingSelected\s*\?/);
   assert.match(groupSchedulePageSource, /getGroupScheduleOwnedPacks\(checkout\.clientSubscriptions\)/);
-  assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !spanishTrainingSelected && !proTrainingSelected && !topokratyExcluded/);
+  assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !spanishTrainingSelected && !kidsAcademyTrainingSelected && !proTrainingSelected && !topokratyExcluded/);
   assert.match(groupSchedulePageSource, /subscriptionUsageShadowEnabled && !spanishTrainingSelected && !proTrainingSelected/);
   assert.doesNotMatch(groupSchedulePageSource, /ПРО-тренировка оплачивается по полной цене/);
   // Promo codes stay available: the promo section is not part of the PRO exclusion.

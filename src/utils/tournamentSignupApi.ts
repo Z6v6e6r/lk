@@ -1,3 +1,4 @@
+import { isKidsAcademyTraining, isPadelKidsProduct, needsPadelKidsIdentity, resolvePadelKidsVisits } from "./kidsTrainingSubscriptions";
 import { isSpanishTrainingExercise } from "./spanishTrainingExclusion";
 import {
   API_BASE,
@@ -2513,7 +2514,8 @@ export async function apiFetchTournamentVivaCheckout(
   const exercise = exerciseResult.data;
   const studio = pickNestedRecord(exercise, ["studio"]);
   const childTournament = isChildTournamentExercise(exercise);
-  const customPricing = childTournament
+  const kidsAcademyTraining = isKidsAcademyTraining(exercise) || isKidsAcademyTraining(options.tournament);
+  const customPricing = childTournament || kidsAcademyTraining
     ? null
     : resolveTournamentCustomPricing([exercise, options.tournament], options.skinPriceLabel);
 
@@ -2547,20 +2549,27 @@ export async function apiFetchTournamentVivaCheckout(
     }),
   ]);
 
-  const clientSubscriptions = childTournament ? [] : filterClientSubscriptionsForExercise(
+  const eligibleSubscriptions = childTournament ? [] : filterClientSubscriptionsForExercise(
     normalizeVivaProducts(pickFirstArray(exercise, ["availableClientSubscriptions"]), "client-subscription"),
     exerciseId,
     exercise,
   );
+  const ownership = kidsAcademyTraining && needsPadelKidsIdentity(eligibleSubscriptions)
+    ? await apiFetchSubscriptions({ includeFinished: true, size: 1000 })
+    : null;
+  const clientSubscriptions = kidsAcademyTraining
+    ? resolvePadelKidsVisits(eligibleSubscriptions, ownership?.error ? [] : extractItems(ownership?.data))
+    : eligibleSubscriptions;
   const clientOneTimes = normalizeVivaProducts(
     pickFirstArray(exercise, ["availableClientOneTimes"]),
     "client-one-time",
   );
   const oneTimes = oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time");
   const subscriptions = subscriptionsResult && !subscriptionsResult.error
-    ? normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription") : [];
+    ? normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription")
+      .filter(product => !kidsAcademyTraining || isPadelKidsProduct(product)) : [];
   const category = resolveSubscriptionCategoryDailyLimitCategoryFromEvent(exercise);
-  if (!childTournament && LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED && (category === "group_training" || category === "tournament")) {
+  if (!childTournament && !kidsAcademyTraining && LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED && (category === "group_training" || category === "tournament")) {
     // A display candidate only: the gateway re-reads the same actor-owned
     // source and active rule before any discount or payment. Do not mutate the
     // provider's availableClientSubscriptions or offer a subscription visit.
@@ -2681,7 +2690,8 @@ export async function apiFetchTournamentVivaPublicCheckout(
       : {};
   const studio = pickNestedRecord(exercise, ["studio"]);
   const childTournament = isChildTournamentExercise(exercise);
-  const customPricing = childTournament
+  const kidsAcademyTraining = isKidsAcademyTraining(exercise) || isKidsAcademyTraining(options.tournament);
+  const customPricing = childTournament || kidsAcademyTraining
     ? null
     : resolveTournamentCustomPricing([exercise, options.tournament], options.skinPriceLabel);
 
@@ -2715,7 +2725,8 @@ export async function apiFetchTournamentVivaPublicCheckout(
 
   const oneTimes = oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time");
   const subscriptions = subscriptionsResult && !subscriptionsResult.error
-    ? normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription") : [];
+    ? normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription")
+      .filter(product => !kidsAcademyTraining || isPadelKidsProduct(product)) : [];
 
   if (exerciseResult.error && oneTimes.length === 0 && subscriptions.length === 0) {
     return {
@@ -3225,6 +3236,13 @@ export async function apiCreateTournamentVivaTransaction(
       || params.product.lk1MoneyDiscountCandidate === true)) {
     return { data: null, error: { status: 409,
       message: "На индивидуальные/сплит тренировки с испанским тренером подписки не действуют. Выберите разовую оплату." }, status: 409 };
+  }
+  if ((isKidsAcademyTraining(params.exercise) || isKidsAcademyTraining(params.tournament))
+    && (params.product.groupDiscountQuote || params.product.tournamentDiscountQuote
+      || params.product.lk1MoneyDiscountCandidate || params.product.isCustomTournamentEnergy
+      || (["subscription", "client-subscription"].includes(params.product.source) && !isPadelKidsProduct(params.product)))) {
+    return { data: null, error: { status: 409,
+      message: "На детские тренировки действуют разовая оплата и абонемент «Падел.Дети»." }, status: 409 };
   }
   const trialGroupTarget = TRIAL_GROUP_CHECKOUT_ENABLED
     && (isTrialGroupTraining(params.exercise) || isTrialGroupTraining(params.tournament));

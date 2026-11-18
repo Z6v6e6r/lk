@@ -124,6 +124,7 @@ const exerciseDirectionId = (exercise) => {
 const lk1Quote = (ctx, exercise, owned) => {
   if (isSpanishTrainingExercise(exercise)) return { code: "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE" };
   if (exerciseDirectionId(exercise) === 7108) return { code: "CHILD_TOURNAMENT_SUBSCRIPTION_UNAVAILABLE" };
+  if ([2468, 2975, 3163].includes(exerciseDirectionId(exercise))) return { code: "KIDS_TRAINING_SUBSCRIPTION_UNAVAILABLE" };
   // The station of the resolved booking target is part of the contour decision: an
   // excluded station keeps the product's legacy path for this quote as well.
   const configured = lk1Config(owned, exercise?.studio?.id || exercise?.studioId || null);
