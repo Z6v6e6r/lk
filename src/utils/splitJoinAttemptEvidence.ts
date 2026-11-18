@@ -50,16 +50,35 @@ export function classifySplitJoinAttempt(record: unknown, paymentRef: string): S
   return "pending";
 }
 
-// Statuses the split JOIN rejects before any provider call (validation, auth,
-// actor mismatch, unknown game). 409/423/429 are NOT here: the paid-join pilot
-// answers 409 SPLIT_JOIN_CHECKOUT_PENDING after provider steps, and a 409 can
-// mean an earlier attempt is still in flight.
-const PRE_PROVIDER_REFUSAL_STATUSES = new Set([400, 401, 403, 404, 422]);
-const IN_FLIGHT_CODES = new Set(["SPLIT_JOIN_CHECKOUT_PENDING"]);
+// A refusal releases the held attempt only when the server says, by an exact
+// status + code pair, that it stopped before this request dispatched any provider
+// write. An HTTP status alone is not evidence: after POST /transactions succeeded,
+// the split router forwards a failed GET /transactions/{id} (or a 4xx from the
+// create itself) with Viva's own 400/401/403/404/422 and a provider payload.
+// Each code below is emitted only at one pre-write point; the contract test
+// scripts/tests/splitJoinRefusalContract.test.mjs pins those origins.
+const PRE_PROVIDER_REFUSALS = new Map<string, number>([
+  // fn_split_join_prepare.js: the stored game cannot address a court; no Viva call yet.
+  ["SPLIT_GAME_LOCATION_INCOMPLETE", 400],
+  // nodered_split_join_recovery_nodes/checkout.js paidJoinBegin: no user session; before any Viva call.
+  ["SPLIT_JOIN_AUTH_REQUIRED", 401],
+  // checkout.js paid_join_profile: the Viva profile is not this participant; before the journal and any write.
+  ["SPLIT_JOIN_ACTOR_MISMATCH", 403],
+]);
 
-/** True only when the server refused this exact request before reaching the provider. */
+function refusalCodes(raw: unknown): string[] {
+  if (!raw || typeof raw !== "object") return [];
+  const top = (raw as { code?: unknown }).code;
+  const details = (raw as { details?: unknown }).details;
+  const nested = details && typeof details === "object" ? (details as { code?: unknown }).code : undefined;
+  return [top, nested].filter((code): code is string => typeof code === "string" && code.trim() !== "").map(code => code.trim());
+}
+
+/** True only when the server proved it refused this exact request before any provider write. */
 export function isDefinitiveSplitJoinRefusal(status: number | null | undefined, raw?: unknown): boolean {
-  if (typeof status !== "number" || !PRE_PROVIDER_REFUSAL_STATUSES.has(status)) return false;
-  const code = raw && typeof raw === "object" ? (raw as { code?: unknown }).code : undefined;
-  return !(typeof code === "string" && IN_FLIGHT_CODES.has(code));
+  if (typeof status !== "number") return false;
+  const codes = refusalCodes(raw);
+  // Every code the answer carries must be a pre-write code for this exact status:
+  // a provider code next to ours, or an in-flight code anywhere, keeps the hold.
+  return codes.length > 0 && codes.every(code => PRE_PROVIDER_REFUSALS.get(code) === status);
 }

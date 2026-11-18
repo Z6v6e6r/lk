@@ -29,12 +29,33 @@ test("malformed records and empty refs are never evidence", () => {
   assert.equal(classifySplitJoinAttempt(record([{ status: "PAID", paymentRef: "r" }]), " "), "absent");
 });
 
-test("only statuses rejected before the provider are definitive; 409 and in-flight codes are not", () => {
-  for (const status of [400, 401, 403, 404, 422]) assert.equal(isDefinitiveSplitJoinRefusal(status), true, String(status));
-  for (const status of [null, undefined, 0, 200, 201, 202, 408, 409, 423, 429, 500, 503, Number.NaN]) {
+test("an HTTP status alone never proves a pre-provider refusal", () => {
+  for (const status of [null, undefined, 0, 200, 201, 202, 400, 401, 403, 404, 408, 409, 422, 423, 429, 500, 503, Number.NaN]) {
     assert.equal(isDefinitiveSplitJoinRefusal(status), false, String(status));
+    assert.equal(isDefinitiveSplitJoinRefusal(status, { error: "Viva request failed", details: { message: "x" } }), false, String(status));
   }
-  assert.equal(isDefinitiveSplitJoinRefusal(400, { code: "SPLIT_JOIN_CHECKOUT_PENDING" }), false);
+});
+
+test("only an exact pre-write status + code pair is definitive, in the real Node-RED shape too", () => {
+  const nodeRed = (code: string) => ({ error: "refused", details: { code } });
+  assert.equal(isDefinitiveSplitJoinRefusal(400, nodeRed("SPLIT_GAME_LOCATION_INCOMPLETE")), true);
+  assert.equal(isDefinitiveSplitJoinRefusal(401, nodeRed("SPLIT_JOIN_AUTH_REQUIRED")), true);
+  assert.equal(isDefinitiveSplitJoinRefusal(403, nodeRed("SPLIT_JOIN_ACTOR_MISMATCH")), true);
+  assert.equal(isDefinitiveSplitJoinRefusal(403, { code: "SPLIT_JOIN_ACTOR_MISMATCH" }), true, "top-level code shape");
+  // Right code, wrong status: the pair is the evidence.
+  assert.equal(isDefinitiveSplitJoinRefusal(404, nodeRed("SPLIT_JOIN_AUTH_REQUIRED")), false);
+  assert.equal(isDefinitiveSplitJoinRefusal(409, nodeRed("SPLIT_GAME_LOCATION_INCOMPLETE")), false);
+});
+
+test("in-flight, provider and unknown codes keep the hold wherever they appear", () => {
+  for (const status of [400, 401, 403, 404, 422]) {
+    assert.equal(isDefinitiveSplitJoinRefusal(status, { error: "x", details: { code: "SPLIT_JOIN_CHECKOUT_PENDING" } }), false, `${status} nested`);
+    assert.equal(isDefinitiveSplitJoinRefusal(status, { code: "SPLIT_JOIN_CHECKOUT_PENDING" }), false, `${status} top`);
+    assert.equal(isDefinitiveSplitJoinRefusal(status, { error: "x", details: { code: "UNAUTHORIZED" } }), false, `${status} provider`);
+    assert.equal(isDefinitiveSplitJoinRefusal(status, { error: "x", details: { code: "SPLIT_PROVIDER_TRANSACTION_MISMATCH" } }), false);
+  }
+  assert.equal(isDefinitiveSplitJoinRefusal(401, { code: "SPLIT_JOIN_AUTH_REQUIRED", details: { code: "UNAUTHORIZED" } }), false,
+    "a provider code next to ours is not a pre-write refusal");
 });
 
 test("deadline-driven and money-ambiguous statuses never end an attempt", () => {

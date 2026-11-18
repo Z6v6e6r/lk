@@ -9555,7 +9555,8 @@ export async function apiCreatePadelSplitParticipantPayment(
     );
     const response = await requestPadelSplitJoinWithPendingPoll(splitRequest, baseUrl, params);
     if (oneTime && response.error && isDefinitiveSplitJoinRefusal(response.status, response.error.raw)) {
-      // Refused before any provider call: this exact request created nothing.
+      // The server proved (exact status + pre-write code) that this request created nothing.
+      // A bare 4xx is not proof: the router forwards Viva's status after POST /transactions.
       getSplitJoinAttempts().completeIf(attemptKey, paymentRef);
     }
 

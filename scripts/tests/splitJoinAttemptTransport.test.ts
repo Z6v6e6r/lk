@@ -36,7 +36,7 @@ class MemoryStorage {
   clear() { this.values.clear(); }
 }
 
-type PostMode = "accept-then-lose-response" | "refuse-409" | "refuse-422" | "status-500" | "status-408" | "checkout-pending-409" | "accept";
+type PostMode = "accept-then-lose-response" | "refuse-409" | "refuse-422" | "refuse-400-prewrite" | "status-500" | "status-408" | "checkout-pending-409" | "accept";
 type ReadMode = "fail" | "ok";
 interface Server {
   posts: Array<{ gameId: string; paymentRef: string; operationIdQuery: string | null }>;
@@ -75,7 +75,12 @@ function installEnvironment(server: Server, storage: MemoryStorage) {
       server.posts.push({ gameId: decodeURIComponent(join[1]), paymentRef, operationIdQuery: url.searchParams.get("operationId") });
       const reply = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
       if (server.postMode === "refuse-409") return reply(409, { message: "Последнее место уже занято" });
-      if (server.postMode === "refuse-422") return reply(422, { message: "Некорректные данные участия", code: "SPLIT_JOIN_VALIDATION" });
+      // The exact shape fn_split_join_prepare.js answers before any provider call.
+      if (server.postMode === "refuse-400-prewrite") {
+        return reply(400, { error: "Stored split game location is incomplete", details: { code: "SPLIT_GAME_LOCATION_INCOMPLETE" } });
+      }
+      // A bare 422 says nothing about whether the provider was reached.
+      if (server.postMode === "refuse-422") return reply(422, { message: "Некорректные данные участия" });
       // These may come after the provider was reached: the payment is created first.
       server.payments.push({ clientId: "client-1", status: "PAYMENT_PENDING", paymentRef, createdAt: new Date().toISOString() });
       if (server.postMode === "status-500") { server.payments.pop(); return reply(500, { message: "Internal" }); }
@@ -202,11 +207,11 @@ test("an exact PAID item resolves the attempt without another create", async () 
   assert.equal(client.getHeldSplitJoinPaymentRef("game-1"), null);
 });
 
-test("a refusal before the provider (422) allows a new deliberate attempt with a new key", async () => {
-  const { server } = setup("refuse-422");
+test("a proven pre-write refusal (400 + prepare code) allows a new deliberate attempt with a new key", async () => {
+  const { server } = setup("refuse-400-prewrite");
   const client = await loadClient();
   const refused = await client.apiCreatePadelSplitParticipantPayment("game-2", joinParams("ref-1") as never);
-  assert.equal(refused.error?.status, 422);
+  assert.equal(refused.error?.status, 400);
   assert.equal(client.getHeldSplitJoinPaymentRef("game-2"), null, "a pre-provider refusal proves this request created nothing");
   server.postMode = "accept";
   await client.apiCreatePadelSplitParticipantPayment("game-2", joinParams("ref-2") as never);
@@ -216,7 +221,7 @@ test("a refusal before the provider (422) allows a new deliberate attempt with a
   assert.equal(client.getHeldSplitJoinPaymentRef("game-2"), "ref-2");
 });
 
-for (const mode of ["refuse-409", "checkout-pending-409", "status-500", "status-408"] as const) {
+for (const mode of ["refuse-409", "refuse-422", "checkout-pending-409", "status-500", "status-408"] as const) {
   test(`a ${mode} answer keeps the attempt held: no new key is sent`, async () => {
     const { server } = setup(mode);
     const client = await loadClient();
