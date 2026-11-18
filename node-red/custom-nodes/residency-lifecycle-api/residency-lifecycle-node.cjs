@@ -54,6 +54,14 @@ function readConfig(env) {
   };
 }
 
+function runtimeConfigError(config) {
+  if (!config || !config.mongoUri || !config.databaseName) return "STORAGE";
+  if (!/^https:\/\//.test(config.vivaBaseUrl) || !/^https:\/\//.test(config.successUrl) || !/^https:\/\//.test(config.failUrl)) return "VIVA_URL";
+  if (!/^https:\/\//.test(config.keycloakUserinfoUrl)) return "KEYCLOAK_URL";
+  if (!config.cupBaseUrl || !/^https:\/\//.test(config.cupBaseUrl) || config.cupIntegrationToken.length < 32) return "CUP";
+  return null;
+}
+
 function bearer(req) {
   const value = req && req.headers && (req.headers.authorization || req.headers.Authorization);
   if (typeof value !== "string" || !/^Bearer [A-Za-z0-9._~+/=-]{16,4096}$/.test(value)) return null;
@@ -130,8 +138,9 @@ module.exports = function registerResidencyLifecycleApi(RED) {
         error.statusCode = 503;
         throw error;
       }
-      if (!config.mongoUri || !config.databaseName) {
-        const error = new Error("Residency lifecycle storage is not configured");
+      const configError = runtimeConfigError(config);
+      if (configError) {
+        const error = new Error("Residency lifecycle is not configured: " + configError);
         error.code = "RESIDENCY_LIFECYCLE_NOT_CONFIGURED";
         error.statusCode = 503;
         throw error;
@@ -321,6 +330,7 @@ module.exports = function registerResidencyLifecycleApi(RED) {
 };
 
 module.exports.readConfig = readConfig;
+module.exports.runtimeConfigError = runtimeConfigError;
 module.exports.bearer = bearer;
 module.exports.validateClaims = validateClaims;
 module.exports.readUserinfo = readUserinfo;

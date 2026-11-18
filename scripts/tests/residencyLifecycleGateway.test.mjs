@@ -26,6 +26,17 @@ test("config is disabled by default and requires storage when enabled", () => {
   assert.equal(helpers.readConfig(env({ LK_RESIDENCY_LIFECYCLE_RATE_LIMIT_PER_MINUTE: "500" })).rateLimit, 120);
 });
 
+test("runtime configuration fails closed before any request", () => {
+  const base = { LK_RESIDENCY_LIFECYCLE_ENABLED: "true", LK_RESIDENCY_LIFECYCLE_MONGO_URI: "mongodb://127.0.0.1:27017",
+    LK_RESIDENCY_LIFECYCLE_MONGO_DB: "lk", LK_RESIDENCY_LIFECYCLE_CUP_API_URL: "https://cup.example/api",
+    LK_RESIDENCY_LIFECYCLE_CUP_INTEGRATION_TOKEN: "t".repeat(40) };
+  assert.equal(helpers.runtimeConfigError(helpers.readConfig(env(base))), null);
+  assert.equal(helpers.runtimeConfigError(helpers.readConfig(env({ ...base, LK_RESIDENCY_LIFECYCLE_MONGO_URI: "" }))), "STORAGE");
+  assert.equal(helpers.runtimeConfigError(helpers.readConfig(env({ ...base, LK_RESIDENCY_LIFECYCLE_CUP_API_URL: "http://cup" }))), "CUP");
+  assert.equal(helpers.runtimeConfigError(helpers.readConfig(env({ ...base, LK_RESIDENCY_LIFECYCLE_CUP_INTEGRATION_TOKEN: "short" }))), "CUP");
+  assert.equal(helpers.runtimeConfigError(helpers.readConfig(env({ ...base, LK_RESIDENCY_LIFECYCLE_KEYCLOAK_USERINFO_URL: "http://kc" }))), "KEYCLOAK_URL");
+});
+
 test("bearer parsing is strict and never echoes the token", () => {
   assert.equal(helpers.bearer({ headers: { authorization: "Bearer " + "a".repeat(32) } }), "a".repeat(32));
   for (const value of [undefined, "", "Bearer short", "Basic " + "a".repeat(32), "Bearer " + "a".repeat(32) + "\n"]) {
