@@ -90,6 +90,7 @@ export function createMongoResidencyLifecycleStore({ collection }) {
 export const RESIDENCY_LIFECYCLE_INDEXES = Object.freeze([
   { keys: { tenantId: 1, orderId: 1 }, options: { unique: true, name: "residency_order_identity" } },
   { keys: { tenantId: 1, idempotencyKeyHash: 1 }, options: { unique: true, name: "residency_order_idempotency" } },
+  { keys: { tenantId: 1, userId: 1, activeSlot: 1 }, options: { unique: true, name: "residency_order_active_slot", partialFilterExpression: { activeSlot: 1 } } },
   { keys: { tenantId: 1, userId: 1, state: 1 }, options: { name: "residency_order_user_state" } },
   { keys: { tenantId: 1, state: 1, "payment.expiresAt": 1 }, options: { name: "residency_order_expiry" } },
 ]);

@@ -91,7 +91,7 @@ test("node source never logs secrets or uses console", () => {
 
 test("index contract covers identity and idempotency uniqueness", () => {
   const names = RESIDENCY_LIFECYCLE_INDEXES.map((index) => index.options.name);
-  assert.deepEqual(names, ["residency_order_identity", "residency_order_idempotency", "residency_order_user_state", "residency_order_expiry"]);
+  assert.deepEqual(names, ["residency_order_identity", "residency_order_idempotency", "residency_order_active_slot", "residency_order_user_state", "residency_order_expiry"]);
   assert.equal(RESIDENCY_LIFECYCLE_INDEXES[0].options.unique, true);
   assert.equal(RESIDENCY_LIFECYCLE_INDEXES[1].options.unique, true);
 });

@@ -193,8 +193,16 @@ export function createVivaCupResidencyPorts({
     const paid = response.paid === true;
     if (paid) {
       if (toPay !== null && toPay !== 0 && toPay !== amountMinor) throw providerError("RESIDENCY_PAYMENT_INVALID");
-      return { status: "PAID", providerTransactionId: transactionId, paymentUrl: null, amountMinor,
-        paidAt: iso(response.paymentDate) ? isoMillis(response.paymentDate) : now().toISOString() };
+      if (toPay === 0 || toPay === null) {
+        return { status: "PAID", providerTransactionId: transactionId, paymentUrl: null, amountMinor,
+          paidAt: iso(response.paymentDate) ? isoMillis(response.paymentDate) : now().toISOString() };
+      }
+      // A paid response with the full amount is not trusted on its own: read the
+      // Admin transaction and require the same terminal evidence as a callback.
+      if (!transactionId) throw providerError("RESIDENCY_PAYMENT_INVALID");
+      const verified = await readPayment({ amountMinor, providerTransactionId: transactionId });
+      if (verified?.status !== "PAID") throw providerError("RESIDENCY_PAYMENT_INVALID");
+      return verified;
     }
     const paymentUrl = httpsUrl(response.paymentUrl);
     if (!paymentUrl || toPay !== amountMinor) throw providerError("RESIDENCY_PAYMENT_INVALID");
@@ -218,13 +226,18 @@ export function createVivaCupResidencyPorts({
       || transaction.products[0]?.count !== 1) throw providerError("RESIDENCY_PAYMENT_PRODUCT_MISMATCH");
     if (Number.isInteger(transaction.refundSum) && transaction.refundSum > 0) return { status: "FAILED" };
     if (Array.isArray(transaction.transactionRefunds) && transaction.transactionRefunds.length > 0) return { status: "FAILED" };
-    if (!Number.isSafeInteger(transaction.toPay) || transaction.toPay !== amountMinor) throw providerError("RESIDENCY_PAYMENT_AMOUNT_MISMATCH");
     const status = String(transaction.status || transaction.transactionStatus || "").toUpperCase();
     if (["PAID", "COMPLETED"].includes(status)) {
+      // A PAID card transaction can carry the charged amount in toPay; a fully
+      // discounted/zero issuance carries 0. Anything else is not this order.
+      if (!Number.isSafeInteger(transaction.toPay) || (transaction.toPay !== 0 && transaction.toPay !== amountMinor)) {
+        throw providerError("RESIDENCY_PAYMENT_AMOUNT_MISMATCH");
+      }
       if (!iso(transaction.paymentDate)) return { status: "UNKNOWN" };
-      return { status: "PAID", providerTransactionId, amountMinor, paidAt: isoMillis(transaction.paymentDate) };
+      return { status: "PAID", providerTransactionId, amountMinor, paymentUrl: null, paidAt: isoMillis(transaction.paymentDate) };
     }
     if (["UNPAID", "WAITING", "PENDING", "CREATED"].includes(status)) {
+      if (transaction.toPay !== amountMinor) throw providerError("RESIDENCY_PAYMENT_AMOUNT_MISMATCH");
       return { status: "PENDING", providerTransactionId, amountMinor,
         paymentUrl: httpsUrl(transaction.cardPaymentInfo?.paymentUrl) || null,
         expiresAt: iso(transaction.paymentDueDate) ? isoMillis(transaction.paymentDueDate) : null };
@@ -235,16 +248,32 @@ export function createVivaCupResidencyPorts({
 
   async function findInstance({ productId, providerTransactionId, paidAt }) {
     const holder = await profile();
-    const read = await requestJson(fetchImpl,
-      c.vivaBaseUrl + "/end-user/api/v1/" + encodeURIComponent(c.tenantKey) + "/subscriptions?includeFinished=true&size=200&page=0",
-      { method: "GET", headers: { Accept: "application/json", Authorization: "Bearer " + actorToken } }, c);
-    const body = unwrap(read);
-    const rows = Array.isArray(body) ? body : Array.isArray(body?.subscriptions) ? body.subscriptions : Array.isArray(body?.items) ? body.items : null;
-    if (!rows) throw providerError("RESIDENCY_SUBSCRIPTIONS_INVALID");
-    if (rows.length > 200) throw providerError("RESIDENCY_SUBSCRIPTIONS_PARTIAL");
+    const rows = [];
+    let total = null;
+    for (let page = 0; page < 5; page += 1) {
+      const read = await requestJson(fetchImpl,
+        c.vivaBaseUrl + "/end-user/api/v1/" + encodeURIComponent(c.tenantKey)
+          + "/subscriptions?includeFinished=true&size=200&page=" + page,
+        { method: "GET", headers: { Accept: "application/json", Authorization: "Bearer " + actorToken } }, c);
+      const body = unwrap(read);
+      const pageRows = Array.isArray(body) ? body : Array.isArray(body?.subscriptions) ? body.subscriptions
+        : Array.isArray(body?.items) ? body.items : null;
+      if (!pageRows) throw providerError("RESIDENCY_SUBSCRIPTIONS_INVALID");
+      if (body && !Array.isArray(body) && Number.isInteger(body.total)) total = body.total;
+      rows.push(...pageRows);
+      if (rows.length > 2000) throw providerError("RESIDENCY_SUBSCRIPTIONS_PARTIAL");
+      if (pageRows.length < 200) break;
+      if (page === 4 && pageRows.length === 200) throw providerError("RESIDENCY_SUBSCRIPTIONS_PARTIAL");
+    }
+    if (total !== null && rows.length !== total) throw providerError("RESIDENCY_SUBSCRIPTIONS_PARTIAL");
+    const seen = new Set();
     const matches = [];
     for (const row of rows) {
       if (!row || typeof row !== "object") throw providerError("RESIDENCY_SUBSCRIPTIONS_INVALID");
+      const id = row.subscriptionId ?? row.clientSubscriptionId ?? row.id;
+      if (!text(id, 128)) throw providerError("RESIDENCY_SUBSCRIPTIONS_INVALID");
+      if (seen.has(id)) throw providerError("RESIDENCY_SUBSCRIPTIONS_INVALID");
+      seen.add(id);
       const rowProduct = row.productId ?? row.product?.id;
       const rowClient = row.clientId ?? row.client?.id ?? row.clientSubscription?.clientId;
       if (rowProduct !== productId) continue;
@@ -256,12 +285,11 @@ export function createVivaCupResidencyPorts({
       if (frozen) continue;
       const purchasedAt = iso(row.purchaseDate) ? isoMillis(row.purchaseDate) : iso(row.activationDate) ? isoMillis(row.activationDate) : null;
       if (!purchasedAt) continue;
-      matches.push({ clientSubscriptionId: row.subscriptionId ?? row.clientSubscriptionId ?? row.id, purchasedAt });
+      matches.push({ clientSubscriptionId: id, purchasedAt });
     }
     if (matches.length === 0) return null;
     matches.sort((left, right) => Date.parse(right.purchasedAt) - Date.parse(left.purchasedAt));
     const newest = matches[0];
-    if (!text(newest.clientSubscriptionId, 128)) throw providerError("RESIDENCY_SUBSCRIPTIONS_INVALID");
     if (providerTransactionId && paidAt && Date.parse(newest.purchasedAt) + 5 * 60 * 1000 < Date.parse(paidAt)) {
       throw providerError("RESIDENCY_SUBSCRIPTION_STALE");
     }
@@ -303,7 +331,8 @@ export function createVivaCupResidencyPorts({
       if (!instance) return { state: "NONE", source: "VIVA_OWNED_SUBSCRIPTIONS", observedAt: now().toISOString() };
       return await cupContext({ clientSubscriptionId: instance.clientSubscriptionId, refresh: false });
     } catch (error) {
-      if (error?.upstreamStatus === 404) return { state: "NONE", source: "VIVA_OWNED_SUBSCRIPTIONS", observedAt: now().toISOString() };
+      // Any failure after a partial/absent read is UNAVAILABLE, never absence. A 404
+      // from the provider proves nothing about this user's residency.
       return { state: "UNAVAILABLE", source: "VIVA_CUP", reason: typeof error?.code === "string" ? error.code : "SOURCE_UNAVAILABLE" };
     }
   }

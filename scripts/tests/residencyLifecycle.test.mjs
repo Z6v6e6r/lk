@@ -33,6 +33,7 @@ function memoryStore() {
       const id = order.orderId;
       if (orders.has(id)) return { ok: false };
       if ([...orders.values()].some((o) => o.tenantId === order.tenantId && o.idempotencyKeyHash === order.idempotencyKeyHash)) return { ok: false };
+      if (order.activeSlot === 1 && [...orders.values()].some((o) => o.tenantId === order.tenantId && o.userId === order.userId && o.activeSlot === 1)) return { ok: false };
       orders.set(id, structuredClone(order));
       return { ok: true };
     },
@@ -385,7 +386,13 @@ test("a cancelled order never activates a late payment and is flagged for review
   };
   const creator = build();
   const created = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
-  const cancelled = await creator.lifecycle.cancel({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2 });
+  const failedLifecycle = build({ store: creator.store, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "FAILED", amountMinor: 79000, providerTransactionId: "txn-1" }; },
+  } });
+  const failed = await failedLifecycle.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-failed" });
+  assert.equal(failed.order.state, ORDER_STATES.PAYMENT_FAILED);
+  const cancelled = await failedLifecycle.lifecycle.cancel({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2 });
   assert.equal(cancelled.order.state, ORDER_STATES.CANCELLED);
   const lateLifecycle = build({ store: creator.store, payments });
   const late = await lateLifecycle.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-late" });
@@ -462,6 +469,155 @@ test("cancelling a pending order checks the original transaction first", async (
   assert.equal(creator.store.orders.get(created.order.orderId).state, ORDER_STATES.PENDING_PAYMENT);
 
   const pending = build({ store: creator.store });
-  const cancelled = await pending.lifecycle.cancel({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2 });
-  assert.equal(cancelled.order.state, ORDER_STATES.CANCELLED);
+  await expectCode(pending.lifecycle.cancel({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2 }), 409, "RESIDENCY_PAYMENT_STATUS_UNKNOWN");
+  assert.equal(creator.store.orders.get(created.order.orderId).state, ORDER_STATES.PENDING_PAYMENT);
+});
+
+test("the durable attempt exists before the Viva POST and no second order can start", async () => {
+  let observed = null;
+  let createCalls = 0;
+  const creator = build();
+  const payments = {
+    async create() {
+      createCalls += 1;
+      observed = [...creator.store.orders.values()][0];
+      return { status: "PENDING", providerTransactionId: "txn-1", paymentUrl: "https://bank.example/pay/1",
+        amountMinor: 79000, expiresAt: "2026-11-18T09:20:00.000Z" };
+    },
+    async read() { throw new Error("unused"); },
+  };
+  const second = build({ store: creator.store, payments });
+  await second.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  assert.ok(observed, "the order must be durable before POST");
+  assert.equal(observed.payment.status, "DISPATCHING");
+  assert.equal(observed.activeSlot, 1);
+  await expectCode(second.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY2, mode: "NEW" }), 409, "RESIDENCY_ORDER_ALREADY_PENDING");
+  assert.equal(createCalls, 1);
+});
+
+test("public order never exposes the Viva transaction id", async () => {
+  const { lifecycle } = build();
+  const created = await lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  assert.equal("providerTransactionId" in created.order.payment, false);
+  assert.equal(created.order.payment.paymentUrl, "https://bank.example/pay/1");
+});
+
+test("expiry clears the live payment link from both order and payment endpoints", async () => {
+  const { lifecycle, setNow } = build();
+  const created = await lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  setNow(Date.parse("2026-11-18T09:20:00.000Z"));
+  const order = await lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(order.order.state, ORDER_STATES.EXPIRED);
+  assert.equal(order.order.payment.paymentUrl, null);
+  const payment = await lifecycle.getPayment({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(payment.paymentUrl, null);
+});
+
+test("a paid order is never downgraded by a later PENDING read", async () => {
+  const paidPayments = { async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; } };
+  const failedActivation = { async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async activate() { throw new Error("CUP down"); } };
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  const paidLifecycle = build({ store: creator.store, payments: paidPayments, activation: failedActivation });
+  const paid = await paidLifecycle.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-paid" });
+  assert.equal(paid.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(paid.order.payment.status, "PAID");
+
+  const pendingLifecycle = build({ store: creator.store, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PENDING", amountMinor: 79000, paymentUrl: "https://bank.example/again", expiresAt: "2026-11-18T09:20:00.000Z" }; },
+  } });
+  const after = await pendingLifecycle.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-pending" });
+  assert.equal(after.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(after.order.payment.status, "PAID");
+  assert.equal(after.order.payment.paymentUrl, null);
+});
+
+test("a paid order with a later FAILED read goes to review, not to PAYMENT_FAILED", async () => {
+  const payments = { async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; } };
+  const activation = { async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async activate() { throw new Error("CUP down"); } };
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  const paidLifecycle = build({ store: creator.store, payments, activation });
+  await paidLifecycle.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-paid" });
+  const failedLifecycle = build({ store: creator.store, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "FAILED", amountMinor: 79000, providerTransactionId: "txn-1" }; },
+  } });
+  const result = await failedLifecycle.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-failed" });
+  assert.equal(result.order.state, ORDER_STATES.PAID_REQUIRES_REVIEW);
+  assert.equal(result.order.activation.lastErrorCode, "PAYMENT_CONTRADICTION");
+});
+
+test("a failed payment that later reads PAID is held for review, not activated", async () => {
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  const failed = build({ store: creator.store, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "FAILED", amountMinor: 79000, providerTransactionId: "txn-1" }; },
+  } });
+  await failed.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-failed" });
+  const paid = build({ store: creator.store, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  } });
+  const result = await paid.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-paid" });
+  assert.equal(result.order.state, ORDER_STATES.PAID_REQUIRES_REVIEW);
+  assert.equal(result.order.activation.lastErrorCode, "PAYMENT_AFTER_FAILURE");
+  assert.equal(paid.calls.activate, 0);
+});
+
+test("a renewal cannot bind an instance purchased before the order", async () => {
+  const creator = build({ statusValue: { state: RESIDENCY_STATES.ACTIVE, validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT } });
+  const renewed = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "RENEWAL" });
+  const payments = { async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; } };
+  const activation = { async findInstance() { return { clientSubscriptionId: "sub-old", purchasedAt: "2026-11-01T00:00:00.000Z" }; },
+    async activate() { throw new Error("must not activate an old instance"); } };
+  const lifecycle = build({ store: creator.store, payments, activation, statusValue: { state: RESIDENCY_STATES.ACTIVE, validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT } });
+  const result = await lifecycle.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: renewed.order.orderId, idempotencyKey: KEY2, eventId: "evt-renew" });
+  assert.equal(result.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(result.order.activation.lastErrorCode, "INSTANCE_BEFORE_ORDER");
+  assert.equal(lifecycle.calls.activate, 0);
+});
+
+test("a renewal that does not extend the current window is rejected", async () => {
+  const creator = build({ statusValue: { state: RESIDENCY_STATES.ACTIVE, validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT } });
+  const renewed = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "RENEWAL" });
+  const payments = { async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; } };
+  const activation = { async findInstance() { return { clientSubscriptionId: "sub-new", purchasedAt: PAID_AT }; },
+    async activate() { return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: "2026-12-01T00:00:00.000Z", source: "CUP", observedAt: PAID_AT }; } };
+  const lifecycle = build({ store: creator.store, payments, activation, statusValue: { state: RESIDENCY_STATES.ACTIVE, validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT } });
+  const result = await lifecycle.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: renewed.order.orderId, idempotencyKey: KEY2, eventId: "evt-renew" });
+  assert.equal(result.order.state, ORDER_STATES.ACTIVATION_FAILED);
+  assert.equal(result.order.activation.lastErrorCode, "RENEWAL_WINDOW_NOT_EXTENDED");
+});
+
+test("two concurrent callbacks do not call CUP activation twice", async () => {
+  let activationCalls = 0;
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  const payments = { async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; } };
+  const activation = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async activate() {
+      activationCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT };
+    },
+  };
+  const first = build({ store: creator.store, payments, activation });
+  const second = build({ store: creator.store, payments, activation });
+  const [left, right] = await Promise.all([
+    first.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-a" }),
+    second.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2 + "b", eventId: "evt-b" }),
+  ]);
+  assert.equal(activationCalls, 1);
+  assert.ok([left.order.state, right.order.state].includes(ORDER_STATES.ACTIVE));
 });

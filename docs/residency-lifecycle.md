@@ -28,7 +28,10 @@ From the verified Viva product and the published CUP policy:
 - the CUP window starts at the confirmed financial issuance (paymentDate of the PAID
   transaction), not at Viva visit-counter activation;
 - automatic renewal is **not** part of the product. A renewal is a new purchase; the
-  existing active instance remains valid until its own activeTo;
+  existing active instance remains valid until its own activeTo. The new instance must
+  be purchased after the renewal order was created and its CUP window must extend the
+  current validUntil; otherwise activation is refused (INSTANCE_BEFORE_ORDER /
+  RENEWAL_WINDOW_NOT_EXTENDED) and the old rights are untouched;
 - no residency **price** discount is published. The lifecycle therefore returns an
   empty discountLines array and totalMinor = baseAmountMinor. The benefits above
   are consumed by the existing booking owner, not duplicated here.
@@ -122,7 +125,6 @@ The order object:
   "pricing": { "baseAmountMinor": 79000, "discountLines": [], "totalMinor": 79000, "currency": "RUB" },
   "payment": {
     "status": "PENDING",
-    "providerTransactionId": "00000000-0000-4000-8000-000000000003",
     "paymentUrl": "https://...",
     "expiresAt": "2026-11-18T09:20:00.000Z",
     "instruction": "Оплатите по ссылке. Статус обновится после подтверждения банком."
@@ -138,6 +140,9 @@ The order object:
 States: PENDING_PAYMENT, PAYMENT_FAILED, EXPIRED, CANCELLED, PAID,
 PAID_ACTIVATION_PENDING, ACTIVE, ACTIVATION_FAILED, PAID_REQUIRES_REVIEW.
 PAID is a receipt, never current entitlement. Only ACTIVE carries a residency window.
+The order is durable before the Viva POST, so a crash or lost response leaves a
+DISPATCHING/UNKNOWN local attempt, never a second POST. The Viva transaction id is
+internal and is not present in any client DTO.
 
 ### Order state
 
@@ -161,8 +166,9 @@ GET /orders/{orderId}/payment
 ~~~
 
 A lost create response is recovered by reading the original transaction/order, never
-by POSTing a second transaction. A cancelled or paid order never returns a stale
-payment link.
+by POSTing a second transaction. A cancelled, expired or paid order never returns a
+stale payment link; expiry also checks the original transaction before closing, and a
+live link without a provider id is never silently voided.
 
 ### Reconcile / payment callback
 
@@ -191,9 +197,11 @@ CUP's context.instance.activeFrom/activeTo.
 
 POST /orders/{orderId}/cancel with Idempotency-Key. Cancellable only while not
 paid and not active. The owner reads the original transaction first: PAID refuses the
-cancel, and an unreadable status fails closed instead of cancelling an in-flight payment.
-A paid order waiting for activation must not be cancelled into an automatic refund
-(409 RESIDENCY_ORDER_PAID).
+cancel, and an unreadable or still-PENDING status fails closed (409
+RESIDENCY_PAYMENT_STATUS_UNKNOWN) instead of cancelling an in-flight payment. An
+ambiguous DISPATCHING/UNKNOWN order without a provider id cannot be cancelled without
+support. A paid order waiting for activation must not be cancelled into an automatic
+refund (409 RESIDENCY_ORDER_PAID).
 
 ### Error envelope
 
@@ -213,7 +221,9 @@ RESIDENCY_UPSTREAM_TIMEOUT, RESIDENCY_UPSTREAM_UNAVAILABLE,
 RESIDENCY_UPSTREAM_INVALID, RESIDENCY_PAYMENT_INVALID,
 RESIDENCY_PAYMENT_AMOUNT_MISMATCH, RESIDENCY_PAYMENT_OWNERSHIP_MISMATCH,
 RESIDENCY_PRODUCT_TERMS_MISMATCH, RESIDENCY_SUBSCRIPTION_OWNERSHIP_CONFLICT,
-RESIDENCY_EVIDENCE_INVALID, RESIDENCY_RATE_LIMITED, RESIDENCY_INTERNAL.
+RESIDENCY_EVIDENCE_INVALID, RESIDENCY_PAYMENT_STATUS_UNAVAILABLE,
+RESIDENCY_PAYMENT_STATUS_UNKNOWN, RESIDENCY_SUBSCRIPTIONS_PARTIAL,
+RESIDENCY_RATE_LIMITED, RESIDENCY_INTERNAL.
 No code, message or log carries a token, phone, provider id, PII or raw provider body.
 
 ## Idempotency and double-charge guards
@@ -226,8 +236,9 @@ No code, message or log carries a token, phone, provider id, PII or raw provider
    UNKNOWN; the next read recovers the original order, it never re-POSTs.
 4. Every state change is a Mongo revision CAS. A losing callback re-reads the durable
    row and returns it.
-5. Activation is a separate transition after PAID; it is called only once per order
-   and only from CUP evidence. A repeated callback cannot activate twice.
+5. Activation is a single-flight claim after PAID; only the CAS winner calls CUP, and
+   the claim is reclaimable only after two minutes. A repeated or concurrent callback
+   cannot activate twice.
 6. Cancellation and expiry are terminal for that order; a replacement order is a new
    key, not a re-dispatch of the old one.
 
@@ -259,6 +270,8 @@ Collection lk_residency_lifecycle_orders:
 
 - unique residency_order_identity on (tenantId, orderId);
 - unique residency_order_idempotency on (tenantId, idempotencyKeyHash);
+- unique partial residency_order_active_slot on (tenantId, userId, activeSlot)
+  where activeSlot=1 — the atomic one-unresolved-order-per-user guard;
 - residency_order_user_state on (tenantId, userId, state);
 - residency_order_expiry on (tenantId, state, payment.expiresAt).
 

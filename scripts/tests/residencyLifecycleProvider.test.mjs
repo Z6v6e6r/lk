@@ -118,12 +118,16 @@ test("create sends one exact subscription line and returns a payable link", asyn
 });
 
 test("an already paid create is PAID without inventing a URL", async () => {
-  const { ports } = build({ routes: { "/transactions": () => response({ paid: true, toPay: 79000, id: TXN, paymentDate: "2026-11-18T09:05:00.000Z" }) } });
+  const { ports } = build({ routes: { "/transactions": (url) => url.endsWith("/transactions")
+    ? response({ paid: true, toPay: 79000, id: TXN })
+    : response(txn()) } });
   const result = await ports.payments.create({ amountMinor: 79000 });
   assert.equal(result.status, "PAID");
   assert.equal(result.paymentUrl, null);
   assert.equal(result.paidAt, "2026-11-18T09:05:00.000Z");
-  const changed = build({ routes: { "/transactions": () => response({ paid: true, toPay: 1, id: TXN }) } });
+  const changed = build({ routes: { "/transactions": (url) => url.endsWith("/transactions")
+    ? response({ paid: true, toPay: 1, id: TXN })
+    : response(txn()) } });
   await assert.rejects(changed.ports.payments.create({ amountMinor: 79000 }), /RESIDENCY_PAYMENT_INVALID/);
 });
 
@@ -203,4 +207,39 @@ test("status is NONE only after a complete owned read; source failure is UNAVAIL
 test("no residency price discount is invented", async () => {
   const { ports } = build();
   assert.deepEqual(await ports.discounts.quote({ baseAmountMinor: 79000 }), { discountLines: [], totalMinor: 79000 });
+});
+
+test("a PAID zero-payment transaction is accepted without forcing the card amount", async () => {
+  const { ports } = build({ routes: { "/api/v1/transactions/": () => response(txn({ toPay: 0 })) } });
+  const result = await ports.payments.read({ amountMinor: 79000, providerTransactionId: TXN });
+  assert.equal(result.status, "PAID");
+});
+
+test("a Viva subscriptions 404 is UNAVAILABLE, never NONE", async () => {
+  const { ports } = build({ routes: { "/subscriptions?": () => response({ code: "NOT_FOUND" }, 404) } });
+  const result = await ports.status.read();
+  assert.equal(result.state, "UNAVAILABLE");
+  assert.equal(result.reason, "NOT_FOUND");
+});
+
+test("the owned subscription read pages to completeness and fails partial reads", async () => {
+  const rows = Array.from({ length: 200 }, (_, index) => subscription({
+    subscriptionId: "00000000-0000-4000-8000-" + String(1000 + index).padStart(12, "0"),
+    productId: "other", purchaseDate: "2026-01-01T00:00:00.000Z",
+  }));
+  const newest = subscription({ subscriptionId: SUB, purchaseDate: "2026-11-18T09:05:00.000Z" });
+  const paged = build({ routes: { "/subscriptions?": (url) => url.includes("page=0") ? response(rows) : response([newest]) } });
+  assert.equal((await paged.ports.activation.findInstance({ productId: RESIDENCY_PRODUCT_ID })).clientSubscriptionId, SUB);
+  const partial = build({ routes: { "/subscriptions?": (url) => url.includes("page=0")
+    ? response({ items: rows, total: 201 }) : response({ items: [], total: 201 }) } });
+  await assert.rejects(partial.ports.activation.findInstance({ productId: RESIDENCY_PRODUCT_ID }), /RESIDENCY_SUBSCRIPTIONS_PARTIAL/);
+});
+
+test("a duplicate subscription id across pages fails closed", async () => {
+  const row = subscription({ productId: "other" });
+  const rows = Array.from({ length: 199 }, (_, index) => subscription({
+    subscriptionId: "00000000-0000-4000-8000-" + String(index + 2).padStart(12, "0"), productId: "other",
+  }));
+  const { ports } = build({ routes: { "/subscriptions?": (url) => url.includes("page=0") ? response([row, ...rows]) : response([row]) } });
+  await assert.rejects(ports.activation.findInstance({ productId: RESIDENCY_PRODUCT_ID }), /RESIDENCY_SUBSCRIPTIONS_INVALID/);
 });

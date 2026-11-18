@@ -30,8 +30,6 @@ export const RESIDENCY_STATES = Object.freeze({
   UNAVAILABLE: "UNAVAILABLE",
 });
 
-const TERMINAL = new Set([ORDER_STATES.PAYMENT_FAILED, ORDER_STATES.CANCELLED, ORDER_STATES.PAID_REQUIRES_REVIEW]);
-
 const hasControls = (value) => Array.from(value).some((ch) => ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127);
 const text = (value, max = 256) => typeof value === "string" && value.length > 0 && value.length <= max
   && value.trim() === value && !hasControls(value);
@@ -107,8 +105,17 @@ export function createResidencyLifecycle(deps) {
       || order.pricing.baseAmountMinor - order.pricing.discountLines.reduce((sum, line) => sum + line.amountMinor, 0) !== order.pricing.totalMinor) {
       throw new Error("RESIDENCY_ORDER_PRICING_INVALID");
     }
-    if (!order.payment || !["NONE", "PENDING", "PAID", "FAILED", "UNKNOWN"].includes(order.payment.status)) {
+    if (!order.product || order.product.productId !== productId || !text(order.product.title, 160)
+      || !Number.isSafeInteger(order.product.termDays) || order.product.termDays <= 0 || order.product.currency !== "RUB") {
+      throw new Error("RESIDENCY_ORDER_PRODUCT_INVALID");
+    }
+    if (!order.payment || !["NONE", "DISPATCHING", "PENDING", "PAID", "FAILED", "UNKNOWN"].includes(order.payment.status)) {
       throw new Error("RESIDENCY_ORDER_PAYMENT_INVALID");
+    }
+    if (!order.activation || typeof order.activation !== "object" || !Array.isArray(order.events)
+      || (order.residency !== null && (typeof order.residency !== "object" || !Object.values(RESIDENCY_STATES).includes(order.residency.state)))
+      || ![1, null].includes(order.activeSlot)) {
+      throw new Error("RESIDENCY_ORDER_STORAGE_INVALID");
     }
     return order;
   }
@@ -140,11 +147,12 @@ export function createResidencyLifecycle(deps) {
         currency: order.pricing.currency,
       },
       payment: {
-        status: order.payment.status,
-        providerTransactionId: order.payment.providerTransactionId || null,
-        paymentUrl: order.payment.status === "PENDING" ? order.payment.paymentUrl || null : null,
+        status: order.payment.status === "DISPATCHING" ? "UNKNOWN" : order.payment.status,
+        paymentUrl: order.state === ORDER_STATES.PENDING_PAYMENT && order.payment.status === "PENDING"
+          ? order.payment.paymentUrl || null : null,
         expiresAt: order.payment.expiresAt || null,
-        instruction: order.payment.status === "PENDING" ? "Оплатите по ссылке. Статус обновится после подтверждения банком." : null,
+        instruction: order.state === ORDER_STATES.PENDING_PAYMENT && order.payment.status === "PENDING"
+          ? "Оплатите по ссылке. Статус обновится после подтверждения банком." : null,
       },
       activation: {
         state: order.activation.state,
@@ -279,14 +287,27 @@ export function createResidencyLifecycle(deps) {
       state: ORDER_STATES.PENDING_PAYMENT,
       product: { productId: product.productId, title: product.title, termDays: product.termDays, currency: product.currency },
       pricing: { baseAmountMinor: product.priceMinor, discountLines: pricing.discountLines, totalMinor: pricing.totalMinor, currency: product.currency },
-      payment: { status: "NONE", providerTransactionId: null, paymentUrl: null, expiresAt: null, paidAt: null, lastCheckedAt: null },
-      activation: { state: "NOT_STARTED", attempts: 0, lastErrorCode: null, clientSubscriptionId: null },
+      payment: { status: "DISPATCHING", providerTransactionId: null, paymentUrl: null, expiresAt: null, paidAt: null, lastCheckedAt: now },
+      activation: { state: "DISPATCHING", attempts: 0, lastErrorCode: null, clientSubscriptionId: null, startedAt: null },
       residency: null,
       events: [],
+      activeSlot: 1,
+      renewalBaseValidUntil: mode === "RENEWAL" ? current.validUntil : null,
       createdAt: now,
       updatedAt: now,
       revision: 1,
     };
+
+    // The durable attempt exists before the provider POST. A crash after this point
+    // leaves DISPATCHING, and a retry returns the same order instead of charging again.
+    const inserted = await store.insertOrder(order);
+    if (!inserted?.ok) {
+      const existing = await store.findOrderByKey(tenantId, keyHash);
+      if (existing && existing.requestHash === hash) return { order: publicOrder(existing), idempotentReplay: true };
+      const active = await store.findUnresolvedOrder(tenantId, userId);
+      if (active) fail(409, "RESIDENCY_ORDER_ALREADY_PENDING", "An unresolved residency order already exists");
+      fail(409, "RESIDENCY_ORDER_CONFLICT", "The order was created concurrently");
+    }
 
     let payment;
     try {
@@ -295,51 +316,65 @@ export function createResidencyLifecycle(deps) {
         productId: product.productId, amountMinor: pricing.totalMinor, currency: product.currency,
       });
     } catch {
-      // A failed create may still have reached the provider. Persist the order as UNKNOWN
-      // so a retry reads it back instead of charging twice.
-      order.payment.status = "UNKNOWN";
-      order.payment.lastCheckedAt = now;
-      const inserted = await store.insertOrder(order);
-      if (!inserted?.ok) {
-        const existing = await store.findOrderByKey(tenantId, keyHash);
-        if (existing && existing.requestHash === hash) return { order: publicOrder(existing), idempotentReplay: true };
-        fail(409, "RESIDENCY_ORDER_CONFLICT", "The order was created concurrently");
-      }
-      return { order: publicOrder(order), idempotentReplay: false, recoveryRequired: true };
+      const updated = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
+        payment: { ...order.payment, status: "UNKNOWN", lastCheckedAt: nowIso() },
+      });
+      return { order: publicOrder(updated), idempotentReplay: false, recoveryRequired: true };
     }
     if (!payment || !money(payment.amountMinor) || payment.amountMinor !== pricing.totalMinor
       || !["PENDING", "PAID"].includes(payment.status)) {
-      order.payment.status = "UNKNOWN";
-      order.payment.lastCheckedAt = now;
-      const inserted = await store.insertOrder(order);
-      if (!inserted?.ok) {
-        const existing = await store.findOrderByKey(tenantId, keyHash);
-        if (existing && existing.requestHash === hash) return { order: publicOrder(existing), idempotentReplay: true };
-        fail(409, "RESIDENCY_ORDER_CONFLICT", "The order was created concurrently");
-      }
-      return { order: publicOrder(order), idempotentReplay: false, recoveryRequired: true };
+      const updated = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
+        payment: { ...order.payment, status: "UNKNOWN", lastCheckedAt: nowIso() },
+      });
+      return { order: publicOrder(updated), idempotentReplay: false, recoveryRequired: true };
     }
 
-    order.payment.status = payment.status;
-    order.payment.providerTransactionId = text(payment.providerTransactionId, 128) ? payment.providerTransactionId : null;
-    order.payment.paymentUrl = payment.status === "PENDING" && text(payment.paymentUrl, 4096) ? payment.paymentUrl : null;
-    order.payment.expiresAt = payment.expiresAt && iso(payment.expiresAt) ? payment.expiresAt : null;
-    order.payment.lastCheckedAt = now;
-    if (payment.status === "PAID") {
-      order.payment.paidAt = payment.paidAt && iso(payment.paidAt) ? payment.paidAt : now;
-      order.state = ORDER_STATES.PAID;
-    }
-    const inserted = await store.insertOrder(order);
-    if (!inserted?.ok) {
-      const existing = await store.findOrderByKey(tenantId, keyHash);
-      if (existing && existing.requestHash === hash) return { order: publicOrder(existing), idempotentReplay: true };
-      fail(409, "RESIDENCY_ORDER_CONFLICT", "The order was created concurrently");
-    }
-    if (order.state === ORDER_STATES.PAID) {
-      const activated = await activate(order);
+    const nextState = payment.status === "PAID" ? ORDER_STATES.PAID : ORDER_STATES.PENDING_PAYMENT;
+    const updated = await transition(order, nextState, {
+      payment: {
+        status: payment.status,
+        providerTransactionId: text(payment.providerTransactionId, 128) ? payment.providerTransactionId : null,
+        paymentUrl: payment.status === "PENDING" && text(payment.paymentUrl, 4096) ? payment.paymentUrl : null,
+        expiresAt: payment.expiresAt && iso(payment.expiresAt) ? payment.expiresAt : null,
+        paidAt: payment.status === "PAID" ? (payment.paidAt && iso(payment.paidAt) ? payment.paidAt : nowIso()) : null,
+        lastCheckedAt: nowIso(),
+      },
+      activation: { ...order.activation, state: "NOT_STARTED" },
+    });
+    if (nextState === ORDER_STATES.PAID) {
+      const activated = await activate(updated);
       return { order: publicOrder(activated), idempotentReplay: false };
     }
-    return { order: publicOrder(order), idempotentReplay: false };
+    return { order: publicOrder(updated), idempotentReplay: false };
+  }
+
+  async function expireIfDue(order) {
+    if (order.state !== ORDER_STATES.PENDING_PAYMENT || order.payment.status !== "PENDING" || !order.payment.expiresAt) return order;
+    if (clock.now() < Date.parse(order.payment.expiresAt)) return order;
+    if (!order.payment.providerTransactionId) {
+      // A payable link without a provider id cannot be verified or safely voided.
+      return order;
+    }
+    let read;
+    try {
+      read = await payments.read({
+        tenantId: order.tenantId, userId: order.userId, orderId: order.orderId,
+        amountMinor: order.pricing.totalMinor, providerTransactionId: order.payment.providerTransactionId,
+      });
+    } catch { return order; }
+    if (read?.status === "PAID") {
+      const paid = await transition(order, ORDER_STATES.PAID, {
+        payment: { ...order.payment, status: "PAID", paymentUrl: null,
+          paidAt: iso(read.paidAt) ? read.paidAt : nowIso(), lastCheckedAt: nowIso() },
+      });
+      return activate(paid);
+    }
+    if (read?.status === "PENDING" || read?.status === "FAILED") {
+      return transition(order, ORDER_STATES.EXPIRED, {
+        payment: { ...order.payment, paymentUrl: null, lastCheckedAt: nowIso() },
+      });
+    }
+    return order;
   }
 
   async function getOrder(query) {
@@ -349,13 +384,8 @@ export function createResidencyLifecycle(deps) {
     const order = await store.getOrder(query.tenantId, query.userId, query.orderId);
     if (!order) fail(404, "RESIDENCY_ORDER_NOT_FOUND", "Order not found");
     assertOrderShape(order);
-    if (order.state === ORDER_STATES.PENDING_PAYMENT && order.payment.expiresAt && clock.now() >= Date.parse(order.payment.expiresAt)) {
-      const expired = await transition(order, ORDER_STATES.EXPIRED, {
-        payment: { ...order.payment, paymentUrl: null, lastCheckedAt: nowIso() },
-      });
-      return { order: publicOrder(expired) };
-    }
-    return { order: publicOrder(order) };
+    const effective = await expireIfDue(order);
+    return { order: publicOrder(effective) };
   }
 
   async function getPayment(query) {
@@ -410,10 +440,12 @@ export function createResidencyLifecycle(deps) {
   }
 
   async function transition(order, state, patch = {}) {
+    const resolved = [ORDER_STATES.ACTIVE, ORDER_STATES.PAYMENT_FAILED, ORDER_STATES.EXPIRED, ORDER_STATES.CANCELLED].includes(state);
     const next = {
       ...order,
       ...patch,
       state,
+      activeSlot: resolved ? null : 1,
       updatedAt: nowIso(),
       revision: order.revision + 1,
     };
@@ -435,6 +467,23 @@ export function createResidencyLifecycle(deps) {
   async function activate(order) {
     if (![ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING, ORDER_STATES.ACTIVATION_FAILED].includes(order.state)) return order;
     if (order.state === ORDER_STATES.ACTIVE) return order;
+    const inFlightSince = iso(order.activation.startedAt) ? Date.parse(order.activation.startedAt) : null;
+    if (order.activation.state === "IN_FLIGHT" && inFlightSince !== null && clock.now() - inFlightSince < 120000) {
+      // Another worker owns this activation. Do not call CUP twice.
+      return order;
+    }
+    const claimed = {
+      ...order,
+      activation: { ...order.activation, state: "IN_FLIGHT", startedAt: nowIso() },
+      updatedAt: nowIso(),
+      revision: order.revision + 1,
+    };
+    const claim = await store.updateOrder(order.tenantId, order.orderId, order.revision, claimed);
+    if (!claim?.ok) {
+      const current = await store.getOrder(order.tenantId, order.userId, order.orderId);
+      return current || order;
+    }
+    order = claimed;
     let instance;
     try {
       instance = await activation.findInstance({
@@ -448,22 +497,17 @@ export function createResidencyLifecycle(deps) {
       });
     }
     if (!instance || !text(instance.clientSubscriptionId, 128)) {
-      // Without a transaction id, an instance is the only recovery signal. Do not
-      // mark the order PAID on absence: CUP must confirm the purchase first.
-      if (!order.payment.providerTransactionId) {
-        return transition(order, ORDER_STATES.PAID_REQUIRES_REVIEW, {
-          activation: { ...order.activation, state: "REQUIRES_REVIEW", lastErrorCode: "TRANSACTION_ID_MISSING" },
-        });
-      }
+      // An absent instance is retryable: CUP must confirm the purchase first, and a
+      // later reconcile can see the issued instance without a second charge.
       return transition(order, ORDER_STATES.ACTIVATION_PENDING, {
         activation: { ...order.activation, state: "PENDING", lastErrorCode: "INSTANCE_NOT_FOUND" },
       });
     }
-    if (!order.payment.providerTransactionId && iso(instance.purchasedAt)
-      && Date.parse(instance.purchasedAt) < Date.parse(order.createdAt)) {
-      // An older instance is not evidence for this order.
+    if (iso(instance.purchasedAt) && Date.parse(instance.purchasedAt) < Date.parse(order.createdAt)) {
+      // An instance purchased before this order is not evidence for it. This is the
+      // renewal guard against binding an old subscription to the new payment.
       return transition(order, ORDER_STATES.ACTIVATION_PENDING, {
-        activation: { ...order.activation, state: "PENDING", lastErrorCode: "INSTANCE_NOT_FOUND" },
+        activation: { ...order.activation, state: "PENDING", lastErrorCode: "INSTANCE_BEFORE_ORDER" },
       });
     }
     let result;
@@ -480,6 +524,13 @@ export function createResidencyLifecycle(deps) {
     }
     if (result?.state === "ACTIVE" && iso(result.validFrom) && iso(result.validUntil)
       && Date.parse(result.validUntil) > Date.parse(result.validFrom)) {
+      if (order.mode === "RENEWAL" && iso(order.renewalBaseValidUntil)
+        && Date.parse(result.validUntil) <= Date.parse(order.renewalBaseValidUntil)) {
+        return transition(order, ORDER_STATES.ACTIVATION_FAILED, {
+          activation: { ...order.activation, state: "REJECTED", attempts: order.activation.attempts + 1,
+            lastErrorCode: "RENEWAL_WINDOW_NOT_EXTENDED", clientSubscriptionId: instance.clientSubscriptionId },
+        });
+      }
       return transition(order, ORDER_STATES.ACTIVE, {
         payment: order.payment.status === "PAID" ? order.payment : {
           ...order.payment,
@@ -547,13 +598,38 @@ export function createResidencyLifecycle(deps) {
       }
       return { order: publicOrder({ ...order, payment: { ...order.payment, status: paid ? "PAID" : order.payment.status } }), idempotentReplay: false, reviewRequired: paid };
     }
-    if (TERMINAL.has(order.state)) return { order: publicOrder(order), idempotentReplay: false };
+    if (order.state === ORDER_STATES.PAID_REQUIRES_REVIEW) return { order: publicOrder(order), idempotentReplay: false, reviewRequired: true };
+
+    const alreadyPaid = order.payment.status === "PAID"
+      || [ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING, ORDER_STATES.ACTIVATION_FAILED].includes(order.state);
+    const failClosedRead = () => ({ order: publicOrder(order), idempotentReplay: false, retryable: true });
+
+    if (order.state === ORDER_STATES.PAYMENT_FAILED) {
+      if (!order.payment.providerTransactionId) return { order: publicOrder(order), idempotentReplay: false };
+      let read;
+      try {
+        read = await payments.read({ tenantId: order.tenantId, userId: order.userId, orderId: order.orderId,
+          amountMinor: order.pricing.totalMinor, providerTransactionId: order.payment.providerTransactionId });
+      } catch { return failClosedRead(); }
+      if (read?.status === "PAID") {
+        const review = await transition(order, ORDER_STATES.PAID_REQUIRES_REVIEW, {
+          payment: { ...order.payment, status: "PAID", paymentUrl: null,
+            paidAt: iso(read.paidAt) ? read.paidAt : nowIso(), lastCheckedAt: nowIso() },
+          activation: { ...order.activation, state: "REQUIRES_REVIEW", lastErrorCode: "PAYMENT_AFTER_FAILURE" },
+          events: appendEvent(order, eventId),
+        });
+        return { order: publicOrder(review), idempotentReplay: false, reviewRequired: true };
+      }
+      return { order: publicOrder(order), idempotentReplay: false };
+    }
 
     if (!order.payment.providerTransactionId) {
       // A lost create response or a callback without a provider id is reconciled by
-      // CUP's owned-instance evidence, never by a second create.
+      // CUP's owned-instance evidence, never by a second create. An absent instance
+      // stays retryable; only CUP can confirm the purchase.
       const activated = await activate(order);
-      return { order: publicOrder(activated), idempotentReplay: false, retryable: activated.state !== ORDER_STATES.ACTIVE };
+      return { order: publicOrder(activated), idempotentReplay: false,
+        retryable: ![ORDER_STATES.ACTIVE, ORDER_STATES.PAID_REQUIRES_REVIEW].includes(activated.state) };
     }
     let read;
     try {
@@ -562,16 +638,14 @@ export function createResidencyLifecycle(deps) {
         amountMinor: order.pricing.totalMinor,
         providerTransactionId: order.payment.providerTransactionId,
       });
-    } catch {
-      return { order: publicOrder(order), idempotentReplay: false, retryable: true };
-    }
-    if (!read || !["PAID", "PENDING", "FAILED", "UNKNOWN"].includes(read.status)) {
-      return { order: publicOrder(order), idempotentReplay: false, retryable: true };
-    }
+    } catch { return failClosedRead(); }
+    if (!read || !["PAID", "PENDING", "FAILED", "UNKNOWN"].includes(read.status)) return failClosedRead();
+
     if (read.status === "PAID") {
       if (!money(read.amountMinor) || read.amountMinor !== order.pricing.totalMinor) {
         const review = await transition(order, ORDER_STATES.PAID_REQUIRES_REVIEW, {
-          payment: { ...order.payment, status: "PAID", paidAt: iso(read.paidAt) ? read.paidAt : nowIso(), lastCheckedAt: nowIso() },
+          payment: { ...order.payment, status: "PAID", paymentUrl: null,
+            paidAt: iso(read.paidAt) ? read.paidAt : nowIso(), lastCheckedAt: nowIso() },
           activation: { ...order.activation, state: "REQUIRES_REVIEW", lastErrorCode: "AMOUNT_MISMATCH" },
           events: appendEvent(order, eventId),
         });
@@ -580,11 +654,16 @@ export function createResidencyLifecycle(deps) {
       if (read.providerTransactionId && order.payment.providerTransactionId
         && read.providerTransactionId !== order.payment.providerTransactionId) {
         const review = await transition(order, ORDER_STATES.PAID_REQUIRES_REVIEW, {
-          payment: { ...order.payment, status: "PAID", lastCheckedAt: nowIso() },
+          payment: { ...order.payment, status: "PAID", paymentUrl: null, lastCheckedAt: nowIso() },
           activation: { ...order.activation, state: "REQUIRES_REVIEW", lastErrorCode: "TRANSACTION_MISMATCH" },
           events: appendEvent(order, eventId),
         });
         return { order: publicOrder(review), idempotentReplay: false, reviewRequired: true };
+      }
+      if (alreadyPaid) {
+        const activated = await activate(order);
+        return { order: publicOrder(activated), idempotentReplay: false,
+          retryable: activated.state === ORDER_STATES.ACTIVATION_PENDING };
       }
       const paid = await transition(order, ORDER_STATES.PAID, {
         payment: {
@@ -595,17 +674,37 @@ export function createResidencyLifecycle(deps) {
           paidAt: iso(read.paidAt) ? read.paidAt : nowIso(),
           lastCheckedAt: nowIso(),
         },
+        activation: { ...order.activation, state: "NOT_STARTED" },
         events: appendEvent(order, eventId),
       });
       const activated = await activate(paid);
       return { order: publicOrder(activated), idempotentReplay: false };
     }
+
+    // PAID is final. A later PENDING/UNKNOWN read never downgrades the order or
+    // re-exposes a payment link; a FAILED/refund contradiction goes to review.
+    if (alreadyPaid) {
+      if (read.status === "FAILED") {
+        const review = await transition(order, ORDER_STATES.PAID_REQUIRES_REVIEW, {
+          payment: { ...order.payment, status: "PAID", paymentUrl: null, lastCheckedAt: nowIso() },
+          activation: { ...order.activation, state: "REQUIRES_REVIEW", lastErrorCode: "PAYMENT_CONTRADICTION" },
+          events: appendEvent(order, eventId),
+        });
+        return { order: publicOrder(review), idempotentReplay: false, reviewRequired: true };
+      }
+      return failClosedRead();
+    }
+
     if (read.status === "FAILED") {
       const failed = await transition(order, ORDER_STATES.PAYMENT_FAILED, {
         payment: { ...order.payment, status: "FAILED", paymentUrl: null, lastCheckedAt: nowIso() },
         events: appendEvent(order, eventId),
       });
       return { order: publicOrder(failed), idempotentReplay: false };
+    }
+    if (order.state === ORDER_STATES.EXPIRED) {
+      // A late PENDING/UNKNOWN read never reopens an expired order.
+      return { order: publicOrder(order), idempotentReplay: false };
     }
     if (read.status === "PENDING") {
       const pending = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
@@ -648,9 +747,11 @@ export function createResidencyLifecycle(deps) {
     }
     // A PAID order waiting for activation must not be cancelled into a refund automatically.
     if (order.payment.status === "PAID") fail(409, "RESIDENCY_ORDER_PAID", "A paid order requires activation or review");
-    // An in-flight payment can settle after a local cancel. Read the original transaction
-    // first; a PAID result refuses the cancel and an unreadable result fails closed.
-    if (order.state === ORDER_STATES.PENDING_PAYMENT && order.payment.providerTransactionId) {
+    // Never cancel a dispatched order whose provider outcome is unknown: it may be paid.
+    if (["DISPATCHING", "UNKNOWN"].includes(order.payment.status) && !order.payment.providerTransactionId) {
+      fail(409, "RESIDENCY_PAYMENT_STATUS_UNKNOWN", "Payment status is unknown; contact support before cancelling");
+    }
+    if (order.payment.providerTransactionId) {
       let read;
       try {
         read = await payments.read({
@@ -663,6 +764,12 @@ export function createResidencyLifecycle(deps) {
       if (read?.status === "PAID") {
         fail(409, "RESIDENCY_ORDER_PAID", "A paid order requires activation or review");
       }
+      if (read?.status === "PENDING" || read?.status === "UNKNOWN" || !read) {
+        fail(409, "RESIDENCY_PAYMENT_STATUS_UNKNOWN", "Payment status is unresolved; retry later or contact support");
+      }
+    } else if (order.payment.status === "PENDING") {
+      // A payable link with no provider id cannot be verified or safely voided.
+      fail(409, "RESIDENCY_PAYMENT_STATUS_UNKNOWN", "Payment status is unresolved; contact support");
     }
     const cancelled = await transition(order, ORDER_STATES.CANCELLED, {
       payment: { ...order.payment, paymentUrl: null },
@@ -679,7 +786,7 @@ export function createResidencyLifecycle(deps) {
       if (row.state !== ORDER_STATES.PENDING_PAYMENT || !row.payment.expiresAt) continue;
       if (Date.parse(row.payment.expiresAt) > clock.now()) continue;
       try {
-        const next = await transition(row, ORDER_STATES.EXPIRED, {});
+        const next = await expireIfDue(row);
         if (next.state === ORDER_STATES.EXPIRED) expired += 1;
       } catch {
         // Best effort; the durable row stays eligible for the next sweep.
