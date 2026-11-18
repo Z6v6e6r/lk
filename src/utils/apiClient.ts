@@ -9265,8 +9265,10 @@ export function getHeldSplitJoinPaymentRef(gameId: string | null | undefined): s
   catch { return "unreadable-journal"; }
 }
 
-/** Apply evidence from an already loaded record without a network call. */
-export function settleSplitJoinAttemptFromRecord(gameId: string, record: unknown): SplitJoinAttemptEvidence | null {
+// Releases happen only inside the per-game Web Lock and re-check that the same
+// exact paymentRef is still held, so a release can never remove another
+// window's newer attempt. Classification alone is safe outside the lock.
+function releaseHeldSplitJoinAttemptLocked(gameId: string, record: unknown): SplitJoinAttemptEvidence | null {
   const paymentRef = getHeldSplitJoinPaymentRef(gameId);
   if (!paymentRef) return null;
   const evidence = classifySplitJoinAttempt(record, paymentRef);
@@ -9274,14 +9276,32 @@ export function settleSplitJoinAttemptFromRecord(gameId: string, record: unknown
   return evidence;
 }
 
-/** Re-read the game and resolve the held attempt only with evidence about that exact paymentRef. */
-export async function resolveSplitJoinAttempt(gameId: string): Promise<SplitJoinAttemptState> {
+async function resolveSplitJoinAttemptLocked(gameId: string): Promise<SplitJoinAttemptState> {
   const paymentRef = getHeldSplitJoinPaymentRef(gameId);
   if (!paymentRef) return { paymentRef: null, evidence: null, record: null };
   const read = await apiFetchPadelGameRecord(gameId, { cache: "no-store", retries: 0 });
   if (read.error || !read.data) return { paymentRef, evidence: "unreadable", record: null };
-  const evidence = settleSplitJoinAttemptFromRecord(gameId, read.data);
-  return { paymentRef: evidence === "paid" || evidence === "terminal" ? null : paymentRef, evidence, record: read.data };
+  const evidence = releaseHeldSplitJoinAttemptLocked(gameId, read.data);
+  const released = evidence === "paid" || evidence === "terminal";
+  return { paymentRef: released ? null : getHeldSplitJoinPaymentRef(gameId), evidence, record: read.data };
+}
+
+/** Apply evidence from an already loaded record. Without Web Locks nothing is released. */
+export async function settleSplitJoinAttemptFromRecord(gameId: string, record: unknown): Promise<SplitJoinAttemptEvidence | null> {
+  const paymentRef = getHeldSplitJoinPaymentRef(gameId);
+  if (!paymentRef) return null;
+  const evidence = classifySplitJoinAttempt(record, paymentRef);
+  if (evidence !== "paid" && evidence !== "terminal") return evidence;
+  const released = await withSplitJoinAttemptLock(splitJoinAttemptKey(gameId), async () => releaseHeldSplitJoinAttemptLocked(gameId, record));
+  return released ?? "pending";
+}
+
+/** Re-read the game and resolve the held attempt only with evidence about that exact paymentRef. */
+export async function resolveSplitJoinAttempt(gameId: string): Promise<SplitJoinAttemptState> {
+  const paymentRef = getHeldSplitJoinPaymentRef(gameId);
+  if (!paymentRef) return { paymentRef: null, evidence: null, record: null };
+  const state = await withSplitJoinAttemptLock(splitJoinAttemptKey(gameId), () => resolveSplitJoinAttemptLocked(gameId));
+  return state ?? { paymentRef, evidence: "unreadable", record: null };
 }
 
 let browserSplitCreateAttempts: SplitCreateAttempts | null = null;
@@ -9473,7 +9493,7 @@ export async function apiCreatePadelSplitParticipantPayment(
     if (oneTime) {
       let held: SplitJoinAttemptState;
       try {
-        held = await resolveSplitJoinAttempt(normalizedGameId);
+        held = await resolveSplitJoinAttemptLocked(normalizedGameId);
       } catch {
         held = { paymentRef: getHeldSplitJoinPaymentRef(normalizedGameId), evidence: "unreadable", record: null };
       }

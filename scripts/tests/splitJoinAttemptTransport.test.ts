@@ -316,3 +316,35 @@ test("without Web Locks a one-time create is refused (fail closed)", async () =>
     if (descriptor) Object.defineProperty(globalThis, "navigator", descriptor);
   }
 });
+
+test("a release from the UI never removes another window's newer attempt", async () => {
+  const { server, storage } = setup();
+  const client = await loadClient();
+  await client.apiCreatePadelSplitParticipantPayment("game-9", joinParams("ref-1") as never);
+  server.payments[0].status = "CANCELLED"; // proves ref-1 terminal
+  // Meanwhile another window (under the lock) released ref-1 and journaled ref-2.
+  storage.setItem("lk_split_join_attempt_refs_v1:game:game-9", JSON.stringify("ref-2"));
+  const staleRecord = { metadata: { splitPayment: { payments: [{ status: "CANCELLED", paymentRef: "ref-1" }] } } };
+  const evidence = await client.settleSplitJoinAttemptFromRecord("game-9", staleRecord);
+  assert.equal(evidence, "absent", "classification uses the currently held ref");
+  const resolved = await client.resolveSplitJoinAttempt("game-9");
+  assert.equal(resolved.evidence, "absent");
+  assert.equal(client.getHeldSplitJoinPaymentRef("game-9"), "ref-2");
+});
+
+test("without Web Locks evidence never releases a held attempt", async () => {
+  const { server } = setup();
+  const client = await loadClient();
+  await client.apiCreatePadelSplitParticipantPayment("game-10", joinParams("ref-1") as never);
+  server.payments[0].status = "CANCELLED";
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { value: { userAgent: "old" }, configurable: true });
+  try {
+    const record = { metadata: { splitPayment: { payments: server.payments } } };
+    assert.equal(await client.settleSplitJoinAttemptFromRecord("game-10", record), "pending");
+    assert.equal((await client.resolveSplitJoinAttempt("game-10")).evidence, "unreadable");
+    assert.equal(client.getHeldSplitJoinPaymentRef("game-10"), "ref-1");
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "navigator", descriptor);
+  }
+});

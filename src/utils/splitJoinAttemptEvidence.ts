@@ -16,10 +16,11 @@ export type SplitJoinAttemptEvidence =
   | "absent";
 
 const PAID_MARKERS = ["PAID", "CONFIRMED", "SUCCEEDED", "SUCCESS", "COMPLETED"];
-// Only provider-confirmed refusals end an attempt. EXPIRED/RELEASED can be set by
-// a server deadline (effectively a timer) and a late PAID may still arrive;
-// ERROR/REFUND do not prove that no money moved. Those stay "pending".
-const TERMINAL_MARKERS = ["CANCEL", "DECLIN", "FAIL", "REJECT", "VOID"];
+// Only exact provider-confirmed refusal statuses end an attempt. Anything in
+// progress (CANCELLING, CANCEL_REQUESTED, PENDING_CANCEL, VOID_PENDING), any
+// deadline-driven value (EXPIRED, RELEASED, CANCELLED_EXPIRED) and anything that
+// does not prove that no money moved (ERROR, REFUND*) stays "pending".
+const TERMINAL_STATUSES = new Set(["CANCELLED", "CANCELED", "DECLINED", "FAILED", "REJECTED", "VOIDED", "VOID"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -45,8 +46,7 @@ export function classifySplitJoinAttempt(record: unknown, paymentRef: string): S
   // paid wins over terminal, because a late PAID is real money.
   const statuses = matches.map(item => normalizeStatus(item.status));
   if (statuses.some(status => PAID_MARKERS.some(marker => status === marker || status.startsWith(`${marker}_`)))) return "paid";
-  const failedWithoutRefusal = (status: string) => status.includes("FAIL") && (status.includes("REFUND") || status.includes("ERROR"));
-  if (statuses.every(status => status && !failedWithoutRefusal(status) && TERMINAL_MARKERS.some(marker => status.includes(marker)))) return "terminal";
+  if (statuses.every(status => TERMINAL_STATUSES.has(status))) return "terminal";
   return "pending";
 }
 

@@ -38,7 +38,8 @@ test("only statuses rejected before the provider are definitive; 409 and in-flig
 });
 
 test("deadline-driven and money-ambiguous statuses never end an attempt", () => {
-  for (const status of ["EXPIRED", "RELEASED", "ERROR", "REFUNDED", "FAILED_REFUND"]) {
+  for (const status of ["EXPIRED", "RELEASED", "ERROR", "REFUNDED", "FAILED_REFUND", "CANCELLING", "CANCEL_REQUESTED",
+    "PENDING_CANCEL", "VOID_PENDING", "CANCELLED_EXPIRED", "DECLINE_PENDING"]) {
     assert.equal(classifySplitJoinAttempt(record([{ status, paymentRef: "r" }]), "r"), "pending", status);
   }
   for (const status of ["CANCELLED", "DECLINED", "FAILED", "REJECTED", "VOIDED"]) {

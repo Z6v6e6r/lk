@@ -14398,8 +14398,11 @@ export default function GamesPage({
   // Evidence can also arrive with any ordinary record refresh (bank return, roster sync).
   useEffect(() => {
     if (!gameRecordId || !activeGameRecord || !getHeldSplitJoinPaymentRef(gameRecordId)) return;
-    const evidence = settleSplitJoinAttemptFromRecord(gameRecordId, activeGameRecord);
-    if (evidence === "paid" || evidence === "terminal") bumpSplitJoinAttempt();
+    let cancelled = false;
+    void settleSplitJoinAttemptFromRecord(gameRecordId, activeGameRecord).then((evidence) => {
+      if (!cancelled && (evidence === "paid" || evidence === "terminal")) bumpSplitJoinAttempt();
+    });
+    return () => { cancelled = true; };
   }, [gameRecordId, activeGameRecord]);
   // Another window may start or resolve an attempt for this game.
   useEffect(() => {
