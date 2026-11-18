@@ -36,6 +36,7 @@ copy(path.join(root, "node-red/imports/lk_residency_lifecycle.import.json"), pat
 for (const name of ["apply-indexes.js", "preimage-check.mjs", "readback.sh", "discount-preview.mjs", "env.template"]) {
   copy(path.join(root, "scripts/pilot-composition", name), path.join(out, name));
 }
+fs.chmodSync(path.join(out, "readback.sh"), 0o755);
 copy(path.join(root, "docs/residency-pilot-install.md"), path.join(out, "INSTALL.md"));
 copy(path.join(root, "docs/residency-pilot-acceptance.md"), path.join(out, "ACCEPTANCE.md"));
 const evidence = path.join(root, "docs/evidence/residency-pilot/isolated-composition-20261118");

@@ -66,8 +66,9 @@ This is not a claim of a shared transaction or of intercepting the old client. T
 client's financial POST is browser→Viva and has no server hop. Remaining gaps:
 
 - The old→new check is a read before the POST, not an atomic provider constraint. A
-  transaction created in that narrow window is not prevented; it is detected on the next
-  read/reconcile.
+  transaction created in that narrow window is not prevented, but the post-create re-read
+  withholds the new payable link and keeps the order in `UNKNOWN_OUTCOME`; the old
+  transaction still exists and must be reviewed, never paid twice.
 - The reverse direction can still create and charge a second Viva transaction. For the
   pilot the owner must choose one of:
   a. one-account pilot with the operator present, the old page not linked and the
@@ -158,6 +159,7 @@ charge; one agreed transaction is enough.
 | 9 | Ordinary account calls `POST /orders` directly | pilot unavailable | 403 `RESIDENCY_CREATE_NOT_ALLOWED`, zero orders |
 | 10 | Double click / two tabs / two devices | one order | one `POST` 200, one 409, one durable order |
 | 11 | (Negative, not a real payment) old checkout open, then new screen | server-detected external purchase, no CTA | 409 `RESIDENCY_EXTERNAL_PURCHASE_PENDING` on direct create, `externalCheck.openCount ≥ 1`, `requiresReview=true`, zero new transactions |
+| 12 | (Negative) old checkout and new purchase launched simultaneously | the new screen never shows a second payable link | the new order stays `PENDING_PAYMENT` / payment `UNKNOWN` / `UNKNOWN_OUTCOME`; the old Viva transaction may exist and is reviewed; no activation |
 
 ### One test purchase request (needs owner approval)
 
