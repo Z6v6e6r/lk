@@ -260,7 +260,7 @@
     "test:game-result-rating-worker": "node --experimental-strip-types --test scripts/tests/gameResultRatingWorker.test.ts",
     "rating:reconcile": "node --experimental-strip-types scripts/reconcile_player_rating.mjs",
     "test:residency-client": "node --experimental-strip-types --test scripts/tests/residencyPassModel.test.ts scripts/tests/residencyPassClient.test.ts scripts/tests/residencyStationContext.test.ts",
-    "test:residency-lifecycle": "node --test scripts/tests/residencyLifecycle.test.mjs scripts/tests/residencyLifecycleProvider.test.mjs scripts/tests/residencyLifecycleHttp.test.mjs scripts/tests/residencyLifecycleGateway.test.mjs",
+    "test:residency-lifecycle": "node --test scripts/tests/residencyLifecycle.test.mjs scripts/tests/residencyLifecycleContractV2.test.mjs scripts/tests/residencyLifecycleProvider.test.mjs scripts/tests/residencyLifecycleHttp.test.mjs scripts/tests/residencyLifecycleGateway.test.mjs scripts/tests/residencyLifecycleMongo.test.mjs",
     "test:residency-gateway": "node --test scripts/tests/residencyPassGateway.nodered.test.mjs && node scripts/build_nodered_residency_pass_import.mjs --check",
     "nodered:residency-pass:build": "node scripts/build_nodered_residency_pass_import.mjs",
     "preview": "vite preview",
