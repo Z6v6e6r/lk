@@ -1539,9 +1539,9 @@ export default function TournamentSignupPage({
       });
       if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
       if (result.error || !result.data) {
-        const raw = result.error?.raw;
-        const previousAttemptClosed = pickString(raw, ["code"]) === "TOURNAMENT_PREVIOUS_ATTEMPT_CLOSED"
-          || (isRecord(raw) && pickString(raw.details, ["code"]) === "TOURNAMENT_PREVIOUS_ATTEMPT_CLOSED");
+        const raw = result.error?.raw as { code?: unknown; details?: { code?: unknown } } | undefined;
+        const previousAttemptClosed = raw?.code === "TOURNAMENT_PREVIOUS_ATTEMPT_CLOSED"
+          || raw?.details?.code === "TOURNAMENT_PREVIOUS_ATTEMPT_CLOSED";
         if (result.status === 409 && (previousAttemptClosed || isSubscriptionBookingReleased(raw))) {
           setError(result.error?.message || "Предыдущая попытка закрыта. Выберите вариант записи снова.");
           setCheckout(null);
@@ -1549,7 +1549,7 @@ export default function TournamentSignupPage({
           if (previousAttemptClosed) {
             clearStoredPendingPayment(selectedExerciseId);
             setRegistration(null);
-            await loadDetail(selectedId);
+            await loadPublicRoster(selectedExerciseId, { force: true }).catch(() => null);
           }
           return;
         }
