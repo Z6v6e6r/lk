@@ -35,7 +35,7 @@ const viewer: PadelGamePlayer = { id: profile.id, name: `${profile.firstName} ${
 const gamePayMode: 'split' | 'self' = routeParams.get('gamePayMode') === 'self' ? 'self' : 'split';
 // Synthetic server for the wired game-join checkout. Its state survives a page
 // reload (as a real server would) until the stand's reset counter changes.
-// joinOutcome: pending (default) | lost (created, response lost) | lost-unreadable
+// joinOutcome: pending (default) | lost (created, response lost) | network | lost-invisible | lost-unreadable
 // (created, response lost, the next game read fails) | refused.
 let failNextRecordRead = false;
 // settle: paid | cancelled — applies a provider decision to a pending payment on load.
@@ -69,6 +69,9 @@ function restoreServerGame(initial: PadelGameRecord): PadelGameRecord {
 function createSplitParticipantPayment(): unknown {
   const outcome = routeParams.get('joinOutcome') || 'pending';
   if (outcome === 'refused') return { __previewError: { status: 409, message: 'Последнее место уже занято. Оплата не создана.' } };
+  // network: transport failure reported as a result (status null), payment created.
+  // lost-invisible: payment created at the provider but not yet visible in the game record.
+  if (outcome === 'lost-invisible') throw new Error('Synthetic transport: response lost; payment not yet projected');
   const existing = splitPayments(game).find(item => item.clientId === viewer.id && item.status === 'PAYMENT_PENDING');
   const sequence = splitPayments(game).length + 1;
   const now = Date.now();
@@ -79,6 +82,7 @@ function createSplitParticipantPayment(): unknown {
   };
   if (!existing) { game = withSplitPayments(game, [...splitPayments(game), payment]); writeServerGame(game); }
   if (outcome === 'lost-unreadable') failNextRecordRead = true;
+  if (outcome === 'network') return { __previewError: { status: null, message: 'Ошибка сети' } };
   if (outcome === 'lost' || outcome === 'lost-unreadable') throw new Error('Synthetic transport: response lost after the payment was created');
   return { checkoutStored: true, paymentUrl: payment.paymentUrl, paymentRef: payment.paymentRef, bookingId: payment.bookingId, toPay: game.metadata?.joinPrice };
 }
@@ -258,7 +262,7 @@ export async function call(name: string, args: unknown[]) {
   }
   const result: unknown = handler(...args);
   const refusal = result && typeof result === 'object' && '__previewError' in result
-    ? (result as { __previewError: { status: number; message: string } }).__previewError : null;
+    ? (result as { __previewError: { status: number | null; message: string } }).__previewError : null;
   if (refusal) return { data: null, status: refusal.status, error: refusal };
   return { data: structuredClone(result), error: null, status: 200 };
 }
