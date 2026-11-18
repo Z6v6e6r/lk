@@ -141,7 +141,7 @@ const handler = async (req, res) => {
   // ---- Viva end-user API (old client and new gateway) ----
   if (path.startsWith("/viva/end-user/api/v1/" + TENANT + "/")) {
     const rest = path.slice(("/viva/end-user/api/v1/" + TENANT + "/").length);
-    if (rest === "profile") return json(res, 200, { id: CLIENT, phone: "+79990000000" });
+    if (rest === "profile") return json(res, 200, { id: CLIENT, phone: "+15550000000" });
     if (rest === "products/subscriptions/" + PRODUCT) return json(res, 200, product());
     if (rest === "transactions" && method === "POST") {
       const body = await readBody(req);

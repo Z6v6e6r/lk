@@ -17,7 +17,7 @@ const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 function token(role) {
   return b64({ alg: "none", typ: "JWT" }) + "." + b64({
     sub: role === "ordinary" ? "ordinary.user.0001" : "pilot.user.0001",
-    phone: role === "ordinary" ? "+79990000001" : "+79990000000",
+    phone: role === "ordinary" ? "+15550000001" : "+15550000000",
     azp: "widget", tenant_key: "iSkq6G", role, exp: Math.floor(Date.now() / 1000) + 86400,
   }) + ".";
 }

@@ -6,8 +6,8 @@ NEW=${NEW:-https://127.0.0.1:8443}
 FIX=${FIXTURE:-https://127.0.0.1:9443}
 MONGO_CONTAINER=${MONGO_CONTAINER:-lk1-pilot-mongo}
 PID=4037a3a3-e551-4f9a-a9db-1410e46b8635
-TOKEN=$(node -e 'const b=o=>Buffer.from(JSON.stringify(o)).toString("base64url");process.stdout.write(b({alg:"none",typ:"JWT"})+"."+b({sub:"pilot.user.0001",phone:"+79990000000",azp:"widget",tenant_key:"iSkq6G",role:"pilot",exp:Math.floor(Date.now()/1000)+86400})+".")')
-ORD=$(node -e 'const b=o=>Buffer.from(JSON.stringify(o)).toString("base64url");process.stdout.write(b({alg:"none",typ:"JWT"})+"."+b({sub:"ordinary.user.0001",phone:"+79990000001",azp:"widget",tenant_key:"iSkq6G",role:"ordinary",exp:Math.floor(Date.now()/1000)+86400})+".")')
+TOKEN=$(node -e 'const b=o=>Buffer.from(JSON.stringify(o)).toString("base64url");process.stdout.write(b({alg:"none",typ:"JWT"})+"."+b({sub:"pilot.user.0001",phone:"+15550000000",azp:"widget",tenant_key:"iSkq6G",role:"pilot",exp:Math.floor(Date.now()/1000)+86400})+".")')
+ORD=$(node -e 'const b=o=>Buffer.from(JSON.stringify(o)).toString("base64url");process.stdout.write(b({alg:"none",typ:"JWT"})+"."+b({sub:"ordinary.user.0001",phone:"+15550000001",azp:"widget",tenant_key:"iSkq6G",role:"ordinary",exp:Math.floor(Date.now()/1000)+86400})+".")')
 reset() {
   curl -sk -X POST $FIX/_control/reset >/dev/null
   docker exec $MONGO_CONTAINER mongosh lk_residency_pilot --quiet --eval 'db.lk_residency_lifecycle_orders.deleteMany({})' >/dev/null
@@ -22,7 +22,7 @@ summary() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try
 echo "== 1. reset =="
 reset
 echo "== 2. published old client creates its Viva transaction directly =="
-OLD=$(curl -sk -X POST $FIX/viva/end-user/api/v1/iSkq6G/transactions -H 'Content-Type: application/json' -d '{"clientPhone":"+79990000000","products":[{"id":"'$PID'","type":"SUBSCRIPTION","count":1}],"baseRedirectUrl":"https://127.0.0.1:8444/lk_new?phCheckoutReturn=residency"}')
+OLD=$(curl -sk -X POST $FIX/viva/end-user/api/v1/iSkq6G/transactions -H 'Content-Type: application/json' -d '{"clientPhone":"+15550000000","products":[{"id":"'$PID'","type":"SUBSCRIPTION","count":1}],"baseRedirectUrl":"https://127.0.0.1:8444/lk_new?phCheckoutReturn=residency"}')
 echo "$OLD" | summary
 OLDID=$(printf '%s' "$OLD" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).id))')
 echo "== 3. new create refused before any provider POST =="
@@ -41,7 +41,7 @@ curl -sk -X POST $NEW/lk/residency/orders/$ORDERID/reconcile -H "Authorization: 
 echo "== 7. reverse: new order first, old checkout second, old payment =="
 reset
 CREATE3=$(create "$TOKEN" transcript-key-0002); ORDER3=$(printf '%s' "$CREATE3" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).order.orderId))')
-OLD2=$(curl -sk -X POST $FIX/viva/end-user/api/v1/iSkq6G/transactions -H 'Content-Type: application/json' -d '{"clientPhone":"+79990000000","products":[{"id":"'$PID'","type":"SUBSCRIPTION","count":1}],"baseRedirectUrl":"https://127.0.0.1:8444/lk_new?phCheckoutReturn=residency"}')
+OLD2=$(curl -sk -X POST $FIX/viva/end-user/api/v1/iSkq6G/transactions -H 'Content-Type: application/json' -d '{"clientPhone":"+15550000000","products":[{"id":"'$PID'","type":"SUBSCRIPTION","count":1}],"baseRedirectUrl":"https://127.0.0.1:8444/lk_new?phCheckoutReturn=residency"}')
 OLD2ID=$(printf '%s' "$OLD2" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).id))')
 curl -sk $NEW/lk/residency/orders?state=unresolved -H "Authorization: Bearer $TOKEN" | summary
 curl -sk -X POST $FIX/_control/pay -H 'Content-Type: application/json' -d '{"transactionId":"'$OLD2ID'"}' >/dev/null
