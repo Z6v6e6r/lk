@@ -38,6 +38,7 @@ function memoryStore() {
     },
     async insertOrder(order) {
       if ([...orders.values()].some((o) => o.orderId === order.orderId || (o.tenantId === order.tenantId && o.idempotencyKeyHash === order.idempotencyKeyHash))) return { ok: false };
+      if (order.activeSlot === 1 && [...orders.values()].some((o) => o.tenantId === order.tenantId && o.userId === order.userId && o.activeSlot === 1)) return { ok: false };
       orders.set(order.orderId, structuredClone(order));
       return { ok: true };
     },
@@ -53,7 +54,7 @@ function memoryStore() {
     },
     async findUnresolvedOrder(tenantId, userId) {
       return [...orders.values()].find((o) => o.tenantId === tenantId && o.userId === userId
-        && ["PENDING_PAYMENT", "PAID", "PAID_ACTIVATION_PENDING"].includes(o.state)) || null;
+        && ["PENDING_PAYMENT", "PAID", "PAID_ACTIVATION_PENDING", "ACTIVATION_FAILED", "PAID_REQUIRES_REVIEW"].includes(o.state)) || null;
     },
     async listExpiredPending() { return []; },
   };
