@@ -39,9 +39,13 @@ fails closed on an invalid or unavailable quote.
 
 ## API contract for LK2 (and the LK1 client)
 
-Base path: https://padlhub.su/lk/residency (SERV2 origin, same as the resident pass
-gateway). Authentication: LK bearer (Authorization: Bearer <LK user token>), verified
-through Keycloak userinfo; expected azp/client_id=widget and tenant iSkq6G.
+Base path: https://padlhub.su/lk/residency (SERV2 origin, same as the existing
+/lk/residency/passes gateway). This is not a second pricing or payment engine: it
+reuses the existing Viva transaction, the Admin transaction read and CUP's
+residency-booking-refresh/context. LK2 must call this contract through PadlHub, never
+Viva directly, and must not recompute the price. Authentication: LK bearer
+(Authorization: Bearer <LK user token>), verified through Keycloak userinfo; expected
+azp/client_id=widget and tenant iSkq6G.
 Mutating routes require Idempotency-Key: 16..128 non-whitespace characters.
 X-Correlation-ID is optional and echoed. All responses are Cache-Control: no-store,
 Referrer-Policy: no-referrer, X-Robots-Tag: noindex, nofollow.
