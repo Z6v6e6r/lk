@@ -75,7 +75,16 @@ const PROD_TOURNAMENT_HISTORY_CACHE_TTL_MS = 10_000;
 const DEV_CABINET_ADVERTISING_CACHE_TTL_MS = 30_000;
 const DEV_SPLIT_PAYMENT_PROMO_CACHE_TTL_MS = 30_000;
 
+export interface PlayerLevel {
+  status: "RATED" | "UNRATED" | "UNAVAILABLE";
+  ratingNumeric: number | null;
+  rating: string | null;
+  source: "CUP_CANONICAL";
+  version?: string | null;
+}
+
 export interface UserProfileType {
+  level?: PlayerLevel;
   id: string;
   email: string | null;
   firstName: string;
@@ -4714,23 +4723,43 @@ async function withRetry<T>(
   }
 }
 
+const RETIRED_LEVEL_FIELDS = new Set([
+  "9018d922-6427-41a6-9ac0-4a2c0440eb8a", "f9790818-25fd-4b73-a781-79c02720727d", "eabfe27b-3f72-4496-9185-1a2ec6e6465e",
+]);
+
+async function attachCupLevel(result: ApiResult<UserProfileType>, signal?: AbortSignal): Promise<ApiResult<UserProfileType>> {
+  if (!result.data) return result;
+  const response = await request<{ ok: boolean; items: Array<PlayerLevel & { clientId: string }> }>("/lk/games/ratings/me", {
+    method: "GET", baseUrl: getServ2Origin() || "", auth: true, retries: 1, signal,
+  });
+  signal?.throwIfAborted();
+  const row = response.data?.ok === true && response.data.items?.length === 1 ? response.data.items[0] : null;
+  const valid = row?.clientId === result.data.id && row.source === "CUP_CANONICAL"
+    && ((row.status === "UNRATED" && row.ratingNumeric === null && row.rating === null)
+      || (row.status === "RATED" && typeof row.ratingNumeric === "number" && Number.isFinite(row.ratingNumeric) && row.ratingNumeric >= 1 && row.ratingNumeric <= 7));
+  return { ...result, data: { ...result.data,
+    customFields: (result.data.customFields || []).filter(field => !RETIRED_LEVEL_FIELDS.has(field.id)),
+    level: valid ? row! : { source: "CUP_CANONICAL", status: "UNAVAILABLE", ratingNumeric: null, rating: null },
+  } };
+}
+
 export async function apiFetchProfile(signal?: AbortSignal) {
   signal?.throwIfAborted();
-  return request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
-    method: "GET",
-    auth: true,
-    retries: 1,
-    signal,
-  });
+  return attachCupLevel(await request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
+    method: "GET", auth: true, retries: 1, signal,
+  }), signal);
 }
 
 export async function apiUpdateProfile(data: UpdateProfileData) {
-  return request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
-    method: "PATCH",
-    auth: true,
-    retries: 1,
-    body: JSON.stringify(data),
-  });
+  const safeData = { ...data };
+  if (data.customFields) {
+    const fields = data.customFields.filter(field => !RETIRED_LEVEL_FIELDS.has(field.id));
+    if (data.customFields.length > 0 && fields.length === 0) delete safeData.customFields;
+    else safeData.customFields = fields;
+  }
+  return attachCupLevel(await request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
+    method: "PATCH", auth: true, retries: 1, body: JSON.stringify(safeData),
+  }));
 }
 
 export interface OnboardingLevelPayload {
@@ -4756,7 +4785,7 @@ export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
     ? `${serv2Origin.replace(/\/+$/, "")}/lk/onboarding/level`
     : "/lk/onboarding/level";
 
-  const result = await request<{ ok?: boolean; success?: boolean; message?: string; error?: string }>(onboardingUrl, {
+  const result = await request<{ ok?: boolean; success?: boolean; message?: string; error?: string; items?: Array<PlayerLevel & { clientId: string }> }>(onboardingUrl, {
     method: "POST",
     auth: true,
     retries: 1,
@@ -4777,7 +4806,7 @@ export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
         status: result.status,
         message:
           pickString(result.data, ["message", "error", "error_description"])
-          || "Не удалось обновить данные в Viva",
+          || "Не удалось сохранить уровень в ЦУП",
         raw: result.data,
       },
       status: result.status,
@@ -7038,6 +7067,21 @@ function extractSupportClientResolveResult(payload: unknown): SupportClientResol
   };
 }
 
+async function hydratePadelGameLevels(games: PadelGameRecord[]): Promise<PadelGameRecord[]> {
+  const ids = [...new Set(games.flatMap(game => [game.organizer?.id, ...(game.participants || []).map(p => p.id), ...(game.waitlist || []).map(p => p.id)]).filter((id): id is string => Boolean(id)))];
+  const levels = new Map<string, PadelLiveRatingItem>();
+  for (let index = 0; index < ids.length; index += 100) {
+    const result = await apiFetchPadelLiveRatings(ids.slice(index, index + 100).map(clientId => ({ clientId })));
+    for (const row of result.data || []) if (row.clientId && row.source === "CUP_CANONICAL") levels.set(row.clientId, row);
+  }
+  const apply = <T extends { id?: string | null }>(player: T): T & { rating: string | null; ratingNumeric: number | null } => {
+    const level = player.id ? levels.get(player.id) : null;
+    return { ...player, rating: level?.rating ?? null, ratingNumeric: level?.ratingNumeric ?? null };
+  };
+  return games.map(game => ({ ...game, organizer: game.organizer ? apply(game.organizer) : game.organizer,
+    participants: game.participants?.map(apply), waitlist: game.waitlist?.map(apply) }));
+}
+
 export async function apiFetchPadelGamesByPhone(
   phone: string,
   clientId?: string | null,
@@ -7181,7 +7225,7 @@ export async function apiFetchPadelGamesByPhone(
     ));
     const filteredOutCount = sorted.length - relevantRecords.length;
     const total = Math.max(Math.max(0, reportedTotal - filteredOutCount), relevantRecords.length);
-    const games = limit ? relevantRecords.slice(0, limit) : relevantRecords;
+    const games = await hydratePadelGameLevels(limit ? relevantRecords.slice(0, limit) : relevantRecords);
 
     return {
       data: { games, total },
@@ -7226,7 +7270,7 @@ export async function apiFetchPadelAvailableGames(options: PadelAvailableGamesQu
         }),
   });
 
-  const games = extractPadelGameRecordList(response.data);
+  const games = await hydratePadelGameLevels(extractPadelGameRecordList(response.data));
   const consumedCount = extractPadelGameRecordPageItemCount(response.data);
   const total = extractPadelGameRecordListTotal(response.data) ?? games.length + offset;
   const hasMore = extractPadelGameRecordListHasMore(response.data) ?? (offset + games.length < total);
@@ -7285,7 +7329,7 @@ export async function apiFetchPadelGameRecord(
     const parsed = normalizePadelGameRecord(response.data);
     if (parsed) {
       return {
-        data: parsed,
+        data: (await hydratePadelGameLevels([parsed]))[0],
         error: null,
         status: response.status,
       };
@@ -9684,20 +9728,7 @@ export async function apiFetchFprStartRatings(clientIds: string[]) {
 }
 
 export async function apiFetchPadelLiveRatings(players: PadelLiveRatingRequestPlayer[]) {
-  const body = {
-    players: (Array.isArray(players) ? players : [])
-      .map((player) => ({
-        clientId: (player?.clientId || "").trim() || null,
-        phone: (player?.phone || "").trim() || null,
-        name: (player?.name || "").trim() || null,
-        rating: (player?.rating || "").trim() || null,
-        ratingNumeric:
-          typeof player?.ratingNumeric === "number" && Number.isFinite(player.ratingNumeric)
-            ? player.ratingNumeric
-            : null,
-      }))
-      .filter((player) => player.clientId || player.phone),
-  };
+  const body = { players: [...new Set((Array.isArray(players) ? players : []).map(p => p?.clientId?.trim()).filter((id): id is string => Boolean(id)))].map(clientId => ({ clientId })) };
 
   if (body.players.length === 0) {
     return {
@@ -9720,6 +9751,7 @@ export async function apiFetchPadelLiveRatings(players: PadelLiveRatingRequestPl
       method: endpoint.method,
       baseUrl,
       retries: 1,
+      auth: true,
       body: JSON.stringify(body),
     });
 

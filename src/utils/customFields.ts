@@ -1,9 +1,6 @@
 import type { CustomField, UserProfileType } from "./apiClient";
 
 export const CUSTOM_FIELD_IDS = {
-  vivaPadelLevel: "9018d922-6427-41a6-9ac0-4a2c0440eb8a",
-  lkPadelLevel: "f9790818-25fd-4b73-a781-79c02720727d",
-  lkPadelLevelNumeric: "eabfe27b-3f72-4496-9185-1a2ec6e6465e",
   tournamentsAccess: "e17a32f3-65f7-47c5-bda1-33d79932c884",
 } as const;
 
@@ -45,6 +42,7 @@ export function parseNumericLevel(value?: string): number | null {
 }
 
 export function getLetterGrade(value: number): string {
+  if (!Number.isFinite(value) || value < 1 || value > 7) return "—";
   if (value < 2) return "D";
   if (value < 3) return "D+";
   if (value < 3.5) return "C";
@@ -94,6 +92,7 @@ export function normalizeLevelGradeLabel(
 }
 
 export function formatScoreDisplay(value: number): string {
+  if (!Number.isFinite(value) || value < 1 || value > 7) return "—";
   const rounded = Math.round(value * 10) / 10;
   return rounded.toFixed(1).replace(/\.0$/, "");
 }

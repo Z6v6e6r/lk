@@ -1,3 +1,5 @@
+import { EventAllowedLevel } from "../UI/EventAllowedLevel";
+import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isTournamentCapacityError } from "../../utils/tournamentCapacityError";
 import { isSubscriptionBookingReleased } from "../../utils/subscriptionRejoin";
@@ -1003,6 +1005,7 @@ export default function TournamentSignupPage({
   const [dateIndex, setDateIndex] = useState(initialDateIndex >= 0 ? initialDateIndex : DAYS_BEFORE_TODAY);
   const [items, setItems] = useState<TournamentSignupSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(targetTournamentId);
+  const { checkLevel, levelOnboardingDialog } = useLevelOnboardingGate(selectedId);
   const [detail, setDetail] = useState<TournamentSignupDetail | null>(null);
   const [registration, setRegistration] = useState<TournamentRegistrationState | null>(null);
   const [registrationSessionIdentity, setRegistrationSessionIdentity] = useState<string | null>(null);
@@ -1518,6 +1521,9 @@ export default function TournamentSignupPage({
 
     const requestId = checkoutRequestIdRef.current;
     const paymentToken = readAuthToken();
+    if (!await checkLevel(detail ?? selectedTournament, nextCheckout.profile.id)) return;
+    if (checkoutRequestIdRef.current !== requestId || paymentToken !== readAuthToken()) return;
+
     const profile = nextCheckout.profile;
     const subscriptionProductKey = product.source === "client-subscription"
       ? `${product.source}:${product.id}`
@@ -1599,6 +1605,7 @@ export default function TournamentSignupPage({
       }
     }
   }, [
+    checkLevel,
     actionLoading,
     checkout,
     currentDiscountQuotes,
@@ -1919,6 +1926,7 @@ export default function TournamentSignupPage({
 
   return (
     <div className="tournament-signup-page">
+      {levelOnboardingDialog}
       <header className="tournament-signup-header">
         <button className="page-back" onClick={selectedId ? () => setSelectedId(null) : onBack} type="button">
           ← Назад
@@ -2122,6 +2130,7 @@ export default function TournamentSignupPage({
                     </div>
                     <div className="details-time details-time-strong">{selectedTournament.title}</div>
                     <div className="details-time">{detailTournamentTypeLabel}</div>
+                    <EventAllowedLevel event={detail ?? selectedTournament} />
                   </div>
                   <CalendarDateBadge
                     monthLabel={detailDateParts.month}
@@ -2465,7 +2474,7 @@ export default function TournamentSignupPage({
                     )}
                     {selectedTournament.address && <div><span>Адрес</span><strong>{selectedTournament.address}</strong></div>}
                     {selectedTournament.format && <div><span>Формат</span><strong>{selectedTournament.format}</strong></div>}
-                    {selectedTournament.levelLabel && <div><span>Уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
+                    {selectedTournament.levelLabel && <div><span>Допустимый уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
                     {selectedTournament.priceLabel && <div><span>Стоимость</span><strong>{selectedTournament.priceLabel}</strong></div>}
                   </div>
                   {detail?.description && <p className="tournament-signup-copy">{detail.description}</p>}

@@ -1,3 +1,6 @@
+import { EventAllowedLevel } from "../UI/EventAllowedLevel";
+import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
+import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
 import { mergeRosterMetadata } from "./rosterMetadata";
 import { moscowBookingEndIso } from "../../utils/bookingEndTime";
@@ -105,8 +108,6 @@ import {
 } from "../../utils/splitRosterPaymentConfirmation";
 import { recoverGameExerciseId } from "../../utils/gameExerciseIdRecovery";
 import {
-  CUSTOM_FIELD_IDS,
-  getCustomFieldValue,
   getLetterGrade,
   normalizeLevelGradeLabel,
   parseNumericLevel,
@@ -2810,7 +2811,6 @@ function mergePadelPlayerFreshData(
   const nextRating =
     (fresh.rating || "").trim()
     || (freshRatingNumeric != null ? mapNumericToRatingGrade(freshRatingNumeric) : "")
-    || player.rating
     || null;
   const nextPlayer: PadelGamePlayer = {
     ...player,
@@ -2819,7 +2819,7 @@ function mergePadelPlayerFreshData(
     name: fresh.name?.trim() || player.name,
     photo: fresh.photo ?? player.photo ?? null,
     rating: nextRating,
-    ratingNumeric: freshRatingNumeric ?? player.ratingNumeric ?? null,
+    ratingNumeric: freshRatingNumeric,
   };
   return (
     nextPlayer.id === player.id
@@ -2840,7 +2840,6 @@ function mergePadelOrganizerFreshData(
   const nextRating =
     (fresh.rating || "").trim()
     || (freshRatingNumeric != null ? mapNumericToRatingGrade(freshRatingNumeric) : "")
-    || organizer.rating
     || null;
   const nextOrganizer = {
     ...organizer,
@@ -2850,7 +2849,7 @@ function mergePadelOrganizerFreshData(
     name: organizer.name || fresh.name?.trim() || null,
     photo: organizer.photo ?? fresh.photo ?? null,
     rating: nextRating,
-    ratingNumeric: freshRatingNumeric ?? organizer.ratingNumeric ?? null,
+    ratingNumeric: freshRatingNumeric,
   };
   return (
     nextOrganizer.id === organizer.id
@@ -3276,21 +3275,8 @@ function normalizePhoneForGame(value: string | null | undefined): string | null 
   return digits;
 }
 
-function getCommunityActorLevelScore(
-  numericRating: number | null,
-  letterGrade: string | null | undefined,
-): number {
-  if (typeof numericRating === "number" && Number.isFinite(numericRating)) {
-    return Math.max(1.5, Math.min(6, numericRating));
-  }
-
-  const normalizedGrade = String(letterGrade || "").trim().toUpperCase();
-  const matchedIndex = RATING_LABELS.findIndex((item) => item === normalizedGrade);
-  if (matchedIndex >= 0) {
-    return matchedIndex + 1.5;
-  }
-
-  return 3.2;
+function getCommunityActorLevelScore(numericRating: number | null, _letterGrade: string | null | undefined): number | null {
+  return typeof numericRating === "number" && Number.isFinite(numericRating) ? numericRating : null;
 }
 
 function buildCommunityGamePostBody(game: PadelGameRecord) {
@@ -4969,6 +4955,7 @@ export default function GamesPage({
   const [chatReadMap, setChatReadMap] = useState<Record<string, number>>({});
   const [chatUnreadByGame, setChatUnreadByGame] = useState<Record<string, number>>({});
   const [gameRecordId, setGameRecordId] = useState<string | null>(null);
+  const { checkLevel, levelOnboardingDialog, levelProfileRef } = useLevelOnboardingGate(gameRecordId);
   const [gameRecordStatus, setGameRecordStatus] = useState<string | null>(null);
   const [gamePaymentUrl, setGamePaymentUrl] = useState<string | null>(null);
   const [gamePaid, setGamePaid] = useState<boolean | null>(null);
@@ -5008,7 +4995,7 @@ export default function GamesPage({
   const [profileId, setProfileId] = useState<string | null>(null);
   const [profilePhone, setProfilePhone] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("Организатор");
-  const [profileGrade, setProfileGrade] = useState("D+");
+  const [profileGrade, setProfileGrade] = useState<string | null>(null);
   const [profileRatingNumeric, setProfileRatingNumeric] = useState<number | null>(null);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [communityAutopublishStationTarget, setCommunityAutopublishStationTarget] =
@@ -5341,12 +5328,9 @@ export default function GamesPage({
       setProfileName(fullName || "Организатор");
       setProfilePhoto(res.data.photo ?? null);
 
-      const explicitGrade = getCustomFieldValue(
-        res.data,
-        CUSTOM_FIELD_IDS.lkPadelLevel,
-      );
+      const explicitGrade = getProfileLevelGrade(res.data);
       const numericValue = parseNumericLevel(
-        getCustomFieldValue(res.data, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
+        getProfileLevelNumericText(res.data),
       );
       const gradeFallback: Record<string, number> = {
         D: 2.0,
@@ -5372,6 +5356,8 @@ export default function GamesPage({
         setProfileGrade(explicitGrade);
       } else if (numeric !== null) {
         setProfileGrade(getLetterGrade(numeric));
+      } else {
+        setProfileGrade(null);
       }
 
       setParticipants([
@@ -8067,8 +8053,8 @@ export default function GamesPage({
           phone: normalizePhoneForGame(player.phone),
           name: player.name,
           photo: player.photo ?? null,
-          rating: player.rating ?? null,
-          ratingNumeric: normalizeRatingNumeric(player.ratingNumeric),
+          rating: null,
+          ratingNumeric: null,
         });
       });
 
@@ -10051,9 +10037,9 @@ export default function GamesPage({
 
     if (profileData) {
       const fullName = [profileData.firstName, profileData.lastName].filter(Boolean).join(" ").trim() || "Игрок";
-      const explicitGrade = getCustomFieldValue(profileData, CUSTOM_FIELD_IDS.lkPadelLevel);
+      const explicitGrade = getProfileLevelGrade(profileData);
       const numericValue = parseNumericLevel(
-        getCustomFieldValue(profileData, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
+        getProfileLevelNumericText(profileData),
       );
       const levelScore = getCommunityActorLevelScore(numericValue, explicitGrade);
 
@@ -10061,7 +10047,7 @@ export default function GamesPage({
       setProfilePhone(profileData.phone ?? null);
       setProfileName(fullName || "Организатор");
       setProfilePhoto(profileData.photo ?? null);
-      setProfileGrade(explicitGrade ?? getLetterGrade(levelScore));
+      setProfileGrade(explicitGrade ?? (levelScore === null ? "" : getLetterGrade(levelScore)));
       setProfileRatingNumeric(numericValue);
 
       return {
@@ -10071,7 +10057,7 @@ export default function GamesPage({
         avatar: profileData.photo ?? null,
         role: "MEMBER" as const,
         levelScore,
-        levelLabel: explicitGrade ?? getLetterGrade(levelScore),
+        levelLabel: explicitGrade ?? (levelScore === null ? null : getLetterGrade(levelScore)),
       };
     }
 
@@ -10084,7 +10070,7 @@ export default function GamesPage({
       avatar: profilePhoto ?? null,
       role: "MEMBER" as const,
       levelScore: fallbackLevelScore,
-      levelLabel: profileGrade || getLetterGrade(fallbackLevelScore),
+      levelLabel: profileGrade || (fallbackLevelScore === null ? null : getLetterGrade(fallbackLevelScore)),
     };
   }, [
     profileGrade,
@@ -14415,6 +14401,9 @@ export default function GamesPage({
       return;
     }
 
+    if (!await checkLevel(activeGameRecord, profileId)) return;
+    const admittedLevel = levelProfileRef.current?.level;
+
     const booking = activeGameRecord.booking;
     const bookingDate = booking?.date?.trim() || "";
     const fromTime = booking?.timeFrom?.trim() || "";
@@ -14698,8 +14687,8 @@ export default function GamesPage({
         name: profileName || "Игрок",
         phone: pendingCurrentClientPhoneNorm ?? pendingCurrentClientPhone,
         photo: profilePhoto ?? null,
-        rating: profileGrade ?? null,
-        ratingNumeric: profileRatingNumeric ?? null,
+        rating: admittedLevel?.rating ?? profileGrade ?? null,
+        ratingNumeric: admittedLevel?.ratingNumeric ?? profileRatingNumeric ?? null,
         source: "INVITE_LINK",
         status: "PENDING",
       };
@@ -14828,8 +14817,8 @@ export default function GamesPage({
           name: profileName || "Игрок",
           phone: currentClientPhoneNorm ?? currentClientPhone,
           photo: profilePhoto ?? null,
-          rating: profileGrade ?? null,
-          ratingNumeric: profileRatingNumeric ?? null,
+          rating: admittedLevel?.rating ?? profileGrade ?? null,
+          ratingNumeric: admittedLevel?.ratingNumeric ?? profileRatingNumeric ?? null,
           source: "INVITE_LINK",
           status: shouldJoinAsConfirmed ? "CONFIRMED" : "WAITLIST",
         };
@@ -14975,6 +14964,8 @@ export default function GamesPage({
       }
     }
   }, [
+    checkLevel,
+    levelProfileRef,
     detailsJoinPricePreview.bySubscriptionId,
     canCurrentUserJoinSplitGameInDetails,
     gameRecordId,
@@ -15011,7 +15002,7 @@ export default function GamesPage({
       await previewSubscriptionUsageShadow(subscriptionUsageShadowJoinPreview);
       return;
     }
-    if (!canCurrentUserJoinGameInDetails || !gameRecordId) return;
+    if (!canCurrentUserJoinGameInDetails || !gameRecordId || !activeGameRecord) return;
 
     const normalizedProfileId = (profileId || "").trim() || null;
     const normalizedPhone = profilePhoneNorm ?? normalizePhoneForGame(profilePhone);
@@ -15024,6 +15015,9 @@ export default function GamesPage({
       setGameRosterError("Свободных мест нет, лист ожидания закрыт.");
       return;
     }
+
+    if (!await checkLevel(activeGameRecord, profileId)) return;
+    const admittedLevel = levelProfileRef.current?.level;
 
     if (LEGACY_ROSTER_BRIDGE_ENABLED) {
       setUpdatingGameRoster(true);
@@ -15068,8 +15062,8 @@ export default function GamesPage({
       name: profileName || "Игрок",
       phone: normalizedPhone,
       photo: profilePhoto ?? null,
-      rating: profileGrade ?? null,
-      ratingNumeric: profileRatingNumeric ?? null,
+      rating: admittedLevel?.rating ?? profileGrade ?? null,
+      ratingNumeric: admittedLevel?.ratingNumeric ?? profileRatingNumeric ?? null,
       source: "INVITE_LINK",
       status: detailsHasFreeSlots ? "CONFIRMED" : "WAITLIST",
     };
@@ -15109,6 +15103,9 @@ export default function GamesPage({
         : "Не удалось добавиться в лист ожидания",
     });
   }, [
+    checkLevel,
+    levelProfileRef,
+    activeGameRecord,
     canCurrentUserJoinGameInDetails,
     gameRecordId,
     profileId,
@@ -16260,6 +16257,7 @@ export default function GamesPage({
                 </div>
                 <div className="details-time details-time-strong">{detailsRoomName}</div>
                 <div className="details-time">{detailsStudioName}</div>
+                <EventAllowedLevel event={activeGameRecord} />
                 {detailsGameTitle && (
                   <div className="details-match-custom-title">{detailsGameTitle}</div>
                 )}
@@ -16828,6 +16826,7 @@ export default function GamesPage({
 
     return (
       <div className="app-container game-container">
+        {levelOnboardingDialog}
         <div className="page-header">
           <button data-lk-leave-action="GAME_BACK" className="page-back" onClick={onBack} type="button">
             ← Назад

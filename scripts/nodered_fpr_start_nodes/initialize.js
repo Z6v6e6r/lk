@@ -4,7 +4,7 @@ const fail = (error, playerId) => {
   msg.statusCode = error === 'FPR_START_BUSY' ? 503 : 409;
   msg.headers = { 'Content-Type':'application/json', 'Cache-Control':'no-store', 'Access-Control-Allow-Origin':'*' };
   msg.payload = { error, ...(Array.isArray(ctx?.ids) && ctx.ids.includes(playerId) ? { playerId } : {}),
-    message: error === 'FPR_START_BUSY' ? 'ЦУП занят плановым расчётом. Повторите загрузку через несколько секунд.' : 'Не удалось подготовить стартовый рейтинг участника. Повторите загрузку.' };
+    message: error === 'FPR_START_LEVEL_REQUIRED' ? 'У игрока не определён уровень. Пройдите онбординг или назначьте уровень в ЦУП.' : error === 'FPR_START_BUSY' ? 'ЦУП занят плановым расчётом. Повторите загрузку через несколько секунд.' : 'Не удалось подготовить стартовый рейтинг участника. Повторите загрузку.' };
   node.send([null,msg]); node.done();
 };
 if (!ctx || typeof ctx.actorId !== 'string' || !ctx.actorId) { fail('FPR_START_UNAVAILABLE'); return; }

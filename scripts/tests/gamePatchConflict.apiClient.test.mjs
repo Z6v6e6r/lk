@@ -40,7 +40,8 @@ function client({ patchStatus = 409, readStatus = 200, readBody = fresh, throwRe
     captureSplitLeaveInitiator: () => {}, correlateGameReadRequest: () => false,
     trackClientError: (_source, _error, context) => diagnostics.push(context), isRecord: (value) => value !== null && typeof value === "object" && !Array.isArray(value),
     pickString: (record, keys) => keys.map((key) => record[key]).find((value) => typeof value === "string" && value) ?? null,
-    isGameExerciseIdMissingGuard: () => false, normalizePadelGameRecord: (value) => value?.id ? value : null,
+    isGameExerciseIdMissingGuard: () => false, hydratePadelGameLevels: async records => records, // Level hydration has its own contract suite; keep these transport/CAS tests isolated.
+    normalizePadelGameRecord: (value) => value?.id ? value : null,
     mergePadelGameRecord: (before, after) => ({ ...before, ...after }),
     requestWithBaseUrlFallback: () => { throw new Error("Fixture must not use additional origins"); },
     setTimeout: (fn, delay) => { delays.push(delay); fn(); },

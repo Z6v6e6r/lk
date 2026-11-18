@@ -53,9 +53,9 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
       assert.equal(fencedSource.fprLevelLedgerFence.policy, 'fpr-ordinary-level-v1');
       delete fencedSource.fprLevelLedgerFence;
       assert.equal(beforeSource, fprLevelHash(fencedSource));
-      assert.equal(await db.collection('rating_projection_outbox').countDocuments({ fprProjection: true }), 1);
+      assert.equal(await db.collection('rating_projection_outbox').countDocuments({ fprProjection: true }), 0);
       assert.equal((await applyFprPlayerPlan(db, client, 'p0', context, now)).events, 0);
-      assert.equal(await db.collection('rating_projection_outbox').countDocuments({ fprProjection: true }), 1);
+      assert.equal(await db.collection('rating_projection_outbox').countDocuments({ fprProjection: true }), 0);
 
       const settledContext = { ...context, ratings: new Map([...context.ratings].map(([id, result]) =>
         [id, { ...result, standings: result.standings.filter(row => row.id === 'p0') }])) };
@@ -110,6 +110,9 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
       await assert.rejects(applyFprPlayerPlan(db, client, 'p1', context, now, p1.fingerprint), /PREIMAGE_CHANGED/);
       assert.equal(await db.collection('rating_events').countDocuments({ 'player.clientId': 'p1', 'source.fprProtocolId': { $exists: true } }), 0);
 
+      for (const id of ['p2', 'p3']) await db.collection('rating_events').insertOne({ ...initial,
+        _id: 'assigned-' + id, id: 'assigned-' + id, idempotencyKey: 'assigned-' + id, eventType: 'RATING_INITIAL_ASSIGNED',
+        player: { ...initial.player, clientId: id, key: 'client:' + id }, change: { ...initial.change, after: state.players.find(p => p.id === id).level } });
       // Fail after inserting events inside a transaction: no events/state/outbox may escape.
       const injected = { collection(name) {
         const collection = db.collection(name);
@@ -120,7 +123,7 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
         } });
       } };
       await assert.rejects(applyFprPlayerPlan(injected, client, 'p2', context, now), /INJECTED_TRANSACTION_FAILURE/);
-      assert.equal(await db.collection('rating_events').countDocuments({ 'player.clientId': 'p2' }), 0);
+      assert.equal(await db.collection('rating_events').countDocuments({ 'player.clientId': 'p2' }), 1);
       assert.equal(await db.collection('player_rating_state').countDocuments({ clientId: 'p2' }), 0);
       assert.equal(await db.collection('rating_projection_outbox').countDocuments({ clientId: 'p2' }), 0);
 
@@ -132,38 +135,13 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
       assert.equal(ordinary.eventsPlanned, 0);
       assert.equal(ordinary.reopened, 0);
 
-      // Provider delivery reads current canonical state, rather than sending a stale historical payload.
-      let sends = 0;
-      const latest = Number((after.ratingNumeric + 0.02).toFixed(5));
-      await db.collection('player_rating_state').updateOne({ _id: old._id }, { $set: { ratingNumeric: latest, lastEventId: 'new-game' } });
-      globalThis.fetch = async () => { sends++; throw new Error('Must not send stale payload'); };
-      assert.equal((await processFprProjectionOutbox(db, 'http://127.0.0.1/synthetic', now, false)).superseded, 1);
-      assert.equal(sends, 0);
-      for (const ack of [{ ok: false }, { ok: true, projectionStatus: 'PENDING' },
-        { ok: true, projectionStatus: 'SYNCED', clientId: 'wrong', levelNumeric: latest.toFixed(5) }]) {
-        globalThis.fetch = async () => new Response(JSON.stringify(ack), { status: 200 });
-        assert.equal((await processFprProjectionOutbox(db, 'http://127.0.0.1/synthetic', now, false)).synced, 0);
-        await db.collection('rating_projection_outbox').updateMany({ fprProjection: true, status: 'FAILED_RETRYABLE' }, { $set: { nextAttemptAt: now } });
-      }
-      globalThis.fetch = async (_url, options) => {
-        const payload = JSON.parse(options.body);
-        assert.equal(payload.nextRating, latest);
-        assert.equal(payload.levelNumeric, latest.toFixed(5));
-        sends++; return new Response(JSON.stringify({ ok: true, projectionStatus: 'SYNCED', clientId: payload.clientId, levelNumeric: payload.levelNumeric }), { status: 200 });
-      };
-      assert.equal((await processFprProjectionOutbox(db, 'http://127.0.0.1/synthetic', now, false)).synced, 1);
-      assert.equal(sends, 1);
-      // A new roster can supersede an enumerated pending send before its row lock.
-      await db.collection('rating_projection_outbox').updateMany({ fprProjection: true }, { $set: { status: 'SUPERSEDED' } });
-      const queued = await db.collection('rating_projection_outbox').findOne({ clientId: 'p0' });
-      await db.collection('rating_projection_outbox').updateOne({ _id: queued._id }, { $set: { status: 'PENDING', nextAttemptAt: now } });
-      let rowLocks = 0;
-      const skipSuperseded = await processFprProjectionOutbox(db, 'http://127.0.0.1/synthetic', now, false, async work => {
-        rowLocks++;
-        await db.collection('rating_projection_outbox').updateOne({ _id: queued._id }, { $set: { status: 'SUPERSEDED' } });
-        return work();
-      });
-      assert.equal(rowLocks, 1);assert.equal(skipSuperseded.synced, 0);assert.equal(sends, 1);
+      // Retirement does not send or rewrite historical provider queue rows.
+      const queued = { _id: 'retired-synthetic', fprProjection: true, status: 'PENDING', clientId: 'p0' };
+      await db.collection('rating_projection_outbox').insertOne(queued);
+      let sends = 0; globalThis.fetch = async () => { sends++; throw Error('unexpected provider call'); };
+      const retired = await processFprProjectionOutbox(db, 'http://127.0.0.1/synthetic', now, false);
+      assert.equal(retired.reason, 'CUP_ONLY'); assert.equal(sends, 0);
+      assert.deepEqual(await db.collection('rating_projection_outbox').findOne({ _id: queued._id }), queued);
       const compatibility = await db.collection('player_ratings').findOne({ clientId: 'p0' });
       assert.equal(compatibility.ratingNumeric, after.ratingNumeric);
 
@@ -189,7 +167,7 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
         } });
       } };
       await assert.rejects(applyFprPlayerPlan(concurrent, client, 'p3', context, now), /SOURCE_CHANGED/);
-      assert.equal(await db.collection('rating_events').countDocuments({ 'player.clientId': 'p3' }), 0);
+      assert.equal(await db.collection('rating_events').countDocuments({ 'player.clientId': 'p3' }), 1);
       assert.equal(await db.collection('player_rating_state').countDocuments({ clientId: 'p3' }), 0);
       assert.equal(await db.collection('rating_projection_outbox').countDocuments({ clientId: 'p3' }), 0);
     } finally {
@@ -212,6 +190,10 @@ test('historical level snapshots need no new award and retain sports, state and 
       const document = { _id: 'historical-snapshot', tournamentId: state.tournamentId, tournamentType: 'fpr_6x25',
         participants: state.players, ...fprProjection(state, { sourceExerciseId: 'synthetic-source' }) };
       await db.collection('tournaments').insertOne(document);
+      await db.collection('rating_events').insertMany(state.players.map(p => ({ _id: 'assigned-' + p.id, id: 'assigned-' + p.id,
+        idempotencyKey: 'assigned-' + p.id, schemaVersion: 1, eventType: 'RATING_INITIAL_ASSIGNED', occurredAt: '2026-10-31T10:00:00.000Z', createdAt: now,
+        player: { key: 'client:' + p.id, clientId: p.id, name: p.name }, actor: {}, source: { domain: 'CUP_ADMIN' },
+        change: { before: null, after: p.level, delta: null }, formula: null, projectionIntent: { viva: 'NONE_CUP_ONLY' } })));
       let context = await loadFprLevelContext(db, config);
       await applyFprPlayerPlan(db, client, 'p0', context, now);
       await projectFprLevelResults(db, context, now, false);
@@ -269,6 +251,10 @@ test('canonical correction cohort shares one transaction: mid-cohort abort, comm
       const document={_id:'synthetic',tournamentId:state.tournamentId,tournamentType:'fpr_6x25',participants:state.players,
         ...fprProjection(state,{sourceExerciseId:'synthetic-source'})};
       await db.collection('tournaments').insertOne(document);
+      await db.collection('rating_events').insertMany(state.players.map(p => ({ _id: 'assigned-' + p.id, id: 'assigned-' + p.id,
+        idempotencyKey: 'assigned-' + p.id, schemaVersion: 1, eventType: 'RATING_INITIAL_ASSIGNED', occurredAt: '2026-10-31T10:00:00.000Z', createdAt: now,
+        player: { key: 'client:' + p.id, clientId: p.id, name: p.name }, actor: {}, source: { domain: 'CUP_ADMIN' },
+        change: { before: null, after: p.level, delta: null }, formula: null, projectionIntent: { viva: 'NONE_CUP_ONLY' } })));
       let context=await loadFprLevelContext(db,config);
       for(const p of state.players)await applyFprPlayerPlan(db,client,p.id,context,now);
       const backup={};for(const name of ['tournaments','rating_events','player_rating_state','player_ratings','rating_projection_outbox'])

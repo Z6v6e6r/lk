@@ -31,7 +31,6 @@ import {
   buildTournamentStartOverrideEvent,
   eventAppliesToCanonicalState,
   normalizeRatingPhone,
-  ratingGradeFromNumeric,
   replayPlayerRatingEvents,
   toFiniteRating,
 } from "../src/services/player-rating/ledger.ts";
@@ -108,42 +107,6 @@ function resolveTournamentId(tournament) {
   return toStr(tournament?.tournamentId || tournament?.id || tournament?.exerciseId || tournament?.sourceTournamentId);
 }
 
-function buildBootstrapEvent({ event, createdAt }) {
-  const baselineRating = toFiniteRating(event?.change?.before);
-  if (baselineRating == null) return null;
-  const occurredAtTs = Date.parse(event.occurredAt);
-  const occurredAt = new Date((Number.isFinite(occurredAtTs) ? occurredAtTs : Date.now()) - 1).toISOString();
-  const eventId = `rating_evt:tournament_bootstrap:${event.source.sourceId}:${event.player.key}`;
-  return {
-    _id: eventId,
-    id: eventId,
-    idempotencyKey: eventId,
-    schemaVersion: PLAYER_RATING_LEDGER_SCHEMA_VERSION,
-    eventType: "RATING_BOOTSTRAPPED_FROM_TOURNAMENT",
-    occurredAt,
-    createdAt,
-    player: event.player,
-    actor: {
-      type: "SYSTEM",
-      id: "system:rating-worker",
-      name: "Rating worker",
-    },
-    source: {
-      domain: "TOURNAMENT_BOOTSTRAP",
-      sourceId: event.source.sourceId,
-      tournamentId: event.source.sourceId,
-    },
-    change: {
-      before: null,
-      delta: null,
-      after: baselineRating,
-      gradeBefore: null,
-      gradeAfter: ratingGradeFromNumeric(baselineRating),
-    },
-    formula: null,
-    projectionIntent: { viva: "NONE_BOOTSTRAP" },
-  };
-}
 
 function eventMatchesIdentity(event, identity) {
   return Boolean(
@@ -439,52 +402,8 @@ async function reconcileCompatibilityProjection(db, nowIso, dryRun) {
   return { scanned: states.length, changed };
 }
 
-async function enqueueProjection(db, projection, nowIso, dryRun) {
-  if (!projection?.state?.clientId) return false;
-  const lastEvent = await db.collection(PLAYER_RATING_COLLECTIONS.events)
-    .findOne({ _id: projection.state.lastEventId });
-  if (!["TOURNAMENT", "TOURNAMENT_START"].includes(lastEvent?.source?.domain)) return false;
-  const isStartOverride = lastEvent.source.domain === "TOURNAMENT_START";
-  const outboxId = `rating_projection:${lastEvent.id}`;
-  if (!dryRun) {
-    await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).updateOne(
-      { _id: outboxId },
-      {
-        $setOnInsert: {
-          _id: outboxId,
-          id: outboxId,
-          ratingEventId: lastEvent.id,
-          playerKey: projection.state.playerKey,
-          clientId: projection.state.clientId,
-          phoneNorm: projection.state.phoneNorm,
-          payload: {
-            clientId: projection.state.clientId,
-            phone: projection.state.phoneNorm,
-            playerName: projection.state.name,
-            levelLetter: projection.state.rating,
-            levelNumeric: projection.state.ratingNumeric.toFixed(5),
-            source: isStartOverride ? "tournament_start" : "tournament_rating_worker",
-            gameId: lastEvent.source.sourceId,
-            tournamentId: lastEvent.source.sourceId,
-            previousRating: lastEvent.change.before,
-            nextRating: projection.state.ratingNumeric,
-            confirmedAt: lastEvent.occurredAt,
-            changedById: lastEvent.actor?.id || "system:rating-worker",
-            changedByName: lastEvent.actor?.name || "Rating worker",
-            changedByPhone: lastEvent.actor?.phoneNorm || null,
-            eventId: lastEvent.id,
-          },
-          status: "PENDING",
-          attempts: 0,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-          nextAttemptAt: nowIso,
-        },
-      },
-      { upsert: true },
-    );
-  }
-  return true;
+async function enqueueProjection() {
+  return false; // CUP-only: provider projection is retired; preserve historical rows.
 }
 
 export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowIso, dryRun, excludedTournamentIds = new Set() }) {
@@ -549,10 +468,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
         continue;
       }
       const currentState = await loadStateForIdentity(db, identity);
-      if (!currentState) {
-        const bootstrap = buildBootstrapEvent({ event, createdAt: nowIso });
-        if (bootstrap) newEvents.push(bootstrap);
-      }
+      if (!currentState) continue; // First level requires onboarding/admin; never infer it from standings.
       newEvents.push(event);
       existingStartEventIds.add(event.id);
       identities.set(playerKey, identity);
@@ -639,10 +555,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
         }
       }
       const currentState = await loadStateForIdentity(db, identity);
-      if (!currentState) {
-        const bootstrap = buildBootstrapEvent({ event, createdAt: nowIso });
-        if (bootstrap) newEvents.push(bootstrap);
-      }
+      if (!currentState) continue; // First level requires onboarding/admin; never infer it from standings.
       newEvents.push(event);
       allTournamentEvents.push(event);
       identities.set(playerKey, identity);
@@ -1128,45 +1041,8 @@ async function recalculateCommunities(db, communityIds, nowIso, dryRun) {
   };
 }
 
-async function processProjectionOutbox(db, projectionUrl, nowIso, dryRun, withRowLock = work => work()) {
-  const rows = await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).find({
-    fprProjection: { $ne: true },
-    status: { $in: ["PENDING", "FAILED_RETRYABLE"] },
-    nextAttemptAt: { $lte: nowIso },
-    attempts: { $lt: 30 },
-  }).sort({ createdAt: 1 }).limit(100).toArray();
-  const result = { scanned: rows.length, synced: 0, failed: 0 };
-  if (dryRun) return result;
-  for (const candidate of rows) await withRowLock(async () => {
-    // A roster bootstrap may have superseded this row while another was sent.
-    const row = await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).findOne({
-      _id: candidate._id, status: { $in: ["PENDING", "FAILED_RETRYABLE"] },
-    });
-    if (!row) return;
-    const attemptAt = new Date().toISOString();
-    try {
-      const response = await fetch(projectionUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(row.payload),
-      });
-      const raw = await response.text();
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${raw.slice(0, 200)}`);
-      await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).updateOne(
-        { _id: row._id },
-        { $set: { status: "SYNCED", syncedAt: attemptAt, updatedAt: attemptAt, lastHttpStatus: response.status }, $inc: { attempts: 1 } },
-      );
-      result.synced += 1;
-    } catch (error) {
-      const nextAttemptAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-      await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).updateOne(
-        { _id: row._id },
-        { $set: { status: "FAILED_RETRYABLE", lastError: String(error?.message || error).slice(0, 500), lastAttemptAt: attemptAt, nextAttemptAt, updatedAt: attemptAt }, $inc: { attempts: 1 } },
-      );
-      result.failed += 1;
-    }
-  });
-  return result;
+async function processProjectionOutbox() {
+  return { enabled: false, reason: "CUP_ONLY", scanned: 0, synced: 0, failed: 0 };
 }
 
 async function acquireLease(db, jobKey, owner, nowIso) {

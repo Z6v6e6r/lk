@@ -1,3 +1,4 @@
+import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { loadTournamentDaySchedule } from "../../utils/tournamentDaySchedule";
 import { tournamentAutoFinishNotice } from "./tournamentAutoFinish";
 import { tournamentEventId, tournamentIdentityKeys } from "../../utils/tournamentEventIdentity";
@@ -58,8 +59,6 @@ import {
   buildTournamentStartRatingChanges,
 } from "./tournamentRatingAudit";
 import {
-  CUSTOM_FIELD_IDS,
-  getCustomFieldValue,
   getLetterGrade,
   hasTournamentHostingAccess,
   parseNumericLevel,
@@ -2626,10 +2625,10 @@ function TournamentDetailsModal({
     if (!profile) return null;
 
     const profileRatingNumeric = parseNumericLevel(
-      getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
+      getProfileLevelNumericText(profile),
     );
     const profileRatingLetter =
-      getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel)
+      getProfileLevelGrade(profile)
       ?? (profileRatingNumeric != null ? getLetterGrade(profileRatingNumeric) : null);
     const name = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() || "Организатор";
     const persistedRating =
