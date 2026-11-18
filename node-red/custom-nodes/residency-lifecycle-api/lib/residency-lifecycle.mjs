@@ -460,7 +460,8 @@ export function createResidencyLifecycle(deps) {
     if (mode === "RENEWAL") {
       // The CUP window starts at the new paymentDate. Renewing while days remain would
       // silently drop them, so the refusal happens here, before the durable order and
-      // therefore before any provider POST.
+      // therefore before any provider POST. The term is the pinned product term (the
+      // adapter rejects any product whose validityDays is not 30).
       const renewal = renewalContext(current, 30);
       if (!renewal.eligible) {
         fail(409, "RESIDENCY_RENEWAL_TOO_EARLY",
