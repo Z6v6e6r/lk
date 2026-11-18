@@ -154,6 +154,128 @@ function validateProfile(body) {
   return { clientId: profile.id, phone: profile.phone };
 }
 
+const MOSCOW_TIME_ZONE = "Europe/Moscow";
+const EXTERNAL_OPEN_STATUSES = ["UNPAID", "WAITING", "WAITING_FOR_PAYMENT", "PENDING", "PAYMENT_PENDING", "CREATED"];
+const EXTERNAL_PAID_STATUSES = ["PAID", "COMPLETED"];
+const EXTERNAL_SETTLED_STATUSES = ["CANCELLED", "CANCELED", "REFUND", "REFUNDED", "FAILED", "DECLINED", "EXPIRED"];
+const EXTERNAL_PAGE_SIZE = 100;
+const EXTERNAL_MAX_PAGES = 5;
+
+/** The provider list takes calendar dates in the club timezone, not UTC timestamps. */
+function moscowDate(isoValue) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: MOSCOW_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date(isoValue));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return values.year + "-" + values.month + "-" + values.day;
+}
+
+function externalStatus(status) {
+  const normalized = String(status || "").trim().toUpperCase();
+  if (EXTERNAL_OPEN_STATUSES.includes(normalized)) return { state: "OPEN", status: normalized };
+  if (EXTERNAL_PAID_STATUSES.includes(normalized)) return { state: "PAID", status: normalized };
+  if (EXTERNAL_SETTLED_STATUSES.includes(normalized)) return { state: "SETTLED", status: normalized };
+  // An unknown status is never read as "no financial operation exists".
+  return { state: "UNKNOWN", status: normalized || "UNKNOWN" };
+}
+
+function exactId(value, keys) {
+  if (typeof value === "string") return text(value, 128) ? [value] : [];
+  const ids = new Set();
+  const add = (candidate, objectKeys) => {
+    if (candidate && typeof candidate === "object") {
+      for (const key of objectKeys) if (text(candidate[key], 128)) ids.add(candidate[key]);
+      return;
+    }
+    if (text(candidate, 128)) ids.add(candidate);
+  };
+  for (const key of keys) add(value?.[key], keys);
+  return [...ids];
+}
+
+function normalizeExternalTransaction(row, expectedClientId, productId) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) throw providerError("RESIDENCY_EXTERNAL_ATTEMPTS_INVALID");
+  const ids = exactId(row, ["transactionId", "transactionUuid", "id", "uuid"]);
+  if (ids.length !== 1) throw providerError("RESIDENCY_EXTERNAL_ATTEMPTS_INVALID");
+  const clients = [...new Set([
+    ...exactId(row.client, ["id", "uuid", "clientId"]),
+    ...exactId(row.clientId, ["id", "uuid", "clientId"]),
+  ])];
+  if (clients.length !== 1 || clients[0] !== expectedClientId) throw providerError("RESIDENCY_EXTERNAL_OWNERSHIP_CONFLICT", 403);
+  const products = new Set();
+  const addProducts = (value) => {
+    if (value && typeof value === "object") {
+      for (const key of ["id", "uuid", "productId", "subscriptionId"]) if (text(value[key], 128)) products.add(value[key]);
+      return;
+    }
+    if (text(value, 128)) products.add(value);
+  };
+  addProducts(row.productId);
+  addProducts(row.subscriptionProductId);
+  if (Array.isArray(row.products)) row.products.forEach((item) => {
+    addProducts(item);
+    if (item && typeof item === "object") addProducts(item.product);
+  });
+  if (!products.has(productId)) throw providerError("RESIDENCY_EXTERNAL_PRODUCT_MISMATCH");
+  const created = row.createDate || row.createdAt || row.createdDate;
+  if (!iso(created)) throw providerError("RESIDENCY_EXTERNAL_ATTEMPTS_INVALID");
+  const classified = externalStatus(row.status || row.state || row.paymentStatus || row.transactionStatus);
+  return {
+    transactionId: ids[0],
+    status: classified.status,
+    state: classified.state,
+    createdAt: isoMillis(created),
+  };
+}
+
+/**
+ * Lists this client's transactions for the residency product over a calendar window.
+ *
+ * This is the only server-side view of a checkout started by the published old client:
+ * that client posts directly to the Viva end-user API from the browser, so the gateway
+ * can observe such an operation but cannot intercept its creation.
+ */
+async function listClientTransactions({ fetchImpl, config: c, getAdminToken, now, clientId, productId, sinceIso, untilIso }) {
+  if (!text(clientId, 128) || !iso(sinceIso) || !iso(untilIso) || Date.parse(sinceIso) >= Date.parse(untilIso)) {
+    throw providerError("RESIDENCY_EXTERNAL_ATTEMPTS_INVALID", 400);
+  }
+  const adminToken = getAdminToken();
+  if (!text(adminToken, 8192)) throw providerError("RESIDENCY_ADMIN_TOKEN_UNAVAILABLE");
+  const dateFrom = moscowDate(sinceIso);
+  const dateTo = moscowDate(untilIso);
+  const rows = [];
+  let totalPages = null;
+  let totalElements = null;
+  for (let page = 0; page < EXTERNAL_MAX_PAGES; page += 1) {
+    const query = [
+      ["clientIds", clientId], ["productIds", productId], ["dateFrom", dateFrom], ["dateTo", dateTo],
+      ["page", page], ["size", EXTERNAL_PAGE_SIZE], ["sort", "createDate,desc"],
+    ].map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(String(value))).join("&");
+    const body = await requestJson(fetchImpl,
+      c.vivaBaseUrl + "/api/v1/transactions?" + query,
+      { method: "GET", headers: { Accept: "application/json", Authorization: "Bearer " + adminToken } }, c);
+    if (!body || typeof body !== "object" || !Array.isArray(body.content)
+      || body.number !== page || !Number.isInteger(body.totalPages) || body.totalPages < 0
+      || body.totalPages > EXTERNAL_MAX_PAGES || !Number.isInteger(body.totalElements)
+      || body.totalElements < 0 || body.totalElements > EXTERNAL_MAX_PAGES * EXTERNAL_PAGE_SIZE
+      || body.numberOfElements !== body.content.length
+      || body.last !== (page >= body.totalPages - 1)) {
+      throw providerError("RESIDENCY_EXTERNAL_ATTEMPTS_PARTIAL");
+    }
+    if (totalPages === null) { totalPages = body.totalPages; totalElements = body.totalElements; }
+    else if (totalPages !== body.totalPages || totalElements !== body.totalElements) {
+      throw providerError("RESIDENCY_EXTERNAL_ATTEMPTS_PARTIAL");
+    }
+    rows.push(...body.content);
+    if (page >= body.totalPages - 1) break;
+  }
+  if (totalPages === null || rows.length !== totalElements) throw providerError("RESIDENCY_EXTERNAL_ATTEMPTS_PARTIAL");
+  return {
+    checkedAt: now().toISOString(),
+    transactions: rows.map((row) => normalizeExternalTransaction(row, clientId, productId)),
+  };
+}
+
 export function createVivaCupResidencyPorts({
   fetch: fetchImpl,
   config,
@@ -386,6 +508,12 @@ export function createVivaCupResidencyPorts({
     activation: { findInstance, activate },
     discounts: { quote: discountsQuote },
     status: { read: statusRead },
+    external: {
+      async list({ sinceIso, untilIso }) {
+        const holder = await profile();
+        return listClientTransactions({ fetchImpl, config: c, getAdminToken, now, clientId: holder.clientId, productId: c.productId, sinceIso, untilIso });
+      },
+    },
     // Test/ops introspection only.
     _config: c,
     _stable: stable,

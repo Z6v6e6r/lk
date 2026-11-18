@@ -209,3 +209,62 @@ test("reconcile is a POST with its own key and an invalid payload is not accepte
 test("money formatting is stable for the published 790 RUB price", () => {
   assert.equal(formatResidencyMoney(79000), "790 ₽");
 });
+
+
+test("a server-detected external checkout blocks the new screen and wins over the local marker", () => {
+  const blocked = resolveResidencyLifecycleDecision({ catalog: parseLifecycleCatalog(catalog)!, status: parseLifecycleStatus(statusNone)!,
+    unresolved: null, oldCheckoutPending: false, externalReview: true });
+  assert.equal(blocked?.kind, "BLOCKED");
+  if (blocked?.kind === "BLOCKED") assert.equal(blocked.code, "EXTERNAL_CHECKOUT_PENDING");
+  // An unresolved lifecycle order stays the first recovery target.
+  const recovery = resolveResidencyLifecycleDecision({ catalog: parseLifecycleCatalog(catalog)!, status: parseLifecycleStatus(statusNone)!,
+    unresolved: parseLifecycleOrder(order())!, oldCheckoutPending: false, externalReview: true });
+  assert.equal(recovery?.kind, "RECOVERY");
+});
+
+test("the unresolved read carries the server external check and stays backward compatible", async () => {
+  const externalCheck = { state: "OK", openCount: 1, paidAfterOrderCount: 0, requiresReview: true, reason: null, retryable: false };
+  const detailed = createResidencyLifecycleClient(async () => ({
+    status: 200, networkError: false,
+    data: { schemaVersion: 1, orders: [order()], count: 1, externalCheck },
+  }));
+  const read = await detailed.listUnresolvedDetailed();
+  assert.equal(read.ok, true);
+  if (read.ok) {
+    assert.equal(read.value.orders.length, 1);
+    assert.equal(read.value.externalCheck?.requiresReview, true);
+    assert.equal(read.value.externalCheck?.openCount, 1);
+  }
+  const legacyList = await detailed.listUnresolved();
+  assert.equal(legacyList.ok, true);
+  if (legacyList.ok) assert.equal(legacyList.value[0]?.orderId, ORDER_ID);
+
+  const oldServer = createResidencyLifecycleClient(async () => ({
+    status: 200, networkError: false, data: { schemaVersion: 1, orders: [], count: 0 },
+  }));
+  const oldRead = await oldServer.listUnresolvedDetailed();
+  assert.equal(oldRead.ok, true);
+  if (oldRead.ok) assert.equal(oldRead.value.externalCheck, null);
+
+  const broken = createResidencyLifecycleClient(async () => ({
+    status: 200, networkError: false,
+    data: { schemaVersion: 1, orders: [], count: 0, externalCheck: { state: "MAYBE" } },
+  }));
+  const invalid = await broken.listUnresolvedDetailed();
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.equal(invalid.failure.code, "RESIDENCY_CLIENT_UPSTREAM_INVALID");
+});
+
+test("the external purchase refusal is a non-retryable conflict with its own message", async () => {
+  const client = createResidencyLifecycleClient(async () => ({
+    status: 409, networkError: false,
+    data: { code: "RESIDENCY_EXTERNAL_PURCHASE_PENDING", message: "open legacy checkout" },
+  }));
+  const result = await client.createOrder({ mode: "NEW", expectedTotalMinor: 79000,
+    expectedProductId: RESIDENCY_LIFECYCLE_PRODUCT_ID, idempotencyKey: "idem-key-0000000001" });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.failure.code, "RESIDENCY_EXTERNAL_PURCHASE_PENDING");
+    assert.equal(result.failure.retryable, false);
+  }
+});

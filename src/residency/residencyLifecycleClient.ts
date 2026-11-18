@@ -93,6 +93,16 @@ export interface LifecyclePayment {
   terminalReason: string | null;
 }
 
+/** Server-side view of a purchase started outside the new checkout (the old client). */
+export interface LifecycleExternalCheck {
+  state: "OK" | "UNAVAILABLE" | "NOT_CONFIGURED";
+  openCount: number | null;
+  paidAfterOrderCount: number | null;
+  requiresReview: boolean;
+  reason: string | null;
+  retryable: boolean;
+}
+
 export interface LifecycleFailure {
   code: string;
   status: number | null;
@@ -318,6 +328,20 @@ export function parseLifecyclePayment(payload: unknown): LifecyclePayment | null
   };
 }
 
+export function parseLifecycleExternalCheck(value: unknown): LifecycleExternalCheck | null {
+  const body = record(value);
+  if (!body || !["OK", "UNAVAILABLE", "NOT_CONFIGURED"].includes(body.state as string)) return null;
+  const count = (input: unknown) => (Number.isSafeInteger(input) && (input as number) >= 0 ? input as number : null);
+  return {
+    state: body.state as LifecycleExternalCheck["state"],
+    openCount: count(body.openCount),
+    paidAfterOrderCount: count(body.paidAfterOrderCount),
+    requiresReview: body.requiresReview === true,
+    reason: text(body.reason, 64),
+    retryable: body.retryable === true,
+  };
+}
+
 function orderEnvelope(payload: unknown): { order: LifecycleOrder; idempotentReplay: boolean } | null {
   const body = record(payload);
   const order = parseLifecycleOrder(body?.order);
@@ -330,7 +354,7 @@ export function createResidencyLifecycleClient(transport: LifecycleTransport) {
     return transport({ ...options, path });
   }
 
-  return {
+  const client = {
     async readCatalog(signal?: AbortSignal): Promise<LifecycleResult<LifecycleCatalog>> {
       const result = await call("/lk/residency/catalog", { method: "GET", signal });
       if (!okStatus(result.status)) return { ok: false, failure: failure(result) };
@@ -345,7 +369,7 @@ export function createResidencyLifecycleClient(transport: LifecycleTransport) {
       return parsed ? { ok: true, value: parsed } : invalid(result);
     },
 
-    async listUnresolved(signal?: AbortSignal): Promise<LifecycleResult<LifecycleOrder[]>> {
+    async listUnresolvedDetailed(signal?: AbortSignal): Promise<LifecycleResult<{ orders: LifecycleOrder[]; externalCheck: LifecycleExternalCheck | null }>> {
       const result = await call("/lk/residency/orders?state=unresolved", { method: "GET", signal });
       if (!okStatus(result.status)) return { ok: false, failure: failure(result) };
       const body = record(result.data);
@@ -357,7 +381,15 @@ export function createResidencyLifecycleClient(transport: LifecycleTransport) {
         if (!parsed) return invalid(result);
         orders.push(parsed);
       }
-      return { ok: true, value: orders };
+      // Absent on an older server build; the screen then keeps its previous behaviour.
+      const externalCheck = body.externalCheck === undefined ? null : parseLifecycleExternalCheck(body.externalCheck);
+      if (body.externalCheck !== undefined && !externalCheck) return invalid(result);
+      return { ok: true, value: { orders, externalCheck } };
+    },
+
+    async listUnresolved(signal?: AbortSignal): Promise<LifecycleResult<LifecycleOrder[]>> {
+      const detailed = await client.listUnresolvedDetailed(signal);
+      return detailed.ok ? { ok: true, value: detailed.value.orders } : detailed;
     },
 
     async getOrder(orderId: string, signal?: AbortSignal): Promise<LifecycleResult<LifecycleOrder>> {
@@ -416,4 +448,5 @@ export function createResidencyLifecycleClient(transport: LifecycleTransport) {
       } };
     },
   };
+  return client;
 }

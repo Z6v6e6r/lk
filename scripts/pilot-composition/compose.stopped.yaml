@@ -1,0 +1,4 @@
+services:
+  nodered:
+    environment:
+      LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED: "false"

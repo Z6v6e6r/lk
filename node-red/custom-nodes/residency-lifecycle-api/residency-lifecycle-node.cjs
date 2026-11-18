@@ -121,6 +121,15 @@ function readConfig(env) {
     allowOrigin,
     rateLimit: Number.isFinite(rateLimit) ? Math.max(1, Math.min(120, Math.floor(rateLimit))) : 20,
     ensureIndexes: readEnv(env, "LK_RESIDENCY_LIFECYCLE_ENSURE_INDEXES", "false") === "true",
+    // The old published checkout posts directly to Viva; this guard reads the provider's
+    // transaction list before a new order and on reconcile. On by default: an incomplete
+    // read must not release a second financial command.
+    externalGuard: readEnv(env, "LK_RESIDENCY_LIFECYCLE_EXTERNAL_GUARD", "true") === "true",
+    externalLookbackMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_EXTERNAL_LOOKBACK_MS", String(30 * 86400000))),
+    // Enrollment only: the operator enables this, the pilot account logs in once and
+    // opens the page, and the verified tenant:user is written to the server log. It is
+    // off by default and never enabled by a request parameter.
+    identityLog: readEnv(env, "LK_RESIDENCY_LIFECYCLE_IDENTITY_LOG", "false") === "true",
     timeoutMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_TIMEOUT_MS", "8000")),
     paymentTtlMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_PAYMENT_TTL_MS", "1200000")),
     dispatchLeaseMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_DISPATCH_LEASE_MS", "120000")),
@@ -318,6 +327,8 @@ module.exports = function registerResidencyLifecycleApi(RED) {
                     returnTargets: config.returnTargets,
                     defaultReturnTarget: config.defaultReturnTarget,
                     dispatchLeaseMs: config.dispatchLeaseMs,
+                    externalGuardRequired: config.externalGuard,
+                    externalLookbackMs: config.externalLookbackMs,
                   },
                   ids: {
                     orderId: (tenantId, keyHash) => {
@@ -334,6 +345,7 @@ module.exports = function registerResidencyLifecycleApi(RED) {
                   activation: ports.activation,
                   discounts: ports.discounts,
                   status: ports.status,
+                  external: ports.external,
                 });
               },
             });
@@ -370,6 +382,10 @@ module.exports = function registerResidencyLifecycleApi(RED) {
         return { statusCode: 401, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store",
           "Referrer-Policy": "no-referrer", "Access-Control-Allow-Origin": runtime.config.allowOrigin },
         body: { code: "RESIDENCY_AUTH_REQUIRED", message: "Authentication required" } };
+      }
+      if (runtime.config.identityLog) {
+        node.warn(JSON.stringify({ event: "residency_lifecycle_identity", tenantId: actor.tenantId,
+          userId: actor.userId, correlationId: correlation }));
       }
       const minute = Math.floor(Date.now() / 60000);
       const rateKey = "residency-lifecycle:" + crypto.createHash("sha256").update(actor.userId).digest("hex").slice(0, 16) + ":" + minute;

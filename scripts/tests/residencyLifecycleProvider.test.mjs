@@ -78,7 +78,7 @@ function build(overrides = {}) {
   };
   const ports = createVivaCupResidencyPorts({
     fetch: fetchImpl, config: CONFIG, clock: { now: () => NOW.getTime() }, actorToken: ACTOR,
-    getAdminToken: () => ADMIN, now: () => NOW,
+    getAdminToken: overrides.getAdminToken || (() => ADMIN), now: () => NOW,
   });
   return { ports, calls };
 }
@@ -283,4 +283,63 @@ test("a duplicate subscription id across pages fails closed", async () => {
   }));
   const { ports } = build({ routes: { "/subscriptions?": (url) => url.includes("page=0") ? response([row, ...rows]) : response([row]) } });
   await assert.rejects(ports.activation.findInstance({ productId: RESIDENCY_PRODUCT_ID }), /RESIDENCY_SUBSCRIPTIONS_INVALID/);
+});
+
+function transactionPage(rows, overrides = {}) {
+  return { content: rows, number: 0, totalPages: rows.length ? 1 : 0, totalElements: rows.length,
+    numberOfElements: rows.length, last: true, ...overrides };
+}
+
+function externalRow(overrides = {}) {
+  return { id: TXN, clientId: CLIENT, productId: RESIDENCY_PRODUCT_ID, status: "UNPAID",
+    createDate: "2026-11-18T08:50:00.000Z", ...overrides };
+}
+
+test("the external list reads the exact client, product and Moscow calendar window", async () => {
+  const { ports, calls } = build({ routes: { "/api/v1/transactions?": () => response(transactionPage([externalRow()])) } });
+  const result = await ports.external.list({ sinceIso: "2026-10-19T09:00:00.000Z", untilIso: "2026-11-18T09:00:00.000Z" });
+  assert.deepEqual(result.transactions, [{ transactionId: TXN, status: "UNPAID", state: "OPEN",
+    createdAt: "2026-11-18T08:50:00.000Z" }]);
+  const listCall = calls.find((call) => call.url.includes("/api/v1/transactions?"));
+  const url = listCall.url;
+  const query = new URL(url).searchParams;
+  assert.equal(query.get("clientIds"), CLIENT);
+  assert.equal(query.get("productIds"), RESIDENCY_PRODUCT_ID);
+  assert.equal(query.get("dateFrom"), "2026-10-19");
+  assert.equal(query.get("dateTo"), "2026-11-18");
+  assert.equal(query.get("size"), "100");
+  assert.equal(listCall.options.headers.Authorization, "Bearer " + ADMIN);
+  assert.equal(calls[0].url.endsWith("/profile"), true);
+  assert.equal(calls[0].options.headers.Authorization, "Bearer " + ACTOR);
+});
+
+test("the external list fails closed without an admin token", async () => {
+  const { ports } = build({ getAdminToken: () => "" });
+  await assert.rejects(ports.external.list({ sinceIso: "2026-10-19T09:00:00.000Z", untilIso: "2026-11-18T09:00:00.000Z" }),
+    /RESIDENCY_ADMIN_TOKEN_UNAVAILABLE/);
+});
+
+test("the external list refuses a transaction of another client", async () => {
+  const { ports } = build({ routes: { "/api/v1/transactions?": () => response(transactionPage([
+    externalRow({ clientId: "00000000-0000-4000-8000-000000000099" })])) } });
+  await assert.rejects(ports.external.list({ sinceIso: "2026-10-19T09:00:00.000Z", untilIso: "2026-11-18T09:00:00.000Z" }),
+    /RESIDENCY_EXTERNAL_OWNERSHIP_CONFLICT/);
+});
+
+test("the external list refuses a partial or ambiguous page", async () => {
+  const partial = build({ routes: { "/api/v1/transactions?": () => response(transactionPage([externalRow()], {
+    totalPages: 2, last: false })) } });
+  await assert.rejects(partial.ports.external.list({ sinceIso: "2026-10-19T09:00:00.000Z", untilIso: "2026-11-18T09:00:00.000Z" }),
+    /RESIDENCY_EXTERNAL_ATTEMPTS_PARTIAL/);
+  const ambiguous = build({ routes: { "/api/v1/transactions?": () => response(transactionPage([
+    externalRow({ transactionId: TXN, id: "00000000-0000-4000-8000-000000000098" })])) } });
+  await assert.rejects(ambiguous.ports.external.list({ sinceIso: "2026-10-19T09:00:00.000Z", untilIso: "2026-11-18T09:00:00.000Z" }),
+    /RESIDENCY_EXTERNAL_ATTEMPTS_INVALID/);
+});
+
+test("an unknown provider status is surfaced as UNKNOWN, never as settled", async () => {
+  const { ports } = build({ routes: { "/api/v1/transactions?": () => response(transactionPage([
+    externalRow({ status: "SOMETHING_NEW" })])) } });
+  const result = await ports.external.list({ sinceIso: "2026-10-19T09:00:00.000Z", untilIso: "2026-11-18T09:00:00.000Z" });
+  assert.equal(result.transactions[0].state, "UNKNOWN");
 });

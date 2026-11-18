@@ -93,7 +93,7 @@ const fail = (statusCode, code, message, details) => { throw new ResidencyLifecy
  */
 export function createResidencyLifecycle(deps) {
   if (!deps || typeof deps !== "object") throw new Error("RESIDENCY_LIFECYCLE_DEPS_REQUIRED");
-  const { clock, ids, sha256, store, catalog, payments, activation, discounts, status } = deps;
+  const { clock, ids, sha256, store, catalog, payments, activation, discounts, status, external } = deps;
   for (const [name, value] of Object.entries({ clock, ids, sha256, store, catalog, payments, activation, discounts, status })) {
     if (!value || typeof value !== "object" && typeof value !== "function") throw new Error("RESIDENCY_LIFECYCLE_DEP_INVALID:" + name);
   }
@@ -107,6 +107,14 @@ export function createResidencyLifecycle(deps) {
   const returnTargets = config.returnTargets && typeof config.returnTargets === "object" ? config.returnTargets : null;
   const defaultReturnTarget = text(config.defaultReturnTarget, 32) ? config.defaultReturnTarget : "widget";
   const windowSlackMs = 5 * 60 * 1000;
+  // The published old client posts its checkout directly to the Viva end-user API from
+  // the browser. The only server-side view of such an operation is the provider's own
+  // transaction list, so the guard below is a read before a new financial command and a
+  // detection afterwards, never an interception of the old client.
+  const externalGuardRequired = config.externalGuardRequired === true;
+  const externalLookbackMs = Number.isSafeInteger(config.externalLookbackMs) && config.externalLookbackMs > 0
+    ? config.externalLookbackMs : 30 * 86400000;
+  const EXTERNAL_PAID_GRACE_MS = 5 * 60 * 1000;
 
   const nowIso = () => new Date(clock.now()).toISOString();
 
@@ -168,6 +176,86 @@ export function createResidencyLifecycle(deps) {
   function isOverdue(order) {
     return order.payment.status === "PENDING" && iso(order.payment.expiresAt)
       && clock.now() > Date.parse(order.payment.expiresAt);
+  }
+
+  /**
+   * Reads the provider's own transaction list for this actor and product, then removes the
+   * transactions already owned by this user's lifecycle orders. What remains is an
+   * operation started outside the new owner (normally by the published old checkout).
+   *
+   * A failed or partial read is UNAVAILABLE, never "no other purchase": an unknown
+   * outcome must keep the original operation and must not release a new financial command.
+   */
+  async function readExternalAttempts({ tenantId, userId }) {
+    if (!external) return { state: "NOT_CONFIGURED", attempts: [] };
+    let listed;
+    try {
+      listed = await external.list({
+        tenantId, userId,
+        sinceIso: new Date(clock.now() - externalLookbackMs).toISOString(),
+        untilIso: nowIso(),
+      });
+    } catch (error) {
+      return { state: "UNAVAILABLE", attempts: [], reason: text(error?.code, 64) ? error.code : "EXTERNAL_CHECK_FAILED" };
+    }
+    if (!listed || !Array.isArray(listed.transactions)) {
+      return { state: "UNAVAILABLE", attempts: [], reason: "EXTERNAL_CHECK_INVALID" };
+    }
+    const ids = [];
+    for (const row of listed.transactions) {
+      if (!row || typeof row !== "object" || !text(row.transactionId, 128) || !iso(row.createdAt)
+        || !["OPEN", "PAID", "SETTLED", "UNKNOWN"].includes(row.state)) {
+        return { state: "UNAVAILABLE", attempts: [], reason: "EXTERNAL_ATTEMPT_INVALID" };
+      }
+      ids.push(row.transactionId);
+    }
+    let own = [];
+    if (ids.length) {
+      if (typeof store.findOrdersByTransactionIds !== "function") {
+        return { state: "UNAVAILABLE", attempts: [], reason: "STORE_TX_LOOKUP_MISSING" };
+      }
+      try { own = await store.findOrdersByTransactionIds(tenantId, userId, ids); }
+      catch { return { state: "UNAVAILABLE", attempts: [], reason: "STORE_TX_LOOKUP_FAILED" }; }
+    }
+    const ownIds = new Set((Array.isArray(own) ? own : [])
+      .map((row) => row?.payment?.providerTransactionId).filter((value) => text(value, 128)));
+    return { state: "OK", attempts: listed.transactions.filter((row) => !ownIds.has(row.transactionId)) };
+  }
+
+  /**
+   * An open/unknown operation always blocks a new order. A paid one blocks unless it is
+   * already reflected by an active residency, or it is the payment that produced a now
+   * expired residency (created no later than that residency's validUntil). A payment
+   * after validUntil is an unreflected operation and blocks.
+   */
+  function blockingExternalAttempts(attempts, current) {
+    return attempts.filter((row) => {
+      if (row.state === "OPEN" || row.state === "UNKNOWN") return true;
+      if (row.state !== "PAID") return false;
+      if (current?.state === RESIDENCY_STATES.ACTIVE) return false;
+      if (current?.state === RESIDENCY_STATES.EXPIRED && iso(current.validUntil)
+        && Date.parse(row.createdAt) <= Date.parse(current.validUntil)) return false;
+      return true;
+    });
+  }
+
+  function externalCheckView(view, orders) {
+    if (view.state !== "OK") {
+      return { state: view.state, openCount: null, paidAfterOrderCount: null, requiresReview: false,
+        reason: view.reason || null, retryable: true };
+    }
+    const open = view.attempts.filter((row) => row.state === "OPEN" || row.state === "UNKNOWN");
+    const since = orders.reduce((min, order) => {
+      const at = Date.parse(order.createdAt);
+      return Number.isFinite(at) && (min === null || at < min) ? at : min;
+    }, null);
+    const paidAfterOrder = since === null ? [] : view.attempts.filter((row) => row.state === "PAID"
+      && Date.parse(row.createdAt) >= since - EXTERNAL_PAID_GRACE_MS);
+    return {
+      state: "OK", openCount: open.length, paidAfterOrderCount: paidAfterOrder.length,
+      requiresReview: open.length > 0 || paidAfterOrder.length > 0,
+      reason: null, retryable: false,
+    };
   }
 
   /**
@@ -489,6 +577,27 @@ export function createResidencyLifecycle(deps) {
     const pending = await store.findUnresolvedOrder(tenantId, userId);
     if (pending) fail(409, "RESIDENCY_ORDER_ALREADY_PENDING", "An unresolved residency order already exists");
 
+    // A second financial command is never justified by a failed or incomplete read. The
+    // check runs before the durable order and therefore before any provider POST.
+    const externalView = await readExternalAttempts({ tenantId, userId });
+    if (externalView.state !== "OK" && externalGuardRequired) {
+      fail(503, "RESIDENCY_EXTERNAL_CHECK_UNAVAILABLE",
+        "Another residency purchase could not be ruled out", { reason: externalView.reason || "EXTERNAL_CHECK_FAILED" });
+    }
+    if (externalView.state === "OK") {
+      const blocking = blockingExternalAttempts(externalView.attempts, current);
+      if (blocking.length) {
+        fail(409, "RESIDENCY_EXTERNAL_PURCHASE_PENDING",
+          "A residency purchase outside this checkout is still open", {
+            source: "VIVA_CLIENT_TRANSACTIONS",
+            count: blocking.length,
+            hasOpen: blocking.some((row) => row.state !== "PAID"),
+            hasPaid: blocking.some((row) => row.state === "PAID"),
+            oldestCreatedAt: blocking.map((row) => row.createdAt).sort()[0],
+          });
+      }
+    }
+
     const product = await catalog.read({ productId });
     if (!product || product.productId !== productId || !money(product.priceMinor) || product.priceMinor <= 0
       || !text(product.title, 160) || !Number.isSafeInteger(product.termDays) || product.termDays <= 0
@@ -742,7 +851,11 @@ export function createResidencyLifecycle(deps) {
       const effective = await expireIfDue(row);
       if (!TERMINAL_STATES.includes(effective.state)) orders.push(publicOrder(effective));
     }
-    return { schemaVersion: RESIDENCY_LIFECYCLE_VERSION, orders, count: orders.length };
+    const externalView = await readExternalAttempts({ tenantId: query.tenantId, userId: query.userId });
+    // The read remains available when the provider list is: a servicing path is never
+    // taken down by an auxiliary check. The view says "unknown", not "no other purchase".
+    const externalCheck = external ? externalCheckView(externalView, orders) : null;
+    return { schemaVersion: RESIDENCY_LIFECYCLE_VERSION, orders, count: orders.length, externalCheck };
   }
 
   async function getPayment(query) {
@@ -1109,6 +1222,30 @@ export function createResidencyLifecycle(deps) {
 
     if (eventId && order.events.some((event) => event.eventId === eventId)) {
       return { order: publicOrder(order), idempotentReplay: true };
+    }
+    if (external && ![ORDER_STATES.ACTIVE, ORDER_STATES.CANCELLED, ORDER_STATES.PAID_REQUIRES_REVIEW].includes(order.state)) {
+      const externalView = await readExternalAttempts({ tenantId: command.tenantId, userId: command.userId });
+      if (externalView.state !== "OK" && externalGuardRequired) {
+        // This path issues no financial command, but activating on a possibly doubled
+        // payment is not safe either; the client retries the same reconcile later.
+        fail(503, "RESIDENCY_EXTERNAL_CHECK_UNAVAILABLE",
+          "Another residency purchase could not be ruled out", { reason: externalView.reason || "EXTERNAL_CHECK_FAILED" });
+      }
+      if (externalView.state === "OK") {
+        const ownTransaction = text(order.payment?.providerTransactionId, 128) ? order.payment.providerTransactionId : null;
+        const paidAfterOrder = externalView.attempts.filter((row) => row.state === "PAID"
+          && row.transactionId !== ownTransaction
+          && Date.parse(row.createdAt) >= Date.parse(order.createdAt) - EXTERNAL_PAID_GRACE_MS);
+        if (paidAfterOrder.length) {
+          // Two paid operations for one residency: the original order is preserved for a
+          // human decision instead of activating one of them silently.
+          const review = await transition(order, ORDER_STATES.PAID_REQUIRES_REVIEW, {
+            activation: { ...order.activation, state: "REQUIRES_REVIEW", lastErrorCode: "EXTERNAL_PAYMENT_DETECTED" },
+            events: appendEvent(order, eventId),
+          });
+          return { order: publicOrder(review), idempotentReplay: false, reviewRequired: true };
+        }
+      }
     }
     if (order.state === ORDER_STATES.ACTIVE) return { order: publicOrder(order), idempotentReplay: false };
     if (order.state === ORDER_STATES.CANCELLED) {

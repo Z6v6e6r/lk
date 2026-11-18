@@ -368,3 +368,20 @@ test("a held create response that loses the CAS is persisted through the real st
     assert.equal(createCalls, 1);
   });
 });
+
+
+test("orders are looked up by their provider transaction for the cross-path guard", { skip }, async () => {
+  await withDatabase(async ({ collection }) => {
+    const store = createMongoResidencyLifecycleStore({ collection });
+    const mine = orderDocument({ orderId: crypto.randomUUID(), activeSlot: 1 });
+    assert.deepEqual(await store.insertOrder(mine), { ok: true });
+    const other = orderDocument({ orderId: crypto.randomUUID(), userId: "user-2", activeSlot: 1,
+      payment: { ...mine.payment, providerTransactionId: "txn-2" } });
+    assert.deepEqual(await store.insertOrder(other), { ok: true });
+    const found = await store.findOrdersByTransactionIds(TENANT, USER, ["txn-1", "txn-2"]);
+    assert.equal(found.length, 1);
+    assert.equal(found[0].orderId, mine.orderId);
+    assert.equal(found[0].payment.providerTransactionId, "txn-1");
+    assert.deepEqual(await store.findOrdersByTransactionIds(TENANT, USER, []), []);
+  });
+});

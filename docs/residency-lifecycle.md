@@ -243,6 +243,8 @@ looked up and no order with that key existed at that moment (a concurrent reques
 | 503 `RESIDENCY_STATUS_UNAVAILABLE` | after lookup, before insert | no | no for this key at lookup (concurrent race only) | may discard | retry after status recovers; unresolved lookup if the response was lost |
 | 409 `RESIDENCY_RENEWAL_NOT_ELIGIBLE`, `RESIDENCY_RENEWAL_REQUIRED`, `RESIDENCY_RENEWAL_TOO_EARLY` | after lookup, before insert | no | no for this key at lookup | may discard | refresh status/catalog; `RENEWAL_TOO_EARLY` carries `eligibleAt` |
 | 409 `RESIDENCY_ORDER_ALREADY_PENDING` | after lookup, before insert | no | **yes** — another unresolved order for the user | discard this attempt's key | `GET /orders?state=unresolved`; never create a new key |
+| 409 `RESIDENCY_EXTERNAL_PURCHASE_PENDING` | after unresolved lookup, before insert and before any provider POST | no | **yes** — an open/paid operation outside this checkout (normally the published old client) | discard this attempt's key | finish/recover the external purchase; `GET /orders?state=unresolved` exposes `externalCheck` |
+| 503 `RESIDENCY_EXTERNAL_CHECK_UNAVAILABLE` | same point; provider transaction list failed/partial/admin token missing | no | **unknown** | keep or discard; no financial command was issued | retry after the provider list/token recovers; never treat as "no purchase" |
 | 503 `RESIDENCY_CATALOG_UNAVAILABLE`, `RESIDENCY_PRICING_UNAVAILABLE`, `RESIDENCY_PRICING_INVALID` | after lookup, before insert | no | no for this key at lookup | may discard | retry after configuration/quote recovers |
 | 409 `RESIDENCY_PRICE_CHANGED` (total) | after lookup, after quote | no | no for this key at lookup | may keep; no order exists | re-read catalog, show and confirm the exact new total, then retry |
 | 409 `RESIDENCY_ORDER_CONFLICT` | insert race | no by this request | **yes** — a concurrent order may exist | keep | unresolved lookup or same-key replay |
@@ -262,23 +264,34 @@ LK2 consumer-only outcomes (the owner may not have been called):
 
 #### Old checkout, new checkout and rollback
 
-The published old client creates a Viva transaction directly in the browser and has no
-server lifecycle row. The new owner creates a durable order before its own Viva POST.
-Neither path can see the other's pending attempt from its own storage. The pilot therefore:
+The published old client creates a Viva transaction directly in the browser
+(`https://api.vivacrm.ru/end-user/api/v1/{tenant}/transactions`); it never calls this
+service. The new owner creates a durable order before its own Viva POST. Since the provider
+is the only shared component, the guard uses the provider's own transaction list:
 
-- refuses to start when the old checkout marker
-  `padlhub_zero_checkout_attempt_v1:residency` exists, and links to the old page for
-  recovery instead of creating a second order;
-- keeps one server-side unresolved order per user, one idempotency key per confirmed
-  operation, and one reconcile/activation handler for a started order;
-- is exposed only as a direct personal entry, not as a simultaneous production button.
-  The old page remains the only production purchase entry until Alexey accepts the pilot.
+- **before** the new order and before any provider POST, the gateway reads the actor's
+  transactions for the residency product (Viva Admin API, 30-day window), excludes
+  transactions already owned by this user's lifecycle orders, and refuses with 409
+  `RESIDENCY_EXTERNAL_PURCHASE_PENDING` if an open/unknown operation or a paid operation
+  without an active residency exists;
+- a failed, partial or unreadable list (including a missing Admin token) is 503
+  `RESIDENCY_EXTERNAL_CHECK_UNAVAILABLE`, never "no other purchase";
+- `GET /orders?state=unresolved` exposes `externalCheck` (state, open count, paid-after-
+  order count, `requiresReview`); `reconcile` moves the original order to
+  `PAID_REQUIRES_REVIEW` with `EXTERNAL_PAYMENT_DETECTED` when a paid external operation
+  appeared after the order, instead of activating;
+- the client-side old marker (`padlhub_zero_checkout_attempt_v1:residency`) remains a UI
+  warning for the old→new direction on the same browser; it is not the server guarantee.
 
-This is a deliberate switch boundary, not a claim that the two browser flows share a
-transaction. A provider-side idempotency key or a shared server attempt registry for the
-old path would require changing the published old client or a provider contract and is
-not implemented here. Rolling the frontend back to `?buyResidency=1` does not roll back
-the Node-RED module, Mongo orders or Viva transactions; keep serving them with
+The old→new check is a read before the POST, not an atomic provider constraint, so a
+transaction created in that window is detected later, not prevented. The reverse direction
+(old page after a new order) cannot be intercepted at all; it is detected and held for
+review. This is a deliberate boundary, not a claim that the two browser flows share a
+transaction. Preventing it requires a provider-side constraint or a change to the published
+old client; see the pilot acceptance for the owner options.
+
+Rolling the frontend back to `?buyResidency=1` does not roll back the Node-RED module,
+Mongo orders or Viva transactions; keep serving them with
 `ENABLED=true, CREATE_ENABLED=false` until every started order is terminal or ACTIVE.
 
 ## Client-side state (not a tariff)
@@ -482,6 +495,10 @@ No code, message or log carries a token, phone, provider id, PII or raw provider
    cannot activate twice.
 6. Cancellation is terminal for that order and needs a confirmed basis; a replacement
    order is a new key, not a re-dispatch of the old one.
+7. The cross-path guard reads the provider transaction list before every create and
+   reconcile. Its own transactions are separated by the durable order's
+   `payment.providerTransactionId`; an external open/paid operation blocks a new order or
+   moves the original order to review. An unreadable list is a closed gate, not a pass.
 
 ## LK2 server consumer boundary
 
@@ -541,6 +558,9 @@ a second payment owner or a local entitlement model.
 | LK_RESIDENCY_LIFECYCLE_TIMEOUT_MS | Upstream timeout, 500..15000 ms. |
 | LK_RESIDENCY_LIFECYCLE_RATE_LIMIT_PER_MINUTE | Per-user mutation/read limit, 1..120. |
 | LK_RESIDENCY_LIFECYCLE_ENSURE_INDEXES | true only for a reviewed first install; default false verifies the indexes and fails closed. |
+| LK_RESIDENCY_LIFECYCLE_EXTERNAL_GUARD | Default true. Reads the Viva Admin transaction list before create/reconcile; fails closed when the list is unavailable. Disable only for a non-production diagnostic run. |
+| LK_RESIDENCY_LIFECYCLE_EXTERNAL_LOOKBACK_MS | Lookback for that list, default 2 592 000 000 (30 days). |
+| LK_RESIDENCY_LIFECYCLE_IDENTITY_LOG | Default false. When true, the verified `tenantId`/`userId` are written to the Node-RED log for one-time pilot enrollment; turn it off after the allowlist is set. |
 
 ### Personal pilot access and servicing
 
@@ -569,7 +589,14 @@ the whole API (all routes 503) and is a deeper stop method that does not delete 
 
 The Viva Admin token is read from the existing Node-RED global
 vivacrm_access_token; the actor's Viva token is the request Bearer. Neither is
-stored in the order, flow or logs.
+stored in the order, flow or logs. The external guard depends on that Admin token: with no
+token (or a partial list) new orders and reconcile fail closed with 503
+`RESIDENCY_EXTERNAL_CHECK_UNAVAILABLE`.
+
+For enrollment the gateway can log the verified identity once
+(`LK_RESIDENCY_LIFECYCLE_IDENTITY_LOG=true`); the value is `tenantId` + `sub`, never a
+token. This lets the operator add Alexey to `PILOT_USERS` without asking him for a UUID or
+a token. Turn the flag off immediately after the allowlist is set.
 
 ## Storage
 
@@ -674,5 +701,15 @@ separate approvals. This source change performs none of them.
   unique active-slot index, no automatic retry, a persisted transaction id and
   read-back. Reconciling a fully lost response through CUP evidence is supported; a
   provider-side dedup key remains a separate PROVIDER contract decision.
+- Cross-path boundary: the published old client's transaction POST is browser→Viva and
+  cannot be intercepted by this service. The implemented guard is a provider-list read
+  before a new command (old→new) and a review transition after it (new→old). A fully
+  mutual guarantee requires a provider-side constraint, a separate pilot product with the
+  old product disabled, or a published old-client change; none is implemented here.
+- Admin token: the external guard and payment readback need the existing Viva Admin token
+  in the Node-RED global context. Without it, create/reconcile fail closed by design.
+- Fresh preimage: the 147 host was not reachable from the working host during this task.
+  The pinned 316-route snapshot is evidence for route isolation, not a substitute for the
+  fresh `flows.json` pulled at apply time.
 - Index apply, custom-node install, flow import, flags and deployment are separate
-  operational steps.
+  operational steps; the exact packet is `docs/residency-pilot-install.md`.

@@ -16,9 +16,11 @@ export const residencyLifecycleTransport: LifecycleTransport = async ({ method, 
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   if (returnTarget) headers["X-Residency-Return-Target"] = returnTarget;
-  const response = await request<unknown>(path, {
+  // Absolute URL: the generic /lk/ read fallback must not silently move a GET to another
+  // origin than the gateway the build configured. POST and GET stay on one base.
+  const target = baseUrl.replace(/\/+$/, "") + path;
+  const response = await request<unknown>(target, {
     method,
-    baseUrl,
     auth: true,
     retries: 0,
     signal,

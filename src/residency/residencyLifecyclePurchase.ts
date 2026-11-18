@@ -14,13 +14,19 @@ export function resolveResidencyLifecycleDecision(input: {
   status: LifecycleStatus | null;
   unresolved: LifecycleOrder | null;
   oldCheckoutPending: boolean;
+  /** Verified server-side: a purchase created outside the new checkout exists. */
+  externalReview?: boolean;
 }): ResidencyLifecycleDecision | null {
-  const { catalog, status, unresolved, oldCheckoutPending } = input;
+  const { catalog, status, unresolved, oldCheckoutPending, externalReview } = input;
   if (!catalog || !status) return null;
   if (unresolved) return { kind: "RECOVERY", order: unresolved };
   if (oldCheckoutPending) {
     return { kind: "BLOCKED", code: "LEGACY_CHECKOUT_PENDING", eligibleAt: null,
       message: "Есть незавершённая покупка в прежнем оформлении. Завершите или проверьте её перед новой оплатой." };
+  }
+  if (externalReview) {
+    return { kind: "BLOCKED", code: "EXTERNAL_CHECKOUT_PENDING", eligibleAt: null,
+      message: "Сервер обнаружил покупку резидентства в прежнем оформлении. Завершите или проверьте её перед новой оплатой — повторная оплата не создаётся." };
   }
   if (status.state === "UNAVAILABLE") {
     return { kind: "BLOCKED", code: "RESIDENCY_STATUS_UNAVAILABLE", eligibleAt: null,

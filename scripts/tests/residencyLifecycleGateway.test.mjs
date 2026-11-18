@@ -24,6 +24,14 @@ test("config is disabled by default and requires storage when enabled", () => {
   assert.equal(enabled.productId, "4037a3a3-e551-4f9a-a9db-1410e46b8635");
   assert.equal(enabled.rateLimit, 20);
   assert.equal(helpers.readConfig(env({ LK_RESIDENCY_LIFECYCLE_RATE_LIMIT_PER_MINUTE: "500" })).rateLimit, 120);
+  // The cross-path guard is on by default: an unread provider list must not release a
+  // second financial command. It can only be disabled explicitly for a non-production run.
+  assert.equal(helpers.readConfig(env({})).externalGuard, true);
+  assert.equal(helpers.readConfig(env({ LK_RESIDENCY_LIFECYCLE_EXTERNAL_GUARD: "false" })).externalGuard, false);
+  assert.equal(helpers.readConfig(env({})).externalLookbackMs, 30 * 86400000);
+  assert.equal(helpers.readConfig(env({ LK_RESIDENCY_LIFECYCLE_EXTERNAL_LOOKBACK_MS: "86400000" })).externalLookbackMs, 86400000);
+  assert.equal(helpers.readConfig(env({})).identityLog, false);
+  assert.equal(helpers.readConfig(env({ LK_RESIDENCY_LIFECYCLE_IDENTITY_LOG: "true" })).identityLog, true);
 });
 
 test("personal pilot create settings are closed by default and bound to the verified tenant", () => {

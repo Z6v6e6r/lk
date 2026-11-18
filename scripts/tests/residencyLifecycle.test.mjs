@@ -64,6 +64,23 @@ function memoryStore() {
       return [...orders.values()].filter((o) => o.tenantId === tenantId && o.state === "PENDING_PAYMENT"
         && o.payment.expiresAt && o.payment.expiresAt <= nowIso).map((o) => structuredClone(o));
     },
+    async findOrdersByTransactionIds(tenantId, userId, transactionIds) {
+      const wanted = new Set(transactionIds);
+      return [...orders.values()].filter((o) => o.tenantId === tenantId && o.userId === userId
+        && wanted.has(o.payment?.providerTransactionId)).map((o) => structuredClone(o));
+    },
+  };
+}
+
+function externalPort(transactions) {
+  const calls = [];
+  return {
+    calls,
+    async list(request) {
+      calls.push(request);
+      if (transactions instanceof Error) throw transactions;
+      return { checkedAt: new Date(NOW).toISOString(), transactions: transactions.map((row) => ({ ...row })) };
+    },
   };
 }
 
@@ -139,6 +156,8 @@ function build(overrides = {}) {
     activation,
     discounts,
     status,
+    ...(overrides.external ? { external: overrides.external } : {}),
+    ...(overrides.config ? { config: overrides.config } : {}),
   });
   return {
     lifecycle, store, calls,
@@ -1222,4 +1241,173 @@ test("a durable paid phase without a confirmed payment still reads as unknown", 
   assert.equal(payment.recovery.state, "UNKNOWN_OUTCOME");
   assert.ok(!payment.instruction.includes("Оплата получена"));
   assert.equal(creator.store.orders.get(created.order.orderId).activeSlot, 1);
+});
+
+
+// ---------------------------------------------------------------------------
+// Cross-path guard: a purchase started by the published old client.
+// ---------------------------------------------------------------------------
+
+const GUARD = { externalGuardRequired: true, externalLookbackMs: 30 * 86400000 };
+
+test("a purchase started in the old checkout blocks a new order before any provider POST", async () => {
+  const external = externalPort([{ transactionId: "legacy-txn-1", state: "OPEN", status: "UNPAID",
+    createdAt: "2026-11-18T08:40:00.000Z" }]);
+  const { lifecycle, store, calls } = build({ external, config: GUARD });
+  const error = await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" }).then(() => null, (failure) => failure);
+  assert.ok(error instanceof ResidencyLifecycleError);
+  assert.equal(error.statusCode, 409);
+  assert.equal(error.code, "RESIDENCY_EXTERNAL_PURCHASE_PENDING");
+  assert.equal(error.details.source, "VIVA_CLIENT_TRANSACTIONS");
+  assert.equal(error.details.hasOpen, true);
+  assert.equal(error.details.hasPaid, false);
+  assert.equal(error.details.oldestCreatedAt, "2026-11-18T08:40:00.000Z");
+  assert.equal(calls.create, 0);
+  assert.equal(store.orders.size, 0);
+  assert.equal(external.calls.length, 1);
+  assert.equal(external.calls[0].tenantId, TENANT);
+  assert.equal(external.calls[0].userId, USER);
+  assert.equal(external.calls[0].sinceIso, "2026-10-19T09:00:00.000Z");
+});
+
+test("a paid purchase without an active residency blocks a new order", async () => {
+  const external = externalPort([{ transactionId: "legacy-txn-2", state: "PAID", status: "PAID",
+    createdAt: "2026-11-18T08:30:00.000Z" }]);
+  const { lifecycle, store, calls } = build({ external, config: GUARD });
+  const error = await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" }).then(() => null, (failure) => failure);
+  assert.equal(error?.code, "RESIDENCY_EXTERNAL_PURCHASE_PENDING");
+  assert.equal(error.details.hasPaid, true);
+  assert.equal(calls.create, 0);
+  assert.equal(store.orders.size, 0);
+});
+
+test("an unavailable provider list fails closed before the provider POST", async () => {
+  const external = externalPort(Object.assign(new Error("no admin token"), { code: "RESIDENCY_ADMIN_TOKEN_UNAVAILABLE" }));
+  const { lifecycle, store, calls } = build({ external, config: GUARD });
+  await expectCode(lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" }), 503, "RESIDENCY_EXTERNAL_CHECK_UNAVAILABLE");
+  assert.equal(calls.create, 0);
+  assert.equal(store.orders.size, 0);
+});
+
+test("without the guard flag an unavailable list keeps the pre-guard behaviour (non-production compatibility)", async () => {
+  const external = externalPort(Object.assign(new Error("no admin token"), { code: "RESIDENCY_ADMIN_TOKEN_UNAVAILABLE" }));
+  const { lifecycle, calls } = build({ external });
+  const created = await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  assert.equal(created.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(calls.create, 1);
+});
+
+test("the service's own transaction is not mistaken for an external purchase", async () => {
+  let rows = [];
+  const external = { calls: [], async list(request) { this.calls.push(request); return { transactions: rows.map((row) => ({ ...row })) }; } };
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  rows = [{ transactionId: "txn-1", state: "PAID", status: "PAID", createdAt: "2026-11-18T09:01:00.000Z" }];
+  const paid = build({ store: creator.store, external, config: GUARD, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  } });
+  const result = await paid.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-own-payment" });
+  assert.equal(result.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(paid.calls.activate, 1);
+});
+
+test("listOrders exposes an open external attempt created after the order", async () => {
+  let rows = [];
+  const external = { calls: [], async list(request) { this.calls.push(request); return { transactions: rows.map((row) => ({ ...row })) }; } };
+  const { lifecycle } = build({ external, config: GUARD });
+  const created = await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  rows = [{ transactionId: "legacy-txn-3", state: "OPEN", status: "WAITING",
+    createdAt: new Date(Date.parse(created.order.createdAt) + 60000).toISOString() }];
+  const listed = await lifecycle.listOrders({ tenantId: TENANT, userId: USER, state: "unresolved" });
+  assert.equal(listed.count, 1);
+  assert.equal(listed.externalCheck.state, "OK");
+  assert.equal(listed.externalCheck.openCount, 1);
+  assert.equal(listed.externalCheck.paidAfterOrderCount, 0);
+  assert.equal(listed.externalCheck.requiresReview, true);
+});
+
+test("an unavailable external check does not take the servicing read down", async () => {
+  const external = externalPort(Object.assign(new Error("down"), { code: "RESIDENCY_EXTERNAL_ATTEMPTS_PARTIAL" }));
+  const { lifecycle } = build({ external, config: GUARD });
+  await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" }).catch(() => null);
+  const listed = await lifecycle.listOrders({ tenantId: TENANT, userId: USER, state: "unresolved" });
+  assert.equal(listed.count, 0);
+  assert.equal(listed.externalCheck.state, "UNAVAILABLE");
+  assert.equal(listed.externalCheck.requiresReview, false);
+  assert.equal(listed.externalCheck.retryable, true);
+});
+
+test("reconcile preserves the original order for review when a second paid operation exists", async () => {
+  let rows = [];
+  const external = { calls: [], async list(request) { this.calls.push(request); return { transactions: rows.map((row) => ({ ...row })) }; } };
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  rows = [{ transactionId: "legacy-txn-4", state: "PAID", status: "PAID",
+    createdAt: new Date(Date.parse(created.order.createdAt) + 120000).toISOString() }];
+  const second = build({ store: creator.store, external, config: GUARD, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PENDING", amountMinor: 79000, paymentUrl: "https://bank.example/pay/1" }; },
+  } });
+  const result = await second.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-external-paid" });
+  assert.equal(result.order.state, ORDER_STATES.PAID_REQUIRES_REVIEW);
+  assert.equal(result.order.activation.lastErrorCode, "EXTERNAL_PAYMENT_DETECTED");
+  assert.equal(result.order.payment.status, "PENDING");
+  assert.equal(result.reviewRequired, true);
+  assert.equal(second.calls.activate, 0);
+  assert.equal(creator.store.orders.size, 1);
+});
+
+test("two concurrent creates produce one order and one provider POST", async () => {
+  const external = externalPort([]);
+  const { lifecycle, store, calls } = build({ external, config: GUARD });
+  const base = { expectedTotalMinor: 79000, tenantId: TENANT, userId: USER, mode: "NEW" };
+  const results = await Promise.allSettled([
+    lifecycle.createOrder({ ...base, idempotencyKey: KEY }),
+    lifecycle.createOrder({ ...base, idempotencyKey: KEY2 }),
+  ]);
+  const fulfilled = results.filter((row) => row.status === "fulfilled");
+  const rejected = results.filter((row) => row.status === "rejected");
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].reason.code, "RESIDENCY_ORDER_ALREADY_PENDING");
+  assert.equal(calls.create, 1);
+  assert.equal(store.orders.size, 1);
+});
+
+
+
+test("a paid old purchase that produced an expired residency does not block the next term", async () => {
+  const external = externalPort([{ transactionId: "legacy-paid-1", state: "PAID", status: "PAID",
+    createdAt: "2026-10-20T09:00:00.000Z" }]);
+  const { lifecycle, calls } = build({ external, config: GUARD, statusValue: {
+    state: RESIDENCY_STATES.EXPIRED, source: "CUP", observedAt: PAID_AT,
+    validFrom: "2026-10-19T09:05:00.000Z", validUntil: "2026-11-18T09:05:00.000Z",
+  } });
+  const created = await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  assert.equal(created.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(calls.create, 1);
+});
+
+test("a paid external operation after the expired window still blocks a new order", async () => {
+  const external = externalPort([{ transactionId: "legacy-paid-2", state: "PAID", status: "PAID",
+    createdAt: "2026-11-18T09:06:00.000Z" }]);
+  const { lifecycle, calls } = build({ external, config: GUARD, statusValue: {
+    state: RESIDENCY_STATES.EXPIRED, source: "CUP", observedAt: PAID_AT,
+    validFrom: "2026-10-19T09:05:00.000Z", validUntil: "2026-11-18T09:05:00.000Z",
+  } });
+  await expectCode(lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" }), 409, "RESIDENCY_EXTERNAL_PURCHASE_PENDING");
+  assert.equal(calls.create, 0);
 });

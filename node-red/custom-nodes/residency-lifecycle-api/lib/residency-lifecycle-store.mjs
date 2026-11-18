@@ -79,6 +79,18 @@ export function createMongoResidencyLifecycleStore({ collection }) {
     return rows.map((row) => clone(withoutMongoId(row)));
   }
 
+  /**
+   * Looks up the lifecycle orders that already own a provider transaction. Used only to
+   * separate this service's own payments from a purchase started by the old checkout.
+   */
+  async function findOrdersByTransactionIds(tenantId, userId, transactionIds) {
+    const ids = (Array.isArray(transactionIds) ? transactionIds : []).filter((id) => typeof id === "string" && id.length > 0).slice(0, 100);
+    if (!ids.length) return [];
+    const cursor = collection.find({ tenantId, userId, "payment.providerTransactionId": { $in: ids } }).limit(50);
+    const rows = await cursor.toArray();
+    return rows.map((row) => clone(withoutMongoId(row)));
+  }
+
   async function listExpiredPending(tenantId, nowIso) {
     const cursor = collection.find({
       tenantId,
@@ -89,7 +101,8 @@ export function createMongoResidencyLifecycleStore({ collection }) {
     return rows.map((row) => clone(withoutMongoId(row)));
   }
 
-  return { findOrderByKey, getOrder, insertOrder, updateOrder, findUnresolvedOrder, listUnresolvedOrders, listExpiredPending };
+  return { findOrderByKey, getOrder, insertOrder, updateOrder, findUnresolvedOrder, listUnresolvedOrders,
+    findOrdersByTransactionIds, listExpiredPending };
 }
 
 /**
