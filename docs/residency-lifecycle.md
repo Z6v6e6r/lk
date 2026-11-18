@@ -319,5 +319,11 @@ separate approvals. This source change performs none of them.
 - PROVIDER evidence: the exact Admin transaction/status fields and CUP refresh response
   are pinned from existing source and tests, not from a fresh sandbox read in this
   session. Run the contract check before activation.
+- Provider-side idempotency: the current Viva end-user transaction contract has no
+  reviewed idempotency key. The owner mitigates with a durable pre-POST attempt, a
+  unique active-slot index, no automatic retry and read-back, but a lost response can
+  still leave a Viva transaction without a stored id. Reconciling that case through
+  CUP evidence is supported; a provider-side dedup key remains a separate PROVIDER
+  contract decision.
 - Index apply, custom-node install, flow import, flags and deployment are separate
   operational steps.
