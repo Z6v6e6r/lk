@@ -3,9 +3,11 @@
 const tournamentAdmissionUrl = (ctx) => {
   const base = env.get("TOURNAMENT_OWNER_API_BASE");
   try {
-    const url = new URL(base);
-    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return null;
-    return url.href.replace(/\/$/, "") + "/tournaments/" + encodeURIComponent(ctx.exerciseId) + "/subscription-admission";
+    if (typeof base !== "string" || /[?#\s]/.test(base) || !base.startsWith("https://")) return null;
+    const url = new tournamentOwnerUrl.URL(base);
+    const path = url.pathname.replace(/\/$/, "");
+    if (url.username || url.password || !path.endsWith("/api")) return null;
+    return url.origin + path + "/tournaments/" + encodeURIComponent(ctx.exerciseId) + "/subscription-admission";
   } catch { return null; }
 };
 const tournamentAdmissionPending = (ctx) => finishPending(ctx, "Результат допуска требует сверки. Повторная запись не создана.", {
@@ -65,9 +67,14 @@ const tournamentAdmissionComplete = (ctx, bookingId) => {
 const tournamentAdmissionBinding = (ctx) => ({ _id: ctx.operationKey, operationId: ctx.operationId,
   actorClientId: ctx.actorClientId, exerciseId: ctx.exerciseId, clientSubscriptionId: ctx.clientSubscriptionId,
   tenantKey: ctx.tenantKey, tournamentAdmission: ctx.tournamentAdmission });
-const tournamentAdmissionUnused = { bookingId: { $exists: false }, upstreamBookingId: { $exists: false },
-  managedEntitlementOperationId: { $exists: false }, "lk1.createAttemptedAt": { $exists: false },
-  "lk1.bookingAttemptedAt": { $exists: false }, "lk1.transactionAttemptedAt": { $exists: false }, "lk1.visitJob": { $exists: false } };
+const tournamentAdmissionEffectFields = [
+  "bookingId", "upstreamBookingId", "acceptedAt", "correlationId", "managedEntitlementOperationId",
+  "lk1.createAttemptedAt", "lk1.bookingAttemptedAt", "lk1.transactionAttemptedAt",
+  "lk1.transactionId", "lk1.transactionIntent", "lk1.checkout", "lk1.visitJob",
+];
+const tournamentAdmissionUnused = Object.fromEntries(tournamentAdmissionEffectFields.map(field => [field, { $exists: false }]));
+const tournamentAdmissionHasNoEffect = (row) => tournamentAdmissionEffectFields.every(field =>
+  field.split(".").reduce((value, key) => value?.[key], row) === undefined);
 const tournamentAdmissionDurableUpdate = (ctx, step, filter, update) => {
   const out = prepareMongoUpdate(ctx, step, filter, update);
   msg.payload[2] = { writeConcern: { w: "majority", j: true } };
@@ -83,14 +90,53 @@ const tournamentAdmissionDispatch = (ctx) => {
 const tournamentAdmissionAbortFailure = (ctx, statusCode, message, rawCode) => {
   if (ctx.category !== "tournament" || ctx.step !== "exercise_recheck"
     || rawCode !== "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE" || !ctx.tournamentAdmission) return null;
+  return tournamentAdmissionSaveAbort(ctx, statusCode, message, rawCode);
+};
+const tournamentAdmissionSaveAbort = (ctx, statusCode, message, rawCode, managed = false) => {
   ctx.finalFailure = { statusCode, message, rawCode };
   return tournamentAdmissionDurableUpdate(ctx, "tournament_abort_saved", {
     ...tournamentAdmissionBinding(ctx), ...tournamentAdmissionUnused,
     state: "PENDING_CONFIRMATION", tournamentProviderPhase: "PRE_DISPATCH",
+    ...(managed ? { category: "tournament", serviceDate: ctx.serviceDate, "lk1.fingerprint": ctx.lk1.fingerprint,
+      "lk1.dailyVisitPolicyVersion": 1, "lk1.decision.subscriptionVisitCount": 1 } : {}),
   }, { $set: { state: "FAILED", failure: ctx.finalFailure, failedAt: new Date().toISOString(),
-    tournamentAbort: { proof: "PRE_DISPATCH_REJECTED_V1", acknowledged: false } }, $unset: { pendingUntil: "" } });
+    tournamentAbort: { proof: "PRE_DISPATCH_REJECTED_V1", acknowledged: false,
+      ...(managed ? { recheck: "LK1_QUOTE_CHANGED" } : {}) } }, $unset: { pendingUntil: "" } });
 };
-const tournamentAdmissionAbortTerminal = (ctx, row) => row?._id === ctx.operationKey
+const tournamentAdmissionManagedScope = (ctx) => ctx.caller === "http" && ctx.action === "book"
+  && ctx.category === "tournament" && ctx.managedAction === "BOOK_TOURNAMENT"
+  && ctx.lk1?.dailyVisitPolicyVersion === 1 && ctx.lk1?.decision?.subscriptionVisitCount === 1;
+const tournamentAdmissionReadMatches = (url) => !msg.error && isHttpOk(msg.statusCode)
+  && msg.method === "GET" && msg.url === url && msg.responseUrl === url
+  && msg.followRedirects === false && msg.maxRedirects === 0;
+const tournamentAdmissionObserveManagedRecheck = (ctx) => {
+  if (!tournamentAdmissionManagedScope(ctx) || !ctx.lk1DailyVisitOwned || !ctx.tournamentAdmission) return;
+  if (ctx.step === "exercise_recheck") {
+    const url = `${VIVA_API_BASE}/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`;
+    ctx.tournamentManagedRecheckAt = tournamentAdmissionReadMatches(url) ? Date.now() : null;
+  }
+  if (["product_owned_recheck", "lk1_money_owned_subscriptions"].includes(ctx.step)) {
+    const url = `${VIVA_API_BASE}/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`;
+    if (!tournamentAdmissionReadMatches(url)) ctx.tournamentManagedRecheckAt = null;
+  }
+};
+const tournamentAdmissionManagedAbort = (ctx, exercise, quote) => {
+  // Missing/source-error evidence belongs to reconciliation. A fresh, valid,
+  // different quote for this event proves a local refusal before booking.
+  if (!tournamentAdmissionManagedScope(ctx) || ctx.lk1DailyVisitOwned !== true || !ctx.tournamentAdmission
+    || ctx.tournamentDispatchGranted === true || !isValidDateKey(ctx.serviceDate)
+    || !Number.isFinite(ctx.tournamentManagedRecheckAt)
+    || Date.now() - ctx.tournamentManagedRecheckAt < 0 || Date.now() - ctx.tournamentManagedRecheckAt > 30_000
+    || toStr(exercise?.id || exercise?.exerciseId) !== ctx.exerciseId
+    || resolveCategory(exercise) !== "tournament" || !isObj(quote) || quote.code
+    || typeof quote.fingerprint !== "string" || !quote.fingerprint || quote.fingerprint === ctx.lk1.fingerprint
+    || typeof ctx.lk1.fingerprint !== "string" || !ctx.lk1.fingerprint) return null;
+  if (ctx.step === "lk1_event_tariff" && !tournamentAdmissionReadMatches(
+    `${VIVA_API_BASE}/end-user/api/v2/${ctx.tenantKey}/products/one-times?exerciseId=${encodeURIComponent(ctx.exerciseId)}`)) return null;
+  return tournamentAdmissionSaveAbort(ctx, 409, "Условия подписки изменились до записи.",
+    "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE", true);
+};
+const tournamentAdmissionAbortTerminal = (ctx, row) => isObj(row) && row._id === ctx.operationKey
   && row.actorClientId === ctx.actorClientId && row.exerciseId === ctx.exerciseId
   && row.clientSubscriptionId === ctx.clientSubscriptionId && row.tenantKey === ctx.tenantKey
   && isValidDateKey(row.serviceDate)
@@ -101,8 +147,12 @@ const tournamentAdmissionAbortTerminal = (ctx, row) => row?._id === ctx.operatio
   && row.tournamentAdmission?.actorClientId === row.actorClientId
   && row.tournamentAdmission?.exerciseId === row.exerciseId
   && row.tournamentAdmission?.clientSubscriptionId === row.clientSubscriptionId
-  && !row.bookingId && !row.upstreamBookingId && !row.managedEntitlementOperationId
-  && !row.lk1?.createAttemptedAt && !row.lk1?.bookingAttemptedAt && !row.lk1?.transactionAttemptedAt && !row.lk1?.visitJob;
+  && (row.tournamentAbort.recheck === undefined || (row.tournamentAbort.recheck === "LK1_QUOTE_CHANGED"
+    && ctx.caller === "http" && ctx.action === "book" && row.category === "tournament"
+    && row.operationId === ctx.operationId && row.lk1?.dailyVisitPolicyVersion === 1
+    && row.lk1?.decision?.subscriptionVisitCount === 1
+    && typeof lk1ReplayIdentityMatches === "function" && lk1ReplayIdentityMatches(ctx, row)))
+  && tournamentAdmissionHasNoEffect(row);
 const tournamentAdmissionAbortSend = (ctx) => {
   const base = tournamentAdmissionUrl(ctx), token = env.get("TOURNAMENT_OWNER_INTEGRATION_TOKEN");
   if (!base || typeof token !== "string" || !token) return tournamentAdmissionPending(ctx);
@@ -123,6 +173,37 @@ const tournamentAdmissionReclaimFence = { $or: [
 const tournamentAdmissionAbortUnfinished = (row) => row.tournamentAbort !== undefined
   && !(row.tournamentAbort?.proof === "PRE_DISPATCH_REJECTED_V1"
     && row.tournamentAbort.acknowledged === true && row.tournamentAbort.cleanupComplete === true);
+const tournamentAdmissionResetReclaimed = (row) => row.tournamentAbort && !tournamentAdmissionAbortUnfinished(row)
+  ? { tournamentAdmission: "", tournamentProviderPhase: "", tournamentAbort: "", upstreamAttemptedAt: "" } : {};
+const tournamentAdmissionResumeAbort = (ctx, row) => {
+  ctx.operationId = row.operationId;
+  ctx.serviceDate = row.serviceDate;
+  ctx.tournamentAdmission = row.tournamentAdmission;
+  ctx.finalFailure = row.failure;
+  ctx.tournamentAdmissionRefusalCode = row.failure.rawCode;
+  ctx.tournamentAbortRecovery = true;
+  ctx.tournamentAbortCleanupComplete = row.tournamentAbort.cleanupComplete === true;
+  return row.tournamentAbort.acknowledged === true
+    ? tournamentAdmissionFind(ctx, "tournament_admission_guard_read", tournamentAdmissionGuardKey(ctx))
+    : tournamentAdmissionAbortSend(ctx);
+};
+const tournamentAdmissionManagedReplay = (ctx) => {
+  if (ctx.caller !== "http" || ctx.action !== "book"
+    || !["lk1_ingress_operation_find", "lk1_operation_find"].includes(ctx.step)
+    || msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1) return null;
+  const row = msg.payload[0];
+  const postAdmission = row?.tournamentAbort?.recheck === "LK1_QUOTE_CHANGED";
+  if (!postAdmission && row?.failure?.rawCode !== "TOURNAMENT_ADMISSION_REJECTED") return null;
+  if (row.category !== "tournament" || typeof lk1ReplayIdentityMatches !== "function"
+    || !lk1ReplayIdentityMatches(ctx, row) || !isValidDateKey(row.serviceDate)) return tournamentAdmissionPending(ctx);
+  ctx.operationKey = row._id;
+  if (postAdmission) return tournamentAdmissionAbortTerminal(ctx, row)
+    ? tournamentAdmissionResumeAbort(ctx, row) : tournamentAdmissionPending(ctx);
+  if (!tournamentAdmissionTerminal(ctx, row)) return tournamentAdmissionPending(ctx);
+  ctx.serviceDate = row.serviceDate;
+  ctx.tournamentAdmissionRefusalCode = row.failure.admissionCode;
+  return tournamentAdmissionFind(ctx, "tournament_admission_guard_read", tournamentAdmissionGuardKey(ctx));
+};
 const tournamentAdmissionRoute = (ctx) => {
   if (ctx.step === "tournament_dispatch_saved") {
     // A lost database ACK cannot authorize a POST, even if a later read finds DISPATCHING.
@@ -136,16 +217,7 @@ const tournamentAdmissionRoute = (ctx) => {
     const row = msg.payload[0];
     // A new operation may reclaim only after the old compensation was durably acknowledged.
     if (row.operationId !== ctx.operationId && row.tournamentAbort.acknowledged === true && row.tournamentAbort.cleanupComplete === true) return null;
-    ctx.operationId = row.operationId;
-    ctx.serviceDate = row.serviceDate;
-    ctx.tournamentAdmission = row.tournamentAdmission;
-    ctx.finalFailure = row.failure;
-    ctx.tournamentAdmissionRefusalCode = row.failure.rawCode;
-    ctx.tournamentAbortRecovery = true;
-    ctx.tournamentAbortCleanupComplete = row.tournamentAbort.cleanupComplete === true;
-    return row.tournamentAbort.acknowledged === true
-      ? tournamentAdmissionFind(ctx, "tournament_admission_guard_read", tournamentAdmissionGuardKey(ctx))
-      : tournamentAdmissionAbortSend(ctx);
+    return tournamentAdmissionResumeAbort(ctx, row);
   }
   if (["operation_find", "lk1_operation_find", "lk1_ingress_operation_find"].includes(ctx.step)
     && !msg.error && Array.isArray(msg.payload) && msg.payload.length === 1

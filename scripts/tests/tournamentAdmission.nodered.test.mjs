@@ -2,18 +2,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import crypto from 'node:crypto';
+import * as url from 'node:url';
 import { composeTournamentAdmissionCandidate } from '../prepare_tournament_admission_candidate.mjs';
 import { patchTournamentAdmissionSource } from '../lib/tournamentAdmissionSource.mjs';
 const base = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
 const source = patchTournamentAdmissionSource(base);
-const run = new Function('msg', 'env', 'global', 'node', source);
+const run = new Function('msg', 'env', 'global', 'node', 'tournamentOwnerUrl', source);
 const env = { get: key => key === 'TOURNAMENT_OWNER_API_BASE' ? 'https://cup.example/api' : undefined };
 const context = (extra = {}) => ({ step: 'operation_insert', category: 'tournament', action: 'book', actorClientId: 'actor',
   exerciseId: 'exercise', operationKey: 'op-key', operationId: 'op-id', tenantKey: 'fixture',
   clientSubscriptionId: 'subscription', serviceDate: '2026-11-18', authHeader: 'Bearer synthetic', ...extra });
 function step(ctx, payload, extra = {}) {
   const msg = { _subscriptionBooking: ctx, payload, ...extra };
-  const out = run(msg, env, { get: () => undefined }, { warn() {}, error() {} });
+  const out = run(msg, env, { get: () => undefined }, { warn() {}, error() {} }, url);
   return { msg, out };
 }
 function response(ctx, status, payload) {
@@ -69,27 +70,59 @@ test('refusal recovery never releases a foreign guard or an operation with dispa
   const { ctx } = refused(); ctx.step = 'tournament_admission_guard_read';
   assert.equal(step(ctx, [{ ownerOperationKey: 'foreign', ownerOperationId: 'foreign' }]).msg.statusCode, 403);
 });
-test('patch guards composed daily acquisition before reservation, and preserves unrelated source', () => {
+function withDailyGuard(source) {
   const guard = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/daily_visit_guard.js', import.meta.url), 'utf8');
-  const composed = base.replace('const ctx = isObj(msg._subscriptionBooking)', guard + '\nconst ctx = isObj(msg._subscriptionBooking)');
+  return source.replace('const ctx = isObj(msg._subscriptionBooking)', guard + '\nconst ctx = isObj(msg._subscriptionBooking)')
+    .replace('const preparePreaccept = (ctx) => {', 'const preparePreaccept = (ctx) => {\n'
+      + '  if (ctx.lk1?.decision?.subscriptionVisitCount === 1 && ctx.lk1DailyVisitOwned !== true) {\n    return lk1DailyVisitAcquire(ctx);\n  }')
+    .replace('const prepareBookingCreate = (ctx) => {', 'const prepareBookingCreate = (ctx) => {\n'
+      + '  if (ctx.lk1?.decision?.subscriptionVisitCount === 1 && ctx.lk1DailyVisitOwned !== true) {\n'
+      + '    ctx.lk1DailyVisitContinuation = "booking";\n    return lk1DailyVisitAcquire(ctx);\n  }');
+}
+
+test('patch requires composed daily guard ownership before CUP admission and before preaccept', () => {
+  const composed = withDailyGuard(base);
   const patched = patchTournamentAdmissionSource(composed);
   new Function('msg', 'env', 'global', 'node', patched);
-  assert.match(patched, /const lk1DailyVisitAcquire = \(ctx\) => \{\n {2}const admission = tournamentAdmissionGate/);
+  const preaccept = patched.slice(patched.indexOf('const preparePreaccept ='), patched.indexOf('const preparePrecreatedReservationPromotion ='));
+  assert.ok(preaccept.indexOf('return lk1DailyVisitAcquire(ctx)') < preaccept.indexOf('tournamentAdmissionGate(ctx, "preaccept")'));
   assert.match(patched, /\$unset: \{ admissionRelease: "" \}/);
   assert.throws(() => patchTournamentAdmissionSource(patched), /already installed/);
 });
 
 
-test('candidate validates exact graph preimage and preserves every unrelated node and wire', () => {
+test('candidate preserves the live provider-version overlay, existing libraries and all other nodes', () => {
+  const liveAdminVersion = '  const adminVersion = ctx.caller === "split" || (ctx.lk1 && payload.paymentType === "SUBSCRIPTION")\n'
+    + '    || (lk1EventMoneyBooking(ctx) && payload.paymentType === "ON_PLACE") ? "v1" : "v2";';
+  const func = withDailyGuard(base.replace('  const adminVersion = ctx.caller === "split" ? "v1" : "v2";', liveAdminVersion));
   const nodes = [{ id: 'untouched', type: 'comment', name: 'fixture' },
-    { id: 'lk_subscription_booking_router_20260804', type: 'function', outputs: 5, wires: [['fixture'], [], [], [], []], func: base }];
+    { id: 'lk_subscription_booking_router_20260804', type: 'function', outputs: 5, wires: [['fixture'], [], [], [], []],
+      libs: [{ var: 'fixtureCrypto', module: 'crypto' }], func }];
   const raw = Buffer.from(JSON.stringify(nodes));
   const digest = crypto.createHash('sha256').update(raw).digest('hex');
   const candidate = composeTournamentAdmissionCandidate(raw, digest);
   assert.deepEqual(candidate[0], nodes[0]);
-  assert.deepEqual({ ...candidate[1], func: '' }, { ...nodes[1], func: '' });
+  assert.deepEqual({ ...candidate[1], func: '', libs: [] }, { ...nodes[1], func: '', libs: [] });
+  assert.deepEqual(candidate[1].libs, [...nodes[1].libs, { var: 'tournamentOwnerUrl', module: 'url' }]);
+  assert.ok(candidate[1].func.includes(liveAdminVersion));
   assert.throws(() => composeTournamentAdmissionCandidate(raw, '0'.repeat(64)), /preimage mismatch/);
   assert.match(candidate[1].func, /tournamentAdmissionGate/);
+});
+
+test('owner URL is resolved through the Function library and malformed bases fail closed', () => {
+  const execute = new Function('msg', 'env', 'global', 'node', 'tournamentOwnerUrl', 'URL', source);
+  for (const [base, accepted] of [
+    ['https://cup.example/api/', true], ['http://cup.example/api', false], ['https://cup.example/notapi', false],
+    ['https://cup.example/api?', false], ['https://cup.example/api#', false],
+    [['https://user', 'cup.example/api'].join('@'), false],
+  ]) {
+    const ctx = context();
+    const msg = { _subscriptionBooking: ctx, payload: { acknowledged: true, insertedId: ctx.operationKey } };
+    execute(msg, { get: () => base }, { get: () => undefined }, {}, url, undefined);
+    assert.equal(ctx.step === 'tournament_admission', accepted, base);
+    if (accepted) assert.equal(msg.url, 'https://cup.example/api/tournaments/exercise/subscription-admission');
+    else assert.equal(msg.statusCode, 202);
+  }
 });
 
 
@@ -98,13 +131,13 @@ test('LK1 completion preserves the existing payment safety check before telling 
   const finish = gateway.slice(gateway.indexOf('const lk1Finish ='), gateway.indexOf('// EVENT_PAYMENT_ROUTES'));
   const composed = base.replace('const ctx = isObj(msg._subscriptionBooking)', finish + '\nconst ctx = isObj(msg._subscriptionBooking)')
     .replace('if (ctx.managedCreateBinding !== undefined) {', 'if (ctx.step === "fixture_finish") return lk1Finish(ctx);\nif (ctx.managedCreateBinding !== undefined) {');
-  const execute = new Function('msg', 'env', 'global', 'node', 'lk1Stop', patchTournamentAdmissionSource(composed));
+  const execute = new Function('msg', 'env', 'global', 'node', 'lk1Stop', 'tournamentOwnerUrl', patchTournamentAdmissionSource(composed));
   for (const price of [0, 100]) {
     const ctx = context({ step: 'fixture_finish', confirmedBookingId: 'confirmed-booking',
       lk1: { decision: { benefit: { finalPriceMinor: price } } } });
     const msg = { _subscriptionBooking: ctx };
     const result = execute(msg, { get: key => key === 'TOURNAMENT_OWNER_INTEGRATION_TOKEN' ? 'synthetic-integration' : env.get(key) },
-      { get: () => undefined }, { warn() {}, error() {} }, (_ctx, code) => ({ refused: code }));
+      { get: () => undefined }, { warn() {}, error() {} }, (_ctx, code) => ({ refused: code }), url);
     if (price) {
       assert.equal(result.refused, 'LK1_PAYMENT_RECONCILIATION_REQUIRED');
       assert.equal(msg.method, undefined);
@@ -138,6 +171,51 @@ test('ADMITTED preaccept persists explicit predispatch phase; recheck refusal is
   assert.equal(options.writeConcern.w, 'majority');
   step(ctx, null, { error: Error('ACK lost') }); assert.equal(ctx.step, 'tournament_abort_read');
 });
+test('managed quote compensation requires an owned daily guard and a valid quote from the same fresh provider read', () => {
+  const harness = source.replace('if (ctx.managedCreateBinding !== undefined) {', `
+    if (ctx.step === "exercise_recheck") {
+      return tournamentAdmissionManagedAbort(ctx, msg.payload.exercise, msg.payload.quote)
+        || tournamentAdmissionPending(ctx);
+    }
+    if (ctx.managedCreateBinding !== undefined) {`);
+  const execute = new Function('msg', 'env', 'global', 'node', 'tournamentOwnerUrl', harness);
+  const exercise = { id: 'exercise', typeId: 839, directionId: 2617 };
+  const getUrl = 'https://api.vivacrm.ru/end-user/api/v1/fixture/exercises/exercise';
+  for (const [name, contextDelta, body, httpDelta] of [
+    ['fresh change', {}, {}, {}],
+    ['foreign guard', { lk1DailyVisitOwned: false }, {}, {}],
+    ['already dispatching', { tournamentDispatchGranted: true }, {}, {}],
+    ['wrong exercise', {}, { exercise: { ...exercise, id: 'other' } }, {}],
+    ['unavailable quote', {}, { quote: { code: 'LK1_EVENT_TARIFF_UNVERIFIED' } }, {}],
+    ['redirected read', {}, {}, { responseUrl: 'https://elsewhere.example/fixture' }],
+    ['transport failure', {}, {}, { statusCode: 503, error: { message: 'fixture error' } }],
+  ]) {
+    const { ctx, grant } = admitted();
+    Object.assign(ctx, { step: 'exercise_recheck', caller: 'http', managedAction: 'BOOK_TOURNAMENT',
+      lk1DailyVisitOwned: true, lk1: { fingerprint: 'original', dailyVisitPolicyVersion: 1,
+        decision: { subscriptionVisitCount: 1 } }, ...contextDelta });
+    const msg = { _subscriptionBooking: ctx, payload: { exercise, quote: { fingerprint: 'changed' }, ...body },
+      statusCode: 200, method: 'GET', url: getUrl, responseUrl: getUrl, followRedirects: false, maxRedirects: 0, ...httpDelta };
+    execute(msg, env, {}, {}, url);
+    if (name !== 'fresh change') {
+      assert.equal(msg.statusCode, 202, name);
+      assert.notEqual(ctx.step, 'tournament_abort_saved', name);
+      continue;
+    }
+    assert.equal(ctx.step, 'tournament_abort_saved');
+    const [query, update, options] = msg.payload;
+    assert.equal(query['lk1.fingerprint'], 'original');
+    assert.equal(query['lk1.decision.subscriptionVisitCount'], 1);
+    assert.equal(query.serviceDate, ctx.serviceDate);
+    assert.equal(query.tournamentProviderPhase, 'PRE_DISPATCH');
+    assert.deepEqual(query.tournamentAdmission, grant);
+    for (const marker of ['lk1.checkout', 'lk1.transactionId', 'lk1.transactionIntent', 'acceptedAt', 'correlationId']) {
+      assert.deepEqual(query[marker], { $exists: false });
+    }
+    assert.equal(update.$set.tournamentAbort.recheck, 'LK1_QUOTE_CHANGED');
+    assert.equal(options.writeConcern.w, 'majority');
+  }
+});
 test('CUP abort timeout never acknowledges compensation or releases guard', () => {
   const { ctx, grant } = admitted(); ctx.step = 'tournament_abort'; ctx.tournamentAdmission = grant;
   const { msg } = step(ctx, null, { error: Error('timeout') });
@@ -152,7 +230,7 @@ test('lost dispatch ACK cannot issue the booking POST', () => {
 test('acknowledged dispatch emits one provider POST through the actual booking builder', () => {
   const { ctx } = admitted(); ctx.step = 'tournament_dispatch_saved';
   const msg = { _subscriptionBooking: ctx, payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null } };
-  run(msg, env, { get: key => key === 'vivacrm_access_token' ? 'synthetic-token' : undefined }, { warn() {}, error() {} });
+  run(msg, env, { get: key => key === 'vivacrm_access_token' ? 'synthetic-token' : undefined }, { warn() {}, error() {} }, url);
   assert.equal(ctx.step, 'booking_create'); assert.equal(msg.method, 'POST'); assert.match(msg.url, /\/exercises\/exercise\/bookings$/);
 });
 

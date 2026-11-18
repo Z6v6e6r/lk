@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import * as url from 'node:url';
 import { MongoClient } from 'mongodb';
 import { patchTournamentAdmissionSource } from '../lib/tournamentAdmissionSource.mjs';
 const uri = process.env.TEST_MONGODB_URI;
@@ -11,17 +12,24 @@ await client.connect();
 const collection = client.db(database).collection('operations');
 const base = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
 const guardSource = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/daily_visit_guard.js', import.meta.url), 'utf8');
+const lk1Gateway = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
+const findHelper = lk1Gateway.slice(lk1Gateway.indexOf('const lk1Find ='), lk1Gateway.indexOf('const lk1Fingerprint ='));
 // Match the real daily patch: declarations and handlers appear after ctx initialization.
 const composed = base.replace('if (ctx.managedCreateBinding !== undefined) {',
-  guardSource + '\nif (ctx.managedCreateBinding !== undefined) {');
+  findHelper + guardSource + '\nif (ctx.managedCreateBinding !== undefined) {')
+  .replace('const preparePreaccept = (ctx) => {', 'const preparePreaccept = (ctx) => {\n'
+    + '  if (ctx.lk1?.decision?.subscriptionVisitCount === 1 && ctx.lk1DailyVisitOwned !== true) {\n    return lk1DailyVisitAcquire(ctx);\n  }')
+  .replace('const prepareBookingCreate = (ctx) => {', 'const prepareBookingCreate = (ctx) => {\n'
+    + '  if (ctx.lk1?.decision?.subscriptionVisitCount === 1 && ctx.lk1DailyVisitOwned !== true) {\n'
+    + '    ctx.lk1DailyVisitContinuation = "booking";\n    return lk1DailyVisitAcquire(ctx);\n  }');
 const source = patchTournamentAdmissionSource(composed).replace('if (ctx.managedCreateBinding !== undefined) {',
   'if (ctx.step === "fixture_dispatch") return prepareBookingCreate(ctx);\nif (ctx.managedCreateBinding !== undefined) {');
-const run = new Function('msg', 'env', 'global', 'node', source);
+const run = new Function('msg', 'env', 'global', 'node', 'tournamentOwnerUrl', source);
 const ctxFor = (operationId = 'operation-1') => ({ category: 'tournament', action: 'book', actorClientId: 'actor', exerciseId: 'exercise',
   operationId, operationKey: operationId, tenantKey: 'fixture', clientSubscriptionId: 'subscription', serviceDate: '2026-11-18',
   authHeader: 'Bearer synthetic', lk1: { dailyVisitPolicyVersion: 1, decision: { subscriptionVisitCount: 1 } } });
 const env = { get: key => key === 'TOURNAMENT_OWNER_API_BASE' ? 'https://cup.example/api' : key === 'TOURNAMENT_OWNER_INTEGRATION_TOKEN' ? 'synthetic-owner-token' : undefined };
-const execute = msg => run(msg, env, { get: key => key === 'vivacrm_access_token' ? 'synthetic-provider-token' : undefined }, { warn() {}, error() {} });
+const execute = msg => run(msg, env, { get: key => key === 'vivacrm_access_token' ? 'synthetic-provider-token' : undefined }, { warn() {}, error() {} }, url);
 const guardKey = 'lk1-daily-visit:["fixture","subscription","2026-11-18"]';
 try {
   const ctx = ctxFor();
@@ -30,7 +38,11 @@ try {
     clientSubscriptionId: ctx.clientSubscriptionId, serviceDate: ctx.serviceDate,
     ownerOperationKey: ctx.operationKey, ownerOperationId: ctx.operationId });
   let msg = { _subscriptionBooking: { ...ctx, step: 'operation_insert' }, payload: { acknowledged: true, insertedId: ctx.operationKey } };
-  execute(msg); assert.equal(msg.method, 'POST');
+  execute(msg); assert.equal(msg._subscriptionBooking.step, 'lk1_daily_visit_claim');
+  msg.payload = await collection.updateOne(...msg.payload); execute(msg);
+  assert.equal(msg._subscriptionBooking.step, 'lk1_daily_visit_read');
+  msg.payload = await collection.find(msg.payload).toArray(); execute(msg);
+  assert.equal(msg.method, 'POST');
   msg = { ...msg, statusCode: 403, responseUrl: msg.url, payload: { code: 'LEVEL_NOT_ALLOWED' } };
   execute(msg);
   const [filter, update, options] = msg.payload;
@@ -140,7 +152,12 @@ try {
       const complete = { _subscriptionBooking: nextCtx(), payload: [await collection.findOne({ _id: key })] };
       execute(complete); assert.equal(complete._subscriptionBooking.step, 'operation_reclaim');
       assert.equal((await collection.updateOne(...complete.payload)).modifiedCount, 1);
-      assert.equal((await collection.findOne({ _id: key })).exerciseId, 'other-exercise');
+      const next = await collection.findOne({ _id: key });
+      assert.equal(next.exerciseId, 'other-exercise');
+      assert.equal(next.tournamentAbort, undefined);
+      assert.equal(next.tournamentAdmission, undefined);
+      assert.equal(next.tournamentProviderPhase, undefined);
+      assert.equal(next.upstreamAttemptedAt, undefined);
     }
   }
   for (const order of ['abort-first', 'dispatch-first', 'concurrent']) {

@@ -8,9 +8,12 @@ export function composeTournamentAdmissionCandidate(raw, expectedSha) {
   if (!Array.isArray(flow) || new Set(flow.map(n => n.id)).size !== flow.length) throw Error('Invalid source flow');
   const node = flow.find(n => n.id === 'lk_subscription_booking_router_20260804');
   if (node?.type !== 'function' || node.outputs < 4) throw Error('Booking owner graph unavailable');
-  // Patch the supplied composed function only; preserve all wires, other nodes and deployed overlays.
+  // Preserve the composed function and its existing bindings. The Function VM does not expose URL.
+  const libs = node.libs ?? [];
+  if (!Array.isArray(libs) || libs.some(lib => lib?.var === 'tournamentOwnerUrl')) throw Error('Tournament URL binding conflict');
   node.func = patchTournamentAdmissionSource(node.func);
-  new Function('msg', 'env', 'global', 'node', node.func);
+  node.libs = [...libs, { var: 'tournamentOwnerUrl', module: 'url' }];
+  new Function('msg', 'env', 'global', 'node', 'tournamentOwnerUrl', node.func);
   return flow;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

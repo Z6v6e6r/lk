@@ -23,7 +23,9 @@ exercise booking. Paid completion asks CUP to reconcile by exact transaction att
 Use `scripts/prepare_tournament_admission_candidate.mjs SOURCE SHA256 NEW_OUTPUT` on an approved,
 fresh, complete exported booking graph. All three paths must be absolute; output must not exist.
 The source hash, unique node IDs, router ID/type/outputs and function syntax are validated. Only
-that router function changes; graph wires and other source overlays remain identical. Apply last,
+the router's function and library list change. The installer appends the built-in Node `url`
+library for the Function VM and preserves the current Viva v1/v2 routing expression, existing
+libraries, lifecycle hooks, node order, wires and other node fields. Apply last,
 after LK1 daily-visit, discount and managed-entitlement overlays. Do not rebuild from a stale base.
 The installer is local-only: it cannot deploy, import, restart or edit a live runtime.
 
@@ -36,12 +38,15 @@ Required server configuration (configure only during separately authorized rollo
 - `TOURNAMENT_OWNER_API_BASE`: trusted HTTPS CUP base including `/api`, no query/credentials/hash.
 - `TOURNAMENT_OWNER_INTEGRATION_TOKEN`: existing CUP LK integration credential; server-only.
 
-Gate before preaccept, managed entitlement reserve, provider create and daily-visit acquisition:
+Gate before preaccept, managed entitlement reserve and provider create:
 `POST /tournaments/:exercise/subscription-admission`, Bearer, original operation/subscription IDs.
 The returned grant binds actor, exercise, subscription and request ID. A GET preview never grants
 write authority. A confirmed booking calls `/subscription-admission/complete` with the service
 credential, and CUP atomically transfers its hold to a participant. This is retryable; missing
 completion evidence remains pending. Browser credentials alone cannot finalize that receipt.
+For LK1 operations covered by the v1 daily guard, acquire or read back the operation's guard
+before requesting the CUP hold. A request blocked by another event's guard leaves no CUP hold.
+A definitive initial CUP refusal can release only the guard owned by that original request.
 
 Definitive refusal CASes only the exact PREPARED operation without dispatch, booking, visit or
 entitlement markers, then reads it back. Only its matching daily guard is marked released; takeover
@@ -101,9 +106,16 @@ original request remains available; a new event never substitutes its fields int
 Physical Mongo tests cover crashes before the CUP ACK and before cleanup, a stale reclaim snapshot,
 and successful cross-event reclaim only after both acknowledgements.
 
-This compensation is intentionally scoped to the confirmed exercise-recheck refusal.
-Other HUB quote/policy refusals and unknown provider outcomes retain their existing recovery
-path; no broad timeout cleanup is added. A `COMPLETED` abort response never triggers LK1
+Managed LK1 tournament requests using a v1 daily visit can also compensate after the
+exercise or tariff recheck yields a fresh valid quote for the exact exercise with a
+changed fingerprint. The request must own the guard. The refusal CAS requires the
+original stored quote, grant, service date and `PRE_DISPATCH` phase without booking,
+dispatch, entitlement, money or visit effects. Unavailable, redirected, malformed and
+unknown results retain the existing reconciliation path. The CUP abort wire contract
+remains `PRE_DISPATCH_REJECTED_V1` and `SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE`.
+The original LK1 ingress ID recovers the same result even after a process restart.
+An independent seat release cannot take over compensation once the abort marker exists.
+A `COMPLETED` abort response never triggers LK1
 cleanup. CUP atomically retains the participant when completion won; an aborted operation
 cannot later acknowledge completion.
 
