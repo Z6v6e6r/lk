@@ -13,13 +13,19 @@ const tournamentAdmissionUrl = (ctx) => {
 const tournamentAdmissionPending = (ctx) => finishPending(ctx, "Результат допуска требует сверки. Повторная запись не создана.", {
   code: "TOURNAMENT_ADMISSION_UNRESOLVED",
 });
+const tournamentAdmissionHasGrant = ctx => !!ctx.tournamentAdmission
+  && ctx.tournamentAdmission.actorClientId === ctx.actorClientId
+  && ctx.tournamentAdmission.exerciseId === ctx.exerciseId
+  && ctx.tournamentAdmission.requestOperationId === ctx.operationId
+  && ctx.tournamentAdmission.clientSubscriptionId === ctx.clientSubscriptionId;
+const tournamentAdmissionPause = ctx => ctx.category === "tournament" && ctx.action !== "release"
+  && env.get("TOURNAMENT_OWNER_RECOVERY_ONLY") === "true" && !tournamentAdmissionHasGrant(ctx)
+  ? finishError(ctx, 503, "Новые записи на турнир временно приостановлены.", { code: "TOURNAMENT_NEW_OPERATIONS_PAUSED" }) : null;
 const tournamentAdmissionGate = (ctx, continuation) => {
-  // category is resolved from the server-read exercise by the booking owner.
-  if (ctx.category !== "tournament" || ctx.action === "release") return null;
-  if (ctx.tournamentAdmission?.actorClientId === ctx.actorClientId
-    && ctx.tournamentAdmission.exerciseId === ctx.exerciseId
-    && ctx.tournamentAdmission.requestOperationId === ctx.operationId
-    && ctx.tournamentAdmission.clientSubscriptionId === ctx.clientSubscriptionId) return null;
+  // Category is resolved from the server-read exercise by the booking owner.
+  if (ctx.category !== "tournament" || ctx.action === "release" || tournamentAdmissionHasGrant(ctx)) return null;
+  const paused = tournamentAdmissionPause(ctx);
+  if (paused) return paused;
   const url = tournamentAdmissionUrl(ctx);
   if (!url || !ctx.actorClientId || !ctx.operationId || !ctx.operationKey || !ctx.clientSubscriptionId) return tournamentAdmissionPending(ctx);
   ctx.tournamentAdmissionContinuation = continuation;

@@ -322,7 +322,7 @@ test("tournament checkout uses only the durable CUP route, carries promo, and ne
     const calls = [];
     const create = evaluate(node.getText(api).replace(/^export /, ""), {
       isSpanishTrainingExercise: () => false, isTrialGroupTraining: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: true,
-      isChildTournamentExercise, tournamentCheckoutRetryKeys: new Map(),
+      isChildTournamentExercise, isKidsAcademyTraining, tournamentCheckoutRetryKeys: new Map(),
       resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "tournament",
       createVivaPaymentWatcher: () => { throw Error("unbound payment watcher forbidden"); },
       buildTournamentPaymentReturnUrls: () => ({ successUrl: "https://padlhub.ru/ok", failUrl: "https://padlhub.ru/fail" }),
@@ -351,6 +351,7 @@ test("only a durable CUP refusal rotates the key for a new explicit action", asy
   const declarations = names.map(name =>
     find(api, node => ts.isVariableDeclaration(node) && node.name.getText(api) === name).getText(api));
   const entry = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
+  const remember = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "rememberTournamentCheckoutSuccessor");
   const calls = [];
   const operationId = "tournament-owner:11111111-1111-4111-8111-111111111111";
   const responses = [
@@ -360,9 +361,9 @@ test("only a durable CUP refusal rotates the key for a new explicit action", asy
     { data: null, error: { message: "lost" }, status: null },
   ];
   const saved = new Map();
-  const load = () => evaluate(`(() => { const ${declarations.join("; const ")}; ${entry.getText(api).replace(/^export /, "")}; return apiCreateTournamentVivaTransaction; })()`, {
+  const load = () => evaluate(`(() => { const ${declarations.join("; const ")}; ${remember.getText(api)}; ${entry.getText(api).replace(/^export /, "")}; return apiCreateTournamentVivaTransaction; })()`, {
     isSpanishTrainingExercise: () => false, isTrialGroupTraining: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: true,
-    isChildTournamentExercise, resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "tournament",
+    isChildTournamentExercise, isKidsAcademyTraining, resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "tournament",
     createVivaPaymentWatcher: () => { throw Error("unbound payment watcher forbidden"); },
     buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
     buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
@@ -583,6 +584,7 @@ test("kids training transaction rejects stale adult discounts and keeps the orig
   const writes = [];
   const create = evaluate(node.getText(api).replace(/^export /, ""), {
     isKidsAcademyTraining, isPadelKidsProduct, isChildTournamentExercise,
+    resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
     isSpanishTrainingExercise: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: false,
     API_BASE: "https://fixture.invalid", TENANT_KEY: "fixture",
     createVivaPaymentWatcher: async () => ({ close() {} }),

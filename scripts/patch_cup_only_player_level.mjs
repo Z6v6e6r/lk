@@ -34,6 +34,18 @@ export function patchCupOnlyPlayerLevel(bytes, expectedSha256) {
   route('cup_level_self_options', 'options', '/lk/games/ratings/me', 'cup_level_cors');
   live.wires = [['cup_level_batch']]; onboarding.wires = [['cup_level_initial']];
   const retire = (id, type = 'function') => { const n = required(id, type); n.func = "// Retired by CUP-only level cutover. Historical graph retained.\nreturn null;"; };
+  // This independently routed tenant remains outside the PadlHub cutover.
+  // Pin the only legacy reference allowed in that overlay so it cannot hide a new reader.
+  const primeRoute = byId.get('f17b8f6f69e3bc24');
+  const primeReader = byId.get('c94761527a2905c6');
+  const primaryReader = required('4401a1baa1a06b81', 'function');
+  if (primeRoute || primeReader) {
+    if (primeRoute?.type !== 'http in' || primeRoute.method !== 'post'
+      || primeRoute.url !== '/pade-prime/lk/games/ratings/live' || primeRoute.z !== '8cb78548819553d0'
+      || primeReader?.type !== 'function' || primeReader.z !== primeRoute.z || primeReader.func !== primaryReader.func) {
+      throw Error('CUP_LEVEL_OTHER_TENANT_PREIMAGE');
+    }
+  }
   for (const id of ['74ae1729191fc747', 'b2c3d4e5f6011223', 'd4e5f60112233445', 'bcff3bb938651dc9', '4401a1baa1a06b81']) retire(id);
   for (const [id, file] of [
     ['0dafa71f5e7361d2','fn_result_viva_sync_request_prepare.js'],
@@ -42,6 +54,12 @@ export function patchCupOnlyPlayerLevel(bytes, expectedSha256) {
     ['321cfd8582108cc7','fn_result_viva_sync_retry_query.js'],
     ['d0f0fd9ca2dc9f5d','fn_result_viva_sync_finalize_batch.js'],
   ]) required(id, 'function').func = read('./nodered_result_nodes/' + file);
+  const fprBootstrap = byId.get('fpr_canonical_bootstrap_20261106');
+  if (fprBootstrap) {
+    if (fprBootstrap.type !== 'function' || !fprBootstrap.libs?.some(lib => lib.var === 'nodeChildProcess' && lib.module === 'child_process')
+      || !fprBootstrap.func.includes('/opt/padlhub-fpr-start/current/bootstrap.mjs')) throw Error('CUP_LEVEL_FPR_BOOTSTRAP_PREIMAGE');
+    fprBootstrap.func = read('./nodered_fpr_start_nodes/initialize.js');
+  }
   const build = required('21d3e90986ed5b82', 'function'), attach = required('0c63087697cb16c0', 'function');
   build.func = read('./nodered_tournament_participants_nodes/fn_build_client_request_v2.js');
   attach.func = read('./nodered_tournament_participants_nodes/fn_attach_rating_v2.js');
@@ -57,26 +75,26 @@ export function patchCupOnlyPlayerLevel(bytes, expectedSha256) {
       [route.wires.flat(), ['cup_level_response']], [{ var: 'nodeChildProcess', module: 'child_process' }]);
     n.z = route.z; route.wires = [[id]];
   }
-  const autojoins = flow.filter(n => n.type === 'function' && (n.func || '').includes('const sameMemberIdentity =') && (n.func || '').includes('autojoin'));
+  const autojoins = flow.filter(n => n.z !== primeRoute?.z && n.type === 'function' && (n.func || '').includes('const sameMemberIdentity =') && (n.func || '').includes('autojoin'));
   for (const target of autojoins) {
     const id = 'cup_level_snapshot_' + target.id;
     const n = fn(id, 'Refresh CUP levels before autojoin', read('./nodered_player_level_nodes/snapshot.js'), 2,
       [[target.id], ['cup_level_response']], [{ var: 'nodeChildProcess', module: 'child_process' }]); n.z = target.z;
     for (const prior of flow) if (prior.wires) prior.wires = prior.wires.map(output => output.map(wire => wire === target.id ? id : wire));
   }
-  for (const n of flow) if (n.type === 'function') n.func = removeImplicitCommunityLevel(n.func || '');
+  for (const n of flow) if (n.type === 'function' && n.z !== primeRoute?.z) n.func = removeImplicitCommunityLevel(n.func || '');
   flow.push(...nodes);
   const ids = new Set(flow.map(n => n.id));
   if (ids.size !== flow.length || flow.some(n => (n.wires || []).flat().some(id => !ids.has(id)))) throw Error('CUP_LEVEL_GRAPH_INVALID');
   for (const n of nodes.filter(n => n.type === 'function')) new Function('msg', 'node', n.func);
-  if (flow.some(n => n.type === 'function' && /eabfe27b|f9790818|9018d922/.test(n.func || ''))) throw Error('CUP_LEVEL_PROVIDER_FIELD_REMAINS');
+  if (flow.some(n => n !== primeReader && n.type === 'function' && /eabfe27b|f9790818|9018d922/.test(n.func || ''))) throw Error('CUP_LEVEL_PROVIDER_FIELD_REMAINS');
   const changed = before.filter((n, i) => JSON.stringify(n) !== JSON.stringify(flow[i])).map(n => ({ id: n.id, before: hash(JSON.stringify(n)), after: hash(JSON.stringify(byId.get(n.id))) }));
-  return { output: JSON.stringify(flow, null, 2) + '\n', report: { sourceSha256: expectedSha256, changed, added: nodes.map(n => n.id), providerLevelFieldReferences: 0 } };
+  return { output: JSON.stringify(flow, null, 2) + '\n', report: { sourceSha256: expectedSha256, changed, added: nodes.map(n => n.id), providerLevelFieldReferences: 0, preservedOtherTenantReaders: primeReader ? [primeReader.id] : [] } };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [input, sha, output, report] = process.argv.slice(2);
   if (!input || !sha || !output || !report || fs.existsSync(output) || fs.existsSync(report)) throw Error('Usage: source.json source-sha NEW-candidate.json NEW-report.json');
   const result = patchCupOnlyPlayerLevel(fs.readFileSync(input), sha);
   fs.writeFileSync(output, result.output, { mode: 0o600 }); fs.writeFileSync(report, JSON.stringify(result.report, null, 2) + '\n', { mode: 0o600 });
-  console.log(JSON.stringify({ changed: result.report.changed.length, added: result.report.added.length, providerLevelFieldReferences: 0 }));
+  console.log(JSON.stringify({ changed: result.report.changed.length, added: result.report.added.length, providerLevelFieldReferences: 0, preservedOtherTenantReaders: result.report.preservedOtherTenantReaders }));
 }

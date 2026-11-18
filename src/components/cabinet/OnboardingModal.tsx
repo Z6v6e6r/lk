@@ -538,6 +538,11 @@ export function OnboardingModal({
     return score;
   };
 
+  const levelUnavailable = profile.level?.status === "UNAVAILABLE" || profile.level?.status === "CONFLICT";
+  const levelUnavailableMessage = profile.level?.status === "CONFLICT"
+    ? "Требуется сверка уровня в ЦУП. Обратитесь в поддержку."
+    : "Не удалось загрузить уровень ЦУП. Обновите страницу.";
+
   const handleFinish = async () => {
     if (saving || hasRating || (method === "known" ? !declaredLevelValid : !questions.every(q => answers[q.id]?.length))) return;
     const finalScore = method === "known" ? declaredLevel! : computeScore();
@@ -554,7 +559,7 @@ export function OnboardingModal({
     setError(null);
 
     try {
-      if (profile.level?.status === "UNAVAILABLE") throw new Error("Не удалось загрузить уровень ЦУП. Обновите страницу.");
+      if (levelUnavailable) throw new Error(levelUnavailableMessage);
       const res = await apiSaveOnboardingLevel({
         clientId: profile.id,
         phone: profile.phone,
@@ -685,7 +690,7 @@ export function OnboardingModal({
           <div className="onboarding-actions">
             <button className="btn-primary" onClick={handleClose}>{returnToEvent ? "Вернуться к записи" : "Закрыть"}</button>
           </div>
-          {(error || profile.level?.status === "UNAVAILABLE") && <div className="onboarding-error" role="alert">{error || "Не удалось загрузить уровень ЦУП. Обновите страницу."}</div>}
+          {(error || levelUnavailable) && <div className="onboarding-error" role="alert">{error || levelUnavailableMessage}</div>}
         </div>
       </Modal>
     );
@@ -707,11 +712,11 @@ export function OnboardingModal({
               <input id="onboarding-known-level" className="form-input" inputMode="decimal" value={knownLevel} placeholder="Например, 3,25" onChange={event => setKnownLevel(event.target.value)} disabled={saving} aria-describedby="onboarding-known-level-hint" />
               <p id="onboarding-known-level-hint" className="onboarding-text">{declaredLevel !== null ? `Уровень ${getLetterGrade(declaredLevel)} · ${formatNumericField(declaredLevel)}` : "Если знаете только букву или сомневаетесь, пройдите анкету."}</p>
               <div className="onboarding-actions">
-                <button type="button" className="btn-primary" onClick={handleFinish} disabled={!declaredLevelValid || saving || profile.level?.status === "UNAVAILABLE"}>{saving ? "Сохранение..." : "Сохранить уровень"}</button>
+                <button type="button" className="btn-primary" onClick={handleFinish} disabled={!declaredLevelValid || saving || levelUnavailable}>{saving ? "Сохранение..." : "Сохранить уровень"}</button>
               </div>
             </>
           )}
-          {(error || profile.level?.status === "UNAVAILABLE") && <div className="onboarding-error" role="alert">{error || "Не удалось загрузить уровень ЦУП. Обновите страницу."}</div>}
+          {(error || levelUnavailable) && <div className="onboarding-error" role="alert">{error || levelUnavailableMessage}</div>}
         </div>
       </Modal>
     );
@@ -767,7 +772,7 @@ export function OnboardingModal({
                 Назад
               </button>
               {isLast ? (
-                <button className="btn-primary" onClick={handleFinish} disabled={!canNext || saving || profile.level?.status === "UNAVAILABLE"}>
+                <button className="btn-primary" onClick={handleFinish} disabled={!canNext || saving || levelUnavailable}>
                   {saving ? "Сохранение..." : "Получить рейтинг"}
                 </button>
               ) : (
@@ -784,7 +789,7 @@ export function OnboardingModal({
         ) : (
           <div className="onboarding-question-loading">Загрузка вопроса...</div>
         )}
-        {(error || profile.level?.status === "UNAVAILABLE") && <div className="onboarding-error" role="alert">{error || "Не удалось загрузить уровень ЦУП. Обновите страницу."}</div>}
+        {(error || levelUnavailable) && <div className="onboarding-error" role="alert">{error || levelUnavailableMessage}</div>}
       </div>
     </Modal>
   );

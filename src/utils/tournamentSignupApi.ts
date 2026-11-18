@@ -2312,6 +2312,7 @@ export async function apiCancelTournamentVivaRegistration(
   options: {
     placeNumber?: number | null;
     refundMethod?: BookingCancellationRefundMethod | null;
+    cupTournament?: boolean;
   } = {},
 ): Promise<ApiResult<TournamentRegistrationState>> {
   const resolvedBookingIdResult = await apiResolveTournamentVivaRegistrationBookingId(
@@ -2409,6 +2410,13 @@ export async function apiCancelTournamentVivaRegistration(
     }
   }
 
+  if (options.cupTournament) {
+    const reconciled = await apiReconcileTournamentOwner(exerciseId, resolvedBookingId);
+    const reply = reconciled.data;
+    if (reply?.state === "CANCELLED" && reply.actorClientId && reply.requestKey) {
+      rememberTournamentCheckoutSuccessor(`tournament:${exerciseId}:${reply.actorClientId}`, reply.requestKey, reply.operationId);
+    }
+  }
   clearTrialGroupCheckoutOperations(exerciseId);
 
   return {
@@ -2426,6 +2434,15 @@ export async function apiCancelTournamentVivaRegistration(
     error: null,
     status: cancelResult.status,
   };
+}
+
+export function apiReconcileTournamentOwner(exerciseId: string, cancelledBookingId?: string) {
+  return request<{ state?: string; actorClientId?: string; requestKey?: string; operationId?: string }>(
+    `${PHAB_API_BASE}/tournaments/${encodeURIComponent(exerciseId)}/checkout/reconcile`,
+    { method: "POST", auth: true, retries: 0, ...(cancelledBookingId && {
+      body: JSON.stringify({ cancelledBookingId }),
+    }) },
+  );
 }
 
 export async function apiRegisterForTournament(
@@ -3237,6 +3254,19 @@ const tournamentCheckoutRefusalMessages: Record<string, string> = {
   PLAYER_GENDER_REQUIRED: "Укажите пол в профиле, чтобы записаться на турнир.",
 };
 
+function rememberTournamentCheckoutSuccessor(initialKey: string, previousKey: string | null, operationId?: string | null) {
+  let saved: string | null | undefined;
+  try { saved = globalThis.sessionStorage?.getItem(`lk-tournament-checkout:${initialKey}`); }
+  catch { /* Embedded storage may be unavailable. */ }
+  const remembered = saved && /^tournament-retry:tournament-owner:[0-9a-f-]{36}$/i.test(saved)
+    ? saved : tournamentCheckoutRetryKeys.get(initialKey);
+  if ((remembered ?? initialKey) !== previousKey || !operationId || !/^tournament-owner:[0-9a-f-]{36}$/i.test(operationId)) return;
+  const successor = `tournament-retry:${operationId}`;
+  tournamentCheckoutRetryKeys.set(initialKey, successor);
+  try { globalThis.sessionStorage?.setItem(`lk-tournament-checkout:${initialKey}`, successor); }
+  catch { /* Embedded storage may be unavailable. */ }
+}
+
 export async function apiCreateTournamentVivaTransaction(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
@@ -3372,19 +3402,17 @@ export async function apiCreateTournamentVivaTransaction(
       } : payload),
     },
   );
-  if (initialTournamentKey && pickString(result.data, ["state"]) === "REJECTED") {
+  const ownerState = initialTournamentKey ? pickString(result.data, ["state"]) : null;
+  if (initialTournamentKey && (ownerState === "REJECTED" || ownerState === "CANCELLED")) {
     const code = pickString(result.data, ["code"]);
     const refusedOperation = pickString(result.data, ["operationId"]);
     const message = code && Object.hasOwn(tournamentCheckoutRefusalMessages, code)
       ? tournamentCheckoutRefusalMessages[code] : null;
-    if (message && refusedOperation && /^tournament-owner:[0-9a-f-]{36}$/i.test(refusedOperation)
-      && (tournamentCheckoutRetryKeys.get(initialTournamentKey) ?? initialTournamentKey) === tournamentOperationId) {
-      // Each explicit retry after a durable refusal has a stable key. A delayed
-      // response for an older attempt cannot change the current attempt's key.
-      const successor = `tournament-retry:${refusedOperation}`;
-      tournamentCheckoutRetryKeys.set(initialTournamentKey, successor);
-      try { globalThis.sessionStorage?.setItem(`lk-tournament-checkout:${initialTournamentKey}`, successor); }
-      catch { /* Preserve the current in-memory attempt. */ }
+    if (message || (ownerState === "CANCELLED" && code === "TOURNAMENT_BOOKING_CANCELLED")) {
+      rememberTournamentCheckoutSuccessor(initialTournamentKey, tournamentOperationId, refusedOperation);
+    }
+    if (ownerState === "CANCELLED") {
+      return { data: null, error: { status: 409, message: "Предыдущая запись отменена. Выберите способ записи снова.", raw: result.data }, status: 409 };
     }
     return { data: null, error: { status: 403,
       message: message ?? "Запись не соответствует правилам турнира.", raw: result.data }, status: 403 };
@@ -3532,8 +3560,7 @@ export async function apiCreateTournamentVivaTransaction(
   }
 
   if (tournamentOperationId && paid) {
-    await request(`${PHAB_API_BASE}/tournaments/${encodeURIComponent(params.exerciseId)}/checkout/reconcile`,
-      { method: "POST", auth: true, retries: 0 });
+    await apiReconcileTournamentOwner(params.exerciseId);
   }
 
   return {

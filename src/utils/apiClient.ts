@@ -76,7 +76,7 @@ const DEV_CABINET_ADVERTISING_CACHE_TTL_MS = 30_000;
 const DEV_SPLIT_PAYMENT_PROMO_CACHE_TTL_MS = 30_000;
 
 export interface PlayerLevel {
-  status: "RATED" | "UNRATED" | "UNAVAILABLE";
+  status: "RATED" | "UNRATED" | "UNAVAILABLE" | "CONFLICT";
   ratingNumeric: number | null;
   rating: string | null;
   source: "CUP_CANONICAL";
@@ -4739,7 +4739,7 @@ async function attachCupLevel(result: ApiResult<UserProfileType>, signal?: Abort
       || (row.status === "RATED" && typeof row.ratingNumeric === "number" && Number.isFinite(row.ratingNumeric) && row.ratingNumeric >= 1 && row.ratingNumeric <= 7));
   return { ...result, data: { ...result.data,
     customFields: (result.data.customFields || []).filter(field => !RETIRED_LEVEL_FIELDS.has(field.id)),
-    level: valid ? row! : { source: "CUP_CANONICAL", status: "UNAVAILABLE", ratingNumeric: null, rating: null },
+    level: valid ? row! : { source: "CUP_CANONICAL", status: response.status === 409 ? "CONFLICT" : "UNAVAILABLE", ratingNumeric: null, rating: null },
   } };
 }
 

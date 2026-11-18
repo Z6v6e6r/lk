@@ -1,5 +1,6 @@
 const fail = code => {
-  msg.statusCode = code === 'LEVEL_ALREADY_ASSIGNED' ? 409 : code === 'LEVEL_ARGUMENTS' ? 400 : 503;
+  const conflict = ['LEVEL_ALREADY_ASSIGNED', 'LEVEL_IDENTITY_CONFLICT', 'LEVEL_REBUILD_REQUIRED', 'LEVEL_INVALID_CANONICAL'].includes(code);
+  msg.statusCode = conflict ? 409 : code === 'LEVEL_ARGUMENTS' ? 400 : 503;
   msg.headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' };
   msg.payload = { error: code, message: 'Не удалось получить или сохранить уровень ЦУП' }; node.send(msg); node.done();
 };

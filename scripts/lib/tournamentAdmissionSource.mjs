@@ -34,6 +34,8 @@ export function patchTournamentAdmissionSource(source) {
     const declaration = `const ${name} = (ctx) => {`;
     const gate = `\n  const admission = tournamentAdmissionGate(ctx, "${continuation}");\n  if (admission) return admission;`;
     if (hasDailyVisitGuard && afterGuard) {
+      // Recovery must block a new attempt before it can acquire somebody's daily guard.
+      source = once(source, declaration, declaration + '\n  const paused = tournamentAdmissionPause(ctx); if (paused) return paused;');
       const guarded = source.indexOf(afterGuard, source.indexOf(declaration));
       const nextDeclaration = source.indexOf('\nconst ', source.indexOf(declaration));
       if (guarded < 0 || nextDeclaration < 0 || guarded >= nextDeclaration) throw Error('Tournament daily-visit gate source drift: ' + name);

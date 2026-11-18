@@ -169,3 +169,22 @@ test('game list hydration replaces stored levels by exact IDs and clears stale l
     assert.deepEqual(game.metadata, { keep: true }); assert.equal(games[0].organizer.ratingNumeric, 6, 'input historical snapshot stays immutable');
   }
 });
+
+test('Viva inventory dry-run reports discrepancies by exact tenant and recorded aliases without changing inputs', async () => {
+  const { compareVivaLevelInventory } = await import('../audit_cup_player_level_cutover.mjs');
+  const make = (clientId, ratingNumeric, rating, tenantKey = 'fixture-tenant') => ({ clientId, ratingNumeric, rating, tenantKey });
+  const states = [
+    { ...make('player-a', 3.12345, 'C'), identityAliases: { clientIds: ['alias-a'] } },
+    make('player-b', 4.01, 'B'), make('player-c', 5.5, 'A')
+  ];
+  const inventory = { tenantKey: 'fixture-tenant', complete: true, clients: [
+    make('alias-a', 3.12345, 'C'), make('player-b', 2.25, 'D+'), make('player-d', 4, 'B'),
+    make('player-e', null, null), make('player-f', '4', 'B'), make('player-d', 4, 'B')
+  ] };
+  const before = structuredClone({ states, inventory });
+  const report = compareVivaLevelInventory(states, inventory, 'fixture-tenant');
+  assert.deepEqual(report, { comparison: 'DRY_RUN', completeInventoryAttested: true, records: 6, unratedInViva: 1,
+    matching: 1, different: 1, vivaOnly: 1, cupOnly: 1, conflictingIdentity: 0, invalidVivaLevel: 1, duplicateVivaIds: 1 });
+  assert.deepEqual({ states, inventory }, before);
+  assert.throws(() => compareVivaLevelInventory(states, inventory, 'another-tenant'), /SCOPE_INVALID/);
+});

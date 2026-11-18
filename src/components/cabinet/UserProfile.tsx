@@ -249,9 +249,10 @@ export function UserProfile({ profile, openEditForm, onAvatarClick, shareOffer, 
                 ) : (
                   <div className="cab-avatar cab-avatar--fallback">{initials || "?"}</div>
                 )}
-                <div className="cab-avatar-badge" title={profile.level?.status === "UNAVAILABLE" ? "Уровень временно недоступен" : letterGrade || "Уровень не определён"} style={badgeStyle}>{letterGrade || "—"}</div>
+                <div className="cab-avatar-badge" title={profile.level?.status === "UNAVAILABLE" ? "Уровень временно недоступен" : profile.level?.status === "CONFLICT" ? "Требуется сверка уровня" : letterGrade || "Уровень не определён"} style={badgeStyle}>{letterGrade || "—"}</div>
               </div>
             </button>
+            {profile.level?.status === "CONFLICT" && <span className="cab-avatar-level-status" role="status">Требуется сверка уровня</span>}
             {profile.level?.status === "UNAVAILABLE" && <span className="cab-avatar-level-status" role="status">Уровень недоступен</span>}
 
           </div>
