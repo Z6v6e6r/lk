@@ -1,3 +1,4 @@
+import { installSplitLeaveDiagnostics } from "./utils/splitLeaveDiagnostics";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
@@ -17,6 +18,7 @@ import { ensureFreshRelease } from "./utils/releaseGuard";
 ensureFreshRelease({ entry: "main", bundleFileNames: ["bundle.js", "bundle-dev.js"] });
 mountDevReleaseBadge({ bundleFileNames: ["bundle.js", "bundle-dev.js"] });
 installGlobalErrorTracking();
+installSplitLeaveDiagnostics();
 trackAnalyticsEvent("widget_bootstrap_started", { entry: "main" });
 
 const rootElement = document.getElementById("root");

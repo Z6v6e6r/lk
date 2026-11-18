@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./ratingDataLock.test.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,6 +49,7 @@ function watchdogEnv(tempRoot, binDir, overrides = {}) {
     RATING_WORKER_INSTALL_ROOT: path.join(tempRoot, "install"),
     RATING_WORKER_LOG_DIR: path.join(tempRoot, "logs"),
     RATING_WORKER_LOCK_FILE: path.join(tempRoot, "locks", "rating-worker.lock"),
+    RATING_WORKER_SCHEDULE_LOCK_FILE: path.join(tempRoot, "locks", "rating-schedule.lock"),
     RATING_WORKER_TEST_FLOCK_ARGS: path.join(tempRoot, "flock-args"),
     ...overrides,
   };
@@ -229,7 +231,7 @@ else setTimeout(() => { fs.rmdirSync(mutex); }, 250);
 test("Linux: scheduled modes wait for contention and remain serialized", { skip: !linuxLocksAvailable }, async (t) => {
   const { root, env, start } = realLockFixture(t);
   const ready = path.join(root, "holder-ready");
-  const holder = start("flock", ["-x", env.RATING_WORKER_LOCK_FILE, process.execPath, "-e",
+  const holder = start("flock", ["-x", env.RATING_WORKER_SCHEDULE_LOCK_FILE, process.execPath, "-e",
     `require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 350);`]);
   await waitForFile(ready);
   const incremental = start("bash", [watchdogPath, "incremental"]);
@@ -245,7 +247,7 @@ test("Linux: scheduled modes wait for contention and remain serialized", { skip:
 test("Linux: waiting does not consume the worker execution deadline", { skip: !linuxLocksAvailable }, async (t) => {
   const { root, env, start } = realLockFixture(t);
   const ready = path.join(root, "holder-ready");
-  start("flock", ["-x", env.RATING_WORKER_LOCK_FILE, process.execPath, "-e",
+  start("flock", ["-x", env.RATING_WORKER_SCHEDULE_LOCK_FILE, process.execPath, "-e",
     `require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 1200);`]);
   await waitForFile(ready);
   const result = await start("bash", [watchdogPath, "incremental"], {
@@ -258,7 +260,7 @@ test("Linux: waiting does not consume the worker execution deadline", { skip: !l
 test("Linux: lock deadline expires without starting a worker", { skip: !linuxLocksAvailable }, async (t) => {
   const { root, env, start } = realLockFixture(t);
   const ready = path.join(root, "holder-ready");
-  start("flock", ["-x", env.RATING_WORKER_LOCK_FILE, process.execPath, "-e",
+  start("flock", ["-x", env.RATING_WORKER_SCHEDULE_LOCK_FILE, process.execPath, "-e",
     `require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 4000);`]);
   await waitForFile(ready);
   const result = await start("bash", [watchdogPath, "full"], { RATING_WORKER_LOCK_WAIT_SECONDS: "1" }).done;
@@ -272,7 +274,7 @@ test("Linux: watchdog terminates a stuck worker and releases the lock", { skip: 
     RATING_WORKER_INCREMENTAL_HARD_TIMEOUT_SECONDS: "1", RATING_WORKER_TEST_HANG: "1",
   }).done;
   assert.equal(result.status, 124);
-  assert.equal(spawnSync("flock", ["-n", env.RATING_WORKER_LOCK_FILE, "true"]).status, 0);
+  assert.equal(spawnSync("flock", ["-n", env.RATING_WORKER_SCHEDULE_LOCK_FILE, "true"]).status, 0);
 });
 
 test("cron wrappers delegate all modes to the shared watchdog", () => {

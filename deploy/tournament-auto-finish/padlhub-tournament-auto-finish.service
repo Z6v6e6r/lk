@@ -1,0 +1,17 @@
+[Unit]
+Description=Finish started PadlHub tournaments after three hours
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=padlhub-tournament-auto-finish
+WorkingDirectory=/opt/padlhub-tournament-auto-finish
+EnvironmentFile=/etc/padlhub-tournament-auto-finish.env
+ExecStart=/usr/bin/node --experimental-strip-types scripts/tournament_auto_finish_worker.mjs --apply
+StateDirectory=padlhub-tournament-auto-finish
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+TimeoutStartSec=300

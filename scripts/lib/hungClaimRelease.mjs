@@ -230,8 +230,17 @@ export function planHungClaimRelease({
       return deny('OPERATION_INVALID');
     }
     if (operation.managedEntitlementOperationId || operation.managedSubscriptionInstanceId
-      || operation.activationState === 'PENDING' || operation.lk1?.visitJob != null) {
+      || operation.activationState === 'PENDING' || operation.lk1?.visitJob != null
+      || ['transactionAttemptedAt', 'transactionIntent', 'transactionId', 'checkout']
+        .some(key => operation.lk1?.[key] != null)
+      || operation.transactionId != null || hasCreateAttempt(operation)) {
       return deny('RELATED_OPERATION_REQUIRES_RECONCILIATION');
+    }
+    // Cancellation of a seat does not prove return of a subscription visit.
+    // This reconciler has only exercise-booking evidence, never a visit/payment
+    // readback. Keep those claims for their dedicated recovery protocol.
+    if (operation.lk1?.decision?.subscriptionVisitCount === 1) {
+      return deny('SUBSCRIPTION_RETURN_REQUIRES_RECONCILIATION');
     }
     if (!exactId([operation.actorClientId]) || !exactId([operation.clientSubscriptionId])) return deny('IDENTITY_UNRESOLVED');
     const boundId = exactId([operation.bookingId, operation.upstreamBookingId]);

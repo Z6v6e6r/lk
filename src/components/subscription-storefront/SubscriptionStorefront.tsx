@@ -47,7 +47,7 @@ export function SubscriptionStorefront(props: {
   readonly view: SubscriptionStorefrontView;
   readonly onBack?: () => void;
   readonly onMore?: () => void;
-  readonly onChoose: (selection: SubscriptionPlanSelection) => void;
+  readonly onChoose: (selection: SubscriptionPlanSelection, gesture?: Event) => void;
   readonly renderCheckoutAddon?: (selection: SubscriptionPlanSelection, disabled: boolean) => ReactNode;
 }): React.JSX.Element {
   const defaults = useMemo(() => initialBillingOptions(props.view), [props.view]);

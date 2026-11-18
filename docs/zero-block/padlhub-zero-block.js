@@ -1,5 +1,5 @@
 /* global window, document */
-/* PadlHub Zero Block adapter v2.1.0 — scoped bindings + optional lazy checkout/fallback. */
+/* PadlHub Zero Block adapter v2.4.0 — scoped bindings + optional lazy checkout/fallback. */
 (function (window, document) {
   'use strict';
   if (window.PadlHubZeroBlock) return;
@@ -78,6 +78,12 @@
     return runtimePromise;
   }
   var definitions = {
+    residency: { runtimePrice: true, label: 'Резидентство ПадлхАБ' },
+    'friendship-two-hours': { runtimePrice: true, label: 'Дружба 2.0' },
+    atlanty: { runtimePrice: true, label: 'ДРУЖБА.АТЛАНТЫ' },
+    'atlanty-year': { runtimePrice: true, label: 'ДРУЖБА.АТЛАНТЫ — год' },
+    topocraty: { runtimePrice: true, label: 'ДРУЖБА.ТОПОКРАТЫ' },
+    patriots: { runtimePrice: true, label: 'ДРУЖБА.ПАТРИОТЫ' },
     friendship: { counterKey: 'friendship', label: 'Дружба' },
     'friendship-year': { counterKey: 'network_friendship', label: 'Дружба — год' },
     academy: { counterKey: 'academy', label: 'Академия' },
@@ -88,7 +94,7 @@
     'ra-promo': { promo: true, label: 'РА — Питер', priceMinor: 1190000 }
   };
   var instances = new Map();
-  var money = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+  var money = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
   function known(key) { return Object.prototype.hasOwnProperty.call(definitions, key); }
   function integer(value) {
     return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -177,13 +183,26 @@
       // Event contains only catalog information, never a session or user profile.
       root.dispatchEvent(new CustomEvent('padlhub:subscription', { detail: { key: key, state: { status: states[key].status, data: states[key].data ? Object.assign({}, states[key].data) : null } } }));
     }
+    function supported(api, key) {
+      var direct = options.directCheckout === true;
+      var originalFast = key === 'residency' || key === 'friendship-two-hours';
+      return api && (!definitions[key].runtimePrice || (typeof api.supportsCheckoutOffer === 'function'
+        && api.supportsCheckoutOffer(key) === true && typeof api.loadCheckoutOfferPrice === 'function'))
+        && (!direct || api.directCheckoutVersion === 1 && typeof api.startCheckout === 'function'
+          && (originalFast || api.directCheckoutAllOffersVersion === 1 && typeof api.supportsDirectCheckoutOffer === 'function' && api.supportsDirectCheckoutOffer(key)));
+    }
+    function requireOffer(api, key) {
+      if (!supported(api, key)) throw new Error('Обновите модуль оформления: предложение ещё не поддерживается.');
+      return api;
+    }
     function render(key) {
       var state = states[key], data = state.data || lastGood[key];
       var promo = definitions[key].promo === true;
-      var usable = checkout && (promo || (state.status === 'ready' && data && data.canPurchase));
+      var usable = supported(checkout, key) && (promo || (state.status === 'ready' && data && data.canPurchase));
       var unavailable = !promo && state.status === 'ready' && data && !data.canPurchase;
       var recovery = lazy && hasAttempt(key);
-      var interactive = usable || recovery || (fallback && !unavailable);
+      var keyFallback = definitions[key].runtimePrice ? null : fallback;
+      var interactive = usable || recovery || (keyFallback && !unavailable);
       text('price', key, data ? money.format(data.priceMinor / 100) + ' ₽' : '—');
       text('remaining', key, data && data.remaining !== null ? String(data.remaining) : '—');
       text('total', key, data && data.total !== null ? String(data.total) : '—');
@@ -192,6 +211,7 @@
         : state.status === 'error' ? 'Не удалось обновить данные. Попробуйте позже.'
         : interactive ? '' : 'Сейчас недоступно';
       if (!checkout && !lazy) message = checkoutError || 'Загружаем оформление…';
+      if (checkout && !supported(checkout, key)) message = 'Обновите модуль оформления: предложение ещё не поддерживается.';
       if (recovery) message = 'Откройте оформление для проверки предыдущей попытки.';
       if (opening && opening.key === key) message = 'Открываем оформление…';
       else if (checkoutError) message = checkoutError;
@@ -208,7 +228,7 @@
         attribute(element, 'aria-busy', opening && opening.key === key ? 'true' : null);
         attribute(element, 'tabindex', interactive ? '0' : '-1');
         if (element.tagName === 'A') {
-          attribute(element, 'href', fallback || (usable ? '#ph-checkout=' + key : null));
+          attribute(element, 'href', keyFallback || (usable ? '#ph-checkout=' + key : null));
           attribute(element, 'target', '_self');
           attribute(element, 'role', 'button');
         } else {
@@ -240,23 +260,33 @@
       if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || (event.button !== undefined && event.button !== 0)) return;
       if (lazy) {
         event.preventDefault(); event.stopImmediatePropagation();
-        void open(key, event.target.closest('a,button') || event.target.closest(selector('buy', key)));
+        void open(key, event.target.closest('a,button') || event.target.closest(selector('buy', key)), false, event);
         return;
       }
       var state = states[key];
-      if (!checkout || (!definitions[key].promo && (state.status !== 'ready' || !state.data.canPurchase))) {
+      if (!supported(checkout, key) || (!definitions[key].promo && (state.status !== 'ready' || !state.data.canPurchase))) {
         event.preventDefault(); event.stopImmediatePropagation(); return;
       }
       event.preventDefault(); event.stopImmediatePropagation();
       try {
         var trigger = event.target.closest('a,button') || event.target.closest(selector('buy', key));
         if (trigger && typeof trigger.focus === 'function') trigger.focus();
-        checkout.openCheckout(key);
+        if (options.directCheckout === true) checkout.startCheckout(key, state.data.priceMinor, event);
+        else checkout.openCheckout(key);
       } catch (error) { text('status', key, error.message || 'Не удалось открыть оформление'); }
     }
     function onKey(event) {
       var key = matchTarget(event);
       if (!key || event.target.closest('button') || (event.target.closest('a') && event.key === 'Enter') || (event.key !== 'Enter' && event.key !== ' ')) return;
+      if (options.directCheckout === true) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (lazy) void open(key, event.target, false, event);
+        else if (supported(checkout, key) && states[key].status === 'ready' && states[key].data.canPurchase) {
+          try { checkout.startCheckout(key, states[key].data.priceMinor, event); }
+          catch (error) { text('status', key, error.message || 'Не удалось открыть оформление'); }
+        }
+        return;
+      }
       event.preventDefault();
       event.target.click();
     }
@@ -272,7 +302,17 @@
         var controller = new AbortController(); controllers.add(controller);
         var timeout = window.setTimeout(function () { controller.abort(); }, 12000);
         try {
-          var data = await fetchStatus(definitions[key].counterKey, controller.signal, channel);
+          var data;
+          if (definitions[key].runtimePrice) {
+            var runtime = requireOffer(await loadCheckout(channel, options.requireIsolation === true), key);
+            if (!active || controller.signal.aborted) return;
+            checkout = runtime;
+            var price = await runtime.loadCheckoutOfferPrice(key, controller.signal);
+            if (integer(price) === null || price <= 0) throw new Error('Некорректная цена');
+            // Public product quote permits opening checkout; provider sale acceptance is checked by its transaction API.
+            data = { source: 'live', priceMinor: price, unlimited: null, remaining: null, total: null,
+              canPurchase: true, updatedAt: null };
+          } else data = await fetchStatus(definitions[key].counterKey, controller.signal, channel);
           if (!active) return;
           lastGood[key] = data;
           states[key] = { status: 'ready', data: data };
@@ -312,12 +352,14 @@
       try { return window.localStorage.getItem('padlhub_zero_checkout_attempt_v1:' + key) !== null; }
       catch { return true; } // Unknown custody must never cause an automatic alternative purchase path.
     }
-    function open(key, trigger, resume) {
+    function open(key, trigger, resume, gesture) {
       if (!active || keys.indexOf(key) < 0 || opening) return Promise.resolve();
       if (checkout && typeof checkout.isCheckoutOpen === 'function' && checkout.isCheckoutOpen()) {
-        checkout.openCheckout(key); return Promise.resolve();
+        try { requireOffer(checkout, key).openCheckout(key); } catch (error) { text('status', key, error.message); }
+        return Promise.resolve();
       }
       var state = states[key];
+      var chosenPrice = state.data && state.data.priceMinor;
       var recovery = resume || hasAttempt(key);
       if (!recovery && !definitions[key].promo && state.status === 'ready' && !state.data.canPurchase) return Promise.resolve();
       var generation = ++intent;
@@ -334,21 +376,23 @@
         // This only covers loading/opening UI. Payment/auth errors remain inside checkout.
         var runtime = window.LKWidgetSubscriptionStorefront;
         var openAlready = runtime && typeof runtime.isCheckoutOpen === 'function' && runtime.isCheckoutOpen();
-        if (fallback && !recovery && !openAlready && !hasAttempt(key)) window.location.assign(fallback);
+        if (fallback && !definitions[key].runtimePrice && !recovery && !openAlready && !hasAttempt(key)) window.location.assign(fallback);
       }
       var deadline = new Promise(function (_resolve, reject) {
         intentTimer = window.setTimeout(function () { reject(new Error('Оформление загружается слишком долго')); }, 12000);
       });
       return Promise.race([Promise.all([recovery ? Promise.resolve() : refreshKey(key), loadCheckout(channel, options.requireIsolation === true)]), deadline]).then(function (result) {
         if (!current()) { if (active && generation === intent) cancelOpening(); return; }
-        checkout = result[1];
+        checkout = requireOffer(result[1], key);
         var currentState = states[key];
         if (!recovery && !definitions[key].promo && (currentState.status !== 'ready' || !currentState.data)) throw new Error('Не удалось проверить доступность');
         if (!recovery && !definitions[key].promo && !currentState.data.canPurchase) { cancelOpening(); return; }
         window.clearTimeout(intentTimer); opening = null;
         keys.forEach(render);
         if (trigger && typeof trigger.focus === 'function') trigger.focus();
-        if (resume) checkout.resumeCheckout(key); else checkout.openCheckout(key);
+        if (resume) checkout.resumeCheckout(key);
+        else if (gesture && options.directCheckout === true && chosenPrice) checkout.startCheckout(key, chosenPrice, gesture);
+        else checkout.openCheckout(key);
       }).catch(failed);
     }
     function hashKey() {
@@ -368,7 +412,7 @@
       refreshBindings: function () { if (active) keys.forEach(render); },
       getState: function (key) {
         if (!states[key]) return null;
-        return { status: states[key].status, data: states[key].data ? Object.assign({}, states[key].data) : null, checkoutReady: Boolean(checkout), checkoutError: checkoutError };
+        return { status: states[key].status, data: states[key].data ? Object.assign({}, states[key].data) : null, checkoutReady: Boolean(supported(checkout, key)), checkoutError: checkoutError };
       },
       destroy: function () {
         if (!active) return true;
@@ -424,5 +468,5 @@
     }
     return api;
   }
-  window.PadlHubZeroBlock = Object.freeze({ version: '2.1.0', init: init });
+  window.PadlHubZeroBlock = Object.freeze({ version: '2.4.0', init: init });
 })(window, document);

@@ -8,7 +8,7 @@ Owner: event organizer; audience: participants of «Корпоративный �
 - Shared strict notice policy; draft settings without it remain closed. Direct, invited, existing and pending participants require a current policy-bound registration.
 - Every EVENT roster writer (LK join/invite/member management + CUP moderation) increments `eventRosterRevision`; game/roster filters contain numeric fences rather than profile arrays. New EVENT activation must wait until all writers are upgraded; stale cross-type moderation conflicts. Mutation success requires acknowledged=true, matchedCount=1, modifiedCount=1.
 - Private entries have epoch/revision/version and a server-computed one-calendar-year retention deadline. No provider write, mail, marketing opt-in, schema migration, new collection or rating-worker change.
-- Candidate patching excludes disabled tabs, rejects duplicate active names/routes (normalized method/path uniqueness is checked both before and after graph assembly), reserves inactive IDs, validates generated auth routes/active wires, and upgrades only known V1 function bytes. Archived graph copies stay byte-identical. Production currently has disabled Media2 copies and one active LK Communities graph (structural read only); this does not establish a deployable full candidate.
+- Candidate patching excludes disabled tabs, rejects duplicate active names/routes (normalized method/path uniqueness is checked both before and after graph assembly), reserves inactive IDs, validates generated auth routes/active wires, and upgrades only known historical function bytes. Archived graph copies stay byte-identical. Production currently has disabled Media2 copies and one active LK Communities graph (structural read only); this does not establish a deployable full candidate.
 - The synthetic fixture has no real owner/contact/policy and cannot open registration. Historical private launch drafts do not supply authority for a new activation; use the confirmed scope below and obtain the missing current contact/owner.
 
 ## November exhibition: confirmed scope and open integration
@@ -32,6 +32,39 @@ The owner confirmed a separate instance and supplied the community invite on Nov
 production lookup found FRIENDS/OPEN/INSTANT, one OWNER, zero forms and no EVENT notice.
 That observation is not an activation; the later responsible/contact confirmation remains private.
 The older endless EVENT game is not a fallback for the selected mode.
+
+On November 10 the owner superseded the earlier V3 no-pre-registration rule: **this exact
+community remains available for joining at any time**, including after the game ends.
+Full name, company and email remain mandatory; questionnaire retention is one calendar year
+from the server's `registeredAt`, not from the game closing date. Normal visits and membership
+retries do not slide that deadline. An expired entry requires a genuinely new submission.
+The V1 shared LK/CUP policy parser is unchanged; for this selected community its dates still
+bound the game, not community joining. Other EVENT communities retain their existing
+pre-registration/closing and event-end-based retention behavior.
+
+`EVENT_REGISTRATION_GUARD_V4` keeps verified identity, invite/banned checks, OWNER preservation
+and the acknowledged canonical CAS. The server supplies `eventNotice.retentionMode` as
+`submitted-year-v1`; the form must show the changed terms and explicitly send that mode back.
+An old client cannot silently collect under its old event-end notice. The stored private entry
+has the same mode and a server-derived individual `retentionUntil`. Only known V1/V2/V3 guard
+bytes can upgrade, while modified or unknown guards fail closed. V2 and V3 fixtures are frozen
+from actual predecessor source, not reconstructed by editing the new guard.
+
+Candidate graph comparisons preserve finite top-level Node-RED editor `x`/`y` values and
+ignore only those two positions when matching managed definitions. All other fields,
+including nested wiring, code, clients, disabled state, libraries and Catch scope, remain
+exact. The profile HTTP node additionally accepts only the frozen observed predecessor
+`communityProfileHttpObservedV1.json` (source digest and node digest pinned in code), which
+omitted both `requestTimeout`/`followRedirects` node properties; the builder restores both
+explicit source properties and preserves its positions. One missing property, different
+values or any other runtime field change is rejected. Actual Node-RED 4.0.9 dispatch still
+uses the unchanged message-level `requestTimeout=10000` and `followRedirects=false`; node
+property restoration alone is not proof of transport behavior. This is source compatibility,
+not permission to admit unknown live drift or to skip fresh preimage/review/rollback gates.
+
+The owner separately authorized a temporary full-client game test on November 10. This does
+not permanently open the game or move the final November 12–13 game window. Any test-only
+game opening must be bounded and closed afterwards; **do not close the community afterwards**.
 
 ### Five-life integration source (not deployed)
 
@@ -114,13 +147,23 @@ instance/contract/env/mixed-unit/API cases, with systemd/nginx/account/runtime c
 They do not establish real host permissions, nginx syntax/reload or process restart acceptance.
 Do not turn the test fixture's synthetic CI or runtime values into release receipts.
 
-LOCAL evidence: canonical admission/access/HTTP and replay/finish tests use synthetic actors,
+Prior LOCAL evidence: canonical admission/access/HTTP and replay/finish tests use synthetic actors,
 policies and disposable directories, not Mongo or real registration. The real form was rendered
 at 390/1440 px: no horizontal overflow, 48 px actions, visible keyboard focus; one synthetic
 submit handed off to the five-life start screen with exactly fullName/company/email/revision.
-Scheduled/closed/pending/banned states expose no form. This is component evidence, not a real
+Those earlier scheduled/closed/pending/banned game screens expose no form.
+This is component evidence, not a real
 QR/login/Mongo/phone end-to-end or production readiness claim. Independent integration security
 review and exact-head CI are separate from the earlier bounded CSV-only review.
+
+Current perpetual-registration LOCAL browser evidence uses the real React form, Modal and
+project CSS/fonts at 390×844 and 1440×1000 with a synthetic clock after the game dates.
+The form stays available, shows one year from submission and its actual submit callback
+receives only fullName/company/email/policyRevision plus `retentionMode:submitted-year-v1`.
+No horizontal overflow; form controls and this modal's close target are at least 48px, keyboard
+focus is visible, and close/remount does not auto-submit. The regular EVENT fixture still
+closes after its dates. This is a local callback, not an authenticated HTTP submission or
+production phone acceptance.
 
 The EVENT replay builder now pins and embeds its complete simulation closure: campaign,
 level layout and engine, using ordered filename-plus-NUL/source hashes. This repairs the
@@ -163,9 +206,17 @@ node scripts/nginx/prepare_event_community_guard.mjs \
 
 Outputs are a hashed vhost candidate, http-context maps/zones, and an event proxy snippet. Their install paths are `/etc/nginx/conf.d/lk-event-community-http.conf` and `/etc/nginx/snippets/lk-event-community-proxy.conf`; all three files form one candidate. Any live installation/reload is a separate authorized operation. Refuse an unfamiliar/nested/already limited parent configuration and refresh instead of weakening a guard. Full live config export was not performed; a synthetic rehearsal cannot certify a real vhost.
 
-Only nested registration (`add-member`, `join-by-invite`) and event game routes receive limits: per IP 60 requests/minute + burst 20; global 10/second + burst 10; concurrent requests 6/IP and 30/global; 429 on overload; body 8 KiB for join/start/ranking and 192 KiB for replay finish. Other community reads/PATCH keep their prior budgets. Registration routes also cover ordinary communities, so confirm the small-pilot NAT/shared-IP budget before activation. Trust only the socket IP; do not add forwarded-IP trust without a separate review. Check the complete ingress route inventory so no alias or direct public Node-RED port bypasses this edge.
+Only nested registration (`add-member`, `join-by-invite`), canonical `event-admission` and event game routes receive limits: per IP 60 requests/minute + burst 20; global 10/second + burst 10; concurrent requests 6/IP and 30/global; 429 on overload; body 8 KiB for join/admission/start/ranking and 192 KiB for replay finish. Other community reads/PATCH keep their prior budgets. Canonical admission is limited before its profile verification, not only by the separate game's caller budget; trailing slashes, endpoint case variants and encoded separators must not fall back to the unlimited parent location. Registration routes also cover ordinary communities, so confirm the small-pilot NAT/shared-IP budget before activation. Trust only the socket IP; do not add forwarded-IP trust without a separate review. Check the complete ingress route inventory so no alias or direct public Node-RED port bypasses this edge.
 
 CORS uses an explicit exact-origin allowlist for protected routes, Vary: Origin, Authorization/Content-Type/X-API-Key/Idempotency-Key/X-Correlation-ID; preflight terminates locally. Correlation input is limited to 80 safe characters or replaced by nginx request ID; idempotency is forwarded unchanged. New proxy access logging is off; audit existing upstream/error/profiler logs for body/header/query redaction with synthetic requests. Global concurrency across multiple source IPs remains an activation test; the local rehearsal proves same-IP concurrency/release and the shared global rate budget.
+
+Direct Node-RED access is not an exemption from provider budgets. The generated community-auth subflow places a process-global dispatch gate before its profile HTTP request, shared by every subflow instance and route. It permits at most 10 dispatches in any 1 second and 30 in any 15 seconds; the latter window exceeds the pinned 10-second provider request timeout. Budget denial restores the original request through the existing auth response: typed access fails closed as unavailable and FRIENDS retains its existing compatibility behavior. A separate admission ingress gate validates the GET, community ID, empty query, authorization shape and 8 KiB declared body bound before auth. Its graph and continuation are exact-shape guarded. Both budgets retain at most 30 numeric timestamps, never token/IP/actor keys; corrupt state, clock rollback or unavailable storage fails closed. These are local source/fixture properties until the reviewed graph is installed and read back; nginx alone is not protection when port 1880 is reachable directly.
+
+The nginx admission cap also covers the normalized bare `/lk/communities/event-admission` path: an encoded slash-only ID can collapse to it. Decoded linefeeds must not evade the pattern either. These malformed aliases receive the same edge body/rate budgets, and the Node-RED admission gate independently rejects their invalid decoded IDs before profile verification. Keep both raw `%2F`-only and `%0A` regressions in the real nginx fixture; a regex-only check does not prove which upstream receives the original URI.
+
+Bind the profile deadline through `msg.requestTimeout = 10000` before dispatch and restore the original field and own-property presence with the rest of the raw request. Installed Node-RED 4.0.9 reads this message field; a `requestTimeout` property on the HTTP node alone does not establish that deadline. Verify the installed HTTP request implementation before using the 15-second dispatch window as concurrency evidence.
+
+With `senderr: true`, that HTTP implementation sends transport failures to Catch only, not its normal output. Keep the auth subflow's Catch scoped to the profile HTTP node, sanitize the captured failure to 503 before auth-response restoration, and remove its diagnostic error object; a stale caller status such as 401 must not turn an outage into invalid credentials. If any generated auth definition is present, every required definition must match or patching fails closed as drift. Follow-up finding: deleting all definitions while retaining an old instance is an inherited unsupported completeness edge case; it is not covered by that partial-definition guard. First-activation preparation must verify the fresh preimage has neither definitions nor instances, and the final candidate contains all expected definitions. The pinned official-consumer fixture tests effective timeout options and this error dispatch with owned RED/got stubs; it is not a full Node-RED runtime or measured provider/network timeout.
 
 Local rehearsal uses the existing cached immutable nginx image without a network:
 
@@ -193,6 +244,46 @@ Actor deletion removes every epoch and run/result for that actor, leaves other e
 
 Physical live erasure is intentionally irreversible and not authorized here. A real executor must use the existing guarded operator path with separate exact-target authority, this frozen plan, fresh identity/revisions and the strict acknowledgement check. The tool creates no PII backup. Existing backups have their own retention/access boundary: inventory them, establish expiry, record erasure tombstones outside participant payloads, and reapply erasure after any separately authorized restore before reopening. Restoring an old backup can resurrect deleted data; never treat source rollback as data rollback.
 
+### Perpetual community: canonical expiry worker (source, not installed)
+
+`scripts/lib/exhibitionRegistrationRetention.mjs` adds an internal canonical Node-RED worker
+only when the existing candidate builder receives **both** `--event-admission` and
+`--event-retention`. Source generation is not live deletion authority. The exact target is
+the confirmed Cyrillic community ID above; there is no caller-selected community, URI,
+collection or public cleanup route. The Mongo client is taken from the canonical admission
+reader, never from an unrelated first connection.
+
+- An inject runs 30 seconds after startup and hourly thereafter. Collection is not considered
+  retention-ready until the first actual automatic tick is read back after authorized install.
+- Reads project only activation/revision and entry metadata, excluding full name, company,
+  email, runs and result values. Each rolling deadline is checked against `registeredAt` plus
+  one calendar year; malformed metadata, foreign targets and clock rollback stop before writes.
+- The existing `prepareEventErasure` creates the same exact aggregate/revision CAS and
+  `$pull`/revision increment with `upsert:false`. The execution clock is the server clock,
+  never an inject payload or an offline `--now`. Find/update operations have 5-second Mongo
+  execution limits. No expired rows means no write or revision bump. Archiving or changing
+  the community type does not cancel the remaining entries' stored retention duties.
+- A strict acknowledgement is followed by a fresh metadata readback and expected-state digest.
+  Only both together report `PURGED`. Lost acknowledgement, CAS conflict or readback drift
+  reports `RECONCILE_REQUIRED`, never an automatic write replay or a false success. The next
+  hourly attempt reads a fresh aggregate rather than replaying a stale command.
+- The `EXHIBITION_REGISTRATION_RETENTION_V1` audit contains only an operation UUID, timestamp,
+  counts, revisions and status. It carries no actor identifiers, contacts or document snapshot,
+  and creates no PII backup. Unknown/partial worker graphs are rejected before patching.
+
+Questionnaire use/export ends at each inclusive individual cutoff; physical removal from the
+canonical collection follows on the next successful hourly tick. An unavailable worker is an
+operational retention incident, not permission to extend the lifetime. Incident recovery uses
+the existing reviewed flow/known-preimage procedure; hold new collection if retention cannot
+be restored. Never switch to FRIENDS merely to bypass the mandatory form or restore erased
+data as automatic recovery. Participant-request erasure, private CSVs, existing database backups
+and restored-copy tombstones remain separately scoped operator duties.
+
+LOCAL worker tests execute the generated functions over owned in-memory Mongo transport doubles,
+including inclusive expiry, preserved unexpired values/OWNER, no-op ticks, type rollback,
+forged deadlines, clock rollback, missing acknowledgement and readback conflict. They are not
+evidence of a real Mongo deletion, an installed scheduler or backup/export erasure.
+
 ### Separate five-life score receipts and process caches
 
 The canonical planner now accepts the exact Cyrillic community ID without transliteration.
@@ -202,9 +293,11 @@ installed job or approval to delete anything. It never touches the team archive,
 membership, provider, canonical Mongo collection, exports or backups.
 
 1. Resolve the verified account ID and approve the exact erasure scope. For expiry, use each
-   stored inclusive retention deadline; the confirmed notice ends retention at
-   `2027-11-13T21:00:00.000Z`. Assign the responsible operator and backup/export lifecycle before
-   activation. No retention cron/timer has been installed by this task.
+   stored inclusive retention deadline. Game score receipts retain their separate event-end
+   cutoff `2027-11-13T21:00:00.000Z`; questionnaires in the perpetual selected community expire
+   individually one calendar year after submission. Assign the responsible operator and
+   backup/export lifecycle before activation. No retention cron/timer is installed merely
+   by adding its source or generating a candidate.
 2. Under a separately approved ordered operation, stop only `padlhub-jump-exhibition.service`
    and confirm it is inactive with MainPID=0. This retires the registry/spectator/admission
    caches and prevents score writes. Do not restart or stop the team service. Apply the exact

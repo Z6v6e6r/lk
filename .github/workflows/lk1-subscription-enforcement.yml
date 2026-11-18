@@ -396,6 +396,10 @@ jobs:
         id: check_leave_generations
         run: npm run test:leave-generation-regressions
 
+      - name: Rehearse daily guard repair on isolated Mongo replica set
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        run: bash scripts/run_lk1_guard_repair_replica_tests.sh
+
       - name: Run critical subscription regression matrix
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:
@@ -403,8 +407,23 @@ jobs:
         id: check_9
         run: >-
           node --experimental-strip-types --test
+          scripts/tests/tournamentParticipantRead.test.ts
+          scripts/tests/tournamentParticipantRead.apiClient.test.mjs
+          scripts/tests/tournamentParticipantsContainmentV2.test.ts
+          scripts/tests/tournamentParticipantsManualRefreshBackend.test.ts
+          scripts/tests/tournamentParticipantsManualRefreshPatch.test.mjs
+          scripts/tests/tournamentParticipantRefresh.test.ts
           scripts/tests/messageDelivery.test.ts
           scripts/tests/subscriptionBookingGateway.nodered.test.ts
+          scripts/tests/rosterMetadataAuthority.test.ts
+          scripts/tests/gamePrivateProjection.test.mjs
+          scripts/tests/gamePrivateProjection.frontend.test.mjs
+          scripts/tests/organizerHandoff.nodered.test.mjs
+          scripts/tests/gamesPatchCasAck.test.mjs
+          scripts/tests/existingBookingLinkRecovery.test.mjs
+          scripts/tests/subscriptionBookingPagination.nodered.test.mjs
+          scripts/tests/subscriptionBookingPaginationPatch.test.mjs
+          scripts/tests/subscriptionHistoryRelease.test.mjs
           scripts/tests/bookingConversionEvidence.test.ts
           scripts/tests/cabinetBookingConversionGuard.test.ts
           scripts/tests/gamesCreateBookingConvertGuard.test.ts
@@ -413,7 +432,14 @@ jobs:
           scripts/tests/subscriptionPricePreviewHook.test.mjs
           scripts/tests/subscriptionPricePreview.apiClient.test.mjs
           scripts/tests/subscriptionPricePreviewBackend.test.mjs
+          scripts/tests/bookingMidnightBoundary.test.mjs
+          scripts/tests/bookingMidnightRelease.test.mjs
+          scripts/tests/friendshipSpecialResidencyPreview.test.mjs
           scripts/tests/productionErrorCauses.test.mjs
+          scripts/tests/subscriptionBookingConflictDiagnostics.test.mjs
+          scripts/tests/subscriptionBookingFailureDiagnostics.test.mjs
+          scripts/tests/subscriptionBookingScope.test.mjs
+          scripts/tests/subscriptionBookingBootstrap.test.mjs
           scripts/tests/lk1ErrorSourceFixes.test.mjs
           scripts/tests/lk1R03ResponseLifecycle.test.mjs
           scripts/tests/errorCauseCandidateAndRoster.test.mjs
@@ -426,6 +452,7 @@ jobs:
           scripts/tests/publicCreateFlow.devRouting.test.ts
           scripts/tests/splitSubscriptionAvailability.test.ts
           scripts/tests/subscriptionAuditFixes.test.mjs
+          scripts/tests/tournamentAutoFinish.test.mjs
           scripts/tests/tournamentPendingPayment.test.mjs
           scripts/tests/subscriptionProductIdentity.test.mjs
           scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts
@@ -458,6 +485,14 @@ jobs:
           scripts/tests/splitOrdinaryPriceHook.test.mjs
           scripts/tests/splitJoinOrdinaryPriceSource.test.mjs
           scripts/tests/splitPayment.apiClient.test.ts
+          scripts/tests/paidSplitJoinRecovery.test.mjs
+          scripts/tests/splitCreateRecovery.test.ts
+          scripts/tests/splitCreateResult.test.mjs
+          scripts/tests/gameCreateButtonPreparation.test.mjs
+          scripts/tests/gamesBookingLeadTimeSource.test.ts
+          scripts/tests/requestTimeout.test.ts
+          scripts/tests/gamePatchConflict.apiClient.test.mjs
+          scripts/tests/gamePatch409Diagnostics.test.mjs
           scripts/tests/subscriptionCriticalMatrix.test.ts
           scripts/tests/subscriptionRejoin.test.ts
           scripts/tests/subscriptionRejoinGateway.test.mjs
@@ -469,18 +504,44 @@ jobs:
           scripts/tests/tournamentSubscription.summer.nodered.test.ts
           scripts/tests/subscriptionStorefront.test.ts
           scripts/tests/subscriptionStorefrontPromo.test.ts
+          scripts/tests/atlantySchedule.test.ts
+          scripts/tests/atlantyLkBookingWindow.test.ts
           scripts/tests/subscriptionPromoCode.test.ts
+          scripts/tests/directCheckoutRecovery.test.ts
+          scripts/tests/directCheckoutRecoveryBackend.test.mjs
+          scripts/tests/mainSubscriptionsZeroBlock.test.mjs
           scripts/tests/tournamentSubscriptionCatalog.test.ts
           scripts/tests/tournamentSubscriptionSalesCandidate.test.mjs
           scripts/tests/tournamentSignupAvailability.test.ts
           scripts/tests/tournamentSignupVivaBookingIdentity.test.ts
           scripts/tests/groupScheduleApi.test.ts
+          scripts/tests/groupScheduleCheckout.test.mjs
+          scripts/tests/groupSchedulePromo.test.ts
+          scripts/tests/groupScheduleDetailUi.test.ts
           scripts/tests/groupEventPayment.test.mjs
           scripts/tests/trialGroupEligibility.test.mjs
           scripts/tests/trialGroupBooking.nodered.test.mjs
           scripts/tests/trialGroupCandidate.test.mjs
           scripts/tests/trialGroupFrontend.test.mjs
           scripts/tests/lk1UnpaidBookingCancellation.test.mjs
+          scripts/tests/cancelledDayAllowance.test.mjs
+          scripts/tests/lk1FreeCancellation.test.mjs
+          scripts/tests/lk1SeatRecovery.test.mjs
+          scripts/tests/gameCancellationReconciliation.test.mjs
+          scripts/tests/organizerBookingDiscovery.test.mjs
+          scripts/tests/cancellationSyncRecovery.test.mjs
+          scripts/tests/cancellationSyncRuntime.test.mjs
+          scripts/tests/cancellationReadback.client.test.mjs
+          scripts/tests/lk1NativeDeployGuard.test.mjs
+          scripts/tests/legacyCancellationRecovery.test.mjs
+          scripts/tests/reconciledCancellationRecovery.test.mjs
+          scripts/tests/cancelledVisitRepair.test.mjs
+          scripts/tests/dailyGuardRepair.test.mjs
+          scripts/tests/timeoutSubscriptionPreservation.test.mjs
+          scripts/tests/hungClaimRelease.test.mjs
+          scripts/tests/lk1FreeCancellationRuntime.test.mjs
+          scripts/tests/friendship2TdzRecovery.test.mjs
+          scripts/tests/lk1FreeGateOrder.test.mjs
           scripts/tests/proTrainingExclusion.test.ts
           scripts/tests/proTrainingExclusion.nodered.test.mjs
           scripts/tests/proTrainingExclusionHotfix.test.mjs
@@ -490,6 +551,9 @@ jobs:
           scripts/tests/groupSubscriptionDiscount.test.ts
           scripts/tests/spanishTrainingExclusion.test.ts
           scripts/tests/tournamentSubscriptionDiscount.test.ts
+          scripts/tests/tournamentCapacityRefusal.nodered.test.mjs
+          scripts/tests/tournamentCapacityPatcher.test.mjs
+          scripts/tests/tournamentCapacityRefresh.test.mjs
           scripts/tests/tournamentSignup.checkoutReadiness.test.ts
           scripts/tests/tournamentSignup.paymentResolution.test.ts
 
@@ -504,6 +568,8 @@ jobs:
           scripts/tests/lk1ActiveBookingLimit.test.mjs
           scripts/tests/pulkovoFriendship.test.mjs
           scripts/tests/patriotsFriendshipParity.test.mjs
+          scripts/tests/vskFriendship.test.mjs
+          scripts/tests/vskTilda.test.mjs
           scripts/tests/lk1PlanRulesResolver.test.mjs
           scripts/tests/lk1PlanRulesPreview.test.mjs
           scripts/tests/subscriptionPricePreviewSources.test.mjs
@@ -573,8 +639,22 @@ jobs:
           scripts/tests/matchResult.submitPairingsPayload.test.ts
           scripts/tests/matchResult.cardStateHydration.test.ts
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs
+          scripts/tests/function98SafeDiagnostic.test.mjs
+          scripts/tests/function296SafeDiagnostic.test.mjs
+          scripts/tests/function98NativeOperation.test.mjs
+          scripts/tests/function98BrowserGuard.test.mjs
           scripts/tests/vivaSessionCompatibility.test.mjs
+          scripts/tests/zeroCheckoutIntent.test.ts
+          scripts/tests/zeroCheckoutSession.test.ts
           scripts/tests/subscriptionBookingNginx.test.mjs
+
+      - name: Verify function98 native lifecycle with isolated Node-RED
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        run: |
+          npm install --prefix "$RUNNER_TEMP/function98-runtime" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund node-red@4.0.9
+          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/function98NativeRuntime.test.mjs
+          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/splitCreateResultRuntime.test.mjs
+          NODERED_RUNTIME_ROOT="$RUNNER_TEMP/function98-runtime" node --test scripts/tests/gamePrivateProjection.runtime.test.mjs
 
       - name: Run Partner membership R4 gates
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
@@ -638,6 +718,10 @@ jobs:
           scripts/tests/referralAttributionReleaseCandidate.test.mjs
           scripts/tests/correlatedErrorDiagnostics.test.mjs
           scripts/tests/clientErrorDiagnostics.test.mjs
+          scripts/tests/gameReadCorrelation.test.mjs
+          scripts/tests/gameReadDiagnosticsNginx.test.mjs
+          scripts/tests/splitLeaveDiagnostics.test.mjs
+          scripts/tests/subscriptionRouterBackgroundDiagnostic.test.mjs
 
       - name: Fetch pinned legacy build image
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
@@ -671,6 +755,17 @@ jobs:
           npm run test:frontend-bootstrap-runtime
           npm run test:frontend-bootstrap-guard
           npm run test:frontend-static-nginx
+
+      - name: Tournament input and started-day regressions
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        run: >-
+          node --experimental-strip-types --test
+          scripts/tests/fprBackgroundRefresh.test.mjs
+          scripts/tests/fprScoreDraft.test.ts
+          scripts/tests/tournamentDaySchedule.test.ts
+          scripts/tests/tournamentMechanicsExercises.test.ts
+          scripts/tests/tournamentVivaManualRefresh.test.ts
+          scripts/tests/fprManagerContinuity.test.mjs
 
       - name: Typecheck
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''

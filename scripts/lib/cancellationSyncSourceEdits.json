@@ -1,0 +1,73 @@
+{
+  "scripts/nodered_games_nodes/fn_split_leave_authorize.js": [
+    [
+      "+ minutes;\n};\nconst gameSubscriptionVisitCount = (game, splitPayment) => {\n  const booking = isObj(game?.booking) ? game.booking : {};\n  const explicitDuration = toNumber(booking.durationMinutes ?? splitPayment?.durationMinutes);\n  let durationMinutes = explicitDuration && explicitDuration > 0 ? explicitDuration : null;\n  if (durationMinutes === null) {\n    const from = parseTimeMinutes(booking.timeFrom);\n    const to = parseTimeMinutes(booking.timeTo);\n    if (from !== null && to !== null) {\n      const delta = to >= from ? to - from : to + 24 * 60 - from;\n      if (delta > 0) durationMinutes = delta;\n    }\n  }\n  if (durationMinutes === null) return null;\n  return durationMinutes >= 90 ? 2 : 1;\n};\nconst ",
+      "+ minutes;\n};\nconst "
+    ],
+    [
+      "length === 0) {\n    return respond(403, \"CONFLICT\", \"Запись игрока не связана с этой игрой\", ctx);\n  }",
+      "length === 0) {\n    // The caller's booking IDs are hints, never authority. A replacement is\n    // discovered from the exact provider exercise for a stored current member.\n    const targetId = normalizeId(ctx.legacyRequestedClientId);\n    const members = [...asArray(game.participants), ...asArray(game.waitlist)]\n      .filter(row => strongId(row) === targetId && !inactiveStatus(row.status));\n    if (!targetId || members.length !== 1 || targetId === actorId\n      || selected.filter(Boolean).some(item => normalizeId(item.clientId) !== targetId)) {\n      return respond(403, \"CONFLICT\", \"Запись игрока не связана с этой игрой\", ctx);\n    }\n    targetClientId = targetId;\n    targetPhone = normalizePhone(members[0].phoneNorm || members[0].phone);\n    targetPayments = payments.filter(p => strongId(p) === targetId);\n    ctx.organizerBookingDiscovery = true;\n  } else {"
+    ],
+    [
+      "ingItems(selected);\n",
+      "ingItems(selected);\n  }\n"
+    ],
+    [
+      "MembershipVersion = ",
+      "MembershipVersion = ctx.organizerBookingDiscovery ? null : "
+    ],
+    [
+      "R_TARGET\") {\n  if (c",
+      "R_TARGET\") {\n  if (ctx.organizerBookingDiscovery) {\n    ctx.membershipVersion = null;\n    ctx.operationId = `organizer-discovery:${ctx.gameId}:${ctx.actorClientId}:${targetClientId}`;\n  } else if (c"
+    ],
+    [
+      "previouslyApplied = operationApplied || (!targetActive && targetPayments.some((item) => (\n  inactiveStatus(item.status) && (toStr(item.leftAt) || toStr(item.cancelledAt))\n",
+      "previouslyApplied = !ctx.organizerBookingDiscovery && (operationApplied || (!targetActive && targetPayments.some((item) => (\n  inactiveStatus(item.status) && (toStr(item.leftAt) || toStr(item.cancelledAt))\n)"
+    ],
+    [
+      "tx.membershipVersion)\n  || (mode !== \"SELF\" && verifiedQueue.length === 0",
+      "tx.membershipVersion && !ctx.organizerBookingDiscovery)\n  || (mode !== \"SELF\" && verifiedQueue.length === 0 && !ctx.organizerBookingDiscovery"
+    ],
+    [
+      "sBookingDiscovery = mode === \"SELF\"",
+      "sBookingDiscovery = (mode === \"SELF\" || ctx.organizerBookingDiscovery)"
+    ],
+    [
+      "entSubscriptionId = subscriptionInstanceIds.length === 1 ? subscriptionInstanceIds[0] : null;\nctx.subscriptionVisitCount = subscriptionVisitCounts.length === 1\n  ? subscriptionVisitCounts[0]\n  : (subscriptionVisitCounts.length === 0 ? gameSubscriptionVisitCount(game, splitPayment) : null)",
+      "entSubscriptionId = !ctx.organizerBookingDiscovery && subscriptionInstanceIds.length === 1 ? subscriptionInstanceIds[0] : null;\nctx.subscriptionVisitCount = !ctx.organizerBookingDiscovery && subscriptionVisitCounts.length === 1\n  ? subscriptionVisitCounts[0]\n  : null"
+    ]
+  ],
+  "scripts/nodered_games_nodes/fn_split_leave_router.js": [
+    [
+      "  ctx.operationId = ",
+      "  ctx.operationId = ctx.mode === \"ORGANIZER_TARGET\"\n    ? `organizer-leave:${ctx.gameId}:${ctx.actorClientId}:${ctx.targetClientId}:${ctx.membershipVersion}`\n    : "
+    ],
+    [
+      "Code, state, message",
+      "Code, state, message, code = null"
+    ],
+    [
+      "retryScheduled,\n    ",
+      "retryScheduled,\n    ...(code ? { code } : {}),\n    "
+    ],
+    [
+      "FLICT\", \"Не удалось однозначно определить абонемент и число посещений",
+      "FLICT\", \"Не удалось подтвердить число посещений для возврата. Запись сохранена — обратитесь в поддержку.\", \"NEEDS_VISIT_COUNT"
+    ],
+    [
+      "ctx.mode === \"SELF\" && bookingIds.size === 0) {\n    const exactExerciseRows = activeRows.filter((row) => (\n      ctx.backgroundStartedRecovery === true\n        ? Boolean(t",
+      "(ctx.mode === \"SELF\" || ctx.organizerBookingDiscovery) && bookingIds.size === 0) {\n    const exactExerciseRows = activeRows.filter((row) => (\n      ctx.backgroundStartedRecovery === true || ctx.organizerBookingDiscovery\n        ? Boolean(t"
+    ],
+    [
+      "n),\n    ));\n    if (",
+      "n),\n    ));\n    if (ctx.organizerBookingDiscovery && (exactExerciseRows.length !== 1 || discoveredBookingIds.length !== 1\n      || !completeBookingPage(msg.payload, 200)\n      || exactExerciseRows.some(row => rowClientId(row) !== targetClientId\n        || [row.clientId, row.client?.id].some(id => id != null && normalizeId(id) !== targetClientId)\n        || [row.exerciseId, row.exercise?.id].some(id => id != null && normalizeId(id) !== exerciseId)))) {\n      return fail(ctx, 409, \"CONFLICT\", \"Не удалось подтвердить единственную текущую запись участника в Viva\");\n    }\n    if ("
+    ],
+    [
+      "  const refundMethod = toStr(ctx.currentRefundMethod);\n",
+      "  const refundMethod = toStr(ctx.currentRefundMethod);\n  // Discovery proves membership, not a once-only refund capability. A manually\n  // replaced booking cannot inherit an old payment's SERVICE/money dispatch.\n  if (ctx.organizerBookingDiscovery && refundMethod !== \"NONE\") {\n    return fail(ctx, 409, \"CONFLICT\", \"Запись найдена, но безопасный возврат по заменённой записи ещё не подтверждён. Передайте её в поддержку.\", \"NEEDS_PROVIDER_RETURN_PROOF\");\n  }\n"
+    ]
+  ],
+  "freeHelpers": "// lk1Free* pure protocol is embedded from lib/lk1FreeCancellation.mjs.\nconst lk1FreeServiceToken = () => {\n  try {\n    const token = toStr(readGlobal('vivacrm_access_token'));\n    const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));\n    return typeof claims.exp === 'number' && claims.exp * 1000 > Date.now() + 60_000 ? token : null;\n  } catch (_) { return null; }\n};\nconst lk1FreeApplyEffect = (ctx, effect) => {\n  if (effect.kind === 'reply') {\n    delete ctx.lk1FreeCancellation;\n    if (effect.status >= 400) return finishError(ctx, effect.status, effect.payload.message, effect.payload.details);\n    msg._subscriptionBooking = ctx; msg.statusCode = effect.status;\n    msg.headers = responseHeaders(); msg.payload = effect.payload;\n    return emit(OUTPUT_FINAL);\n  }\n  if (effect.kind === 'find') {\n    delete ctx.lk1FreeExpectedHttp;\n    return lk1Find(ctx, 'lk1_free_cancel_effect', effect.query);\n  }\n  if (effect.kind === 'update') {\n    delete ctx.lk1FreeExpectedHttp;\n    if (effect.change.$set?.phase === 'CANCEL_INTENT' && !lk1FreeServiceToken()) {\n      return lk1FreeApplyEffect(ctx, lk1FreeStep(ctx.lk1FreeCancellation, { error: true }));\n    }\n    ctx.step = 'lk1_free_cancel_effect'; msg._subscriptionBooking = ctx;\n    msg.payload = [effect.query, effect.change, effect.options]; delete msg.error;\n    return emit(OUTPUT_MONGO_UPDATE);\n  }\n  if (effect.kind === 'http') {\n    const token = lk1FreeServiceToken();\n    if (!token) return lk1FreeApplyEffect(ctx, lk1FreeStep(ctx.lk1FreeCancellation, { error: true }));\n    ctx.lk1FreeExpectedHttp = { method: effect.method, url: VIVA_API_BASE + effect.path };\n    return prepareHttp(ctx, 'lk1_free_cancel_effect', effect.method, VIVA_API_BASE + effect.path,\n      effect.body, { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' });\n  }\n  return lk1Stop(ctx, 'LK1_FREE_CANCEL_EFFECT_INVALID');\n};\nconst lk1FreeStart = (ctx, verifyOnly = false) => {\n  const begun = lk1FreeBegin({ tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,\n    bookingId: ctx.releaseBookingId, requestId: verifyOnly ? null : ctx.operationId, verifyOnly });\n  ctx.lk1FreeCancellation = begun.state;\n  return lk1FreeApplyEffect(ctx, begun.effect);\n};\nconst lk1FreePrewriteGate = (ctx, continuation) => {\n  ctx.lk1FreeGateContinuation = continuation;\n  return lk1Find(ctx, 'lk1_free_cancel_booking_gate', { kind: 'LK1_FREE_CANCEL_JOB_V1',\n    tenantKey: ctx.tenantKey, clientSubscriptionId: normalizeId(ctx.clientSubscriptionId),\n    phase: { $in: lk1FreePending } });\n};\n",
+  "freeSteps": "if (ctx.step === 'lk1_profile_continue' && ctx.action === 'cancel-free') return lk1FreeStart(ctx);\nif (ctx.step === 'lk1_free_cancel_effect') {\n  if (!ctx.lk1FreeCancellation) return lk1Stop(ctx, 'LK1_FREE_CANCEL_CONTEXT_MISSING');\n  const expected = ctx.lk1FreeExpectedHttp;\n  const provenanceError = expected && (msg.method !== expected.method || msg.url !== expected.url || msg.responseUrl !== expected.url);\n  delete ctx.lk1FreeExpectedHttp;\n  return lk1FreeApplyEffect(ctx, lk1FreeStep(ctx.lk1FreeCancellation,\n    { payload: msg.payload, status: msg.statusCode, error: !!msg.error || !!provenanceError }));\n}\nif (ctx.step === 'lk1_free_cancel_booking_gate') {\n  if (msg.error || !Array.isArray(msg.payload)) return lk1Stop(ctx, 'LK1_FREE_CANCEL_GATE_READ_UNAVAILABLE');\n  if (msg.payload.length) return finishError(ctx, 409,\n    'Дождитесь подтверждения возврата посещения по отменяемой записи.', { code: 'LK1_FREE_CANCEL_RETURN_PENDING' });\n  const continuation = ctx.lk1FreeGateContinuation;\n  delete ctx.lk1FreeGateContinuation; ctx.lk1FreeGateCleared = true;\n  return continuation === 'booking' ? prepareBookingCreate(ctx) : preparePreaccept(ctx);\n}",
+  "cancelledAllowanceBefore": "// Executed inside the shared booking/preview usage step. A missing or stale\n// receipt preserves the reservation; absence and payment failure prove nothing.\nconst lk1CancelledZeroVisitOperation = (operation) => {\n  const snapshot = ctx.lk1.cancellationSnapshot;\n  const observed = Date.parse(snapshot?.observedAt);\n  const updated = Date.parse(operation.updatedAt);\n  if (operation.state !== \"CONFIRMED\" || ![\"group_training\", \"tournament\"].includes(operation.category)\n    || operation.lk1?.decision?.subscriptionVisitCount !== 0 || operation.lk1?.visitJob\n    || [operation.lk1?.decision?.gameMinutes, operation.lk1?.decision?.courtMinutes]\n      .some(value => value && value.freeMinutes !== 0)\n    || !Number.isFinite(observed) || !Number.isFinite(updated) || updated > observed\n    || observed > Date.now() || Date.now() - observed > 60_000\n    || !Array.isArray(snapshot.active) || !Array.isArray(snapshot.history)\n    || typeof operation.bookingId !== \"string\" || !normalizeId(operation.bookingId)\n    || !normalizeId(operation.exerciseId)) return false;\n  const id = normalizeId(operation.bookingId);\n  const rows = snapshot.active.concat(snapshot.history).filter(row =>\n    [row?.id, row?.bookingId, row?.clientBookingId].some(value => normalizeId(value) === id));\n  if (!rows.length) return false;\n  return rows.every(row => {\n    if (!isObj(row)) return false;\n    const ids = [row.id, row.bookingId, row.clientBookingId];\n    const owners = [row.clientId, row.actorClientId, row.profileId, row.client?.id];\n    const exercises = [row.exerciseId, row.exercise?.id, row.exercise?.exerciseId];\n    const subscriptions = [row.clientSubscriptionId, row.subscriptionId, row.clientSubId,\n      row.subscription?.id, row.clientSubscription?.id];\n    const present = values => values.filter(value => value !== undefined && value !== null && value !== \"\");\n    const agrees = (values, expected) => present(values).every(value =>\n      typeof value === \"string\" && normalizeId(value) === normalizeId(expected));\n    if (!agrees(ids, operation.bookingId) || !agrees(owners, ctx.actorClientId)\n      || !present(exercises).length || !agrees(exercises, operation.exerciseId)\n      || !agrees(subscriptions, operation.clientSubscriptionId)\n      || eventDate(row) !== operation.serviceDate) return false;\n    // Self-API receipts already bind the actor even when the provider omits it\n    // on individual rows. Every present alias still has to agree.\n    const flags = present([row.isCancelled, row.cancelled, row.canceled]);\n    const statuses = present([row.status, row.bookingStatus, row.state]);\n    return (flags.length > 0 || statuses.length > 0)\n      && flags.every(value => value === true)\n      && statuses.every(value => typeof value === \"string\"\n        && [\"CANCELLED\", \"CANCELED\"].includes(value.trim().toUpperCase()));\n  });\n};"
+}

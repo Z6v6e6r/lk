@@ -2,6 +2,15 @@ import type { TournamentHistoryRecord } from "../../utils/apiClient";
 
 export type TournamentProgressState = "not_started" | "in_progress" | "completed";
 
+export function resolveTournamentLifecycleParams(
+  data: { tournamentId: string; params?: Record<string, unknown> | null } | null,
+  serverLifecycle: { tournamentId: string; params: Record<string, unknown> } | null,
+): Record<string, unknown> | null | undefined {
+  return serverLifecycle && serverLifecycle.tournamentId === data?.tournamentId
+    ? serverLifecycle.params
+    : data?.params;
+}
+
 export interface TournamentFinishConfirmationCopy {
   title: string;
   progress: string;

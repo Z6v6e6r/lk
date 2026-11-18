@@ -12,8 +12,8 @@ export function hasPromoPaymentAttempt(offerKey: string): boolean {
   catch { return true; }
 }
 
-export async function createStorefrontPromoPayment(offerKey: string, phone: string, checkoutReturnUrl?: string): Promise<
-  { status: 'redirect'; paymentUrl: string } | { status: 'settled'; message: string }
+export async function createStorefrontPromoPayment(offerKey: string, phone: string, checkoutReturnUrl?: string, expectedPrice?: number, canProceed: () => boolean = () => true): Promise<
+  { status: 'redirect'; paymentUrl: string; transactionId?: string } | { status: 'settled'; message: string; transactionId?: string }
 > {
   const offer = resolveStorefrontPromo(offerKey);
   if (!offer || !phone.trim()) throw new StorefrontPaymentError('Не удалось определить акционное предложение или профиль.');
@@ -22,6 +22,7 @@ export async function createStorefrontPromoPayment(offerKey: string, phone: stri
   }
   // A browser-wide lock prevents two tabs from crossing the check/write boundary.
   return navigator.locks.request(`${ATTEMPT_PREFIX}${offer.key}`, { ifAvailable: true }, async lock => {
+    if (!canProceed()) throw new StorefrontPaymentError('Аккаунт изменился. Подтвердите покупку заново.');
     if (!lock || hasPromoPaymentAttempt(offer.key)) throw new StorefrontPaymentError(PROMO_PENDING_MESSAGE);
     const returnUrl = appendCurrentAuthModeToNavigableUrl(new URL(buildPromoReturnUrl(window.location.href))).toString();
     const requestedReturn = checkoutReturnUrl ? new URL(checkoutReturnUrl) : null;
@@ -39,15 +40,20 @@ export async function createStorefrontPromoPayment(offerKey: string, phone: stri
     // This API has no idempotency/confirm contract. Once sent, any uncertainty
     // retains the browser marker; neither reload nor bank return retries create.
     try {
+      if (!canProceed()) throw new Error('Checkout actor changed');
       const result = await apiBuySubscroption(offer.productId, phone, {
         baseRedirectUrl: paymentReturnUrl, successUrl: paymentReturnUrl, failUrl: paymentReturnUrl, retries: 0,
       });
       if (result.error || !result.data) throw new Error('Purchase outcome unavailable');
       const { paymentUrl, paid, toPay } = result.data;
+      if (expectedPrice !== undefined && toPay !== expectedPrice && !(paid === true && toPay === 0)) throw new Error('Price mismatch');
+      const ids = [result.data.transactionId, result.data.id].filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
+        if (new Set(ids).size > 1) throw new Error('Conflicting transaction ids');
+        const transactionId = ids[0];
       if (typeof paymentUrl === 'string' && paymentUrl.trim()) {
         const url = new URL(paymentUrl);
         if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid payment URL');
-        return { status: 'redirect', paymentUrl: url.toString() };
+        return { status: 'redirect', paymentUrl: url.toString(), ...(transactionId ? { transactionId } : {}) };
       }
       if ((paid === true && !(typeof toPay === 'number' && toPay > 0))
         || (paid !== false && typeof toPay === 'number' && Number.isFinite(toPay) && toPay === 0)) {

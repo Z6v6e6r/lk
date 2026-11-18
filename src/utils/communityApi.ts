@@ -277,7 +277,7 @@ export interface ArchiveCommunityFeedPostResponse {
   archived: boolean;
 }
 
-export interface EventNotice { policy: EventRegistrationPolicy; revision: number }
+export interface EventNotice { policy: EventRegistrationPolicy; revision: number; retentionMode?: 'submitted-year-v1' }
 export interface CommunityActionResponse {
   eventNotice?: EventNotice;
   ok: boolean;
@@ -333,7 +333,7 @@ export interface CreateCommunityPayload {
   creator: CommunityActorPayload;
 }
 
-export interface EventRegistration { fullName: string; company: string; email: string; policyRevision: number }
+export interface EventRegistration { fullName: string; company: string; email: string; policyRevision: number; retentionMode?: 'submitted-year-v1' }
 export type EventReplay = Array<[number, number]>;
 
 export interface JoinCommunityPayload {
@@ -1647,7 +1647,8 @@ export async function apiJoinCommunity(communityId: string, payload: JoinCommuni
 
 export function parseEventNotice(value: unknown): EventNotice | undefined {
   if (!isRecord(value) || !Number.isSafeInteger(value.revision) || Number(value.revision) < 1) return undefined;
-  try { return { policy: parseEventRegistrationPolicy(value.policy), revision: Number(value.revision) }; }
+  if (value.retentionMode !== undefined && value.retentionMode !== 'submitted-year-v1') return undefined;
+  try { return { policy: parseEventRegistrationPolicy(value.policy), revision: Number(value.revision), ...(value.retentionMode === 'submitted-year-v1' ? {retentionMode:value.retentionMode} : {}) }; }
   catch { return undefined; }
 }
 function eventRegistrationError(response: ApiResult<unknown>): ApiResult<CommunityActionResponse> {

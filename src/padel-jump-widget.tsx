@@ -9,6 +9,7 @@ import eventStyles from './components/cabinet/event-community.css?inline';
 import spectatorStyles from './components/padel-jump/spectator/spectator.css?inline';
 import spectatorExtraStyles from './components/padel-jump/spectator/spectator-ui-extra.css?inline';
 import scoreboardStyles from './components/padel-jump/spectator/scoreboard.css?inline';
+import spectatorTvStyles from './components/padel-jump/spectator/spectator-tv.css?inline';
 import LiveScreen from './components/padel-jump/LiveScreen';
 
 const mounts = new WeakMap<HTMLElement, () => void>();
@@ -18,7 +19,7 @@ export function mount(target: HTMLElement, mode: 'race' | 'practice' | 'live') {
   unmount(target);
   const owner = document.createElement('div');
   const style = document.createElement('style');
-  style.textContent = `${liveStyles}\n${practiceStyles}\n${startStyles}\n${eventStyles}\n${spectatorStyles}\n${spectatorExtraStyles}\n${scoreboardStyles}`;
+  style.textContent = `${liveStyles}\n${practiceStyles}\n${startStyles}\n${eventStyles}\n${spectatorStyles}\n${spectatorExtraStyles}\n${scoreboardStyles}\n${spectatorTvStyles}`;
   const content = document.createElement('div');
   owner.append(style, content);
   target.append(owner);

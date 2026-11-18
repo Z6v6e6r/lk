@@ -1,3 +1,6 @@
+import { editFprScoreDraft, fprScoreDraftView, reconcileFprScoreDrafts, type FprScoreDraft } from "./fprScoreDraft";
+import { tournamentResultNeedsReview } from "../../utils/tournamentOfflineSyncPolicy";
+import { tournamentAutoFinishNotice } from "./tournamentAutoFinish";
 import { formatFprStartError } from "./fprCanonicalStart";
 import { tournamentEventId } from "../../utils/tournamentEventIdentity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -87,10 +90,14 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
       .finally(() => { if (active) setBindingLoading(false); });
     return () => { active = false; };
   }, [sourceExerciseId, context.communityBinding, reload]);
-  const { fixed: fixedCommunity, choices, communityId, communityName, publishedNames, error: selectionError } = useMemo(
+  const { fixed, choices, communityId: selectedId, communityName: selectedName, publishedNames,
+    needsCommunityList, error: selectionError } = useMemo(
     () => resolveFprCommunitySelection(binding, communities, selectedCommunityId),
     [binding, communities, selectedCommunityId],
   );
+  const fixedCommunity = fixed || Boolean(initialState);
+  const communityId = initialState?.communityRating?.communityId ?? selectedId;
+  const communityName = initialState?.communityRating?.communityName ?? selectedName;
   useEffect(() => { setValues({}); }, [communityId]);
   useEffect(() => {
     let active = true;
@@ -178,19 +185,21 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
     } catch (e) { setError(message(e)); }
     finally { setBusy(false); }
   };
-  const loading = bindingLoading || leagueLoading || (!fixedCommunity && communityLoading);
-  const loadError = bindingError || selectionError || leagueError || (!fixedCommunity ? communityError : null);
+  const loading = bindingLoading || leagueLoading || (needsCommunityList && communityLoading);
+  const loadError = bindingError || selectionError || leagueError || (needsCommunityList ? communityError : null);
   return <div className="fpr-panel">
     <fieldset disabled={Boolean(initialState) || busy || Boolean(pending)}>
-      {fixedCommunity ? <>
-        <p><strong>Опубликован в сообществе:</strong> {publishedNames.length ? publishedNames.join(", ") : communityName}</p>
-        {publishedNames.length > 1 && communityId && <p><strong>Сообщество для рейтинга:</strong> {communityName}</p>}
-      </> : !bindingLoading && !bindingError && <label>Сообщество «Время на друзей» для рейтинга
-        <select value={communityId} disabled={communityLoading} onChange={e => setSelectedCommunityId(e.target.value)}>
-          <option value="">Выберите сообщество</option>
-          {choices.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}
-        </select>
-      </label>}
+      {publishedNames.length > 0 && <p><strong>Опубликован в сообществах:</strong> {publishedNames.join(", ")}</p>}
+      {fixedCommunity ? <p><strong>Сообщество для посева первого раунда:</strong> {communityName}</p>
+        : !bindingLoading && !bindingError && <label>{publishedNames.length > 1
+          ? "Сообщество для посева первого раунда"
+          : "Сообщество «Время на друзей» для рейтинга"}
+          <select value={communityId} disabled={needsCommunityList && communityLoading} onChange={e => setSelectedCommunityId(e.target.value)}>
+            <option value="">Выберите сообщество</option>
+            {choices.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}
+          </select>
+        </label>}
+      {publishedNames.length > 1 && !fixedCommunity && <p>Места и очки выбранного сообщества определяют посев первого раунда. Выбор сохраняется в протоколе.</p>}
       {loading && <p role="status">Загружаем данные сообщества…</p>}
       {loadError && <p role="alert" className="fpr-error">{loadError} <button type="button" onClick={() => setReload(v => v + 1)}>Повторить загрузку</button></p>}
       {!loading && !loadError && !choices.length && !fixedCommunity && <p>Нет доступных сообществ «Время на друзей» для выбора.</p>}
@@ -215,7 +224,7 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
     </fieldset>
     {initialState && <p>Настройки сохранённого турнира. Состав и результаты сохранены.</p>}
     {error && <p role="alert" className="fpr-error">{error}</p>}
-    {initialState ? <button className="section-cta" type="button" onClick={onResume}>Вернуться к турниру</button> : <button className="section-cta" type="button" disabled={busy || (!pending && (loading || Boolean(loadError) || !league)) || presentPlayers.length < 4 || presentPlayers.length > 28 || !organizerId} onClick={() => void save()}>
+    {initialState ? <button className="section-cta" type="button" onClick={onResume}>Вернуться к турниру</button> : <button className="section-cta" type="button" disabled={busy || (!pending && (loading || Boolean(loadError) || !league || league.communityId !== communityId)) || presentPlayers.length < 4 || presentPlayers.length > 28 || !organizerId} onClick={() => void save()}>
       {busy ? "Сохраняем протокол…" : pending ? "Повторить создание с тем же ID" : "Создать протокол ФПР 6×25"}
     </button>}
   </div>;
@@ -252,16 +261,15 @@ function MatchHeader({ match, state }: { match: FprMatch; state: FprState }) {
     <div className="tournament-match-court"><span className="tournament-match-value">{state.courts[match.courtIndex]}</span></div>
   </div>;
 }
-function MatchEditor({ match, state, closed, disabled, onSave, autoCloseRound = true, onDirtyChange }: {
+function MatchEditor({ match, state, closed, disabled, onSave, autoCloseRound = true, draft, onDraftChange }: {
   match: FprMatch; state: FprState; closed: boolean; disabled: boolean;
   autoCloseRound?: boolean;
-  onDirtyChange?: (matchId: string, dirty: boolean) => void;
+  draft?: FprScoreDraft;
+  onDraftChange: (matchId: string, draft: FprScoreDraft | null) => void;
   onSave: (value: Omit<ScoreAction, "id" | "expectedRevision">) => void;
 }) {
-  const [score1, setScore1] = useState(match.score1?.toString() ?? "");
-  const [score2, setScore2] = useState(match.score2?.toString() ?? "");
+  const { score1, score2, conflict } = fprScoreDraftView(match, draft);
   const [reason, setReason] = useState("");
-  useEffect(() => () => onDirtyChange?.(match.id, false), [match.id, onDirtyChange]);
   const names = (ids: string[]) => ids.map(id => state.players.find(p => p.id === id)?.name ?? id).join(" + ");
   const played = (match.score1 ?? 0) + (match.score2 ?? 0);
   const serve = !closed && played < 25 ? fprServeAt(match, played) : null;
@@ -270,16 +278,7 @@ function MatchEditor({ match, state, closed, disabled, onSave, autoCloseRound = 
     && number(score1) >= 0 && number(score2) >= 0 && total <= 25 && (!closed || total === 25);
   const saved = match.score1 !== null && match.score2 !== null && number(score1) === match.score1 && number(score2) === match.score2;
   const changeScore = (team: 1 | 2, value: string) => {
-    if (!value.trim()) {
-      setScore1(""); setScore2("");
-      onDirtyChange?.(match.id, match.score1 !== null || match.score2 !== null);
-      return;
-    }
-    const parsed = Math.max(0, Math.min(25, Number.parseInt(value, 10) || 0));
-    (team === 1 ? setScore1 : setScore2)(String(parsed));
-    (team === 1 ? setScore2 : setScore1)(String(25 - parsed));
-    const next1 = team === 1 ? parsed : 25 - parsed, next2 = 25 - next1;
-    onDirtyChange?.(match.id, next1 !== match.score1 || next2 !== match.score2);
+    onDraftChange(match.id, editFprScoreDraft(match, draft, team, value));
   };
   return <section className="tournament-match fpr-match" aria-label={`Матч: ${state.courts[match.courtIndex]}`}>
     <MatchHeader match={match} state={state} />
@@ -287,17 +286,22 @@ function MatchEditor({ match, state, closed, disabled, onSave, autoCloseRound = 
       <div className="tournament-match-row">
         <span className="tournament-match-label">Пара 1</span>
         <span className="tournament-match-value">{names(match.pair1)}{serve && match.pair1.includes(serve.playerId) && <span className="fpr-serving-pair" role="img" aria-label="Подаёт пара 1" title={`Следующая подача по сохранённому счёту: ${names([serve.playerId])}`}>🎾</span>}</span>
-        <input className="tournament-score-input" aria-label={`Счёт: ${names(match.pair1)}`} type="number" min="0" max="25" step="1" value={score1} onChange={e => changeScore(1, e.target.value)} />
+        <input className="tournament-score-input" aria-label={`Счёт: ${names(match.pair1)}`} type="number" inputMode="numeric" min="0" max="25" step="1" value={score1} onChange={e => changeScore(1, e.target.value)} />
       </div>
       <div className="tournament-match-row">
         <span className="tournament-match-label">Пара 2</span>
         <span className="tournament-match-value">{names(match.pair2)}{serve && match.pair2.includes(serve.playerId) && <span className="fpr-serving-pair" role="img" aria-label="Подаёт пара 2" title={`Следующая подача по сохранённому счёту: ${names([serve.playerId])}`}>🎾</span>}</span>
-        <input className="tournament-score-input" aria-label={`Счёт: ${names(match.pair2)}`} type="number" min="0" max="25" step="1" value={score2} onChange={e => changeScore(2, e.target.value)} />
+        <input className="tournament-score-input" aria-label={`Счёт: ${names(match.pair2)}`} type="number" inputMode="numeric" min="0" max="25" step="1" value={score2} onChange={e => changeScore(2, e.target.value)} />
       </div>
+      {conflict && <div role="alert">
+        <p>На сервере этот счёт изменился на {match.score1 ?? "—"}:{match.score2 ?? "—"}. Ваш ввод сохранён. Выберите, какой счёт использовать.</p>
+        <button type="button" onClick={() => onDraftChange(match.id, null)}>Принять серверный счёт</button>
+        <button type="button" onClick={() => onDraftChange(match.id, { ...draft!, sourceScore1: match.score1, sourceScore2: match.score2 })}>Оставить мой ввод</button>
+      </div>}
       {closed && <label>Причина исправления<input value={reason} onChange={e => setReason(e.target.value)} /></label>}
       <div className="tournament-match-actions">
       <div className="tournament-match-status" aria-live="polite">{saved && <span className="tournament-round-status saved">Сохранено</span>}</div>
-      <button className="tournament-round-save" type="button" disabled={!validScore || (closed && !reason.trim())} onClick={() => onSave({
+      <button className="tournament-round-save" type="button" disabled={conflict || !validScore || (closed && !reason.trim())} onClick={() => onSave({
         action: closed ? "correct_score" : "score", matchId: match.id, score1: number(score1), score2: number(score2), confirmed1: total === 25, confirmed2: total === 25,
         ...(!closed ? { startIfScheduled: true, autoCloseRound, recordResult: true } : {}),
         ...(closed ? { reason } : {}),
@@ -312,6 +316,14 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
   onEditSettings?: () => void;
 }) {
   const pendingKey = `padlhub:fpr-command:${data.tournamentId}`;
+  const reviewKey = `${pendingKey}:review`;
+  const [lateCommands, setLateCommands] = useState<FprCommand[]>(() => {
+    try { return JSON.parse(localStorage.getItem(reviewKey) || "[]") as FprCommand[]; } catch { return []; }
+  });
+  const preserveLateCommand = (command: FprCommand) => {
+    const retained = [...lateCommands.filter(item => item.id !== command.id), command];
+    localStorage.setItem(reviewKey, JSON.stringify(retained)); setLateCommands(retained);
+  };
   useLkTournamentSession(true);
   const [state, setState] = useState<FprState | null>(() => {
     try { validateFprState(data.params?.fpr6x25); return data.params.fpr6x25; } catch { return null; }
@@ -322,14 +334,26 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const [dirtyMatches, setDirtyMatches] = useState<Record<string, boolean>>({});
-  const handleDirtyChange = useCallback((matchId: string, dirty: boolean) => {
-    setDirtyMatches(previous => {
-      if (Boolean(previous[matchId]) === dirty) return previous;
+  const [scoreDrafts, setScoreDrafts] = useState<Record<string, FprScoreDraft>>({});
+  const handleDraftChange = useCallback((matchId: string, draft: FprScoreDraft | null) => {
+    setScoreDrafts(previous => {
       const next = { ...previous };
-      if (dirty) next[matchId] = true; else delete next[matchId];
+      if (draft) next[matchId] = draft; else delete next[matchId];
       return next;
     });
+  }, []);
+  const [reloading, setReloading] = useState(false);
+  const reloadControllerRef = useRef<AbortController | null>(null);
+  const commandGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  const stateRef = useRef(state);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      commandGenerationRef.current += 1;
+      reloadControllerRef.current?.abort();
+    };
   }, []);
   const [tab, setTab] = useState<"round" | "table" | "protocol">("round");
   const [reason, setReason] = useState("");
@@ -340,24 +364,29 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
   useEffect(() => { const timer = window.setInterval(() => setNow(new Date().toISOString()), 10_000); return () => window.clearInterval(timer); }, []);
   const applyResponse = (next: FprState, payload = data) => {
     validateFprState(next);
+    stateRef.current = next;
     setState(next);
+    setScoreDrafts(previous => reconcileFprScoreDrafts(previous, next));
     const projected = fprProjection(next, payload.params);
     onDataChange({ ...payload, params: projected.params, rounds: projected.rounds });
   };
   const clearPending = () => { localStorage.removeItem(pendingKey); setPending(null); };
   const send = async (command: FprCommand) => {
     if (busyRef.current) return;
+    commandGenerationRef.current += 1;
+    reloadControllerRef.current?.abort();
     busyRef.current = true; setBusy(true); setError(null);
     try {
       localStorage.setItem(pendingKey, JSON.stringify(command)); setPending(command);
       const response = await apiUpdateAmericanoResults({ tournamentId: data.tournamentId, results: [], params: { fprCommand: command } });
+      if (tournamentResultNeedsReview(response.error)) preserveLateCommand(command);
       if (isRejectedFprCommand(response)) clearPending();
       if (response.status == null || response.status < 200 || response.status >= 300) throw new Error(response.error?.message || "Сохранение не подтверждено. Повторите эту команду или проверьте сервер.");
       const next = response.data?.params?.fpr6x25;
       validateFprState(next);
       if (next.tournamentId !== data.tournamentId || !next.audit.some(a => a.id === command.id)
         || next.revision <= command.expectedRevision) throw new Error("Сервер вернул протокол без подтверждения этой команды. Проверьте актуальный протокол перед повтором.");
-      applyResponse(next); clearPending(); setReason(""); setFinishConfirmation(false);
+      applyResponse(next, { ...data, params: { ...data.params, ...response.data?.params } }); clearPending(); setReason(""); setFinishConfirmation(false);
       if (command.action === "score" && command.autoCloseRound === true) {
         const scoredAttempt = next.attempts.find(a => a.matches.some(m => m.id === command.matchId));
         if (scoredAttempt?.status === "running" && scoredAttempt.matches.every(m => m.confirmed1 && m.confirmed2)) {
@@ -373,22 +402,46 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
     void send({ ...action, id: crypto.randomUUID(), expectedRevision: state.revision } as FprCommand);
   };
   const reload = async () => {
-    if (busyRef.current) return;
-    busyRef.current = true; setBusy(true); setError(null);
+    if (busyRef.current || reloadControllerRef.current) return;
+    const controller = new AbortController();
+    reloadControllerRef.current = controller;
+    const generation = commandGenerationRef.current;
+    setReloading(true);
+    const timer = window.setTimeout(() => controller.abort(), 15_000);
+    const isCurrent = () => mountedRef.current && !controller.signal.aborted
+      && generation === commandGenerationRef.current && !busyRef.current;
     try {
-      const response = await apiFetchTournamentHistory(data.tournamentId, { forceRefresh: true });
+      const response = await apiFetchTournamentHistory(data.tournamentId, { forceRefresh: true, signal: controller.signal });
+      if (!isCurrent()) return;
       if (response.error) throw new Error(response.error.message);
       const record = response.data?.find(p => p.tournamentId === data.tournamentId);
       const next = record?.params?.fpr6x25;
       validateFprState(next);
-      applyResponse(next);
+      if (next.tournamentId !== data.tournamentId || next.revision < (stateRef.current?.revision ?? 0)) return;
+      applyResponse(next, { ...data, params: record?.params ?? data.params });
       if (pending && (next.audit.some(a => a.id === pending.id) || next.revision !== pending.expectedRevision)) {
-        if (!next.audit.some(a => a.id === pending.id)) setError("Другой организатор изменил протокол. Ожидавшая команда не применена; проверьте таблицу и введите её заново.");
+        if (!next.audit.some(a => a.id === pending.id)) {
+          if (next.status === "completed" || next.status === "incomplete") preserveLateCommand(pending);
+          setError("Другой организатор изменил протокол. Ожидавшая команда не применена; проверьте таблицу и введите её заново.");
+        }
         clearPending();
       }
-    } catch (e) { setError(message(e)); }
-    finally { busyRef.current = false; setBusy(false); }
+    } catch (e) {
+      if (isCurrent()) setError(message(e));
+    } finally {
+      window.clearTimeout(timer);
+      if (reloadControllerRef.current === controller) reloadControllerRef.current = null;
+      if (mountedRef.current) setReloading(false);
+    }
   };
+  const autoReloadRef = useRef(reload);
+  useEffect(() => { autoReloadRef.current = reload; });
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (navigator.onLine && !busyRef.current) void autoReloadRef.current();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const current = state ? fprCurrentAttempt(state) : null;
   const completed = state ? fprCompletedRounds(state) : 0;
   const finished = state?.status === "completed" || state?.status === "incomplete";
@@ -396,8 +449,8 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
   const name = (id: string) => state?.players.find(p => p.id === id)?.name ?? id;
   const disabled = busy || Boolean(pending);
   const supplementaryControls = <>
-    {state && <button type="button" onClick={() => download({ kind: "fpr6x25-protocol", state, pendingCommand: pending, standings: fprStandings(state) }, `${data.tournamentId}-protocol.json`)}>Скачать протокол и таблицу JSON</button>}
-    <button type="button" disabled={busy} onClick={() => void reload()}>{busy ? "Проверяем…" : "Прочитать актуальный протокол с сервера"}</button>
+    {state && <button type="button" onClick={() => download({ kind: "fpr6x25-protocol", state, pendingCommand: pending, lateCommands, scoreDrafts, standings: fprStandings(state) }, `${data.tournamentId}-protocol.json`)}>Скачать протокол и таблицу JSON</button>}
+    <button type="button" disabled={busy || reloading} onClick={() => void reload()}>{reloading ? "Обновляем протокол…" : "Прочитать актуальный протокол с сервера"}</button>
     <TournamentBroadcastControl key={data.tournamentId} tournamentId={data.tournamentId} stationId={data.params?.stationId} initialState={data.params?.broadcast} onDialogChange={setBroadcastSelectionOpen} />
   </>;
   return <Modal isOpen onClose={() => { if (!broadcastSelectionOpen) onClose(); }} title={`ФПР 6×25${state?.testMode ? " · тестовое проведение" : ""}`} variant="fullscreen" bodyClassName="tournament-settings-modal-body"
@@ -410,6 +463,8 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
     <div className="tournament-manager fpr-panel">
       {!state ? <p role="alert">Протокол ФПР повреждён или имеет другую версию. Загрузите его с сервера.</p> : <>
         <div className="tournament-manager-meta"><span className="tournament-manager-chip strong">ФПР 6×25</span><span className="tournament-manager-chip">25 очков на матч</span><span className="tournament-manager-chip">{state.players.length} игроков</span><span className="tournament-manager-chip">Кортов: {state.courts.length}</span></div>
+        {lateCommands.length > 0 && <p role="alert">Поздняя команда сохранена на устройстве и включена в экспорт протокола. Требуется проверка организатором.</p>}
+        {tournamentAutoFinishNotice(data.params) && <p role="status">{tournamentAutoFinishNotice(data.params)}</p>}
         {!finished && Date.parse(now) >= Date.parse(state.endsAt) - 180_000 && <p role="alert" className="fpr-error">Время турнира закончилось. Сохраните сыгранные результаты и завершите турнир.</p>}
         <div className="tournament-tabs" role="group" aria-label="Раздел протокола">
           {([["round", "Турнир"], ["table", "Таблица"], ["protocol", "Протокол"]] as const).map(([key, label]) => <button className={`tournament-tab${tab === key ? " active" : ""}`} type="button" key={key} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}
@@ -418,15 +473,15 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
           {state.attempts.filter(a => a.id !== current?.id).map(a => <details aria-label={`Раунд ${a.round} · попытка ${a.attempt}`} className={`tournament-round ${a.status === "closed" ? "saved" : "unsaved"}`} key={a.id}>
             <summary className="tournament-round-header"><span className="tournament-round-title">Раунд {a.round} · попытка {a.attempt}</span><span className="tournament-round-status">{a.status === "closed" ? "Сохранено" : "Отменён"}</span></summary>
             <div className="tournament-round-body"><p>Отдых: {a.byes.map(name).join(", ") || "нет"}. {a.reason}</p>{a.matches.map(m => a.status === "closed"
-              ? <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed disabled={disabled} onSave={act} />
+              ? <MatchEditor key={m.id} match={m} state={state} closed disabled={disabled} draft={scoreDrafts[m.id]} onDraftChange={handleDraftChange} onSave={act} />
               : <section className="tournament-match fpr-match" key={m.id}><MatchHeader match={m} state={state} /><p>{m.pair1.map(name).join(" + ")} — {m.pair2.map(name).join(" + ")}: {m.score1 ?? "—"}:{m.score2 ?? "—"}</p></section>)}</div>
           </details>)}
           {current ? <div className="tournament-rounds"><section aria-label={`Раунд ${current.round} · попытка ${current.attempt}`} className="tournament-round unsaved">
             <div className="tournament-round-header"><div className="tournament-round-heading"><span className="tournament-round-title">Раунд {current.round}{current.round >= 7 ? " · запасной" : ""}</span><span className="tournament-round-meta-text">Попытка {current.attempt}</span></div><span className="tournament-round-status">{current.status === "scheduled" ? "Готов к старту" : "В игре"}</span></div>
             <div className="tournament-round-body">
             <p>Отдых: {current.byes.length ? current.byes.map(name).join(", ") : "нет"}.</p>
-            {current.matches.map(m => <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed={false} disabled={disabled} onSave={act}
-              autoCloseRound={!current.matches.some(other => other.id !== m.id && dirtyMatches[other.id])} onDirtyChange={handleDirtyChange} />)}
+            {current.matches.map(m => <MatchEditor key={m.id} match={m} state={state} closed={false} disabled={disabled} draft={scoreDrafts[m.id]} onDraftChange={handleDraftChange} onSave={act}
+              autoCloseRound={!current.matches.some(other => other.id !== m.id && fprScoreDraftView(other, scoreDrafts[other.id]).dirty)} />)}
             </div>
           </section></div> : !finished && state.attempts.length < 100 && completed < 8 && Date.parse(now) < Date.parse(state.endsAt) - 180_000 ? <>
             <p>{completed >= 6 ? `Запасной раунд: нужно не меньше ${Math.ceil((threshold?.requiredMs ?? 0) / 60_000)} мин до конца события; осталось ${Math.max(0, Math.floor((threshold?.remainingMs ?? 0) / 60_000))} мин.` : "Предыдущая попытка отменена. Можно подготовить повтор с тем же номером зачётного раунда."}</p>
@@ -459,11 +514,12 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
           {state.attempts.map(a => <details key={a.id}><summary>Раунд {a.round} · попытка {a.attempt} · {a.status === "closed" ? "зачтён" : a.status === "cancelled" ? "отменён" : a.status === "running" ? "идёт" : "подготовлен"}</summary>
             <p>{a.startedAt ? new Date(a.startedAt).toLocaleString("ru-RU") : "Не стартовал"}{a.finishedAt ? ` → ${new Date(a.finishedAt).toLocaleTimeString("ru-RU")}` : ""}. {a.reason}</p>
             <p>Отдых: {a.byes.map(name).join(", ") || "нет"}. Окно: {a.window ?? "первый посев / один корт"}.</p>
-            {a.matches.map(m => a.status === "closed" ? <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed disabled={disabled} onSave={act} /> : <p key={m.id}>{m.pair1.map(name).join(" + ")} — {m.pair2.map(name).join(" + ")}: {m.score1 ?? "—"}:{m.score2 ?? "—"}</p>)}
+            {a.matches.map(m => a.status === "closed" ? <MatchEditor key={m.id} match={m} state={state} closed disabled={disabled} draft={scoreDrafts[m.id]} onDraftChange={handleDraftChange} onSave={act} /> : <p key={m.id}>{m.pair1.map(name).join(" + ")} — {m.pair2.map(name).join(" + ")}: {m.score1 ?? "—"}:{m.score2 ?? "—"}</p>)}
           </details>)}
           <ol>{state.audit.map(a => <li key={a.id}>{new Date(a.at).toLocaleTimeString("ru-RU")} · {a.action}{a.detail ? ` · ${a.detail}` : ""}</li>)}</ol>
         </>}
       </>}
+      {Object.keys(scoreDrafts).length > 0 && <p role="status">Несохранённый ввод счёта сохранён в этом окне и включён в скачиваемый протокол.</p>}
       {pending && <div role="status"><p>Есть команда без подтверждённого ответа сервера. Новые действия временно заблокированы.</p><button type="button" disabled={busy} onClick={() => void send(pending)}>Повторить ту же команду</button></div>}
       {error && <p role="alert" className="fpr-error">{error}</p>}
       {tab === "table" && state ? <details className="fpr-more">

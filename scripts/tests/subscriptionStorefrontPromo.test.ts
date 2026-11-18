@@ -1,8 +1,13 @@
+import { parseZeroOperationLink } from '../../src/components/subscription-storefront/zeroCheckoutResume.ts';
+import { hasVerifiedCheckoutReset, parseZeroAttempt } from '../../src/components/subscription-storefront/zeroCheckoutCustody.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { isResidencyPurchaseRoute, RESIDENCY_PRODUCT_ID } from '../../src/residency/residencyPurchase.ts';
+import { buildVivaOAuthReturnUrl, readPendingVivaOAuth } from '../../src/utils/vivaOAuth.ts';
+import { getVivaOAuthStorageKey } from '../../src/utils/authMode.ts';
 
 function loadModule<T>(file: string, stubs: Record<string, unknown> = {}, globals: Record<string, unknown> = {}): T {
   const source = readFileSync(new URL(`../../src/${file}`, import.meta.url), 'utf8')
@@ -30,6 +35,7 @@ function paymentFixture() {
     window: {
       location: { href: 'https://padlhub.ru/sub_hab?offer=friendship-promo&authMode=viva&utm_source=piter' },
       localStorage: {
+        removeItem: (key: string) => { stored.delete(key); },
         getItem: (key: string) => { if (storageFails) throw new Error('storage disabled'); return stored.get(key) ?? null; },
         setItem: (key: string, value: string) => { if (storageFails) throw new Error('storage disabled'); stored.set(key, value); },
       },
@@ -191,23 +197,39 @@ test('shared API preserves legacy retry behavior and honors the promo no-retry o
 function loadRegularPayment(topocratyProductId: string) {
   return loadModule<typeof import('../../src/components/subscription-storefront/payment')>('components/subscription-storefront/payment.ts', {
     ...catalog,
+    FRIENDSHIP_MONTHLY_PRODUCT_ID: 'c348a02b-1ffa-4bef-9c65-39b3b27b8e25',
     ATLANTY_MONTHLY_PRODUCT_ID: '3907d127-a6b0-419e-a933-4a2857f26356',
     ATLANTY_ANNUAL_PRODUCT_ID: '',
     TOPOCRATY_PRODUCT_ID: topocratyProductId,
     TOPOCRATY_PLAN_ID: 'topocraty',
     PATRIOTS_PRODUCT_ID: '37ab3713-4431-4815-96ba-d7ece76a9241',
+    VSK_PRODUCT_ID: '94e32355-1c69-462b-9f2a-77f2817cb24c',
     PATRIOTS_PLAN_ID: 'patriots',
     apiBuySubscroption: () => {}, apiConfirmTournamentSubscriptionPurchase: () => {},
     apiCreateTournamentSubscriptionPurchase: () => {}, apiFetchProfile: () => {}, appendCurrentAuthModeToNavigableUrl: (url: URL) => url,
   });
 }
 const regularPayment = loadRegularPayment('14692232-12be-4218-9fa1-2d5b79b62035');
+const liveProductFixture = (key: string, changes: Record<string, unknown> = {}) => ({
+  id: key === 'vsk' ? '94e32355-1c69-462b-9f2a-77f2817cb24c' : key === 'residency' ? '4037a3a3-e551-4f9a-a9db-1410e46b8635' : '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e',
+  cost: key === 'vsk' ? 680000 : key === 'residency' ? 79000 : 1980000, validityDays: 30, visits: 30,
+  activationDays: key === 'vsk' || key === 'residency' ? 0 : 1, type: 'GROUP', variant: 'BY_VISITS', appliesTo: 'BOOKING',
+  hasStudioLimitation: false, hasDirectionLimitation: key !== 'residency',
+  availableDirections: key === 'vsk' ? [4588, 6975].map(id => ({ id })) : key === 'residency' ? [] : [4588, 5278].map(id => ({ id })),
+  hasTypeLimitation: true, availableTypes: (key === 'vsk' ? [1613, 2349] : key === 'residency' ? [2572] : [1613, 839]).map(id => ({ id })),
+  hasDayLimitation: false, hasTimeRangeLimitation: false, hasDayTimeLimitation: false,
+  ...changes,
+});
+
 function zeroFixture(overrides: Record<string, unknown> = {}) {
   const f = paymentFixture();
   let result: any = { data: { paymentUrl: 'https://bank.example/zero', toPay: 680000 }, error: null };
   let confirmation: any = { data: { paid: true, failed: false, status: 'PAID' } };
   let price = 980000;
   let availability = true;
+  const liveProducts = { vsk: liveProductFixture('vsk'), residency: liveProductFixture('residency'), 'friendship-two-hours': liveProductFixture('friendship-two-hours') };
+  let twoHourStatus: Record<string, unknown> = { counterKey: 'friendship_two_hours', productId: liveProducts['friendship-two-hours'].id,
+    priceMinor: 1980000, canPurchase: true, bindingReady: true, unlimited: true, totalLimit: 0, remainingCount: 0 };
   let patriotProduct: Record<string, unknown> = {
     id: '37ab3713-4431-4815-96ba-d7ece76a9241', cost: 680000, validityDays: 30, visits: 30,
     // Live Viva redemption scope: 5278/839 has a booking discount, not a visit debit.
@@ -222,39 +244,53 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   const setItem = f.globals.window.localStorage.setItem;
   f.globals.window.localStorage.setItem = (key, value) => { if (storageFails) throw new Error('storage disabled'); setItem(key, value); };
   const adapter = loadModule<typeof import('../../src/components/subscription-storefront/zeroCheckoutPayment')>('components/subscription-storefront/zeroCheckoutPayment.ts', {
+    hasVerifiedCheckoutReset, parseZeroAttempt, parseZeroOperationLink,
+    DIRECT_RECOVERY_PRODUCT: '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e', readClosedDirectCheckout: async () => false,
+    subscriptionPromoAttemptKey: async (id: string, phone: string) => 'fixture:' + (phone === fixturePhone ? 'a' : 'b').repeat(64),
     ...regularPayment, ...promo, ...f.adapter,
+    withSubscriptionPromoLock: async (_id: string, _phone: string, create: () => Promise<unknown>) => create(),
+    recordOrdinarySubscriptionAttempt: async () => {},
+    readSubscriptionPromoTransactionPaid: async () => false,
+    ATLANTY_ANNUAL_PRICE_MINOR: 6800000,
     ATLANTY_MONTHLY_PRICE_MINOR: 680000,
     TOPOCRATY_MONTHLY_PRICE_MINOR: 680000,
     TOPOCRATY_PLAN_ID: 'topocraty',
     PATRIOTS_MONTHLY_PRICE_MINOR: 680000,
     PATRIOTS_PLAN_ID: 'patriots',
     PATRIOTS_PRODUCT_ID: '37ab3713-4431-4815-96ba-d7ece76a9241',
+    VSK_PRODUCT_ID: '94e32355-1c69-462b-9f2a-77f2817cb24c',
     API_BASE: 'https://api.vivacrm.ru', TENANT_KEY: 'iSkq6G',
     canContinue: (row: any) => row.canPurchase && row.bindingReady && row.priceMinor > 0 && row.remainingCount > 0,
     appendCurrentAuthModeToNavigableUrl: (url: URL) => { url.searchParams.set('authMode', 'viva'); return url; },
     getServ2Origin: () => 'https://fixture.invalid',
     request: async (path: string) => {
       counterRequests.push(path);
+      const live = Object.values(liveProducts).find(product => path.endsWith('/products/subscriptions/' + product.id));
+      if (live) return { data: live, error: null };
+      if (path.includes('counterKey=friendship_two_hours')) return { data: { plans: [twoHourStatus] } };
       if (path.includes('/products/subscriptions/')) return { data: patriotProduct, error: null };
       return { data: [{ counterKey: new URL(path, 'https://fixture.invalid').searchParams.get('counterKey'), priceMinor: price, canPurchase: availability, bindingReady: true, remainingCount: 2, totalLimit: 10, unlimited: false }] };
     },
     apiBuySubscroption: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
-    apiCreateTournamentSubscriptionPurchase: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
+    apiCreateTournamentSubscriptionPurchase: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return { ...result, data: result.data ? { toPayMinor: price, ...result.data } : result.data }; },
     apiConfirmTournamentSubscriptionPurchase: async (...args: any[]) => { confirms.push(args); return confirmation; },
     ...overrides,
   }, { ...f.globals, setTimeout, clearTimeout });
-  return { ...f, adapter, writes, confirms, counterRequests, setResult: (value: any) => { result = value; },
+  return { ...f, setPromoResult: f.setResult, adapter, writes, confirms, counterRequests, setResult: (value: any) => { result = value; },
     setConfirmation: (value: any) => { confirmation = value; }, setPrice: (value: number) => { price = value; },
+    setLiveProduct: (key: 'vsk' | 'residency' | 'friendship-two-hours', changes: Record<string, unknown>) => { liveProducts[key] = { ...liveProducts[key], ...changes }; },
+    setTwoHourStatus: (changes: Record<string, unknown>) => { twoHourStatus = { ...twoHourStatus, ...changes }; },
     setPatriotProduct: (value: Record<string, unknown>) => { patriotProduct = value; },
     unavailable: () => { availability = false; }, breakTransport: () => { broken = true; }, failWrite: () => { storageFails = true; } };
 }
 
 test('Zero Block resolves exact monthly, annual and promo products; rejects arbitrary IDs', () => {
   const f = zeroFixture();
+  assert.equal(f.adapter.resolveZeroOffer('atlanty-year')?.target, null);
   assert.equal(f.adapter.resolveZeroOffer('friendship-year')?.target?.counterKey, 'network_friendship');
   assert.equal(f.adapter.resolveZeroOffer('friendship-year')?.billingOptionId, 'annual');
   assert.equal(f.adapter.resolveZeroOffer('energy5')?.period, '60 дней, 5 занятий');
-  for (const key of ['constructor', '__proto__', 'sport-promo', 'unknown', 'atlanty-year']) assert.equal(f.adapter.resolveZeroOffer(key), null);
+  for (const key of ['constructor', '__proto__', 'sport-promo', 'unknown']) assert.equal(f.adapter.resolveZeroOffer(key), null);
 });
 
 test('Zero Block sells the Atlanty club offer from the catalogue price, never the friendship counter', async () => {
@@ -443,7 +479,8 @@ test('Zero Block confirmation uses only stored exact ref; missing local evidence
   assert.equal(f.confirms[0][0], f.writes[0][0].paymentRef);
   f.setConfirmation({ data: { status: 'PAID', paid: true, failed: false } });
   assert.equal((await f.adapter.confirmZeroPayment('friendship')).status, 'paid');
-  assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), false);
+  assert.equal(f.adapter.hasRecordedZeroAttempt('friendship'), true);
   await f.adapter.confirmZeroPayment('academy');
   assert.equal(f.confirms.length, 2);
 });
@@ -459,6 +496,7 @@ test('Zero Block empty counter create requires confirmation, never interprets mi
 
 test('Zero Block promo uses the existing product/guard and returns to the landing page', async () => {
   const f = zeroFixture();
+  f.setPromoResult({ data: { paymentUrl: 'https://bank.example/promo', toPay: 1190000 }, error: null });
   const result = await f.adapter.createZeroPayment('ra-promo', fixturePhone, 1190000, () => true);
   assert.equal(result.status, 'redirect');
   assert.equal(f.calls.length, 1);
@@ -503,4 +541,624 @@ test('Zero Block loader rejects preloaded wrong channel and legacy runtime; comp
     assert.equal(resumed, checkoutChannel === 'prod' ? 1 : 0);
     assert.equal(instance.destroy(), true);
   }
+});
+
+
+for (const key of ['residency', 'friendship-two-hours'] as const) {
+  test(`Zero Block ${key} reads the exact public product and live price without admin-only fields or writes`, async () => {
+    const f = zeroFixture();
+    const offer = f.adapter.resolveZeroOffer(key)!;
+    assert.equal(offer.liveProductId, liveProductFixture(key).id);
+    assert.equal(offer.target, null);
+    assert.equal(offer.billingOptionId, key === 'residency' ? 'monthly' : 'monthly-two-hours');
+    const quote = await f.adapter.loadZeroOfferQuote(key);
+    assert.equal(quote.priceMinor, liveProductFixture(key).cost);
+    assert.equal(quote.activationDays, liveProductFixture(key).activationDays);
+    f.setLiveProduct(key, { cost: 123456 });
+    if (key !== 'residency') f.setTwoHourStatus({ priceMinor: 123456 });
+    assert.equal(await f.adapter.loadZeroOfferPrice(key), 123456);
+    assert.ok(f.counterRequests.some(url => url.endsWith('/products/subscriptions/' + offer.liveProductId)));
+    assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+  });
+
+  test(`Zero Block ${key} rejects malformed terms before writes or attempt markers`, async () => {
+    for (const change of [{ cost: 0 }, { cost: -1 }, { cost: 1.1 }, { cost: '79000' }, { cost: NaN },
+      { validityDays: 31 }, { visits: 0 }, { activationDays: undefined }, { activationDays: -1 }, { activationDays: 1.1 },
+      { type: 'INDIVIDUAL' }, { variant: 'BY_MINUTES' }, { appliesTo: null }, { showToUser: false }, { productType: 'ONE_TIME' }]) {
+      const f = zeroFixture(); f.setLiveProduct(key, change);
+      await assert.rejects(f.adapter.loadZeroOfferPrice(key));
+      await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, 79000, () => true));
+      assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+    }
+    const f = zeroFixture();
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture(key, { id: 'foreign' }), key));
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture(key), 'constructor'));
+  });
+
+  test(`Zero Block ${key} rechecks price and activation after confirmation, before the first POST`, async () => {
+    for (const change of [{ cost: 1990000 }, { activationDays: 15 }]) {
+      const f = zeroFixture(); const shown = await f.adapter.loadZeroOfferQuote(key);
+      f.setLiveProduct(key, change);
+      if (key !== 'residency' && change.cost) f.setTwoHourStatus({ priceMinor: change.cost });
+      await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, shown.priceMinor, () => true, shown), /измен|подтвердить/);
+      assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+    }
+    const f = zeroFixture(); const quote = await f.adapter.loadZeroOfferQuote(key);
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => false, quote));
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true));
+    assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+  });
+
+  test(`Zero Block ${key} uses one exact direct transaction and marker; return/confirm never purchases`, async () => {
+    const f = zeroFixture(); const quote = await f.adapter.loadZeroOfferQuote(key);
+    f.setResult({ data: { paymentUrl: 'https://bank.example/zero', toPay: quote.priceMinor } });
+    const outcomes = await Promise.allSettled([1, 2].map(() => f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote)));
+    assert.equal(outcomes.filter(row => row.status === 'fulfilled').length, 1);
+    assert.equal(f.writes.length, 1);
+    assert.equal(f.writes[0][0], liveProductFixture(key).id);
+    assert.equal(f.writes[0][2].retries, 0);
+    const url = new URL(f.writes[0][2].successUrl);
+    assert.equal(url.searchParams.get('phCheckoutReturn'), key);
+    assert.equal(url.searchParams.has('code'), false);
+    assert.equal((await f.adapter.confirmZeroPayment(key)).status, 'pending');
+    assert.equal(f.confirms.length, 0); assert.equal(f.writes.length, 1);
+    assert.equal(f.stored.size, 1); assert.ok(!JSON.stringify([...f.stored]).includes(fixturePhone));
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+    assert.equal(f.writes.length, 1);
+  });
+
+  test(`Zero Block ${key} keeps ambiguous attempts and never redirects a mismatched transaction amount`, async () => {
+    for (const data of [{ toPay: undefined }, { toPay: 1 }, { toPay: '79000' }]) {
+      const f = zeroFixture(); const quote = await f.adapter.loadZeroOfferQuote(key);
+      f.setResult({ data: { paymentUrl: 'https://bank.example/zero', ...data } });
+      await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+      await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+      assert.equal(f.writes.length, 1); assert.equal(f.stored.size, 1);
+    }
+    const f = zeroFixture(); const quote = await f.adapter.loadZeroOfferQuote(key); f.breakTransport();
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+    assert.equal(f.writes.length, 1);
+  });
+}
+
+test('new live products preserve residency-only and two-hour coverage and exact booking readiness', async () => {
+  const f = zeroFixture();
+  for (const change of [{ hasStudioLimitation: true }, { hasDirectionLimitation: true }, { availableTypes: [{ id: 839 }] },
+    { availableTypes: [{ id: 2572 }, { id: 839 }] }]) {
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture('residency', change), 'residency'));
+  }
+  for (const change of [{ availableDirections: [{ id: 4588 }] }, { hasDirectionLimitation: undefined },
+    { availableTypes: [{ id: 1613 }] }, { hasTypeLimitation: null }]) {
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture('friendship-two-hours', change), 'friendship-two-hours'));
+  }
+  for (const change of [{ counterKey: 'friendship' }, { productId: 'foreign' }, { bindingReady: false },
+    { canPurchase: false }, { priceMinor: 1980001 }, { unlimited: undefined }]) {
+    const f = zeroFixture(); f.setTwoHourStatus(change);
+    await assert.rejects(f.adapter.loadZeroOfferPrice('friendship-two-hours'));
+    await assert.rejects(f.adapter.createZeroPayment('friendship-two-hours', fixturePhone, 1980000, () => true, { priceMinor: 1980000, activationDays: 1 }));
+    assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+  }
+});
+
+test('Zero Block adapter reads new prices through a supporting runtime and rejects old runtime without fallback', async () => {
+  const source = readFileSync(new URL('../../docs/zero-block/padlhub-zero-block.js', import.meta.url), 'utf8');
+  for (const support of [true, false]) {
+    const opened: string[] = [], reads: string[] = [], navigation: string[] = [];
+    const attributes = new Map<string, string>();
+    const button = { tagName: 'BUTTON', matches: () => true,
+      getAttribute: (name: string) => attributes.get(name) ?? null,
+      setAttribute: (name: string, value: string) => attributes.set(name, value),
+      removeAttribute: (name: string) => attributes.delete(name) };
+    const document = { querySelectorAll: (selector: string) => selector.includes('.ph-buy-residency') ? [button] : [], dispatchEvent: () => {}, addEventListener: () => {}, removeEventListener: () => {}, hidden: false };
+    const window: any = { document, location: { href: 'https://padlhub.ru/new', search: '', hash: '', assign: (url: string) => navigation.push(url) },
+      setTimeout: () => 1, clearTimeout: () => {}, addEventListener: () => {}, removeEventListener: () => {},
+      localStorage: { getItem: () => null }, sessionStorage: { getItem: () => null },
+      fetch: () => { throw new Error('No raw product fetch in the adapter'); },
+      LKWidgetSubscriptionStorefront: { checkoutVersion: 1, checkoutChannel: 'prod', openCheckout: (key: string) => opened.push(key),
+        closeCheckout: () => true, resumeCheckout: () => {}, supportsCheckoutOffer: () => support,
+        loadCheckoutOfferPrice: async (key: string) => { reads.push(key); return key === 'residency' ? 79001 : 1980000; } } };
+    vm.runInNewContext(source, { window, document, URL, URLSearchParams, AbortController, CustomEvent: class {} });
+    const instance = window.PadlHubZeroBlock.init({ offerKeys: ['residency', 'friendship-two-hours'], lazyCheckout: true, fallbackToCatalog: true });
+    await instance.refresh();
+    assert.equal(attributes.has('disabled'), !support);
+    assert.equal(attributes.get('tabindex'), support ? '0' : '-1');
+    for (const key of ['residency', 'friendship-two-hours']) {
+      assert.equal(instance.getState(key).status, support ? 'ready' : 'error');
+      if (support) { assert.equal(instance.getState(key).checkoutReady, true); assert.equal(instance.getState(key).data.remaining, null); assert.equal(instance.getState(key).data.total, null); }
+      await instance.openCheckout(key);
+    }
+    assert.deepEqual(opened, support ? ['residency', 'friendship-two-hours'] : []);
+    assert.equal(reads.length > 0, support); assert.deepEqual(navigation, []);
+    assert.equal(instance.destroy(), true);
+  }
+});
+
+
+test('new public product quotes use an explicit discounted price without computing or rounding money', async () => {
+  const f = zeroFixture();
+  assert.equal(f.adapter.parseZeroLiveProductQuote(liveProductFixture('residency', { discountPrice: 65432 }), 'residency').priceMinor, 65432);
+  for (const discountPrice of [0, -1, 79001, '79000', 1.5, NaN]) {
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture('residency', { discountPrice }), 'residency'));
+  }
+  const options: RequestInit[] = [];
+  const fresh = zeroFixture({ request: async (_url: string, init: RequestInit) => {
+    options.push(init); return { data: liveProductFixture('residency') };
+  } });
+  await fresh.adapter.loadZeroOfferQuote('residency');
+  assert.equal(options[0].cache, 'no-store');
+});
+
+test('only the explicit residency purchase and bank-return routes open checkout', () => {
+  for (const query of ['?buyResidency=1', '?buyResidency=1&authMode=viva', '?phCheckoutReturn=residency']) {
+    assert.equal(isResidencyPurchaseRoute(query), true);
+  }
+  for (const query of ['', '?residency=1&stationId=123', '?buyResidency=0', '?buyResidency=1&buyResidency=0',
+    '?phCheckoutReturn=friendship', '?phCheckoutReturn=residency&phCheckoutReturn=friendship',
+    '?buyResidency=1&phCheckoutReturn=foreign', '?productId=' + RESIDENCY_PRODUCT_ID]) {
+    assert.equal(isResidencyPurchaseRoute(query), false);
+  }
+});
+
+test('OAuth returns to the selected residency route after the cabinet callback', () => {
+  const previousWindow = globalThis.window;
+  const href = 'https://padlhub.ru/lk_new?buyResidency=1&authMode=viva&code=old&state=old';
+  const storage = new Map<string, string>();
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    location: { href, origin: 'https://padlhub.ru', search: new URL(href).search },
+    sessionStorage: { getItem: (key: string) => storage.get(key) ?? null },
+  } });
+  try {
+    const returnTo = buildVivaOAuthReturnUrl();
+    assert.equal(isResidencyPurchaseRoute(new URL(returnTo).search), true);
+    assert.equal(new URL(returnTo).searchParams.has('code'), false);
+    storage.set(getVivaOAuthStorageKey(), JSON.stringify({ provider: 'yandex', state: 'fixture', codeVerifier: 'fixture',
+      redirectUri: 'https://padlhub.ru/lk_new?authMode=viva', returnTo }));
+    assert.equal(readPendingVivaOAuth()?.returnTo, returnTo);
+  } finally {
+    if (previousWindow === undefined) delete (globalThis as { window?: unknown }).window;
+    else Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow });
+  }
+});
+
+
+test('known paid counter payment permits a fresh renewal; uncertain legacy refs never age out', async () => {
+  const f = zeroFixture();
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
+  assert.equal((await f.adapter.confirmZeroPayment('friendship')).status, 'paid');
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), false);
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
+  const legacy = zeroFixture();
+  legacy.stored.set('padlhub_tournament_subscription_pending_refs', JSON.stringify([{paymentRef:'legacy-ref',counterKey:'friendship',planId:'annual',createdAt:'2000-01-01'}]));
+  await assert.rejects(legacy.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true));
+  assert.equal(legacy.writes.length, 0);
+  assert.equal(legacy.adapter.hasZeroAttempt('friendship-year'), false);
+});
+
+test('delayed confirmation cannot overwrite a newer pending payment or authorize a third create', async () => {
+  let entered!:()=>void, release!:(v: unknown)=>void;
+  const started = new Promise<void>(r=>{entered=r;});
+  const response = new Promise(r=>{release=r;});
+  const f = zeroFixture({apiConfirmTournamentSubscriptionPurchase:()=>{entered();return response;}});
+  await f.adapter.createZeroPayment('friendship',fixturePhone,980000,()=>true);
+  const pending=f.adapter.confirmZeroPayment('friendship'); await started;
+  const key='padlhub_zero_checkout_attempt_v1:friendship';
+  const newer={key:'friendship',paymentRef:'zero-00000000-0000-4000-8000-000000000002',state:'pending'};
+  f.stored.set(key,JSON.stringify(newer));
+  await assert.rejects(f.adapter.createZeroPayment('friendship',fixturePhone,980000,()=>true));
+  release({data:{paid:true,failed:false,status:'PAID'}});
+  assert.equal((await pending).status,'pending');
+  assert.deepEqual(JSON.parse(f.stored.get(key)!),newer);
+  await assert.rejects(f.adapter.createZeroPayment('friendship',fixturePhone,980000,()=>true));
+  assert.equal(f.writes.length,1);
+});
+
+test('every direct/counter amount and conflicting transaction id fails closed after one POST', async () => {
+  for(const counter of [true,false])for(const change of [undefined,1]){
+    const f=zeroFixture();if(!counter)f.setPrice(2380000);
+    f.setResult({data:{paymentUrl:'https://bank.example/pay',...(counter?{toPayMinor:change}:{toPay:change})}});
+    await assert.rejects(f.adapter.createZeroPayment(counter?'friendship':'academy',fixturePhone,counter?980000:2380000,()=>true));
+    assert.equal(f.writes.length,1);assert.equal(f.adapter.hasZeroAttempt(counter?'friendship':'academy'),true);
+  }
+  const f=zeroFixture();f.setResult({data:{paymentUrl:'https://bank.example/pay',toPay:680000,id:'old-paid',transactionId:'new-pending'}});
+  await assert.rejects(f.adapter.createZeroPayment('atlanty',fixturePhone,680000,()=>true));
+  assert.equal(f.writes.length,1);
+  assert.equal(JSON.parse([...f.stored.values()][0]).transactionId,undefined);
+});
+
+
+test('VSK sells only its exact live monthly product, without annual or arbitrary aliases', async () => {
+  const f = zeroFixture();
+  const offer = f.adapter.resolveZeroOffer('vsk')!;
+  assert.equal(offer.label, 'Дружба.ВСК');
+  assert.equal(offer.billingOptionId, 'monthly');
+  assert.equal(offer.liveProductId, '94e32355-1c69-462b-9f2a-77f2817cb24c');
+  for (const key of ['vsk-year', 'vsk-annual', offer.liveProductId!, 'VSK']) assert.equal(f.adapter.resolveZeroOffer(key), null);
+  const quote = await f.adapter.loadZeroOfferQuote('vsk');
+  assert.equal(quote.priceMinor, 680000);
+  assert.equal(f.writes.length, 0);
+  const outcomes = await Promise.allSettled([1, 2].map(() => f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote)));
+  assert.equal(outcomes.filter(value => value.status === 'fulfilled').length, 1);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0][0], offer.liveProductId);
+  assert.equal(f.writes[0][2].retries, 0);
+  assert.ok(!f.counterRequests.some(url => url.includes('counterKey=')));
+  await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote));
+  assert.equal(f.writes.length, 1);
+});
+
+test('VSK rejects wrong product, changed terms/scope and hidden products before purchase', async () => {
+  for (const change of [{ id: 'foreign' }, { validityDays: 365 }, { visits: 31 }, { showToUser: false },
+    { hasDirectionLimitation: false }, { availableDirections: [{ id: 4588 }, { id: 6180 }] },
+    { availableDirections: [{ id: 4588 }, { id: 6975 }, { id: 5278 }] },
+    { availableTypes: [{ id: 839 }, { id: 2349 }] }, { hasDayLimitation: true },
+    { hasTimeRangeLimitation: true }, { hasDayTimeLimitation: true }]) {
+    const f = zeroFixture(); f.setLiveProduct('vsk', change);
+    await assert.rejects(f.adapter.loadZeroOfferQuote('vsk'));
+    await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, { priceMinor: 680000, activationDays: 0 }));
+    assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+  }
+  for (const change of [{ cost: 690000 }, { activationDays: 1 }]) {
+    const f = zeroFixture(), quote = await f.adapter.loadZeroOfferQuote('vsk');
+    f.setLiveProduct('vsk', change);
+    await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote));
+    assert.equal(f.writes.length, 0);
+  }
+});
+
+test('VSK retains uncertain payments and returns only to its own landing', async () => {
+  const f = zeroFixture(), quote = await f.adapter.loadZeroOfferQuote('vsk');
+  f.globals.window.location.href = 'https://padlhub.ru/vsk?authMode=viva&autoPurchase=1&code=fixture';
+  assert.equal(new URL(f.adapter.buildZeroReturnUrl('vsk')).pathname, '/vsk');
+  assert.equal(new URL(f.adapter.buildZeroReturnUrl('vsk')).searchParams.has('autoPurchase'), false);
+  assert.equal((await f.adapter.confirmZeroPayment('vsk')).status, 'pending');
+  assert.equal(f.writes.length, 0);
+  f.breakTransport();
+  await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote));
+  await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote));
+  assert.equal(f.writes.length, 1);
+});
+
+// Existing checkout continuation must never call the purchase endpoint again.
+test('pending counter resumes its exact bank link despite sold-out inventory or changed card price', async () => {
+  const f = zeroFixture();
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  const paymentRef = f.writes[0][0].paymentRef;
+  f.unavailable(); f.setPrice(999000);
+  f.setConfirmation({ data: { paymentRef, counterKey: 'friendship', status: 'PENDING', paid: false, failed: false, paymentUrl: 'https://bank.example/existing' } });
+  const result = await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true);
+  assert.equal(result.status, 'redirect');
+  assert.equal(result.paymentUrl, 'https://bank.example/existing');
+  assert.equal(f.writes.length, 1);
+});
+
+test('resume checks account binding, exact ref/counter, expiry, cancellation and ambiguous results', async () => {
+  const f = zeroFixture();
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  const paymentRef = f.writes[0][0].paymentRef;
+  const good = { paymentRef, counterKey: 'friendship', status: 'PENDING', paid: false, failed: false, paymentUrl: 'https://bank.example/existing' };
+  for (const changes of [{ paymentRef: 'foreign' }, { counterKey: 'network_friendship' }, { failed: true }, { status: 'FAILED' }, { expiresAt: '2000-01-01T00:00:00Z' }, { paymentUrl: 'javascript:alert(1)' }, { paid: true }, { paymentUrl: null }]) {
+    f.setConfirmation({ data: { ...good, ...changes } });
+    assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'pending');
+  }
+  f.setConfirmation({ data: good });
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', 'other-account', () => true)).status, 'pending');
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => false)).status, 'pending');
+  f.setConfirmation({ error: { status: 503 } });
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'pending');
+  assert.equal((await f.adapter.resumeZeroPayment('academy', fixturePhone, () => true)).status, 'pending');
+  assert.equal(f.writes.length, 1);
+});
+
+test('legacy counter resume requires matching pre-existing account-scoped custody', async () => {
+  const f = zeroFixture();
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  const key = 'padlhub_zero_checkout_attempt_v1:friendship';
+  const attempt = JSON.parse(f.stored.get(key)!); delete attempt.ownerBinding;
+  f.stored.set(key, JSON.stringify(attempt));
+  f.setConfirmation({ data: { paymentRef: attempt.paymentRef, counterKey: 'friendship', status: 'PENDING', paymentUrl: 'https://bank.example/existing' } });
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'pending');
+  f.stored.set('fixture:' + 'a'.repeat(64), JSON.stringify({ kind: 'ordinary', paymentRef: attempt.paymentRef }));
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'redirect');
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', 'other-account', () => true)).status, 'pending');
+  assert.equal(f.writes.length, 1);
+});
+
+test('direct resume reads authenticated transaction/operation without another purchase', async () => {
+  for (const mode of ['pending', 'paid', 'failed', 'expired', 'unknown', 'account-drift', 'ref-drift']) {
+    let active = true;
+    const reads: any[] = [];
+    const f = zeroFixture({ request: async (path: string, options: any) => {
+      if (path.includes('/transactions/')) {
+        reads.push([path, options]);
+        return mode === 'unknown' ? { error: { status: 404 } } : { data: { transactionStatus: mode === 'paid' ? 'PAID' : 'UNPAID' } };
+      }
+      if (path.includes('/operations/')) {
+        reads.push([path, options]);
+        if (mode === 'account-drift') active = false;
+        if (mode === 'ref-drift') f.stored.set('padlhub_zero_checkout_attempt_v1:academy', '{}');
+        return { data: { status: 'COMPLETED', result: { paymentUrl: 'https://bank.example/direct',
+          ...(mode === 'failed' ? { status: 'FAILED' } : {}), ...(mode === 'expired' ? { paymentDueDate: '2000-01-01T00:00:00Z' } : {}) } } };
+      }
+      return { data: [{ counterKey: 'academy', priceMinor: 980000, canPurchase: true, bindingReady: true, unlimited: true }] };
+    } });
+    f.setResult({ data: { transactionId: 'fixture-operation', paymentUrl: 'https://bank.example/first', toPay: 980000 } });
+    await f.adapter.createZeroPayment('academy', fixturePhone, 980000, () => true);
+    const result = await f.adapter.resumeZeroPayment('academy', fixturePhone, () => active);
+    assert.equal(result.status, mode === 'pending' ? 'redirect' : mode === 'paid' ? 'paid' : 'pending', mode);
+    assert.ok(reads.every(([, options]) => options.method === 'GET' && options.auth === true && options.retries === 0));
+    assert.equal(f.writes.length, 1);
+  }
+});
+
+test('resume rejects a held offer lock and rechecks session/custody after asynchronous confirm', async () => {
+  let active = true;
+  const f = zeroFixture({ apiConfirmTournamentSubscriptionPurchase: async (ref: string) => {
+    active = false;
+    return { data: { paymentRef: ref, counterKey: 'friendship', status: 'PENDING', paymentUrl: 'https://bank.example/existing' } };
+  } });
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => active)).status, 'pending');
+  active = true;
+  await f.globals.navigator.locks.request('padlhub_zero_checkout_attempt_v1:friendship', {}, async () => {
+    assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'pending');
+  });
+  assert.equal(f.writes.length, 1);
+});
+
+
+test('cached real counter response without counterKey resumes exact account payment', async () => {
+  const f = zeroFixture();
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  const paymentRef = f.writes[0][0].paymentRef;
+  f.setConfirmation({ data: { ok: true, status: 'PAYMENT_PENDING', paid: false, paymentRef, transactionId: 'existing', paymentUrl: 'https://bank.example/cached', counterKey: null } });
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'redirect');
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.confirms.length, 1);
+});
+
+test('verified reset clears only exact legacy and account markers without creating a payment', async () => {
+  const f = zeroFixture();
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  const marker = 'padlhub_zero_checkout_attempt_v1:friendship', account = 'fixture:' + 'a'.repeat(64);
+  const attempt = JSON.parse(f.stored.get(marker)!); delete attempt.ownerBinding;
+  f.stored.set(marker, JSON.stringify(attempt));
+  f.stored.set(account, JSON.stringify({ kind: 'ordinary', paymentRef: attempt.paymentRef }));
+  const legacy = 'padlhub_tournament_subscription_pending_refs';
+  f.stored.set(legacy, JSON.stringify([{ paymentRef: attempt.paymentRef, counterKey: 'friendship' }, { paymentRef: 'preserve-other', counterKey: 'academy' }]));
+  const tx = '00000000-0000-4000-8000-000000000002';
+  f.setConfirmation({ data: { paymentRef: attempt.paymentRef, transactionId: tx, counterKey: 'friendship', status: 'FAILED', failed: true, paid: false, paymentUrl: null,
+    checkoutReset: { version: 1, state: 'PROVIDER_EXPIRED_UNPAID', paymentRef: attempt.paymentRef, transactionId: tx, operationId: '00000000-0000-4000-8000-000000000003', closureKind: 'PROVIDER_CARD_EXPIRED_UNPAID', terminalCardStatus: 'REJECTED', declineOutcome: 'EXPIRED', paymentIdSha256: 'a'.repeat(64), paymentUrlSha256: 'b'.repeat(64), expireAcknowledged: false, verifiedAt: '2026-11-01T00:00:00Z' } } });
+  f.stored.set(account, JSON.stringify({ kind: 'ordinary', paymentRef: 'preserve-active' }));
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'pending');
+  assert.ok(f.stored.has(marker));
+  f.stored.set(account, JSON.stringify({ kind: 'ordinary', paymentRef: attempt.paymentRef }));
+  assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, 'restart');
+  assert.equal(f.stored.has(marker), false); assert.equal(f.stored.has(account), false);
+  assert.deepEqual(JSON.parse(f.stored.get(legacy)!), [{ paymentRef: 'preserve-other', counterKey: 'academy' }]);
+  assert.equal(f.writes.length, 1);
+});
+
+
+test('reset receipt cannot release a known different transaction or a locally paid attempt', async () => {
+  for (const state of ['paid', 'pending']) {
+    const f = zeroFixture(); await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+    const key = 'padlhub_zero_checkout_attempt_v1:friendship', a = JSON.parse(f.stored.get(key)!);
+    a.state = state; a.transactionId = '00000000-0000-4000-8000-000000000004'; f.stored.set(key, JSON.stringify(a));
+    const tx = '00000000-0000-4000-8000-000000000002';
+    f.setConfirmation({ data: { paymentRef: a.paymentRef, transactionId: tx, counterKey: 'friendship', status: 'FAILED', failed: true, paid: false, paymentUrl: null,
+      checkoutReset: { version: 1, state: 'PROVIDER_EXPIRED_UNPAID', closureKind: 'PROVIDER_CARD_EXPIRED_UNPAID', terminalCardStatus: 'REJECTED', declineOutcome: 'EXPIRED', paymentIdSha256: 'a'.repeat(64), paymentUrlSha256: 'b'.repeat(64), paymentRef: a.paymentRef, transactionId: tx, operationId: '00000000-0000-4000-8000-000000000003', expireAcknowledged: false, verifiedAt: '2026-11-01T00:00:00Z' } } });
+    const before = f.stored.get(key);
+    assert.equal((await f.adapter.resumeZeroPayment('friendship', fixturePhone, () => true)).status, state === 'paid' ? 'paid' : 'pending');
+    assert.equal(f.stored.get(key), before); assert.equal(f.writes.length, 1);
+  }
+});
+
+test('promo actor drift while waiting for lock does not dispatch a purchase', async () => {
+  const f = paymentFixture(); let active = true;
+  const acquire = f.globals.navigator.locks.request;
+  f.globals.navigator.locks.request = async (...args: Parameters<typeof acquire>) => { active = false; return acquire(...args); };
+  await assert.rejects(f.adapter.createStorefrontPromoPayment('friendship-promo', fixturePhone, undefined, 490000, () => active));
+  assert.equal(f.calls.length, 0); assert.equal(f.stored.size, 0);
+});
+
+test('known 2.0 terminal receipt clears only matching pending custody without another purchase', async () => {
+  for (const mode of ['closed', 'mismatch', 'paid', 'unknown-id', 'changed-marker']) {
+    let probes = 0;
+    const tx = '00000000-0000-4000-8000-000000000002';
+    const f = zeroFixture({ readClosedDirectCheckout: async (_p: string, _id: string, current: () => boolean) => {
+      probes++; if (mode === 'changed-marker') f.stored.set('padlhub_zero_checkout_attempt_v1:friendship-two-hours', 'replacement');
+      return current();
+    } });
+    f.setResult({ data: { paymentUrl: 'https://bank.example/old', toPay: 1980000, transactionId: tx } });
+    const quote = await f.adapter.loadZeroOfferQuote('friendship-two-hours');
+    await f.adapter.createZeroPayment('friendship-two-hours', fixturePhone, 1980000, () => true, quote);
+    const key = 'padlhub_zero_checkout_attempt_v1:friendship-two-hours', a = JSON.parse(f.stored.get(key)!);
+    if (mode === 'paid') { a.state = 'paid'; f.stored.set(key, JSON.stringify(a)); }
+    if (mode === 'unknown-id') { delete a.transactionId; f.stored.set(key, JSON.stringify(a)); }
+    if (mode === 'mismatch') f.stored.set('fixture:' + 'a'.repeat(64), JSON.stringify({ kind: 'ordinary', transactionId: 'different' }));
+    const result = await f.adapter.resumeZeroPayment('friendship-two-hours', fixturePhone, () => true);
+    assert.equal(result.status, mode === 'closed' ? 'restart' : mode === 'paid' ? 'paid' : 'pending');
+    assert.equal(f.stored.has(key), mode !== 'closed'); assert.equal(f.writes.length, 1);
+    if (['mismatch', 'paid', 'unknown-id'].includes(mode)) assert.equal(probes, 0);
+  }
+});
+
+function reconciliationFixture(overrides: Record<string, unknown> = {}) {
+  let effect: (() => (() => void) | undefined) | undefined;
+  let state: readonly string[] = [];
+  let token: string | null = 'fixture-session';
+  let hidden = false;
+  let opened = false;
+  let now = 0;
+  const listeners = new Map<string, () => void>();
+  const timers = new Map<number, () => void>();
+  const notices: string[] = [];
+  const resumes: string[] = [];
+  let profiles = 0;
+  const adapter = loadModule<typeof import('../../src/components/subscription-storefront/usePendingCheckoutReconciliation')>(
+    'components/subscription-storefront/usePendingCheckoutReconciliation.ts', {
+      useEffect: (fn: typeof effect) => { effect = fn; },
+      useState: () => [state, (next: readonly string[] | ((previous: readonly string[]) => readonly string[])) => { state = typeof next === 'function' ? next(state) : next; }],
+      useAuth: () => ({ isAuthenticated: true, isRestoringSession: false, isLoading: false, needsPhoneVerification: false }),
+      checkoutSessionToken: () => token,
+      checkoutTransportMatches: (value: string | null) => value === token && !!value,
+      resolveCheckoutPhone: async () => { profiles++; return fixturePhone; },
+      hasRecordedZeroAttempt: () => true,
+      hasZeroAttempt: () => true,
+      isCheckoutOpen: () => opened,
+      isCheckoutReturn: () => false,
+      resumeZeroPayment: async (key: string) => { resumes.push(key); return { status: 'pending' }; },
+      ...overrides,
+    }, {
+      Date: { now: () => now },
+      setTimeout: (fn: () => void) => { timers.set(1, fn); return 1; },
+      clearTimeout: (id: number) => timers.delete(id),
+      CustomEvent: class {
+        type: string; options: { detail: string };
+        constructor(type: string, options: { detail: string }) { this.type = type; this.options = options; }
+      },
+      window: {
+        addEventListener: (name: string, fn: () => void) => listeners.set(name, fn),
+        removeEventListener: (name: string) => listeners.delete(name),
+        dispatchEvent: (event: { options: { detail: string } }) => notices.push(event.options.detail),
+      },
+      document: {
+        get hidden() { return hidden; },
+        addEventListener: (name: string, fn: () => void) => listeners.set(name, fn),
+        removeEventListener: (name: string) => listeners.delete(name),
+      },
+    });
+  return {
+    start: (keys = ['friendship', 'friendship-two-hours', 'academy'], enabled = true) => {
+      adapter.usePendingCheckoutReconciliation(keys, enabled);
+      return effect?.();
+    },
+    state: () => Array.from(state), notices, resumes, profiles: () => profiles,
+    setToken: (value: string | null) => { token = value; },
+    setHidden: (value: boolean) => { hidden = value; },
+    setOpen: (value: boolean) => { opened = value; },
+    advance: () => { now += 30_000; },
+    fire: (name: string) => listeners.get(name)?.(),
+    timeout: () => timers.get(1)?.(),
+    listeners,
+  };
+}
+const flushReconciliation = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test('page reconciliation checks only supported visible offers and never consumes redirect/restart as a purchase', async () => {
+  for (const status of ['restart', 'redirect', 'paid', 'pending']) {
+    const called: string[] = [];
+    const f = reconciliationFixture({ resumeZeroPayment: async (key: string) => {
+      called.push(key); return { status, message: 'fixture result', paymentUrl: 'https://bank.example/should-not-open' };
+    } });
+    const stop = f.start(['friendship', 'academy']);
+    assert.deepEqual(f.state(), ['friendship']);
+    await flushReconciliation();
+    assert.deepEqual(called, ['friendship']);
+    assert.deepEqual(f.state(), []);
+    assert.equal(f.notices.length, ['restart', 'paid'].includes(status) ? 1 : 0);
+    f.fire('focus'); await flushReconciliation(); assert.equal(called.length, 1);
+    f.advance(); f.fire('focus'); await flushReconciliation(); assert.equal(called.length, 2);
+    stop?.(); assert.equal(f.listeners.size, 0);
+  }
+});
+
+test('page reconciliation skips preview, auth/transport restoration, bank return, hidden and interactive checkout', async () => {
+  for (const mode of ['preview', 'auth', 'transport', 'return', 'hidden', 'open', 'legacy-only']) {
+    const f = reconciliationFixture({
+      ...(mode === 'auth' ? { useAuth: () => ({ isAuthenticated: true, isRestoringSession: true }) } : {}),
+      ...(mode === 'transport' ? { checkoutTransportMatches: () => false } : {}),
+      ...(mode === 'return' ? { isCheckoutReturn: () => true } : {}),
+      ...(mode === 'legacy-only' ? { hasRecordedZeroAttempt: () => false } : {}),
+    });
+    f.setHidden(mode === 'hidden'); f.setOpen(mode === 'open');
+    const stop = f.start(undefined, mode !== 'preview');
+    await flushReconciliation();
+    assert.equal(f.profiles(), 0, mode); assert.equal(f.resumes.length, 0, mode);
+    stop?.();
+  }
+});
+
+test('page reconciliation invalidates late confirmation after timeout, session change, hide, checkout or unmount', async () => {
+  for (const mode of ['timeout', 'session', 'hidden', 'open', 'unmount']) {
+    let finish!: () => void;
+    let current!: () => boolean;
+    const f = reconciliationFixture({ resumeZeroPayment: async (_key: string, _phone: string, guard: () => boolean) => {
+      current = guard;
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { status: 'restart', message: 'must not announce stale result' };
+    } });
+    const stop = f.start(['friendship']); await flushReconciliation();
+    f.fire('focus'); assert.equal(f.profiles(), 1);
+    if (mode === 'timeout') f.timeout();
+    if (mode === 'session') f.setToken('replacement-session');
+    if (mode === 'hidden') f.setHidden(true);
+    if (mode === 'open') f.setOpen(true);
+    if (mode === 'unmount') stop?.();
+    assert.equal(current(), false, mode);
+    finish(); await flushReconciliation();
+    assert.equal(f.notices.length, 0, mode);
+    if (mode !== 'unmount') assert.deepEqual(f.state(), []);
+    stop?.();
+  }
+});
+
+test('page reconciliation rejects profile session drift and makes errors retryable without deleting custody', async () => {
+  const f = reconciliationFixture({ resolveCheckoutPhone: async () => { f.setToken('replacement-session'); return fixturePhone; } });
+  const stop = f.start(); await flushReconciliation();
+  assert.equal(f.resumes.length, 0); assert.deepEqual(f.state(), []); stop?.();
+  let calls = 0;
+  const failure = reconciliationFixture({ resumeZeroPayment: async () => { calls++; throw new Error('unavailable'); } });
+  const stopFailure = failure.start(['friendship']); await flushReconciliation();
+  assert.deepEqual(failure.state(), []); assert.equal(failure.notices.length, 0);
+  failure.advance(); failure.fire('focus'); await flushReconciliation(); assert.equal(calls, 2);
+  stopFailure?.();
+});
+
+test('two pending offers start together so a slow first check cannot starve the second', async () => {
+  const started: string[] = [];
+  let finishFirst!: () => void;
+  const f = reconciliationFixture({ resumeZeroPayment: async (key: string) => {
+    started.push(key);
+    if (key === 'friendship') await new Promise<void>(resolve => { finishFirst = resolve; });
+    return { status: 'restart', message: key };
+  } });
+  const stop = f.start(); await flushReconciliation();
+  assert.deepEqual(started, ['friendship', 'friendship-two-hours']);
+  assert.deepEqual(f.notices, ['friendship-two-hours']);
+  finishFirst(); await flushReconciliation();
+  assert.deepEqual(f.state(), []); assert.equal(f.notices.length, 2); stop?.();
+});
+
+test('page-load reconciliation releases an actual verified closed attempt without a second purchase', async () => {
+  const payment = zeroFixture();
+  await payment.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  const marker = 'padlhub_zero_checkout_attempt_v1:friendship';
+  const { paymentRef } = JSON.parse(payment.stored.get(marker)!);
+  const transactionId = '00000000-0000-4000-8000-000000000002';
+  payment.setConfirmation({ data: { paymentRef, transactionId, counterKey: 'friendship', status: 'FAILED', failed: true, paid: false, paymentUrl: null,
+    checkoutReset: { version: 1, state: 'PROVIDER_EXPIRED_UNPAID', paymentRef, transactionId,
+      operationId: '00000000-0000-4000-8000-000000000003', closureKind: 'PROVIDER_CARD_EXPIRED_UNPAID',
+      terminalCardStatus: 'REJECTED', declineOutcome: 'EXPIRED', paymentIdSha256: 'a'.repeat(64), paymentUrlSha256: 'b'.repeat(64),
+      expireAcknowledged: false, verifiedAt: '2026-11-01T00:00:00Z' } } });
+  const page = reconciliationFixture({ ...payment.adapter });
+  const stop = page.start(['friendship']); await flushReconciliation();
+  assert.equal(payment.stored.has(marker), false);
+  assert.equal(payment.writes.length, 1);
+  assert.deepEqual(page.state(), []); assert.equal(page.notices.length, 1); stop?.();
+});
+
+test('StrictMode cleanup invalidates the first profile response before a remounted check', async () => {
+  const finish: (() => void)[] = [];
+  const page = reconciliationFixture({ resolveCheckoutPhone: async () => {
+    await new Promise<void>(resolve => finish.push(resolve)); return fixturePhone;
+  } });
+  const firstStop = page.start(['friendship']); firstStop?.();
+  const secondStop = page.start(['friendship']);
+  finish[0](); finish[1](); await flushReconciliation();
+  assert.deepEqual(page.resumes, ['friendship']); secondStop?.();
 });

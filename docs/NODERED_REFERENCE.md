@@ -407,6 +407,8 @@ npm run nodered:modular:build
 - `GET /lk/communities/:communityId/event-admission` — только текущий verified actor; query-параметры идентичности запрещены. Читает один `lk_communities`, возвращает собственный membership/current-registration, activation/policy binding и notice, но не ФИО/компанию/email участника или массив анкет.
 - Source: `scripts/lib/eventJumpAdmission.mjs`; opt-in builder: `scripts/patch_live_community_types.mjs --event-admission`. Ноды `community-event-admission-v1-*` используют общий verified-actor auth subflow; Mongo только `find`, неизвестный graph drift отклоняется. Это не deploy/import approval.
 - Отдельный пятижизненный backend использует `/jump-exhibition-api/` и `JUMP_EVENT_BINDING`; командный `/jump-live-api/` не перенастраивается. Активация и границы evidence: `docs/event-community-launch-preparation.md`.
+- `Apply community join` / `Apply invite join` (`scripts/lib/eventCommunity.mjs`, guard V4): по новому решению владельца от 10 ноября точное выставочное сообщество принимает вступление с обязательной анкетой в любое время. Notice и форма подтверждают `retentionMode:submitted-year-v1`; срок анкеты — календарный год от серверного `registeredAt`, без продления при обычных визитах. Даты игры и поведение остальных EVENT не меняются. Известные V1/V2/V3 блоки обновляются по точным bytes; неизвестный/изменённый guard отклоняется.
+- `community-exhibition-retention-v1-*` (`scripts/lib/exhibitionRegistrationRetention.mjs`): отдельный opt-in `--event-admission --event-retention` в существующем builder. Внутренний startup/hourly inject, metadata-only `find` через canonical admission client, CAS `$pull` истёкших анкет и свежий readback; без HTTP endpoint, контактов/идентификаторов в audit или PII backup. Не трогает membership, другие сообщества или файловые игровые receipts. Source/LOCAL doubles не означают установленный worker или реальное удаление.
 
 ### Сообщества публикации турнира
 
@@ -436,6 +438,8 @@ npm run nodered:modular:build
 - Дневной claim считается по событию: split на 90/120 минут сохраняет прежний серверный `count=2` для фактического списания Viva, но занимает один ключ даты и не разрешает второе событие в тот же день.
 - Tournament/group вызывают Viva Admin v2 с точным `clientSubscriptionId` и `customFields: []`; split сохраняет проверенный Admin v1 + server-derived `count` контракт. Service token берётся только из Node-RED context `vivacrm_access_token`. В flow/import/frontend не добавляются credentials.
 - Transport timeout, 5xx или неполный readback не освобождают claim: наружу возвращается `202 PENDING_CONFIRMATION`. Повтор с тем же `operationId` сначала перечитывает Viva; другой operation не может выполнить второе списание.
+- Подготовленная дельта `scripts/patch_live_tournament_capacity_refusal.mjs` сохраняет точный provider-отказ `409 CONFLICT / Нет свободных мест` как `409 CAPACITY_FULL` только для HTTP-записи на турнир, до принятой брони/денежной фазы и после строгого durable failure ACK. Она меняет только `func` узлов `lk_subscription_booking_router_20260804` и `lk_subscription_booking_finalize_20260804`, проверяет точные preimage и граф; исторические canonical sources не меняет. Источник вставок: `scripts/nodered_lk1_hub_nodes/capacity_refusal.txt`. Патчер сам ничего не применяет; перед release нужен свежий verified private workspace и отдельный guarded deploy.
+- При таком отказе finalizer увеличивает существующий `lkTournamentParticipantEpochV1` для exact exercise. Форма показывает «Нет свободных мест» и перечитывает публичный состав; общий roster state обновляет участников и счётчик карточки. Уже начатый старый GET сначала завершается, затем выполняется новый. Повторный booking POST не отправляется; обычный `CONFLICT`, timeout и неизвестный результат не считаются доказательством заполнения.
 - Frontend-проверка active+history оставлена только как быстрый UX precheck. Источником соблюдения правила является серверный claim, а не браузер.
 - Source functions: `scripts/nodered_subscription_booking_nodes/`; guarded patch: `scripts/patch_nodered_subscription_booking_flow.mjs`; split dispatch source: `scripts/nodered_games_nodes/fn_split_router.js`.
 - `fn_managed_subscription_policy_evaluate.js` — двухвыходный evaluator опубликованной managed-policy, подключённый к source-driven `/lk/subscription-bookings` candidate. Он принимает только server-resolved target, exact policy/instance version и authoritative usage snapshot; output 1 означает eligibility, output 2 — fail-closed blocker. После атомарного preaccept gateway повторно читает exact Viva exercise/ownership, затем для managed-планов повторно читает CUP runtime context и запускает evaluator непосредственно перед Viva booking POST.
@@ -455,6 +459,49 @@ npm run nodered:modular:build
 - Focused candidate для явного выбора split-абонемента строится только из закреплённого свежего live-147 snapshot через `scripts/patch_live_split_subscription_selection.mjs`. Он меняет только function bodies `Prepare split game payment`, `Prepare split join payment` и `Route Viva split payment`, сохраняет граф/маршруты и не деплоит candidate.
 - Focused candidate для invalidation stale roster snapshot после split leave строится через `scripts/patch_live_split_leave_projection_consistency.mjs`. Он меняет только `Build split leave game CAS`, сохраняет граф/маршруты и не деплоит candidate.
 - Патчер принимает только отдельный свежий live-147 snapshot с корректным `source.flow.meta.json`, проверяет origin/SHA/свежесть до 30 минут и один из двух точных preimage функции `Route Viva split payment`: исходный до gateway либо уже управляемый gateway. Он пишет новый candidate, но не изменяет source snapshot и не деплоит его.
+
+### «Дружба 2.0»: бесплатное «Время на друзей (особый)» и независимые preview-варианты
+
+Правило продукта `6b98e7e3-5bd3-4e94-9dc3-7723ea52513e` покрывает направления Viva
+`5278` и `5280` первым бесплатным событием даты. Сохраняются остаток посещений,
+лимит 8 активных записей и одно посещение на московскую дату по всем категориям.
+Остальные турнирные направления сохраняют скидку по тарифу.
+
+Резидентство поддерживает турнирную скидку 50% через явное правило `TOURNAMENT` /
+`BOOK_TOURNAMENT` опубликованной политики CUP и capability contract v2 (digest
+`sha256:63be8d476b73583c8b80f55cf7016abe571a2b8159dbb7e8db2f07010f614104`).
+Старый v1 остаётся неизменным: игры 30%, групповые тренировки 50%; турнир без нового
+правила не допускается. Льготы не дают бесплатных минут или посещений. Preview
+`POST /lk/subscriptions/game-price-preview` изолирует ошибку refresh/proof: ошибка одного подтверждённого экземпляра резидентства даёт ему `UNAVAILABLE`,
+сохраняя расчёт остальных абонементов. Ошибки общей авторизации, ownership, тарифов,
+истории и общий deadline остаются отказами всего запроса. Write-путь резидентства
+по-прежнему требует свежий валидный контекст перед provider-действием.
+
+Подготовка кандидата: `scripts/patch_live_friendship_special_residency_preview.mjs`
+принимает свежий приватный verified workspace и меняет только `func` узлов
+`lk_subscription_booking_router_20260804`, `lk_subscription_price_preview_20260908_router`,
+`lk_subscription_managed_policy_20260820`, `lk_subscription_price_preview_20260908_evaluate`.
+В обоих evaluator обновляется только встроенный validator capability; scope таблица
+«Дружбы» меняется только в gateway и preview.
+Точные whole-flow/function preimages и graph contract защищают от дрейфа. Кандидат
+и contract хранятся вне всех Git worktree; скрипт не импортирует flow и не деплоит.
+При реальном применении нужны отдельное разрешение, повторная проверка live preimage,
+обновление согласованных pins зависимых worker и предусмотренный guarded recovery.
+
+Владелец — LK1 subscription gateway; аудитория — владельцы указанного продукта и
+смешанных абонементов. Проверяемый результат — нулевая цена нового покрытого события
+и независимые preview-варианты. Stop signal — drift источника, графа или нарушенные
+негативные проверки; stop method — не применять кандидат. Уже созданные paid checkout
+не перепрайсиваются: для прежних `CONFIRMED` операций сначала нужна отдельная сверка
+provider/payment state. Откат к прежнему reviewed flow не отменяет сделанных записей.
+
+Порядок активации резидентства: совместимые CUP readers и четыре LK функции, затем
+проверка аутентификации refresh без ослабления проверки интеграционного токена, затем
+отдельно разрешённая публикация политики v2 с reviewed canonical tournament IDs.
+Привязанные к v1 экземпляры не переходят на v2 автоматически: нужна отдельная
+согласованная операция. После публикации v2 rollback должен сохранять v2 readers;
+отключение новых admission безопаснее возврата несовместимого reader. Изменение
+source не исправляет само по себе боевую конфигурационную причину HTTP 401.
 
 ### Чат
 - `GET /api/game-chat/:gameId` — список чатов

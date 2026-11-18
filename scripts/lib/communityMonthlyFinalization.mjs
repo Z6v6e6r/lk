@@ -24,6 +24,8 @@ export function tournamentWriteFilter(tournamentId, snapshot) {
 }
 export function planCommunityTournamentClose({ tournament, publications, ratingEvents = [], ratingStates = [], nowTs }) {
   const skip = reason => ({ close: false, reason });
+  // Managed sessions use the actual server start/resume, never the publication schedule.
+  if (tournament.params?.autoFinish?.version === 1) return skip("AUTO_FINISH_OWNS_LIFECYCLE");
   if (typeof tournament.tournamentId !== "string" || !tournament.tournamentId.trim()) return skip("MISSING_CANONICAL_TOURNAMENT_ID");
   if (!publicationIsPublic({ ...tournament, kind: "TOURNAMENT" })) return skip("NOT_ACTIVE");
   if (isTournamentFinalized(tournament)) return skip("ALREADY_FINISHED");

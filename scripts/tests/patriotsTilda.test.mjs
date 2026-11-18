@@ -169,7 +169,8 @@ test('scoped checkout return never reopens a different club offer', () => {
   const context = {
     exports: {}, window, URLSearchParams, Date, ZERO_CHECKOUT_RETURN: 'phCheckoutReturn',
     resolveZeroOffer: key => ['patriots', 'topocraty'].includes(key) ? { key } : null,
-    hasZeroAttempt: () => true,
+    hasZeroAttempt: () => true, hasRecordedZeroAttempt: () => true,
+    cancelFastIntent: () => {}, isCheckoutReturn: () => false, takeFastOAuthIntent: () => null,
     openCheckout: key => { opened.push(key); return true; },
   };
   vm.runInNewContext(compiled, context);
@@ -182,4 +183,26 @@ test('scoped checkout return never reopens a different club offer', () => {
   window.location.search = '';
   assert.equal(context.exports.resumeCheckout('patriots'), false);
   assert.deepEqual(opened, []);
+});
+
+
+test('saved pending selection resumes only the existing purchase; bank return stays status-only', () => {
+  const source = readFileSync(new URL('../../src/components/subscription-storefront/zeroCheckoutMount.tsx', import.meta.url), 'utf8');
+  const fn = source.slice(source.indexOf('export function resumeCheckout('));
+  const compiled = ts.transpileModule(fn, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const mounted = [], opened = [];
+  const window = { location: { search: '' }, sessionStorage: { getItem: () => JSON.stringify({ key: 'friendship', at: Date.now() }) } };
+  const context = { exports: {}, window, URLSearchParams, Date, ZERO_CHECKOUT_RETURN: 'phCheckoutReturn', SELECTION_KEY: 'fixture-selection',
+    resolveZeroOffer: key => key === 'friendship', hasZeroAttempt: () => true, hasRecordedZeroAttempt: () => true,
+    cancelFastIntent: () => {}, isCheckoutReturn: () => false, takeFastOAuthIntent: () => null,
+    mountCheckout: (...args) => { mounted.push(args); return true; },
+    openCheckout: key => { opened.push(key); return true; },
+  };
+  vm.runInNewContext(compiled, context);
+  assert.equal(context.exports.resumeCheckout(), true);
+  assert.deepEqual(mounted, [['friendship', undefined, true]]);
+  window.location.search = '?phCheckoutReturn=friendship';
+  assert.equal(context.exports.resumeCheckout(), true);
+  assert.deepEqual(opened, ['friendship']);
+  assert.equal(mounted.length, 1);
 });

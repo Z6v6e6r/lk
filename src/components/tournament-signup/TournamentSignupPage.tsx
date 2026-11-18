@@ -1,4 +1,6 @@
 import { readAuthToken } from "../../utils/authTokenStorage";
+import { isTournamentCapacityError } from "../../utils/tournamentCapacityError";
+import { isSubscriptionBookingReleased } from "../../utils/subscriptionRejoin";
 import { canPayTournamentPending, tournamentPaymentSessionIdentity, clearTournamentPendingPayments as clearStoredPendingPayment, mergeTournamentPendingPayment, storeTournamentPendingPayment } from "../../utils/tournamentPendingPayment";
 import { AvatarImage } from "../UI/AvatarImage";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1042,7 +1044,6 @@ export default function TournamentSignupPage({
   const deepLinkAutoOpenKeyRef = useRef<string>("");
   const requestedPricingPreviewIdsRef = useRef<Set<string>>(new Set());
   const publicRosterByExerciseIdRef = useRef<Record<string, TournamentSignupPublicRoster>>({});
-  const publicRosterRequestsRef = useRef<Map<string, Promise<TournamentSignupPublicRoster | null>>>(new Map());
   const publicRosterDetailAbortRef = useRef<AbortController | null>(null);
   const listRequestIdRef = useRef(0);
   const listForegroundRequestIdRef = useRef(0);
@@ -1187,13 +1188,12 @@ export default function TournamentSignupPage({
     const cachedRoster = publicRosterByExerciseIdRef.current[normalizedExerciseId] ?? null;
     if (cachedRoster && !options.force) return cachedRoster;
 
-    const inFlight = publicRosterRequestsRef.current.get(normalizedExerciseId);
-    if (inFlight) return inFlight;
-
-    const requestPromise = apiFetchTournamentParticipants(normalizedExerciseId, {
+    return apiFetchTournamentParticipants(normalizedExerciseId, {
       auth: false,
       retries: 0,
       signal: options.signal,
+      // After a mutation, wait for the actual old transport before a fresh GET.
+      fresh: options.force,
     })
       .then((result) => {
         if (!result.data) return cachedRoster;
@@ -1205,14 +1205,6 @@ export default function TournamentSignupPage({
         return roster;
       });
 
-    publicRosterRequestsRef.current.set(normalizedExerciseId, requestPromise);
-    try {
-      return await requestPromise;
-    } finally {
-      if (publicRosterRequestsRef.current.get(normalizedExerciseId) === requestPromise) {
-        publicRosterRequestsRef.current.delete(normalizedExerciseId);
-      }
-    }
   }, []);
 
   const loadList = useCallback(async (options: {
@@ -1546,6 +1538,18 @@ export default function TournamentSignupPage({
       });
       if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
       if (result.error || !result.data) {
+        if (result.status === 409 && isSubscriptionBookingReleased(result.error?.raw)) {
+          setError(result.error?.message || "Предыдущая запись отменена. Выберите вариант записи снова.");
+          setCheckout(null);
+          setDiscountQuotes([]);
+          return;
+        }
+        if (isTournamentCapacityError(result.error)) {
+          setError("Нет свободных мест");
+          setCheckout(null);
+          await loadPublicRoster(selectedExerciseId, { force: true }).catch(() => null);
+          return;
+        }
         if (result.status === 202 && subscriptionProductKey) {
           setError(null);
           setSubscriptionConfirmationNotice(

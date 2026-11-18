@@ -1,0 +1,28 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.default = default_1;
+const max_bot_api_1 = require("@maxhub/max-bot-api");
+function default_1(RED) {
+    function MaxBotConfig(config) {
+        RED.nodes.createNode(this, config);
+        this.token = this.credentials?.token || '';
+        if (this.token) {
+            try {
+                const bot = new max_bot_api_1.Bot(this.token);
+                this.status({ fill: "green", shape: "dot", text: "configured" });
+            }
+            catch (e) {
+                this.status({ fill: "red", shape: "ring", text: "invalid token" });
+            }
+        }
+        else {
+            this.status({ fill: "red", shape: "ring", text: "missing token" });
+        }
+    }
+    RED.nodes.registerType("maxbot-config", MaxBotConfig, {
+        credentials: {
+            token: { type: "text" }
+        }
+    });
+}
+//# sourceMappingURL=maxbot-config.js.map

@@ -18,17 +18,22 @@ export function eventRegistrationCsv(document, { communityId, now }) {
       new Date(document.typeSettingsEffectiveAt).toISOString() !== document.typeSettingsEffectiveAt ||
       !Array.isArray(document.eventEntries) || document.eventEntries.length > 500) throw new Error('EVENT_EXPORT_SOURCE_INVALID');
   const policy = parseEventRegistrationPolicy(document.typeSettings?.registrationPolicy);
+  const perpetual = communityId === 'community_1794221739126_корпспорт-падлхаб-2026';
   const retentionUntil = eventRetentionUntil(policy.endsAt);
-  if (now >= retentionUntil) throw new Error('EVENT_EXPORT_DATA_EXPIRED');
+  if (!perpetual && now >= retentionUntil) throw new Error('EVENT_EXPORT_DATA_EXPIRED');
   const selected = document.eventEntries.filter(entry => entry?.epoch === document.typeSettingsEffectiveAt && entry.policyRevision === document.typeSettingsRevision && entry.policyVersion === policy.version);
   const actors = new Set();
   const rows = selected.map(entry => {
-    if (typeof entry.playerId !== 'string' || !entry.playerId || actors.has(entry.playerId) || entry.retentionUntil !== retentionUntil ||
+    if (typeof entry.playerId !== 'string' || !entry.playerId || actors.has(entry.playerId) ||
         typeof entry.registeredAt !== 'string' || !Number.isFinite(Date.parse(entry.registeredAt)) || new Date(entry.registeredAt).toISOString() !== entry.registeredAt) throw new Error('EVENT_EXPORT_ENTRY_INVALID');
+    const rolling = perpetual && entry.retentionMode === 'submitted-year-v1';
+    if (perpetual && entry.retentionMode !== undefined && !rolling || rolling && entry.registeredAt > now ||
+        entry.retentionUntil !== (rolling ? eventRetentionUntil(entry.registeredAt) : retentionUntil)) throw new Error('EVENT_EXPORT_ENTRY_INVALID');
     actors.add(entry.playerId);
     const data = eventRegistration({ fullName: entry.fullName, company: entry.company, email: entry.email });
+    if (perpetual && now >= entry.retentionUntil) return null;
     return [data.fullName, data.company, data.email, entry.registeredAt];
-  });
+  }).filter(row => row !== null);
   const cell = value => '"' + (/^\s*[=+@-]/u.test(value) ? "'" + value : value).replaceAll('"', '""') + '"';
   const csv = '\ufeff' + [['ФИО', 'Компания', 'Email', 'Дата регистрации (UTC)'], ...rows].map(row => row.map(cell).join(';')).join('\r\n') + '\r\n';
   return { csv, receipt: { operationId: randomUUID(), preparedAt: now, exportedCount: rows.length, policyRevision: document.typeSettingsRevision, entriesRevision: document.eventEntriesRevision } };

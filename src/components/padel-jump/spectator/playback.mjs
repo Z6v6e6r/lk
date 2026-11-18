@@ -2,16 +2,17 @@ import { SpectatorTimeline } from './spectator-timeline.mjs';
 import { AdaptivePlayoutDelay } from './spectator-network.mjs';
 import { applySceneDelta } from './state.mjs';
 import { LIVE_ENGINE_VERSION, LIVE_RULE } from '../live-contract.ts';
+import { arcPose } from './smooth-motion.mjs';
 
 /** Compact server state -> delayed read-only scene. No physics, input or result writes. */
-export function createSpectatorPlayback({ profile = 'constrained', onResync = () => {} } = {}) {
+export function createSpectatorPlayback({ profile = 'constrained', onResync = () => {}, maxDelayMs = 4000, motion = 'arc' } = {}) {
   const runs = new Map();
   let offset = null, epoch = null;
   const sourceTimeAt = now => now + (offset ?? 0);
   function ensure(runId) {
     if (!runs.has(runId)) runs.set(runId, {
       timeline: new SpectatorTimeline({ runId, sourceTimeAt, delayMs: 1200, maxExtrapolationMs: 0, maxSnapshots: 64 }),
-      policy: new AdaptivePlayoutDelay({ runId, profile, sourceTimeAt }),
+      policy: new AdaptivePlayoutDelay({ runId, profile, sourceTimeAt, maxDelayMs }),
       scenes: new Map(), samples: new Map(), ack: 0, last: null, waiting: false,
     });
     return runs.get(runId);
@@ -91,14 +92,16 @@ export function createSpectatorPlayback({ profile = 'constrained', onResync = ()
       const left = run.samples.get(frame.confirmed.seq);
       if (!left) return run.last ? { ...run.last, state: 'stale' } : null;
       const right = [...run.samples.values()].find(s => s.snapshot.t > frame.playbackTimeMs);
-      let game = left.game;
+      let game = left.game, pose = frame.pose;
       if (right && right.snapshot.segmentId === left.snapshot.segmentId && right.snapshot.status === 'running'
         && frame.pose.mode === 'interpolated') {
         const alpha = (frame.playbackTimeMs - left.snapshot.t) / (right.snapshot.t - left.snapshot.t);
         game = interpolateScene(left.game, right.game, alpha);
+        // Ballistic arc through both confirmed samples instead of a straight 2Hz segment.
+        if (motion === 'arc') pose = { ...pose, ...arcPose(left.game, right.game, alpha, right.snapshot.t - left.snapshot.t) };
       }
-      game = { ...game, ball: { ...game.ball, x: frame.pose.x, y: frame.pose.y } };
-      const result = { ...frame, game, confirmed: { ...frame.confirmed, phase: left.snapshot.phase, station: left.snapshot.station, section: left.snapshot.section } };
+      game = { ...game, ball: { ...game.ball, x: pose.x, y: pose.y } };
+      const result = { ...frame, pose, game, confirmed: { ...frame.confirmed, phase: left.snapshot.phase, station: left.snapshot.station, section: left.snapshot.section } };
       run.last = result;
       return result;
     },

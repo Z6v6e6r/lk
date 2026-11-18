@@ -5,7 +5,12 @@ umask 027
 RUN_KIND=${1:-}
 INSTALL_ROOT=${RATING_WORKER_INSTALL_ROOT:-/opt/padlhub-rating-worker}
 LOG_DIR=${RATING_WORKER_LOG_DIR:-/var/log/padlhub-rating-worker}
-LOCK_FILE=${RATING_WORKER_LOCK_FILE:-/var/lock/padlhub-rating-worker.lock}
+# Whole-run scheduling is separate from the short canonical data phases.
+LOCK_FILE=${RATING_WORKER_SCHEDULE_LOCK_FILE:-/var/lock/padlhub-rating-schedule.lock}
+if [[ "$LOCK_FILE" == "${RATING_WORKER_LOCK_FILE:-/var/lock/padlhub-rating-worker.lock}" ]]; then
+  echo "Schedule and personal-rating data locks must use distinct paths" >&2
+  exit 64
+fi
 
 case "$RUN_KIND" in
   game-results)

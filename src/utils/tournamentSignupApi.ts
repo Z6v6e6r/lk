@@ -12,6 +12,7 @@ import {
   apiFetchSubscriptions,
   apiFetchSubscriptioName,
   apiReleaseSubscriptionBookingClaim,
+  apiCancelBooking,
   apiVerifyBookingCancellation,
   getServ2Origin,
   request,
@@ -19,11 +20,11 @@ import {
   type UserProfileType,
 } from "./apiClient";
 import { readAuthToken } from "./authTokenStorage";
+import { SubscriptionRejoinTracker } from "./subscriptionRejoin";
 import { isTrialGroupTraining, trialGroupCheckoutOperationId, clearTrialGroupCheckoutOperations } from "./trialGroupTraining";
 import { appendCurrentAuthModeToNavigableUrl } from "./authMode";
 import { buildProjectUrlCandidates } from "./lkApiBaseUrls";
 import {
-  buildBookingCancellationPayload,
   findBookingCancellationActionByRefundMethod,
   resolveBookingCancellationPlan,
   type BookingCancellationOptionsResponse,
@@ -177,6 +178,7 @@ export interface TournamentVivaCheckout {
   clientSubscriptions: TournamentVivaProduct[];
   oneTimes: TournamentVivaProduct[];
   subscriptions: TournamentVivaProduct[];
+  tariffErrors?: string[];
 }
 
 export interface TournamentVivaTransactionResult {
@@ -1731,8 +1733,17 @@ function collectComparableIds(value: unknown, keys: string[], seen = new Set<unk
       if (nestedId) ids.add(nestedId);
     }
   }
-  Object.values(value).forEach((nested) => {
-    if (nested && typeof nested === "object") {
+  Object.entries(value).forEach(([key, nested]) => {
+    // Past/reserved visits are usage, not eligibility restrictions. Likewise,
+    // offered products must not contribute their ids to the exercise's own type.
+    if (key === "activationBooking" || key === "bookings"
+      || key === "availableClientSubscriptions" || key === "availableClientOneTimes") return;
+    if (Array.isArray(nested)) {
+      // Primitive arrays are ids only when their field is explicitly requested above.
+      nested.filter(isRecord).forEach((item) => {
+        collectComparableIds(item, keys, seen).forEach((id) => ids.add(id));
+      });
+    } else if (isRecord(nested)) {
       collectComparableIds(nested, keys, seen).forEach((id) => ids.add(id));
     }
   });
@@ -2359,17 +2370,7 @@ export async function apiCancelTournamentVivaRegistration(
   }
 
   const action = explicitAction ?? plan.actions[0];
-  const cancelPayload = buildBookingCancellationPayload(action);
-  const cancelResult = await request<unknown>(
-    `/end-user/api/v1/${TENANT_KEY}/bookings/${encodeURIComponent(resolvedBookingId)}`,
-    {
-      method: "DELETE",
-      auth: true,
-      retries: 1,
-      ...(cancelPayload
-        ? { body: JSON.stringify(cancelPayload) }
-        : {}),
-    });
+  const cancelResult = await apiCancelBooking(resolvedBookingId, action);
   const accepted = !cancelResult.error;
   const verifiableConflict = cancelResult.status !== null
     && [400, 404, 409, 422].includes(cancelResult.status);
@@ -2584,6 +2585,10 @@ export async function apiFetchTournamentVivaCheckout(
       clientSubscriptions: resolvedClientSubscriptions,
       oneTimes,
       subscriptions,
+      tariffErrors: [
+        ...(oneTimesResult.error ? ["Не удалось загрузить тарифы разовых посещений."] : []),
+        ...(subscriptionsResult.error ? ["Не удалось загрузить тарифы абонементов."] : []),
+      ],
     },
     error: null,
     status: exerciseResult.status || profileResult.status,
@@ -2722,6 +2727,10 @@ export async function apiFetchTournamentVivaPublicCheckout(
       clientSubscriptions: [],
       oneTimes,
       subscriptions,
+      tariffErrors: [
+        ...(oneTimesResult.error ? ["Не удалось загрузить тарифы разовых посещений."] : []),
+        ...(subscriptionsResult.error ? ["Не удалось загрузить тарифы абонементов."] : []),
+      ],
     },
     error: null,
     status: exerciseResult.status || oneTimesResult.status || subscriptionsResult.status,
@@ -2947,6 +2956,16 @@ function normalizeConfirmedSubscriptionBookingPayment(payload: unknown): Tournam
     paymentExpiresAt: null, raw: payload };
 }
 
+let tournamentSubscriptionRejoinTracker: SubscriptionRejoinTracker | null = null;
+function getTournamentSubscriptionRejoinTracker(): SubscriptionRejoinTracker {
+  if (!tournamentSubscriptionRejoinTracker) {
+    let storage: Storage | null = null;
+    try { if (typeof window !== "undefined") storage = window.localStorage; } catch { /* memory fallback */ }
+    tournamentSubscriptionRejoinTracker = new SubscriptionRejoinTracker(storage);
+  }
+  return tournamentSubscriptionRejoinTracker;
+}
+
 async function apiCreateTournamentVivaBookingFromSubscription(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
@@ -3008,7 +3027,8 @@ async function apiCreateTournamentVivaBookingFromSubscription(
     }
     return (hash >>> 0).toString(36);
   };
-  const idempotencyKey = `lk-subscription-${hashPart(idempotencySeed)}${hashPart([...idempotencySeed].reverse().join(""))}`;
+  const baseIdempotencyKey = `lk-subscription-${hashPart(idempotencySeed)}${hashPart([...idempotencySeed].reverse().join(""))}`;
+  const idempotencyKey = getTournamentSubscriptionRejoinTracker().resolve(baseIdempotencyKey);
   const bookingRequest = () => request<unknown>(
     `/lk/subscription-bookings?operationId=${encodeURIComponent(idempotencyKey)}`,
     {
@@ -3040,6 +3060,9 @@ async function apiCreateTournamentVivaBookingFromSubscription(
   );
   const response = await pollSubscriptionBookingConfirmation(bookingRequest);
   if (response.error) {
+    // Keep this submission/poll on its original ID. Only a later explicit
+    // submission may use the server-proved successor.
+    getTournamentSubscriptionRejoinTracker().rememberReleased(idempotencyKey, response.status, response.error.raw);
     return { data: null, error: response.error, status: response.status };
   }
   const gatewayState = pickString(response.data, ["state"]);

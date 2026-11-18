@@ -10,7 +10,10 @@ import {
   validateUnifiedCandidateSummary,
 } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 import { PAYMENT_NODE_IDS } from "../patch_live_game_payment_confirmation.mjs";
+import { applyPaginationEdits, subscriptionBookingPaginationEdits } from "../prepare_subscription_booking_pagination.mjs";
 import { PATRIOTS_PREIMAGE } from "../patch_live_lk1_patriots_friendship.mjs";
+import { applyReconciledEdits, timeoutPreservationEdits } from "../prepare_reconciled_cancellation_recovery.mjs";
+import { prepareChanges, replaceOnce } from "../prepare_game_private_projection_candidate.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -21,7 +24,24 @@ const observerPins = {
   'scripts/nodered_games_nodes/fn_game_payment_confirm_router.js': ['d5606ece01b42d4275e5d53b7a40fb5fb78be015b92d9675d41ae8f984226e16', 'const TOKEN_URL'],
 };
 function frozenBusinessHash(file) {
-  const text = fs.readFileSync(file, 'utf8');
+  let text = fs.readFileSync(file, 'utf8');
+  if (file === 'scripts/nodered_games_nodes/fn_patch.js') {
+    // Recover the exact frozen source; this paired successor does not authorize
+    // recomposing or advancing the historical subscription release contract.
+    for (const [before, after] of [...prepareChanges].reverse()) text = replaceOnce(text, after, before);
+  }
+  if (file.endsWith('fn_split_cleanup_router.js')) {
+    // Verify the preservation successor, then recover the frozen release source.
+    // A source-only amendment must never advance an unrecomposed release contract.
+    assert.equal(sha256(text), '3694faa9e4af631e354d485417833996f78fe772a39f71ef4dc6defcc09bc26f', file);
+    text = applyReconciledEdits(text, timeoutPreservationEdits().reverse().map(([before, after]) => [after, before]));
+  }
+  if (file.endsWith('fn_subscription_booking_router.js')) {
+    // Explicit pagination successor: prove its exact bytes and recover the frozen
+    // source. Never advance a historical deployment/rebase contract to new code.
+    assert.equal(sha256(text), '0b06938e198a63cb798dfc65a050fa20f866ceaf55ab2a95a34aa74b753fdcc6', file);
+    text = applyPaginationEdits(text, subscriptionBookingPaginationEdits().reverse().map(([before, after]) => [after, before]));
+  }
   const pin = observerPins[file];
   if (!pin) return sha256(text);
   assert.equal(sha256(text), pin[0], file);

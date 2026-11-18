@@ -2,7 +2,7 @@
 Run: python3 scripts/tests/eventNginxRuntime.py IMAGE_ID SYNTHETIC_CONFIG_DIRECTORY
 The directory is generated offline by the preparation module; no production files.
 """
-import concurrent.futures
+
 import json
 import pathlib
 import subprocess
@@ -41,6 +41,19 @@ def request(route, method='GET', headers=None, body=b''):
 def count():
     result=cli(['docker','exec',name,'sh','-c','if test -f /tmp/synthetic-upstream.log; then wc -l < /tmp/synthetic-upstream.log; else printf 0; fi'])
     return int(result.stdout)
+def burst(route, method):
+    # One exec transport; HTTP concurrency stays inside the owned container.
+    script='''i=0
+while [ "$i" -lt 60 ]; do
+curl --http1.1 --silent --show-error --max-time 8 --output /dev/null --write-out '%{http_code}\\n' --request "$2" "http://127.0.0.1:8080$1" &
+i=$((i+1))
+if [ $((i%12)) -eq 0 ]; then wait; fi
+done
+wait'''
+    result=cli(['docker','exec',name,'sh','-c',script,'synthetic-burst',route,method],timeout=60)
+    statuses=[int(line) for line in result.stdout.decode().splitlines()]
+    assert len(statuses)==60
+    return statuses
 def start():
     cli(base[:3]+['-d','--name',name]+base[3:]+[image,'-c','/etc/nginx/event-test/runtime.conf','-g','daemon off;'])
     for _ in range(20):
@@ -78,12 +91,22 @@ try:
     assert request('/unrelated')[0]==200
     stop();start()
     before=count()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
-        statuses=list(pool.map(lambda _:request(route,'POST')[0],range(60)))
+    statuses=burst(route,'POST')
     upstream=count()-before
     assert 429 in statuses and upstream<30 and all(s in (200,429) for s in statuses)
     assert request('/lk/communities/synthetic/detail')[0]==200
     assert request('/lk/communities/synthetic/legacy','PATCH')[0]==200
+    stop();start()
+    admission='/lk/communities/synthetic/event-admission'
+    before=count()
+    assert request(admission,'OPTIONS',{'Origin':'https://padlhub.ru'})[0]==204 and count()==before
+    assert request(admission,'GET',body=b'x'*8193)[0]==413 and count()==before
+    for alias in [admission+'/', '/lk/communities/synthetic/EVENT-ADMISSION', '/lk/communities/synthetic%2Fpart/event-admission', '/lk/communities/%2F/event-admission', '/lk/communities/a%0Ab/event-admission']:
+        assert request(alias,'GET',body=b'x'*8193)[0]==413 and count()==before, 'admission alias bypassed edge: '+alias
+    admission_statuses=burst(admission,'GET')
+    admission_upstream=count()-before
+    assert 429 in admission_statuses and admission_upstream<30 and all(s in (200,429) for s in admission_statuses)
+    assert request('/lk/communities/synthetic/detail')[0]==200
     stop();start()
     processes=[]
     for _ in range(6):
@@ -94,10 +117,11 @@ try:
     # Close the container-side test sockets as well as docker exec clients.
     cli(['docker','exec',name,'sh','-c','killall curl || true'])
     for proc in processes:
-        proc.communicate(timeout=5)
+        # Some pinned images lack killall; allow curl's own bounded 8s deadline.
+        proc.communicate(timeout=10)
     time.sleep(.2)
     assert request(route,'POST')[0]==200
-    print(json.dumps({'synthetic':True,'nginxSyntax':True,'preflightNoUpstream':True,'corsAllowDeny':True,'correlationAndIdempotency':True,'bodyLimits':True,'burstLimited':True,'legacyRoutesUnaffected':True,'burstUpstreamCount':upstream,'ipConcurrencyAndRelease':True,'productionAccess':False}))
+    print(json.dumps({'synthetic':True,'nginxSyntax':True,'preflightNoUpstream':True,'corsAllowDeny':True,'correlationAndIdempotency':True,'bodyLimits':True,'burstLimited':True,'legacyRoutesUnaffected':True,'burstUpstreamCount':upstream,'admissionBurstLimited':True,'admissionUpstreamCount':admission_upstream,'ipConcurrencyAndRelease':True,'productionAccess':False}))
 except Exception:
     diagnostic=subprocess.run(['docker','exec',name,'cat','/tmp/event-nginx-error.log'],capture_output=True)
     (root/'runtime-error.log').write_bytes(diagnostic.stdout)

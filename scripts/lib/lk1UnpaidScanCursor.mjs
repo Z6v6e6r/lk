@@ -5,6 +5,8 @@ import path from 'node:path';
 
 const validCursor = value => value === null
   || (typeof value === 'string' && value.startsWith('lk1-product:') && value.length <= 2048);
+const validFreeCursor = value => value === null
+  || (typeof value === 'string' && value.startsWith('lk1-free-cancel-job:') && value.length <= 2048);
 
 export async function openLk1UnpaidScanCursor({ file, tenantKey, cohortFrom }) {
   if (!path.isAbsolute(file) || !tenantKey || !cohortFrom) throw new Error('SCAN_CURSOR_CONFIG_INVALID');
@@ -22,7 +24,8 @@ export async function openLk1UnpaidScanCursor({ file, tenantKey, cohortFrom }) {
     const saved = JSON.parse(await fs.readFile(file, 'utf8'));
     if (saved?.schema !== 1 || typeof saved.tenantKey !== 'string'
       || typeof saved.cohortFrom !== 'string' || !validCursor(saved.intentAfterId)
-      || !validCursor(saved.unclaimedAfterId)) throw new Error('SCAN_CURSOR_FILE_INVALID');
+      || !validCursor(saved.unclaimedAfterId)
+      || (saved.freeCancelAfterId !== undefined && !validFreeCursor(saved.freeCancelAfterId))) throw new Error('SCAN_CURSOR_FILE_INVALID');
     if (saved.tenantKey !== tenantKey || saved.cohortFrom !== cohortFrom) {
       throw new Error('SCAN_CURSOR_COHORT_DRIFT');
     }
@@ -31,12 +34,15 @@ export async function openLk1UnpaidScanCursor({ file, tenantKey, cohortFrom }) {
     if (error?.code !== 'ENOENT') throw error;
   }
   return {
-    afterId(phase) { return state[phase === 'INTENT' ? 'intentAfterId' : 'unclaimedAfterId']; },
+    afterId(phase) { return phase === 'FREE' ? state.freeCancelAfterId ?? null
+      : state[phase === 'INTENT' ? 'intentAfterId' : 'unclaimedAfterId']; },
     async advance(phase, afterId) {
-      if (!['INTENT', 'UNCLAIMED'].includes(phase) || !validCursor(afterId)) {
+      if (!['INTENT', 'UNCLAIMED', 'FREE'].includes(phase)
+        || !(phase === 'FREE' ? validFreeCursor(afterId) : validCursor(afterId))) {
         throw new Error('SCAN_CURSOR_ADVANCE_INVALID');
       }
-      const next = { ...state, [phase === 'INTENT' ? 'intentAfterId' : 'unclaimedAfterId']: afterId };
+      const next = { ...state, [phase === 'FREE' ? 'freeCancelAfterId'
+        : phase === 'INTENT' ? 'intentAfterId' : 'unclaimedAfterId']: afterId };
       const temp = path.join(dir, `.lk1-unpaid-cursor-${crypto.randomBytes(8).toString('hex')}.tmp`);
       let handle;
       try {

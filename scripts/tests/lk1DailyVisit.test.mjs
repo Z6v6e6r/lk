@@ -170,7 +170,8 @@ test('guard never expires; only proved terminal cancellation allows durable fenc
     const ctx = context('new'), old = context('old'), claimed = claimRow(guardStep(old));
     guardStep(ctx); guardStep(ctx, {}); guardStep(ctx, [claimed]);
     const owner = { ...operation('GAME', { state }), _id: old.operationKey, operationId: old.operationId,
-      ...(state === 'RELEASED' ? { releasedAt: '2026-11-07T12:00:00Z', releaseBookingId: 'booking-old',
+      ...(state === 'RELEASED' ? { releaseSource: 'GAME_LEAVE', releaseOperationId: 'fixture-leave',
+        releasedAt: '2026-11-07T12:00:00Z', releaseBookingId: 'booking-old',
         releasedBookingIds: ['booking-old'] } : {}) };
     const result = guardStep(ctx, [owner]);
     assert.equal(result.step, state === 'RELEASED' ? 'lk1_daily_visit_takeover' : 'lk1_daily_visit_conflict_saved');

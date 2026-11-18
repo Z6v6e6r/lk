@@ -11,6 +11,40 @@ RED.nodes.registerType('max-outbox-send', {
   <div class="form-row"><label for="node-input-bot">MAX bot</label><input id="node-input-bot"></div>
 </script>
 <script type="text/html" data-help-name="max-outbox-send">
-  <p>One MAX text send per fenced outbox lease. Output is a sanitized backend receipt.
+  <p>One MAX text/photo message per fenced outbox lease. Photos are uploaded before the message.
+  Output is a sanitized backend receipt.
   Transport uncertainty is quarantined. No automatic message retry.</p>
+</script>
+
+<script type="text/javascript">
+RED.nodes.registerType('max-legacy-outbox-send', {
+  category: 'network', color: '#b7d9a8', defaults: {
+    name: { value: '' }, bot: { value: '', type: 'maxbot-config', required: true }
+  }, inputs: 1, outputs: 1, icon: 'bridge.svg',
+  label: function () { return this.name || 'MAX legacy text/photo send'; }
+});
+</script>
+<script type="text/html" data-template-name="max-legacy-outbox-send">
+  <div class="form-row"><label for="node-input-name">Name</label><input id="node-input-name"></div>
+  <div class="form-row"><label for="node-input-bot">MAX bot</label><input id="node-input-bot"></div>
+</script>
+<script type="text/html" data-help-name="max-legacy-outbox-send">
+  <p>Only a new durable legacy claim with legacyMaxLeaseId. Custody/archive records are refused.
+  No incoming polling. Only a confirmed MAX MID reaches the existing ACK builder.</p>
+</script>
+
+<script type="text/javascript">
+RED.nodes.registerType('max-outbox-receipt', {
+  category: 'network', color: '#b7d9a8', defaults: { name: { value: '' } },
+  inputs: 1, outputs: 1, icon: 'bridge.svg',
+  label: function () { return this.name || 'Persist MAX receipt'; }
+});
+</script>
+<script type="text/html" data-template-name="max-outbox-receipt">
+  <div class="form-row"><label for="node-input-name">Name</label><input id="node-input-name"></div>
+</script>
+<script type="text/html" data-help-name="max-outbox-receipt">
+  <p>Persists the same fenced CUP receipt across short backend outages. Reads the
+  existing SUPPORT_API_BASE_URL and SUPPORT_INTEGRATION_TOKEN from this flow's environment.
+  Bounded by the original lease; never sends a MAX message or requeues an unknown delivery.</p>
 </script>

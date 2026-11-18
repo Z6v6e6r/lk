@@ -839,6 +839,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     if (gameResult.data) {
       setGame(gameResult.data);
     } else {
+      if (gameResult.status === 404) setGame(null);
       setError(gameResult.error?.message || "Игра не найдена");
     }
 
@@ -982,11 +983,12 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             setGame((prev) => (prev ? mergeRecord(prev, patchedRecord) : patchedRecord));
             return;
           }
-          const authoritative = await apiFetchPadelGameRecord(game.id);
+          const authoritative = patchResult.status === 409
+            ? { data: patchResult.conflictRecord ?? null }
+            : await apiFetchPadelGameRecord(game.id);
           if (!alive || !authoritative.data?.id) return;
-          setGame((prev) => (prev
-            ? mergeRecord(prev, authoritative.data as PadelGameRecord)
-            : authoritative.data));
+          const canonical = authoritative.data;
+          setGame((prev) => (prev?.id === game.id ? canonical : prev));
         });
       })
       .catch(() => {
@@ -1226,6 +1228,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         metadata,
       });
 
+      if (updateResult.conflictRecord) {
+        const canonical = updateResult.conflictRecord;
+        setGame((prev) => (prev?.id === actualGame.id ? canonical : prev));
+      }
       if (updateResult.error) {
         setConfirmingSplitPaymentRef(null);
         setDecisionError(updateResult.error.message || "Не удалось подтвердить оплату участия");
@@ -1391,7 +1397,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       participants = removePlayer(participants, myPhoneNorm, profile.id ?? null);
       waitlist = removePlayer(waitlist, myPhoneNorm, profile.id ?? null);
 
-      const maxPlayers = resolveMaxPlayers(actualGame);
+      let maxPlayers = resolveMaxPlayers(actualGame);
       const waitlistEnabled = resolveWaitlistEnabled(actualGame);
       let appliedStatus: JoinDecision = "NONE";
 
@@ -1440,11 +1446,11 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         const bookingDurationMinutes = typeof booking?.durationMinutes === "number" && Number.isFinite(booking.durationMinutes)
           ? booking.durationMinutes
           : null;
-        const shareCount = resolveSplitJoinShareCount(
+        let shareCount = resolveSplitJoinShareCount(
           getSplitShareCount(actualGame),
           resolveMaxPlayers(actualGame),
         );
-        const splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
+        let splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
         const organizerUsedSubscription = String(
           splitPaymentMeta.selectedPaymentMode || "",
         ).trim().toLowerCase() === "subscription";
@@ -1490,7 +1496,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           }
           return null;
         })();
-        const currentPayments = Array.isArray(splitPaymentMeta.payments)
+        let currentPayments = Array.isArray(splitPaymentMeta.payments)
           ? splitPaymentMeta.payments.filter((item) => isRecord(item))
           : [];
         const usedSpots = new Set<number>(
@@ -1588,6 +1594,17 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           return;
         }
 
+        if (paymentResult.data.checkoutStored) {
+          const checkout = paymentResult.data;
+          setSubmitting(null);
+          if (!checkout.paymentUrl || !checkout.paymentRef || !checkout.bookingId) {
+            setDecisionError("Не удалось открыть сохранённую оплату. Обновите карточку игры.");
+            return;
+          }
+          window.location.href = checkout.paymentUrl;
+          return;
+        }
+
         const subscriptionDecisionNotice = resolvedPaymentMode === "subscription"
           ? formatSubscriptionDecisionPresentation(resolveSubscriptionDecisionPresentation({
               action: "JOIN_GAME",
@@ -1656,6 +1673,20 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           return;
         }
 
+        const confirmedBase = await apiFetchPadelGameRecord(actualGame.id, { retries: 0, cache: "no-store" });
+        if (confirmedBase.error || confirmedBase.data?.id !== actualGame.id
+          || resolveGameExerciseId(confirmedBase.data) !== (paymentResult.data.exerciseId || exerciseId)) {
+          setSubmitting(null);
+          setDecisionError("Бронь создана, но не удалось обновить состав. Обновите игру перед проверкой участия.");
+          return;
+        }
+        actualGame = confirmedBase.data;
+        maxPlayers = resolveMaxPlayers(actualGame);
+        shareCount = resolveSplitJoinShareCount(getSplitShareCount(actualGame), maxPlayers);
+        participants = removePlayer(dedupePlayers(actualGame.participants ?? []), myPhoneNorm, profile.id ?? null);
+        waitlist = removePlayer(dedupePlayers(actualGame.waitlist ?? []), myPhoneNorm, profile.id ?? null);
+        splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
+        currentPayments = Array.isArray(splitPaymentMeta.payments) ? splitPaymentMeta.payments.filter(isRecord) : [];
         const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && paymentResult.data.toPay <= 0;
         if (!paymentResult.data.paymentUrl && !isPaidWithoutRedirect) {
           setSubmitting(null);
@@ -1760,6 +1791,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           metadata,
         });
 
+        if (updateResult.conflictRecord) {
+          const canonical = updateResult.conflictRecord;
+          setGame((prev) => (prev?.id === actualGame.id ? canonical : prev));
+        }
         if (updateResult.error) {
           setSubmitting(null);
           setDecisionError(updateResult.error.message || "Не удалось сохранить оплату участия");
@@ -1839,6 +1874,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         metadata,
       });
 
+      if (updateResult.conflictRecord) {
+        const canonical = updateResult.conflictRecord;
+        setGame((prev) => (prev?.id === actualGame.id ? canonical : prev));
+      }
       if (updateResult.error) {
         setDecisionError(updateResult.error.message || "Не удалось обновить участие");
         setSubmitting(null);

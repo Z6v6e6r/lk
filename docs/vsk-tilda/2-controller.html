@@ -1,0 +1,349 @@
+<!-- Replace content of T123 rec5171283401; preserve all other blocks. -->
+<script>
+
+(function () {
+  'use strict';
+  if (window.PHVSK && window.PHVSK.version === '1.0.0') return;
+  var currentPlan = 'monthly';
+  var busy = false;
+  var lastCheckoutAt = 0;
+  var scriptLoads = Object.create(null);
+  var dialog = null;
+  var previousFocus = null;
+  var started = false;
+
+  function config() { return window.PHVSK_CONFIG || {}; }
+  function subConfig() { return config().subscription || {}; }
+  function all(selector) { return Array.prototype.slice.call(document.querySelectorAll('.phvsk ' + selector)); }
+  function one(selector) { return document.querySelector('.phvsk ' + selector); }
+  function text(selector, value) { all(selector).forEach(function (el) { el.textContent = String(value); }); }
+  function https(raw) {
+    if (typeof raw !== 'string' || !raw.trim()) return '';
+    try {
+      var u = new URL(raw);
+      return u.protocol === 'https:' && !u.username && !u.password ? u.href : '';
+    } catch (_) { return ''; }
+  }
+  function finite(value, min, max) {
+    return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
+  }
+  function days(n) {
+    var m = n % 100, k = n % 10;
+    return n + ' ' + (m >= 11 && m <= 14 ? 'дней' : k === 1 ? 'день' : k >= 2 && k <= 4 ? 'дня' : 'дней');
+  }
+  function validTerms(s) {
+    return finite(s.dailyMinutes, 1, 1440) && finite(s.gameDiscountPercent, 0, 100)
+      && finite(s.eventDiscountPercent, 0, 100) && Number.isInteger(s.activeBookingsLimit)
+      && s.activeBookingsLimit > 0;
+  }
+  function planReady() {
+    var s = subConfig(), p = s[currentPlan] || {};
+    return s.confirmed === true && validTerms(s)
+      && (currentPlan !== 'annual' || p.enabled === true)
+      && finite(p.priceRub, 1, 10000000) && Number.isInteger(p.durationDays) && p.durationDays > 0;
+  }
+  function planHasCheckout() {
+    var s = subConfig(), p = s[currentPlan] || {};
+    return Boolean(https(p.checkoutUrl) || (typeof p.offerKey === 'string' && p.offerKey.trim() && https(s.storefrontScript)));
+  }
+  function contactDetails() {
+    var c = config().contacts || {};
+    var phoneLink = one('[data-vsk-phone]');
+    var phoneLabel = one('[data-vsk-phone-label]');
+    var mailLink = one('[data-vsk-mail]');
+    return {
+      phone: /^\+?[0-9]{7,15}$/.test(c.phone || '') ? c.phone : String(phoneLink && phoneLink.getAttribute('href') || '').replace(/^tel:/, ''),
+      phoneLabel: typeof c.phoneLabel === 'string' && c.phoneLabel.trim() ? c.phoneLabel : String(phoneLabel && phoneLabel.textContent || 'Связаться с клубом'),
+      email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email || '') ? c.email : String(mailLink && mailLink.getAttribute('href') || '').replace(/^mailto:/, '').split('?')[0]
+    };
+  }
+  function mailLink(subject) {
+    return 'mailto:' + contactDetails().email + '?subject=' + encodeURIComponent(subject);
+  }
+
+  function renderPlan() {
+    var s = subConfig(), p = s[currentPlan] || {};
+    var ready = planReady();
+    all('[data-vsk-plan]').forEach(function (el) { el.setAttribute('aria-pressed', el.getAttribute('data-vsk-plan') === currentPlan ? 'true' : 'false'); });
+    text('[data-vsk-plan-name]', s.name || 'Дружба.ВСК');
+    if (ready) {
+      text('[data-vsk-price]', new Intl.NumberFormat('ru-RU').format(p.priceRub) + ' ₽');
+      text('[data-vsk-period]', '/ ' + days(p.durationDays));
+      text('[data-vsk-subscribe-label]', planHasCheckout() ? 'Оформить подписку' : 'Уточнить оформление');
+      text('[data-vsk-plan-note]', 'Проверьте выбранный тариф, срок и ограничения перед подтверждением оплаты.');
+    } else {
+      text('[data-vsk-price]', currentPlan === 'annual' ? 'Годовая программа' : 'Для команды ВСК');
+      text('[data-vsk-period]', currentPlan === 'annual' ? 'Стоимость и доступность уточняются' : 'Стоимость и условия уточняются');
+      text('[data-vsk-subscribe-label]', currentPlan === 'annual' ? 'Уточнить годовой тариф' : 'Уточнить условия');
+      text('[data-vsk-plan-note]', 'Состав программы, цену и доступность подписки ВСК подтвердит администратор.');
+    }
+    if (ready) {
+      text('[data-vsk-benefit="minutes"]', s.dailyMinutes === 60 ? '1 час в день включён: создание или участие в игре' : s.dailyMinutes + ' минут игры в день включено');
+      text('[data-vsk-benefit="game"]', 'Скидка ' + s.gameDiscountPercent + '% на создание / участие в игре');
+      text('[data-vsk-benefit="event"]', 'Скидка ' + s.eventDiscountPercent + '% на турниры, групповые тренировки и «Время на друзей»');
+      text('[data-vsk-benefit="bookings"]', 'До ' + s.activeBookingsLimit + ' активных записей');
+    } else {
+      text('[data-vsk-benefit="minutes"]', 'Игровое время по подписке');
+      text('[data-vsk-benefit="game"]', 'Специальные условия на игры');
+      text('[data-vsk-benefit="event"]', 'Турниры, тренировки и «Время на друзей»');
+      text('[data-vsk-benefit="bookings"]', 'Управление своими записями');
+    }
+    var price = one('[data-vsk-price]');
+    if (price) price.setAttribute('aria-live', 'polite');
+  }
+
+  function refresh() {
+    var contacts = contactDetails(), links = config().links || {};
+    text('[data-vsk-phone-label]', contacts.phoneLabel);
+    text('[data-vsk-year]', new Date().getFullYear());
+    all('[data-vsk-phone]').forEach(function (el) { el.href = 'tel:' + contacts.phone; });
+    all('[data-vsk-mail]').forEach(function (el) { el.href = mailLink('Падел для команды ВСК'); });
+    all('[data-vsk-action]').forEach(function (el) {
+      var action = el.getAttribute('data-vsk-action');
+      var target = action === 'events' ? (https(links.allEvents) || https(links.community)) : https(links[action]);
+      if (action === 'cabinet' || action === 'community' || action === 'events') el.href = target || '#vsk-contact';
+    });
+    renderPlan();
+  }
+
+  function ensureDialog() {
+    if (dialog) return dialog;
+    dialog = document.createElement('dialog');
+    dialog.id = 'vsk-contact-dialog';
+    dialog.className = 'phvsk v-dialog';
+    dialog.setAttribute('aria-labelledby', 'vsk-dialog-title');
+    dialog.setAttribute('aria-describedby', 'vsk-dialog-text');
+    dialog.innerHTML = '<button class="v-dialog-close" type="button" aria-label="Закрыть окно" autofocus>×</button>'
+      + '<span class="v-kicker">ВСК × ПадлхАБ</span><h2 id="vsk-dialog-title"></h2>'
+      + '<p class="v-dialog-text" id="vsk-dialog-text"></p>'
+      + '<div class="v-dialog-actions"><a class="v-btn" data-vsk-dialog-phone></a>'
+      + '<a class="v-btn v-btn--light" data-vsk-dialog-mail>Написать на почту</a></div>'
+      + '<p class="v-dialog-note">Общие контакты клуба. Сообщите, что вы из команды ВСК.</p>';
+    document.body.appendChild(dialog);
+    dialog.querySelector('.v-dialog-close').addEventListener('click', function () { dialog.close(); });
+    dialog.addEventListener('click', function (event) {
+      var r = dialog.getBoundingClientRect();
+      if (event.target === dialog && (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom)) dialog.close();
+    });
+    dialog.addEventListener('close', function () {
+      if (previousFocus && previousFocus.isConnected && typeof previousFocus.focus === 'function') previousFocus.focus();
+    });
+    return dialog;
+  }
+
+  function openContact(action, customText) {
+    var messages = {
+      start: ['Начнём с первой игры', 'Расскажите администратору, что вы из ВСК, и играли ли вы раньше. Вам помогут выбрать формат и подтвердить запись.'],
+      team: ['Соберём вашу команду', 'Сообщите число участников, желаемую дату и опыт игроков. Формат встречи, площадка и стоимость согласуются отдельно.'],
+      community: ['Приглашение для команды ВСК', 'Ссылка на сообщество ВСК пока не подключена к этой странице. Получите приглашение у администратора ПадлхАБ или у организатора вашей команды.'],
+      cabinet: ['Личный кабинет ПадлхАБ', 'Ссылка для входа ещё не настроена на этой странице. Уточните её у администратора. Пароли и личные данные здесь не запрашиваются.'],
+      events: ['Ближайшие встречи ВСК', 'Уточните ближайшие даты, площадку, свободные места и условия записи у администратора.'],
+      subscribe: ['Подписка для команды ВСК', currentPlan === 'annual' ? 'Годовой тариф нужно подтвердить отдельно. Месячная подписка вместо годовой не оформляется.' : 'Уточните стоимость, срок и условия подписки ВСК. Онлайн-оплата не начнётся без настроенного предложения ВСК.'],
+      error: ['Не удалось открыть оформление', 'Оформление не подтвердилось. Не повторяйте оплату автоматически: проверьте состояние заказа в личном кабинете или обратитесь в поддержку.']
+    };
+    var content = messages[action] || messages.start;
+    var d = ensureDialog(), c = contactDetails();
+    previousFocus = document.activeElement;
+    d.querySelector('#vsk-dialog-title').textContent = content[0];
+    d.querySelector('#vsk-dialog-text').textContent = customText || content[1];
+    var phone = d.querySelector('[data-vsk-dialog-phone]');
+    phone.textContent = c.phoneLabel;
+    phone.href = 'tel:' + c.phone;
+    d.querySelector('[data-vsk-dialog-mail]').href = mailLink(content[0]);
+    if (typeof d.showModal === 'function') { if (!d.open) d.showModal(); }
+    else { window.location.hash = 'vsk-contact'; }
+  }
+
+  function loadScript(rawUrl, id, timeoutMs) {
+    var url = https(rawUrl);
+    if (!url) return Promise.reject(new Error('HTTPS URL is required'));
+    if (scriptLoads[id]) return scriptLoads[id];
+    scriptLoads[id] = new Promise(function (resolve, reject) {
+      var existing = document.getElementById(id);
+      if (existing) {
+        if (existing.dataset.phvskReady === '1') { resolve(); return; }
+        reject(new Error('Script ID already used')); return;
+      }
+      var script = document.createElement('script');
+      var done = false;
+      var timer = window.setTimeout(function () { finish(new Error('Loading timeout')); }, timeoutMs || 12000);
+      function finish(error) {
+        if (done) return;
+        done = true;
+        window.clearTimeout(timer);
+        if (error) { script.remove(); delete scriptLoads[id]; reject(error); }
+        else { script.dataset.phvskReady = '1'; resolve(); }
+      }
+      script.id = id; script.src = url; script.async = true;
+      script.onload = function () { finish(); };
+      script.onerror = function () { finish(new Error('Script load failed')); };
+      document.head.appendChild(script);
+    });
+    return scriptLoads[id];
+  }
+
+  function storefront() {
+    var widget = window.LKWidgetSubscriptionStorefront;
+    return widget && widget.checkoutVersion === 1 && typeof widget.openCheckout === 'function' ? widget : null;
+  }
+  function loadStorefront() {
+    if (storefront()) return Promise.resolve(storefront());
+    return loadScript(subConfig().storefrontScript, 'vsk-subscription-storefront-script', 45000).then(function () {
+      if (!storefront()) throw new Error('Unsupported checkout widget');
+      return storefront();
+    });
+  }
+  async function checkout(button) {
+    if (!planReady() || !planHasCheckout()) { openContact('subscribe'); return; }
+    if (busy || Date.now() - lastCheckoutAt < 1500) return;
+    var p = subConfig()[currentPlan] || {};
+    var url = https(p.checkoutUrl);
+    if (url) { window.location.assign(url); return; }
+    busy = true;
+    lastCheckoutAt = Date.now();
+    button.setAttribute('aria-busy', 'true');
+    all('[data-vsk-plan]').forEach(function (el) { el.disabled = true; });
+    try {
+      var widget = await loadStorefront();
+      // Оформляется только выбранный тариф, только по явному клику пользователя.
+      // Автоматических повторов запроса покупки нет.
+      await Promise.resolve(widget.openCheckout(p.offerKey.trim()));
+    } catch (_) { openContact('error'); }
+    finally { busy = false; button.removeAttribute('aria-busy'); all('[data-vsk-plan]').forEach(function (el) { el.disabled = false; }); }
+  }
+
+  function bootViva(s, categories) {
+    var v = s.viva || {};
+    if (v.enabled !== true || !v.tenantKey || !/^[a-z][a-z0-9_-]{1,24}$/i.test(v.instance || '')) {
+      return Promise.reject(new Error('Booking configuration is incomplete'));
+    }
+    var name = v.instance;
+    if (document.getElementById(name)) return Promise.reject(new Error('Booking instance ID collision'));
+    var initConfig = {
+      tenantKey: v.tenantKey, theme: 'light', title: 'События ВСК', language: 'ru',
+      year: new Date().getFullYear(), month: new Date().getMonth() + 1,
+      bookingDays: 14, defaultView: 'day', borderRadius: true,
+      showClassesDuration: true, isExerciseTimeVisible: true, showExerciseDirections: true,
+      firstDirectionIsActive: false, hideAvailableSpots: false, roomNamesHidden: false,
+      roomPrefixHidden: false, staticWidgetMode: false, availableStudios: [],
+      widgetStyles: { fontColor: '#182b48', fontFamily: 'Arial', accentColor: '#0754a1', secondColor: '#0754a1', tertiaryColor: '#176ee6', backgroundColor: '#ffffff', secondAccentColor: '#176ee6' }
+    };
+    var types = categories.map(function (c) { return c.typeId; }).filter(function (n, i, arr) { return Number.isInteger(n) && n > 0 && arr.indexOf(n) === i; });
+    if (types.length) initConfig.availableTypes = types;
+    window[name] = window[name] || function () { (window[name].q = window[name].q || []).push(arguments); };
+    window[name].q = window[name].q || [];
+    window.__vcGroupClassesInstances = window.__vcGroupClassesInstances || [];
+    if (window.__vcGroupClassesInstances.indexOf(name) < 0) window.__vcGroupClassesInstances.push(name);
+    window.__vcGroupClassesInstallScripts = window.__vcGroupClassesInstallScripts || {};
+    var install = document.createElement('script');
+    install.id = name; install.type = 'application/json'; document.body.appendChild(install);
+    window.__vcGroupClassesInstallScripts[name] = install;
+    window[name]('init', initConfig);
+    function boot() { if (typeof window.__vcGroupClassesBoot === 'function') window.__vcGroupClassesBoot(); }
+    var existing = document.querySelector('script[data-vc-group-classes-bundle="1"]');
+    if (existing) {
+      if (window.__vcGroupClassesBundleReady || existing.getAttribute('data-vc-group-classes-ready') === '1') { boot(); return Promise.resolve(); }
+      return new Promise(function (resolve, reject) {
+        var timer = window.setTimeout(function () { reject(new Error('Booking load timeout')); }, 12000);
+        existing.addEventListener('load', function () { window.clearTimeout(timer); boot(); resolve(); }, { once: true });
+        existing.addEventListener('error', function () { window.clearTimeout(timer); reject(new Error('Booking load error')); }, { once: true });
+      });
+    }
+    var promise = loadScript(v.scriptUrl, 'vsk-viva-booking-script');
+    var bundle = document.getElementById('vsk-viva-booking-script');
+    if (bundle) bundle.setAttribute('data-vc-group-classes-bundle', '1');
+    return promise.then(function () { if (bundle) bundle.setAttribute('data-vc-group-classes-ready', '1'); boot(); });
+  }
+
+  function initSchedule() {
+    var s = config().schedule || {};
+    if (s.enabled !== true) return;
+    var root = document.getElementById('vsk-schedule-slot');
+    var fallback = one('[data-vsk-schedule-fallback]');
+    if (!root || !fallback) return;
+    function fail() {
+      root.hidden = true; fallback.hidden = false;
+      text('[data-vsk-schedule-title]', 'Уточните ближайшие события');
+      text('[data-vsk-schedule-message]', 'Онлайн-расписание ВСК сейчас недоступно. У администратора можно уточнить даты, площадку и наличие мест.');
+    }
+    var categories = Array.isArray(s.categories) ? s.categories.filter(function (c) { return c && c.enabled !== false; }) : [];
+    if (!categories.length || categories.some(function (c) { return !Number.isInteger(c.directionId) || c.directionId <= 0; })) { fail(); return; }
+    // Общий тип «Корпоративные клиенты» не является идентификатором компании.
+    // Без явных directionId ВСК витрина никогда не запрашивает все события.
+    if (window.LK_ATLANTY_SCHEDULE_CONFIG || document.getElementById('atlanty-schedule-root')) { fail(); return; }
+    var v = s.viva || {};
+    if (s.booking !== 'lk') { fail(); return; }
+    window.LK_ATLANTY_SCHEDULE_CONFIG = {
+      categories: categories, title: '', maxEvents: finite(s.maxEvents, 1, 100) ? s.maxEvents : 12,
+      maxPerCategory: 6, daysAhead: finite(s.daysAhead, 1, 365) ? s.daysAhead : 90,
+      booking: 'lk', bookingAllowedTypeIds: [839], bookingDirectionIds: [5278],
+      bookingDisabledCategoryKeys: ['6975:1613', '6975:2349'],
+      vivaInstance: v.instance, cardsPerView: 3, pillIcon: 'users', avatarMode: 'photo',
+      seatsStyle: 'segmented', levelStyle: 'meta', detailModal: true, imagePick: 'hash'
+    };
+    root.id = 'atlanty-schedule-root';
+    root.hidden = false;
+    text('[data-vsk-schedule-title]', 'Загружаем события ВСК');
+    text('[data-vsk-schedule-message]', 'Подключаем расписание клуба.');
+    var ended = false;
+    var timer;
+    var observer = new MutationObserver(function () {
+      if (!ended && (root.querySelector('.atlanty-schedule') || root.textContent.trim().length > 0)) {
+        ended = true; window.clearTimeout(timer); observer.disconnect(); fallback.hidden = true;
+      }
+    });
+    observer.observe(root, { childList: true, subtree: true, characterData: true });
+    timer = window.setTimeout(function () { if (!ended) { ended = true; observer.disconnect(); fail(); } }, 18000);
+    loadScript(s.scriptUrl, 'vsk-schedule-widget-script')
+      .catch(function () { if (!ended) { ended = true; window.clearTimeout(timer); observer.disconnect(); fail(); } });
+  }
+
+  function resumeOwnCheckout() {
+    var s = subConfig();
+    if (s.confirmed !== true) return;
+    var key;
+    try { key = new URLSearchParams(window.location.search).get('phCheckoutReturn'); } catch (_) { return; }
+    var plans = [s.monthly, s.annual && s.annual.enabled ? s.annual : null].filter(Boolean);
+    if (!key || !plans.some(function (p) { return p.offerKey && p.offerKey === key; })) return;
+    loadStorefront().then(function (w) { if (typeof w.resumeCheckout === 'function') return w.resumeCheckout(); })
+      .catch(function () { openContact('error'); });
+  }
+
+  function start() {
+    if (started || !document.querySelector('[data-vsk-block="hero"]')) return;
+    started = true;
+    all('.v-plan-tabs').forEach(function (el) { el.remove(); });
+    refresh();
+    document.addEventListener('click', function (event) {
+      if (!(event.target instanceof Element)) return;
+      var tab = event.target.closest('.phvsk [data-vsk-plan]');
+      if (tab) {
+        currentPlan = tab.getAttribute('data-vsk-plan') === 'annual' ? 'annual' : 'monthly';
+        renderPlan(); return;
+      }
+      var anchor = event.target.closest('.phvsk a');
+      if (anchor) {
+        var mobile = anchor.closest('.v-mobile-nav');
+        if (mobile) mobile.removeAttribute('open');
+      }
+      var button = event.target.closest('.phvsk [data-vsk-action]');
+      if (!button) return;
+      var action = button.getAttribute('data-vsk-action');
+      if (action === 'subscribe') { event.preventDefault(); checkout(button); return; }
+      var links = config().links || {};
+      var target = action === 'events' ? (https(links.allEvents) || https(links.community)) : https(links[action]);
+      if (target && (action === 'community' || action === 'cabinet' || action === 'events')) return;
+      event.preventDefault(); openContact(action);
+    });
+    initSchedule();
+    resumeOwnCheckout();
+  }
+  window.PHVSK = {
+    version: '1.0.0', refresh: refresh, openContact: openContact,
+    getState: function () { return { selectedPlan: currentPlan, canCheckout: planReady() && planHasCheckout(), busy: busy }; }
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
+  else start();
+})();
+
+</script>

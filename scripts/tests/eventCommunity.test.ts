@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import crypto from 'node:crypto';
-import { eventRegistration, eventGameApplySource, EVENT_GAME_ACK } from '../lib/eventCommunity.mjs';
+import { eventRegistration, eventGameApplySource, EVENT_GAME_ACK, EVENT_JOIN_GUARD } from '../lib/eventCommunity.mjs';
 import { patchCommunityTypesFlow } from '../patch_live_community_types.mjs';
 import { sanitizeTypedCommunityPayload } from '../lib/communityResponseRedaction.mjs';
 import { sanitizeTypedCommunityPayload as legacySanitizer } from '../fixtures/communityResponseRedactionV1.mjs';
@@ -41,15 +41,109 @@ function graph() {
 }
 const candidate=graph();
 class JoinClock extends Date {static now(){return Date.parse('2026-10-23T10:00:00.000Z');}}
-const run = (id: string,msg: any) => vm.runInNewContext('(function(msg){'+candidate.flow.find((n:any)=>n.id===id).func+'\n})(msg)',{msg,Date:JoinClock});
-function join(doc:any, registration:any=form, invite=false, verified:any=actor) {
+const run = (id: string,msg: any,at?:string,flow:any[]=candidate.flow) => {
+  class Clock extends Date {constructor(value:any=at){super(value);}static now(){return Date.parse(at!);}}
+  return vm.runInNewContext('(function(msg){'+flow.find((n:any)=>n.id===id).func+'\n})(msg)',{msg,Date:at===undefined?JoinClock:Clock});
+};
+function join(doc:any, registration:any=form, invite=false, verified:any=actor,at?:string,flow:any[]=candidate.flow) {
   const msg:any={req:{method:'POST',params:{communityId:doc.id},headers:{},query:{}},payload:{member:{id:'spoof',name:'spoof'},inviteCode:'synthetic',eventRegistration:registration},_verifiedCommunityActor:verified};
-  const prep=run(invite?'invite-prepare':'join-prepare',msg); assert.equal(prep[2],null,'no private form debug output');
-  prep[0].payload=[doc];const query=run(invite?'invite-query':'query',prep[0]);
+  const prep=run(invite?'invite-prepare':'join-prepare',msg,at,flow); assert.equal(prep[2],null,'no private form debug output');
+  prep[0].payload=[doc];const query=run(invite?'invite-query':'query',prep[0],at,flow);
   if (!query[0]) return query;
-  return run(invite?'invite':'join',query[0]);
+  return run(invite?'invite':'join',query[0],at,flow);
 }
 function community(extra:any={}) {return {...structuredClone(fixture),members:[{...actor,role:'MEMBER',status:'ACTIVE'}],eventEntries:[{...form,playerId:actor.id,epoch:fixture.typeSettingsEffectiveAt,registeredAt:fixture.typeSettingsEffectiveAt,policyRevision:1,policyVersion:'event-registration-v1'}],...extra};}
+
+test('selected exhibition join and invite require rolling-retention registration regardless of game dates',()=>{
+ for(const invite of [false,true]) for(const role of ['new','MEMBER','OWNER']) for(const [at,expires] of [
+  ['2026-11-10T14:00:00.000Z','2027-11-10T14:00:00.000Z'],
+  ['2026-11-13T21:00:00.000Z','2027-11-13T21:00:00.000Z'],
+  ['2028-02-29T10:00:00.000Z','2029-02-28T10:00:00.000Z'],
+  ['2028-11-15T09:00:00.000Z','2029-11-15T09:00:00.000Z'],
+ ]) {
+  const extra={members:role==='new'?[]:[{...actor,role,status:'ACTIVE'}],eventEntries:[]};
+  const doc=community({...extra,id:'community_1794221739126_корпспорт-падлхаб-2026'});
+  doc.typeSettings.registrationPolicy.startsAt='2026-11-11T21:00:00.000Z';
+  doc.typeSettings.registrationPolicy.endsAt='2026-11-13T21:00:00.000Z';
+  const missing=join(doc,null,invite,actor,at);
+  assert.equal(missing[0],null);
+  assert.equal(missing[4].statusCode,422,'game dates must not close community registration');
+  assert.equal(missing[4].payload.eventNotice.retentionMode,'submitted-year-v1');
+  const outdated=join(doc,form,invite,actor,at);
+  assert.equal(outdated[0],null,'an older client must acknowledge the changed retention notice');
+  assert.equal(outdated[4].payload.error,'EVENT_REGISTRATION_REQUIRED');
+  const result=join(doc,{...form,retentionMode:'submitted-year-v1'},invite,actor,at),write=result[0];
+  assert.ok(write,'valid private registration and membership remain available after the game and its retention cutoff');
+  const entry=write.payload.$set.eventEntries[0];
+  assert.equal(entry.registeredAt,at);assert.equal(entry.retentionUntil,expires);
+  assert.equal(entry.retentionMode,'submitted-year-v1');
+  assert.equal((write.payload.$set.members ?? doc.members)[0].role,role==='OWNER'?'OWNER':'MEMBER');
+  const ack=run((invite?'invite':'join')+'-typed-roster-ack',{...write,payload:{acknowledged:true,matchedCount:1,modifiedCount:1}},at);
+  assert.equal(ack[3].statusCode,200);assert.doesNotMatch(JSON.stringify(ack[3].payload),/fullName|company|eventEntries/);
+ }
+});
+
+test('exhibition registration renews expired forms without sliding retention on ordinary visits',()=>{
+ for(const invite of [false,true]) {
+  const doc=community({id:'community_1794221739126_корпспорт-падлхаб-2026',eventEntries:[]});
+  doc.typeSettings.registrationPolicy.startsAt='2026-11-11T21:00:00.000Z';
+  doc.typeSettings.registrationPolicy.endsAt='2026-11-13T21:00:00.000Z';
+  const accepted={...form,retentionMode:'submitted-year-v1'},at='2026-11-10T14:00:00.000Z';
+  const first=join(doc,accepted,invite,actor,at)[0];assert.ok(first);
+  const committed={...doc,...JSON.parse(JSON.stringify(first.payload.$set))};
+  const original=JSON.stringify(committed.eventEntries);
+  const retry=join(committed,null,invite,actor,'2027-11-10T13:59:59.999Z');
+  if(retry[0]) assert.equal(retry[0].payload.$set.eventEntries,undefined,'a visit must not replace or prolong a valid form');
+  else assert.equal(retry[4].statusCode,200);
+  assert.equal(JSON.stringify(committed.eventEntries),original);
+  const missing=join(committed,null,invite,actor,'2027-11-10T14:00:00.000Z');
+  assert.equal(missing[0],null);assert.equal(missing[4].payload.error,'EVENT_REGISTRATION_REQUIRED');
+  const renewed=join(committed,accepted,invite,actor,'2027-11-10T14:00:00.000Z')[0];assert.ok(renewed);
+  assert.equal(renewed.payload.$set.eventEntries[0].retentionUntil,'2028-11-10T14:00:00.000Z');
+ }
+});
+
+test('ordinary EVENT communities preserve canonical pre-registration through direct and invited joins',()=>{
+ for(const invite of [false,true]) {
+  const doc=community({id:'other-synthetic-event',members:[],eventEntries:[]});
+  doc.typeSettings.registrationPolicy.startsAt='2026-11-11T21:00:00.000Z';
+  doc.typeSettings.registrationPolicy.endsAt='2026-11-13T21:00:00.000Z';
+  assert.ok(join(doc,form,invite,actor,'2026-11-11T20:59:59.999Z')[0]?.payload.$set.eventEntries);
+ }
+});
+
+test('actual historical V2 and V3 join guards upgrade to perpetual registration and stay idempotent',()=>{
+ for(const [version,commit,blob,sha] of [
+  [2,'90533ec33164246bc82b3b32b10e2fa08f94d4f6','2690936cbdeeb387f2d1571de713c0320f626618','7928ff7852ec86b79132eaaacea891332031f31a5c9a731c8f6ed9cd71fb8f7b'],
+  [3,'a4e156f3686cae4fc7cb0ceebc33eb186f8696bf','2db6e3dbe8684e2b9b0d46e2cef84b0beef020de','cf657801baa0e033d43bc50ff70c251e8b19df5bb2ff98841005391b63024322'],
+ ]) {
+  const previous=JSON.parse(fs.readFileSync('scripts/tests/fixtures/eventJoinGuardV'+version+'.json','utf8'));
+  assert.equal(previous.sourceCommit,commit);assert.equal(previous.sourceBlob,blob);
+  assert.equal(crypto.createHash('sha256').update(previous.guard.trim()).digest('hex'),sha);
+  const old=structuredClone(candidate.flow);
+  for(const id of ['join','invite']) {const node=old.find((n:any)=>n.id===id);assert.ok(node.func.includes(EVENT_JOIN_GUARD));node.func=node.func.replace(EVENT_JOIN_GUARD,previous.guard);}
+  const upgraded=patchCommunityTypesFlow(old,{eventGames:true});
+  for(const invite of [false,true]) {
+   const doc=community({id:'community_1794221739126_корпспорт-падлхаб-2026',members:[],eventEntries:[]});
+   doc.typeSettings.registrationPolicy.startsAt='2026-11-11T21:00:00.000Z';doc.typeSettings.registrationPolicy.endsAt='2026-11-13T21:00:00.000Z';
+   const result=join(doc,{...form,retentionMode:'submitted-year-v1'},invite,actor,'2026-11-11T20:59:59.999Z',upgraded.flow);
+   assert.ok(result[0],'the former date ban must not survive a known-byte upgrade');
+   assert.equal(result[0].payload.$set.eventEntries[0].retentionUntil,'2027-11-11T20:59:59.999Z');
+  }
+  assert.deepEqual(upgraded.changes.map((c:any)=>c.id).sort(),['invite','join']);
+  assert.equal(patchCommunityTypesFlow(upgraded.flow,{eventGames:true}).changes.length,0);
+ }
+});
+
+test('registration guard refuses drift in current and historical join or invite blocks',()=>{
+ const previous=JSON.parse(fs.readFileSync('scripts/tests/fixtures/eventJoinGuardV2.json','utf8'));
+ for(const id of ['join','invite']) for(const guard of [EVENT_JOIN_GUARD,previous.guard]) {
+  const bad=structuredClone(candidate.flow),node=bad.find((n:any)=>n.id===id);
+  const drift=guard.replace("community.communityType === 'EVENT'","community.communityType === 'FRIENDS'");
+  assert.notEqual(drift,guard);node.func=node.func.replace(EVENT_JOIN_GUARD,drift);
+  assert.throws(()=>patchCommunityTypesFlow(bad,{eventGames:true}),/EVENT_JOIN_UPGRADE_DRIFT/);
+ }
+});
 
 test('EVENT policy is strict, additive and accepts exactly the two supported games',()=>{
  assert.equal(communityType('EVENT'),'EVENT');

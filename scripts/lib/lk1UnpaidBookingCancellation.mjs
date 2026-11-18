@@ -106,9 +106,15 @@ export function classifyLk1Transaction(op, transaction, now = nowIso(), graceMs 
   if (status !== 'UNPAID') return { reason: 'TRANSACTION_NOT_UNPAID' };
   if ([transaction.paymentDate, transaction.paidAt, transaction.refundDate, transaction.refundedAt]
     .some(value => value !== undefined && value !== null && value !== '')) return { reason: 'PAYMENT_OR_REFUND_EVIDENCE' };
-  const cardStatuses = [transaction.cardPaymentInfo?.status, transaction.cardPaymentStatus?.status]
-    .filter(value => value !== undefined && value !== null && value !== '').map(value => text(value).toUpperCase());
-  if (cardStatuses.some(value => !['NEW', 'UNPAID', 'EXPIRED'].includes(value))) {
+  const unsafeCard = [transaction.cardPaymentInfo, transaction.cardPaymentStatus].some(card => {
+    if (card?.status === undefined || card.status === null || card.status === '') return false;
+    const status = text(card.status).toUpperCase();
+    // Viva closes an unpaid card attempt as REJECTED/CANCELLED or
+    // REJECTED/EXPIRED. The outcome must belong to this same envelope.
+    return !['NEW', 'UNPAID', 'EXPIRED'].includes(status)
+      && !(status === 'REJECTED' && ['CANCELLED', 'EXPIRED'].includes(card.declineOutcome));
+  });
+  if (unsafeCard) {
     return { reason: 'PAYMENT_CARD_STATE_UNSAFE' };
   }
   for (const source of [transaction, transaction.cardPaymentInfo, transaction.cardPaymentStatus]) {
@@ -162,7 +168,13 @@ export function classifyLk1Booking(op, booking) {
   const evidence = [...flags, ...statuses.map(value => ['CANCELLED', 'CANCELED'].includes(value))];
   for (const field of ['cancellationDate', 'cancelledAt', 'canceledAt']) {
     if (booking[field] !== undefined && booking[field] !== null && booking[field] !== '') {
-      if (iso(booking[field]) === null) return { reason: 'BOOKING_STATE_INVALID' };
+      // Admin Viva returns cancellationDate without a timezone. It is only
+      // corroborating metadata for an explicit canceled flag, never a deadline.
+      const localCancellationDate = field === 'cancellationDate'
+        && booking.isCancelled === true && typeof booking[field] === 'string'
+        && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?$/.test(booking[field])
+        && iso(`${booking[field]}Z`) !== null;
+      if (iso(booking[field]) === null && !localCancellationDate) return { reason: 'BOOKING_STATE_INVALID' };
       evidence.push(true);
     }
   }
@@ -175,12 +187,23 @@ const intentQuery = (op, attemptedAt) => ({ _id: op._id, state: 'CONFIRMED', boo
   'lk1.unpaidCancellation.phase': 'INTENT', 'lk1.unpaidCancellation.attemptedAt': attemptedAt });
 const matched = ack => ack?.acknowledged === true && ack.matchedCount === 1 && ack.modifiedCount === 1;
 
+function cancelledAllowanceProof(op, at) {
+  return { schemaVersion: 1, proofId: op.operationId,
+    bookingId: op.bookingId, transactionId: op.lk1.checkout.transactionId,
+    amountMinor: op.lk1.checkout.toPayMinor, bookingState: 'CANCELLED',
+    transactionState: 'UNPAID_EXPIRED', verifiedAt: at };
+}
+
 async function releaseConfirmed(op, operations, attemptedAt, now, shouldStop) {
   if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
   const at = now();
-  const ack = await operations.updateOne(intentQuery(op, attemptedAt), { $set: {
+  const ack = await operations.updateOne({ ...intentQuery(op, attemptedAt),
+    tenantKey: op.tenantKey, actorClientId: op.actorClientId, clientSubscriptionId: op.clientSubscriptionId,
+    exerciseId: op.exerciseId, 'lk1.checkout': op.lk1.checkout,
+    'lk1.transactionIntent': op.lk1.transactionIntent, 'lk1.decision': op.lk1.decision }, { $set: {
     state: 'RELEASED', releaseReason: 'LK1_UNPAID_CHECKOUT_EXPIRED', releasedAt: at, updatedAt: at,
     'lk1.unpaidCancellation.phase': 'CANCELLED', 'lk1.unpaidCancellation.verifiedAt': at,
+    'lk1.cancelledAllowanceRelease': cancelledAllowanceProof(op, at),
   } }, writeOptions);
   return { state: matched(ack) ? 'CANCELLED' : 'RETRY_STORE' };
 }
@@ -218,6 +241,8 @@ export async function reconcileLk1UnpaidBooking({ op, operations, provider, coho
   if (tx.reason !== 'DUE') return { state: 'SKIPPED', reason: tx.reason };
   const booking = classifyLk1Booking(op, await provider.readBooking(op));
   if (shouldStop()) return { state: 'STOPPED' };
+  if (booking.reason === 'CANCELLED') return releaseAlreadyCancelledLk1Allowance({
+    op, operations, provider, cohortFrom, mode, now, shouldStop });
   if (booking.reason !== 'ACTIVE') return { state: 'SKIPPED', reason: booking.reason };
   const options = await provider.readCancelOptions(op);
   if (shouldStop()) return { state: 'STOPPED' };
@@ -269,6 +294,42 @@ export async function reconcileLk1UnpaidBooking({ op, operations, provider, coho
   if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
   if (finalTx.reason !== 'DUE') return markReview(op, operations, attemptedAt, finalTx.reason, now, shouldStop);
   return releaseConfirmed(op, operations, attemptedAt, now, shouldStop);
+}
+
+// Reconcile an already cancelled zero-visit booking without another provider
+// cancellation, charge, visit adjustment or erasure of its original checkout.
+export async function releaseAlreadyCancelledLk1Allowance({ op, operations, provider, cohortFrom,
+  mode = 'SHADOW', now = nowIso, shouldStop = () => false, backup = async () => {} }) {
+  if (!['SHADOW', 'ENFORCE_NEW'].includes(mode)) return { state: 'OFF' };
+  if (shouldStop()) return { state: 'STOPPED' };
+  const eligible = eligibleLk1UnpaidOperation(op, cohortFrom, now(), true);
+  if (eligible.reason !== 'ELIGIBLE' || op.lk1?.unpaidCancellation
+    || op.lk1?.cancelledAllowanceRelease || !/^\d{4}-\d\d-\d\d$/.test(op.serviceDate || '')
+    || op.serviceDate !== op.lk1.target.startsAt.slice(0, 10)
+    || iso(op.updatedAt) === null) return { state: 'SKIPPED', reason: 'CANCELLED_RELEASE_BINDING_INVALID' };
+  const verify = async () => {
+    const tx = classifyLk1Transaction(op, await provider.readTransaction(op), now());
+    if (tx.reason !== 'DUE') return tx.reason;
+    const booking = classifyLk1Booking(op, await provider.readBooking(op));
+    return booking.reason === 'CANCELLED' ? null : booking.reason;
+  };
+  const first = await verify();
+  if (first) return { state: 'SKIPPED', reason: first };
+  if (mode === 'SHADOW') return { state: 'WOULD_RELEASE_CANCELLED' };
+  await backup(op);
+  if (shouldStop()) return { state: 'STOPPED' };
+  const fresh = await verify();
+  if (fresh) return { state: 'SKIPPED', reason: fresh };
+  if (shouldStop()) return { state: 'STOPPED' };
+  const at = now();
+  const ack = await operations.updateOne({ _id: op._id, state: 'CONFIRMED', updatedAt: op.updatedAt,
+    tenantKey: op.tenantKey, actorClientId: op.actorClientId, operationId: op.operationId,
+    clientSubscriptionId: op.clientSubscriptionId, exerciseId: op.exerciseId,
+    serviceDate: op.serviceDate, bookingId: op.bookingId, lk1: op.lk1 }, { $set: {
+    state: 'RELEASED', releaseReason: 'CANCELLED_UNPAID_BOOKING', releasedAt: at, updatedAt: at,
+    'lk1.cancelledAllowanceRelease': cancelledAllowanceProof(op, at),
+  } }, writeOptions);
+  return { state: matched(ack) ? 'RELEASED_CANCELLED' : 'RETRY_STORE' };
 }
 
 export function createLk1VivaCancellationProvider({ token, baseUrl = 'https://api.vivacrm.ru',

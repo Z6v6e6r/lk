@@ -32,9 +32,12 @@ export function createEventAccess({ communityId, event, fetcher = fetch, now = (
           !['ACTIVE','NONE','PENDING','BANNED'].includes(data.membership) || !['CURRENT','REQUIRED'].includes(data.registration)) fail(503, 'EVENT_ADMISSION_INVALID');
       const policy = parseEventRegistrationPolicy(data.eventNotice?.policy);
       if (data.eventNotice.revision !== binding.policyRevision || policy.startsAt !== binding.startsAt || policy.endsAt !== binding.endsAt) fail(503, 'EVENT_BINDING_CHANGED');
+      const retentionMode=data.eventNotice.retentionMode;
+      if (retentionMode !== undefined && retentionMode !== 'submitted-year-v1' ||
+          communityId === 'community_1794221739126_корпспорт-падлхаб-2026' && retentionMode !== 'submitted-year-v1') fail(503,'EVENT_ADMISSION_INVALID');
       const state = data.membership === 'BANNED' ? 'blocked' : data.membership === 'PENDING' ? 'pending' : at < Date.parse(binding.startsAt) ? 'scheduled' : at >= Date.parse(binding.endsAt) ? 'closed' : data.membership !== 'ACTIVE' || data.registration !== 'CURRENT' ? 'form' : 'ready';
       const value = { state, registrationKind: 'event', name: data.actor.name, communityName: typeof data.communityName === 'string' ? data.communityName.slice(0, 160) : 'Мероприятие',
-        eventNotice: { policy, revision: binding.policyRevision }, actor: { id: data.actor.id, name: data.actor.name, communityId, eventEpoch: binding.epoch, policyRevision: binding.policyRevision }, membership: data.membership, registration: data.registration };
+        eventNotice: { policy, revision: binding.policyRevision, ...(retentionMode ? {retentionMode} : {}) }, actor: { id: data.actor.id, name: data.actor.name, communityId, eventEpoch: binding.epoch, policyRevision: binding.policyRevision }, membership: data.membership, registration: data.registration };
       cache.set(key, { at, value }); return value;
     } finally { inflight--; }
   };
@@ -57,9 +60,10 @@ export function createEventAccess({ communityId, event, fetcher = fetch, now = (
         if (now() - requestedAt > 20000) fail(503, 'ENROLLMENT_BUSY');
         const before = await inspect(req);
         if (before.state !== 'form') return publicEntry(before);
+        if (body.retentionMode !== before.eventNotice.retentionMode) fail(422,'EVENT_REGISTRATION_REQUIRED');
         try {
           await identityJson(fetcher, COMMUNITY_BASE + '/lk/communities/join-by-invite', tokenOf(req), { method: 'POST', timeoutMs: 8000,
-            body: JSON.stringify({ inviteCode: binding.inviteCode, member: { id: before.actor.id, name: before.actor.name, role: 'MEMBER' }, eventRegistration: { ...data, policyRevision: binding.policyRevision } }) });
+            body: JSON.stringify({ inviteCode: binding.inviteCode, member: { id: before.actor.id, name: before.actor.name, role: 'MEMBER' }, eventRegistration: { ...data, policyRevision: binding.policyRevision, ...(body.retentionMode ? {retentionMode:body.retentionMode} : {}) } }) });
         } catch { /* Canonical admission, never an upstream 200, decides whether the form committed. */ }
         const after = await inspect(req);
         return { ...publicEntry(after), ...(after.state === 'form' ? { state: 'confirming' } : {}) };

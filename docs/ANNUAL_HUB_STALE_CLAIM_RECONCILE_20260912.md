@@ -123,3 +123,40 @@ implausible release count (the HUB daily seat is one, so a tick normally release
   a previous day stays active (it no longer blocks the daily seat) and keeps
   counting in `reservedCount`; broadening the release to past seats needs a
   separate review.
+
+
+## Source-only reconciliation successor (2026-11-12)
+
+Local inventory release and provider financial state are distinct. The scheduled
+release continues to set the exact marked HUB reservation to `FAILED`, freeing its
+seat. Runtime confirmation now verifies that marker and all frozen identities,
+then durably projects `sale.localInventoryRelease = { reason, releasedAt }`.
+A provider-pending sale remains `PAYMENT_PENDING` with its checkout URL hidden;
+existing hourly recovery polling is preserved. Explicit provider failure can
+project `FAILED` without releasing the counters a second time. Historical marked
+ledger-only releases use the same recovery path; no live repair is included.
+
+A verified late payment converts only the exact marked `FAILED` reservation to
+`PAID` using the observed revision/counts and release receipt in CAS. It increments
+paid/taken, leaves reserved unchanged, and increments daily paid only for the
+ledger's current day. Real paid facts remain counted even after replacement sales
+exhausted the limit; existing total/daily admission guards close further sales.
+Repeated/lost-ACK confirmation reads back the ledger without incrementing again.
+Existing managed-instance verification and durable binding/projection are retained;
+stale pending/failed projection cannot overwrite a paid/binding/refunded sale.
+
+Touched function: `Route atomic Piter subscription sale`. Existing confirmation
+and scheduled-reconciliation paths are used; no endpoint, wire, schema enum,
+provider mutation, import/export payload, scheduler setting or activation changes.
+`patch_stale_annual_release.mjs` is a pure exact-preimage function-only successor,
+bound by `subscription_stale_release_generation.json`. Older generation pins stay
+frozen. Before any separately approved deployment, obtain and verify a fresh live
+preimage and review the complete candidate graph with the existing deployment
+contract. The source-only PR neither deploys nor repairs production records.
+
+Runtime owner: subscription backend; audience: HUB annual checkout and recovery.
+Acceptance: released pending confirmations project the receipt, verified late paid
+is counted once, and expired checkout URLs stay hidden. Stop signals for a later
+approved rollout are renewed release guards, projection conflicts or invalid
+counts. Stop through the reviewed rollback procedure with the same deployment
+owner; a source rollback does not reverse already recorded payment facts.

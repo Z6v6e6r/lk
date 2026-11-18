@@ -1,8 +1,11 @@
 import test from 'node:test';import assert from 'node:assert/strict';import crypto from 'node:crypto';import {MongoClient} from 'mongodb';
 import {buildFprProjectionOutbox,fprLevelHash} from '../lib/fprLevelLedger.mjs';
-import {initializeFprStarts} from '../lib/fprStartBootstrap.mjs';
+import {initializeFprStarts as initializeWithoutViva,initializeFprStartsWithViva,prepareFprStarts} from '../lib/fprStartBootstrap.mjs';
+import {parseFprVivaStartLevel} from '../lib/fprStartVivaLevel.mjs';
 const uri=process.env.FPR_LEVEL_TEST_MONGO_URI;
 const now='2026-11-06T14:00:00.000Z';
+const verifiedUnrated=async ids=>new Map(ids.map(id=>[id,parseFprVivaStartLevel({id,customFields:[]},id,now)]));
+const initializeFprStarts=(db,client,ids,actorId,at)=>initializeFprStartsWithViva(db,client,ids,actorId,verifiedUnrated,{clock:()=>at});
 const baseline=(id,after)=>({_id:'base:'+id,id:'base:'+id,idempotencyKey:'base:'+id,schemaVersion:1,eventType:'RATING_INITIAL_IMPORTED',
  occurredAt:now,createdAt:now,player:{key:'client:'+id,clientId:id,name:'Synthetic'},actor:{},source:{domain:'INITIAL_IMPORT'},
  change:{before:null,after,delta:null},formula:null,projectionIntent:{viva:'NONE'}});
@@ -66,5 +69,84 @@ test('atomic initial default1, existing full precision, compatibility import, hi
  // Recorded alias collision must fail the complete roster.
  await db.collection('player_rating_state').insertOne({_id:'alias-owner',clientId:'owner',playerKey:'client:owner',ownership:'CUP_CANONICAL',ratingNumeric:2,lastEventId:'base',identityAliases:{clientIds:['one','two']}});
  await assert.rejects(initializeFprStarts(db,client,['one','two'],'host',now),e=>e.message==='FPR_START_IDENTITY_CONFLICT'&&e.playerId==='two');
+ }finally{await db.dropDatabase();await client.close();}
+});
+
+test('missing CUP imports verified Viva numeric, defaults only on verified empty fields, and fails whole roster closed',
+ {skip:uri?false:'Requires isolated replica set'},async()=>{
+ const client=new MongoClient(uri),db=client.db('test_fpr_viva_'+crypto.randomBytes(8).toString('hex'));
+ try{
+  await client.connect();
+  for(const name of ['player_rating_state','player_ratings'])await db.collection(name).createIndex({clientId:1},{unique:true});
+  await db.collection('rating_events').createIndex({idempotencyKey:1},{unique:true});
+  await assert.rejects(initializeWithoutViva(db,client,['missing'],'host',now),e=>e.message==='FPR_START_VIVA_REQUIRED');
+  assert.equal(await db.collection('rating_events').countDocuments(),0);
+  let calls=0;
+  const reader=async ids=>{
+   calls++;assert.deepEqual(ids,['rated','unrated']);
+   return new Map(ids.map(id=>[id,parseFprVivaStartLevel({id,customFields:id==='rated'
+    ?[{id:'eabfe27b-3f72-4496-9185-1a2ec6e6465e',value:['3.65432']}]:[]},id,now)]));
+  };
+  const first=await initializeFprStartsWithViva(db,client,['rated','unrated'],'host',reader,{clock:()=>now});
+  assert.deepEqual(first.states.map(s=>s.ratingNumeric),[3.65432,1]);assert.equal(calls,1);
+  const event=await db.collection('rating_events').findOne({'player.clientId':'rated'});
+  assert.equal(event.source.initialSource,'VIVA_NUMERIC');assert.match(event.source.providerEvidence.sha256,/^[a-f0-9]{64}$/);
+  await initializeFprStartsWithViva(db,client,['rated','unrated'],'host',()=>{throw Error('must not call Viva')},{clock:()=>now});
+  assert.equal(await db.collection('rating_events').countDocuments(),2);
+  await db.collection('lk_communities').insertOne({id:'synthetic',members:[{id:'unrelated-legacy-key',clientId:'known-local',levelScore:3.2}]});
+  await assert.rejects(initializeFprStartsWithViva(db,client,['first-new','known-local'],'host',verifiedUnrated,{clock:()=>now}),
+   e=>e.message==='FPR_START_EXISTING_LEVEL_CONFLICT'&&e.playerId==='known-local');
+  assert.equal(await db.collection('player_rating_state').countDocuments({clientId:{$in:['first-new','known-local']}}),0);
+  await assert.rejects(initializeFprStartsWithViva(db,client,['provider-failure'],'host',async()=>{throw Error('FPR_START_VIVA_UNAVAILABLE')},{clock:()=>now}));
+  assert.equal(await db.collection('rating_events').countDocuments(),2);
+  const stale=async ids=>new Map(ids.map(id=>[id,parseFprVivaStartLevel({id,customFields:[]},id,'2026-11-06T13:00:00.000Z')]));
+  await assert.rejects(initializeFprStartsWithViva(db,client,['stale'],'host',stale,{clock:()=>now}),e=>e.message==='FPR_START_VIVA_REQUIRED');
+  assert.equal(await db.collection('rating_events').countDocuments(),2);
+  let checks=0;
+  await assert.rejects(initializeWithoutViva(db,client,['expired-during-plan'],'host',now,{
+   verifiedVivaLevels:await verifiedUnrated(['expired-during-plan']),
+   evidenceClock:()=>++checks===1?now:'2026-11-06T14:01:00.000Z',
+  }),e=>e.message==='FPR_START_VIVA_REQUIRED');
+  assert.equal(await db.collection('rating_events').countDocuments(),2);
+ }finally{await db.dropDatabase();await client.close();}
+});
+
+
+test('canonical roster is read-only without flock or Viva; missing players re-read under the data lock',
+ {skip:uri?false:'Requires isolated replica set'},async()=>{
+ const client=new MongoClient(uri),db=client.db('test_fpr_nonblocking_'+crypto.randomBytes(8).toString('hex'));
+ try{
+  await client.connect();
+  for(const name of ['player_rating_state','player_ratings']){
+   await db.collection(name).createIndex({clientId:1},{unique:true});
+   await db.collection(name).createIndex({playerKey:1},{unique:true});
+  }
+  await db.collection('rating_events').createIndex({idempotencyKey:1},{unique:true});
+  const canonical={_id:'client:ready',clientId:'ready',playerKey:'client:ready',ownership:'CUP_CANONICAL',ratingNumeric:3.65432,lastEventId:'base:ready'};
+  await db.collection('player_rating_state').insertOne(canonical);
+  const noCall=()=>{throw Error('must not acquire writer lock or call Viva');};
+  const snapshot=await prepareFprStarts(db,client,['ready'],'host',noCall,{clock:()=>now,withWriteLock:noCall});
+  assert.equal(snapshot.states[0].ratingNumeric,3.65432);assert.deepEqual(snapshot.initialized,[]);
+  assert.deepEqual(await db.collection('player_rating_state').findOne({_id:canonical._id}),canonical);
+  assert.equal(await db.collection('rating_events').countDocuments(),0);
+  assert.equal(await db.collection('rating_projection_outbox').countDocuments(),0);
+  // Simulate a competing writer winning before we obtain the data lock.
+  let locks=0;
+  const withWriteLock=async work=>{
+   locks++;await initializeFprStarts(db,client,['new'],'other-host',now);return work();
+  };
+  const mixed=await prepareFprStarts(db,client,['ready','new'],'host',noCall,{clock:()=>now,withWriteLock});
+  assert.equal(locks,1);assert.equal(mixed.initialized.length,0);
+  assert.equal(await db.collection('rating_events').countDocuments({'player.clientId':'new'}),1);
+  await db.collection('player_rating_state').updateOne({_id:canonical._id},{$set:{ownership:'VIVA'}});
+  await assert.rejects(prepareFprStarts(db,client,['ready'],'host',noCall,{clock:()=>now,withWriteLock:noCall}),/FPR_START_INVALID_CANONICAL/);
+  await db.collection('player_rating_state').updateOne({_id:canonical._id},{$set:{ownership:'CUP_CANONICAL',identityAliases:{clientIds:['ready','alias']}}});
+  await assert.rejects(prepareFprStarts(db,client,['ready','alias'],'host',noCall,{clock:()=>now,withWriteLock:noCall}),/FPR_START_IDENTITY_CONFLICT/);
+  const mixedNew=await prepareFprStarts(db,client,['ready','brand-new'],'host',verifiedUnrated,{clock:()=>now,withWriteLock:work=>work()});
+  assert.equal(mixedNew.initialized.length,1);
+  assert.equal(await db.collection('rating_projection_outbox').countDocuments(),2);
+  await db.collection('player_ratings').insertOne({_id:'bad',clientId:'bad',ratingNumeric:'invalid'});
+  await assert.rejects(prepareFprStarts(db,client,['rollback-new','bad'],'host',verifiedUnrated,{clock:()=>now,withWriteLock:work=>work()}),/FPR_START_INVALID_LEVEL/);
+  assert.equal(await db.collection('player_rating_state').countDocuments({clientId:'rollback-new'}),0);
  }finally{await db.dropDatabase();await client.close();}
 });

@@ -1,0 +1,15 @@
+{
+  "kind": "SUBSCRIPTION_STALE_RELEASE_GENERATION_V1",
+  "predecessor": "subscription_friendship_promo_generation.json",
+  "deploymentAuthorized": false,
+  "note": "Source-only focused successor. No production repair, flow import or activation. Financial pending remains watched; local inventory release has a separate durable sale receipt.",
+  "targets": [
+    {
+      "id": "piter_atomic_router_20260903",
+      "fileName": "fn_tournament_subscription_piter_atomic_router.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+      "preimageSha256": "399e95cd6864c0d865a977be18773bef24b140d74c12b661682e01181769bb39",
+      "candidateSha256": "c9ba744276f719dd08c0d485aa00ab53ed3aeadd082e122fa9e397ceea379430"
+    }
+  ]
+}

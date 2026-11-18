@@ -1,0 +1,15 @@
+/var/log/nginx/lk-game-read-diagnostics.jsonl {
+    hourly
+    maxsize 32M
+    rotate 3
+    maxage 1
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        /usr/sbin/nginx -s reopen >/dev/null 2>&1
+    endscript
+}

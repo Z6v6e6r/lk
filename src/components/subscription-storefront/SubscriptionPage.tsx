@@ -1,13 +1,15 @@
+import { hasZeroAttempt, resolveZeroOffer } from './zeroCheckoutPayment';
+import { startCheckout } from './zeroCheckoutMount';
+import { fastOfferKey } from './zeroCheckoutOffers';
+import { usePendingCheckoutReconciliation } from './usePendingCheckoutReconciliation';
 import { SubscriptionPromoCodeDialog } from './SubscriptionPromoCodeDialog';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiFetchTournamentSubscriptionStatus, apiGetSubscriptionProduct } from '../../utils/apiClient';
 import { CABINET_URL } from '../../consts/api_config';
-import { useAuth } from '../../context/AuthContext';
 import { SubscriptionStorefront } from './SubscriptionStorefront';
-import { AuthForm } from '../auth/AuthForm';
 import { summerPlanPresentation, friendshipVariantBenefits, atlantyPlanPresentation } from './presentation';
 import {
-  billingFromStatus, canContinue, energy5BillingOptions, requiresAnnualTermsConsent, storefrontPlanKeysForSearch,
+  billingFromStatus, canContinue, energy5BillingOptions, storefrontPlanKeysForSearch,
   friendshipBillingOptions, scopedStorefrontStatuses,
   ATLANTY_PLAN_ID, ATLANTY_VARIANT, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, atlantyBillingOptions, normalizeStorefrontVariant,
   parseFriendshipTwoHoursProduct, type StorefrontStatus,
@@ -18,11 +20,8 @@ import {
   StorefrontPaymentError,
   clearStorefrontPaymentRef,
   confirmStorefrontPayment,
-  createStorefrontSubscriptionPayment,
   readPendingPaymentEntries,
   readStorefrontPaymentRef,
-  resolvePaymentPhone,
-  resolveStorefrontBillingTarget,
   resolveStorefrontPromoTarget,
   type PendingPaymentEntry,
   type StorefrontBillingOptionId,
@@ -39,7 +38,6 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
   /** Variant requested by the hosting Tilda block; URL `variant` is the fallback. */
   variant?: string | null;
 }) {
-  const { isAuthenticated } = useAuth();
   const searchVariant = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('variant');
   // An empty host value (a Tilda block whose data prop is blank) must not shadow
   // the documented `?variant=` fallback.
@@ -48,17 +46,10 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
   /** Provider price of the two-hour product, verified together with its direction scope. */
   const [twoHourProductPriceMinor, setTwoHourProductPriceMinor] = useState<number | null>(null);
   const [error, setError] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  const [annualTermsAccepted, setAnnualTermsAccepted] = useState(false);
-  const [authRequested, setAuthRequested] = useState(false);
-  const [consentRequested, setConsentRequested] = useState(false);
-  const [pendingSelection, setPendingSelection] = useState<SubscriptionPlanSelection | null>(null);
-  const [processing, setProcessing] = useState(false);
   const [promoSelection, setPromoSelection] = useState<{ productId: string; title: string; planId: string; billingOptionId: StorefrontBillingOptionId } | null>(null);
   const [notice, setNotice] = useState<string | null>(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('subscriptionPromoReturn') === '1'
     ? 'Покупка отправлена в Viva. Проверьте абонементы в личном кабинете; если результат неясен, обратитесь в поддержку.' : null);
   const [failure, setFailure] = useState<string | null>(null);
-  const paymentInFlightRef = useRef(false);
   const confirmationStartedRef = useRef(false);
 
   useEffect(() => {
@@ -100,7 +91,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     }
     void refresh();
     return () => { cancelled = true; clearTimeout(timer); controller?.abort(); };
-  }, [attempt, previewView, isAtlantyVariant]);
+  }, [previewView, isAtlantyVariant]);
 
   /**
    * Confirms a payment created by this widget once the bank returns the visitor
@@ -148,95 +139,71 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     return () => { cancelled = true; };
   }, [cabinetUrl, previewView]);
 
-  const handleChoose = useCallback(async (selection: SubscriptionPlanSelection, resumeFlow = false) => {
-    if (previewView || paymentInFlightRef.current) return;
-    setFailure(null);
-    setNotice(null);
-
-    const billingOptionId = selection.billingOptionId as StorefrontBillingOptionId;
-    const target = resolveStorefrontBillingTarget(selection.planId, billingOptionId);
-    if (!target) {
-      setFailure('Этот вариант подписки пока недоступен для оплаты');
-      return;
-    }
-    if (!isAuthenticated) {
-      setPendingSelection(selection);
-      setAuthRequested(true);
-      return;
-    }
-    if (requiresAnnualTermsConsent(billingOptionId, annualTermsAccepted)) {
-      // Условия годовой подписки показываем только после нажатия «Оформить подписку».
-      setPendingSelection(selection);
-      setConsentRequested(true);
-      if (resumeFlow) setAuthRequested(false);
-      return;
-    }
-
-    paymentInFlightRef.current = true;
-    setProcessing(true);
-    try {
-      const phone = await resolvePaymentPhone();
-      const outcome = await createStorefrontSubscriptionPayment({
-        planId: selection.planId,
-        billingOptionId,
-        phone,
-      });
-      if (outcome.status === 'redirect') {
-        setPendingSelection(null);
-        window.location.href = outcome.paymentUrl;
-        return;
-      }
-      setNotice(outcome.message);
-      setAttempt(value => value + 1);
-      if (resumeFlow) {
-        setAuthRequested(false);
-        setConsentRequested(false);
-      }
-    } catch (paymentError) {
-      setFailure(paymentError instanceof StorefrontPaymentError
-        ? paymentError.message
-        : 'Не удалось создать оплату. Попробуйте ещё раз.');
-    } finally {
-      paymentInFlightRef.current = false;
-      setProcessing(false);
-    }
-  }, [annualTermsAccepted, isAuthenticated, previewView]);
-
-  const closeConsentDialog = useCallback(() => {
-    setConsentRequested(false);
-    setPendingSelection(null);
-    setFailure(null);
+  useEffect(() => {
+    const onCheckoutNotice = (event: Event) => {
+      const message = (event as CustomEvent<unknown>).detail;
+      if (typeof message === 'string') setNotice(message);
+    };
+    window.addEventListener('padlhub:checkout-notice', onCheckoutNotice);
+    return () => window.removeEventListener('padlhub:checkout-notice', onCheckoutNotice);
   }, []);
 
+  function handleChoose(selection: SubscriptionPlanSelection, gesture?: Event) {
+    if (previewView || !gesture) return;
+    const key = fastOfferKey(selection.planId, selection.billingOptionId);
+    const option = plans.find(p => p.id === selection.planId)?.billingOptions.find(b => b.id === selection.billingOptionId);
+    try {
+      if (!key || !option || option.ctaDisabled || !option.canResume && option.priceMinor === null) throw new StorefrontPaymentError('Этот вариант подписки пока недоступен для оплаты');
+      startCheckout(key, option.priceMinor ?? 0, gesture);
+    } catch (failure) { setFailure(failure instanceof Error ? failure.message : 'Не удалось открыть оформление.'); }
+  }
+
   const planKeys = storefrontPlanKeysForSearch(typeof window === 'undefined' ? '' : window.location.search);
-  const plans = isAtlantyVariant
+  const basePlans = isAtlantyVariant
     ? [{
       ...atlantyPlanPresentation,
       id: ATLANTY_PLAN_ID,
       billingOptions: atlantyBillingOptions(),
-      ctaLabel: processing ? 'Создаём оплату…' : 'Оформить подписку',
-      ctaDisabled: processing,
+      ctaLabel: 'Оплатить',
+      ctaDisabled: false,
     }]
     : planKeys.flatMap(key => {
       const status = statuses?.find(item => item.counterKey === key);
-      if (!status && key !== 'friendship') return [];
+      if (!status && key !== 'friendship' && !hasZeroAttempt(key)) return [];
       const billingOptions = key === 'friendship'
         ? friendshipBillingOptions(statuses ?? [], error, twoHourProductPriceMinor).map(option => ({
           ...option,
           benefitGroups: friendshipVariantBenefits[option.id],
         }))
         : key === 'energy5'
-          ? energy5BillingOptions(status)
-          : status ? billingFromStatus(status) : [];
+          ? (status ? energy5BillingOptions(status) : [{ id: 'monthly', label: '60 дней, 5 занятий', priceMinor: null }])
+          : status ? billingFromStatus(status) : [{ id: 'monthly', label: resolveZeroOffer(key)?.period ?? '30 дней', priceMinor: null }];
       if (!billingOptions.length) return [];
       return [{
         ...summerPlanPresentation[key], id: key, billingOptions,
-        ctaLabel: processing
-          ? 'Создаём оплату…'
-          : (key === 'energy5' ? 'Оформить абонемент' : 'Оформить подписку'),
-        ctaDisabled: processing || (key === 'friendship' ? error : !status || !canContinue(status, error)),
+        ctaLabel: 'Оплатить',
+        ctaDisabled: (key === 'friendship' ? error : !status || !canContinue(status, error)),
       }];
     });
+  const checkingPayments = usePendingCheckoutReconciliation(basePlans.flatMap(plan =>
+    plan.billingOptions.flatMap(option => {
+      const key = fastOfferKey(plan.id, option.id);
+      return key ? [key] : [];
+    })), !previewView && !isAtlantyVariant);
+  const plans = basePlans.map(plan => {
+    const pending = plan.billingOptions.some(option => {
+      const key = fastOfferKey(plan.id, option.id);
+      return key && hasZeroAttempt(key);
+    });
+    if (!pending) return plan;
+    return { ...plan, ctaDisabled: false, billingOptions: plan.billingOptions.map(option => {
+      const key = fastOfferKey(plan.id, option.id);
+      const canResume = Boolean(key && hasZeroAttempt(key));
+      const checking = Boolean(key && checkingPayments.includes(key));
+      return { ...option, canResume, ctaDisabled: canResume ? false : plan.ctaDisabled || option.ctaDisabled,
+        ...(canResume ? { ctaLabel: checking ? 'Проверяем оплату…' : 'Продолжить оплату', ctaDisabled: checking, statusMessage: undefined } : {}) };
+    }) };
+  });
   const view = previewView ?? (isAtlantyVariant
     ? {
       id: 'lk1-subscription-atlanty', title: 'ДРУЖБА.АТЛАНТЫ',
@@ -256,7 +223,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
    */
   const statusNotice = isAtlantyVariant ? null
     : error ? null
-      : !statuses ? 'Загружаем подписки…'
+      : !statuses && !plans.some(plan => plan.billingOptions.some(option => option.canResume)) ? 'Загружаем подписки…'
         : !plans.length ? 'Сейчас нет доступных предложений.' : null;
 
   return <>
@@ -271,112 +238,20 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
         </div> : statusNotice}
       </div>
     </div>}
-    {(previewView || statuses || isAtlantyVariant) && <>
+    {(previewView || statuses || isAtlantyVariant || plans.some(plan => plan.billingOptions.some(option => option.canResume))) && <>
       {notice && <p className="subscription-status-message" role="status">{notice}</p>}
       {failure && <p className="subscription-status-message subscription-status-message--error" role="alert">{failure}</p>}
-      <SubscriptionStorefront view={view} onBack={onBack} onChoose={selection => { void handleChoose(selection); }}
+      <SubscriptionStorefront view={view} onBack={onBack} onChoose={handleChoose}
         renderCheckoutAddon={previewView ? undefined : (selection, disabled) => {
           const target = resolveStorefrontPromoTarget(selection.planId, selection.billingOptionId as StorefrontBillingOptionId);
           if (!target?.directProductId) return null;
           const plan = plans.find(item => item.id === selection.planId);
           const option = plan?.billingOptions.find(item => item.id === selection.billingOptionId);
-          return <button type="button" className="subscription-card__promo-trigger" disabled={disabled || processing}
+          return <button type="button" className="subscription-card__promo-trigger" disabled={disabled}
             onClick={() => setPromoSelection({ planId: selection.planId, billingOptionId: selection.billingOptionId as StorefrontBillingOptionId, productId: target.directProductId!, title: `${plan?.label ?? ''} · ${option?.label ?? ''}` })}>
             у меня есть промокод
           </button>;
         }} />
     </>}
-    {!previewView && authRequested && (
-      <div className="subscription-auth-overlay" role="dialog" aria-modal="true" aria-labelledby="subscription-auth-title">
-        <button
-          type="button"
-          className="subscription-auth-backdrop"
-          aria-label="Закрыть окно авторизации"
-          onClick={() => { setAuthRequested(false); setPendingSelection(null); }}
-        />
-        <section className="subscription-auth-block">
-          <button
-            type="button"
-            className="subscription-auth-close"
-            aria-label="Закрыть окно авторизации"
-            onClick={() => { setAuthRequested(false); setPendingSelection(null); }}
-          >
-            ×
-          </button>
-          <h2 id="subscription-auth-title" className="subscription-auth-title">
-            {isAuthenticated ? 'Вы вошли в личный кабинет' : 'Оформление подписки'}
-          </h2>
-          <p className="subscription-auth-caption">
-            {isAuthenticated
-              ? 'Продолжите оформление — мы сразу откроем страницу оплаты банка.'
-              : 'Войдите, чтобы продолжить оплату.'}
-          </p>
-          {isAuthenticated ? (
-            <>
-              {failure && <p className="auth-error" role="alert">{failure}</p>}
-              <button
-                type="button"
-                className="auth-btn"
-                disabled={processing}
-                onClick={() => {
-                  if (pendingSelection) void handleChoose(pendingSelection, true);
-                }}
-              >
-                {processing ? 'Создаём оплату…' : 'Продолжить оплату'}
-              </button>
-            </>
-          ) : (
-            <AuthForm onLogin={() => {}} />
-          )}
-        </section>
-      </div>
-    )}
-    {!previewView && consentRequested && isAuthenticated && (
-      <div className="subscription-auth-overlay" role="dialog" aria-modal="true" aria-labelledby="subscription-consent-title">
-        <button
-          type="button"
-          className="subscription-auth-backdrop"
-          aria-label="Закрыть подтверждение условий годовой подписки"
-          onClick={closeConsentDialog}
-        />
-        <section className="subscription-auth-block">
-          <button
-            type="button"
-            className="subscription-auth-close"
-            aria-label="Закрыть подтверждение условий годовой подписки"
-            onClick={closeConsentDialog}
-          >
-            ×
-          </button>
-          <h2 id="subscription-consent-title" className="subscription-auth-title">
-            Оформление годовой подписки
-          </h2>
-          <p className="subscription-auth-caption">
-            Подтвердите согласие с условиями годовой подписки — и мы сразу откроем страницу оплаты банка.
-          </p>
-          {failure && <p className="auth-error" role="alert">{failure}</p>}
-          <label className="subscription-consent">
-            <input
-              type="checkbox"
-              checked={annualTermsAccepted}
-              onChange={event => {
-                const checked = event.target.checked;
-                setAnnualTermsAccepted(checked);
-                if (checked) setFailure(null);
-              }}
-            />
-            <span>Я ознакомился(ась) и согласен(на) с условиями годовой подписки</span>
-          </label>
-          <button
-            type="button"
-            className="auth-btn"
-            disabled={!annualTermsAccepted || processing}
-            onClick={() => { if (pendingSelection) void handleChoose(pendingSelection, true); }}
-          >
-            {processing ? 'Создаём оплату…' : 'Продолжить оплату'}
-          </button>
-        </section>
-      </div>
-    )}
   </>;
 }

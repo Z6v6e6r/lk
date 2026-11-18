@@ -1,3 +1,5 @@
+import { loadTournamentDaySchedule } from "../../utils/tournamentDaySchedule";
+import { tournamentAutoFinishNotice } from "./tournamentAutoFinish";
 import { tournamentEventId, tournamentIdentityKeys } from "../../utils/tournamentEventIdentity";
 import { fprProjection, validateFprState } from "./fpr6x25";
 import { searchTournamentRosterPlayers, resolveTournamentRosterPhone, isStableTournamentClientId } from '../../utils/tournamentRosterSearch';
@@ -90,6 +92,7 @@ import {
   getTournamentProgressState,
   isTournamentManuallyFinished,
   isTournamentMarkedFinished,
+  resolveTournamentLifecycleParams,
 } from "./tournamentLifecycle";
 import {
   buildPairedTournamentStandingsGroups,
@@ -470,32 +473,6 @@ function readTournamentSlugFromLocation() {
   );
 }
 
-function mergeTournamentExercises(primary: Exercise[], bookings: Booking[], dateKey: string) {
-  const merged = new Map<string, Exercise>();
-
-  primary.forEach((exercise) => {
-    const id = String(exercise?.id || "").trim();
-    if (!id) return;
-    merged.set(id, exercise);
-  });
-
-  bookings.forEach((booking) => {
-    const exercise = booking.exercise ?? null;
-    const id = String(exercise?.id || "").trim();
-    if (!exercise || !id) return;
-    if (getExerciseDateKey(exercise) !== dateKey) return;
-    if (!merged.has(id)) {
-      merged.set(id, exercise);
-    }
-  });
-
-  return Array.from(merged.values()).sort((left, right) => {
-    const leftTs = new Date(left.timeFrom || 0).getTime();
-    const rightTs = new Date(right.timeFrom || 0).getTime();
-    return leftTs - rightTs;
-  });
-}
-
 function getTournamentBookingItems(result: Awaited<ReturnType<typeof apiFetchBookings>> | null | undefined) {
   return result?.data?.content ?? [];
 }
@@ -515,9 +492,23 @@ async function fetchTournamentBookingItems(includePastTournaments: boolean): Pro
 }
 
 async function fetchTournamentMechanicsSourceItems(dateKey: string) {
-  return apiFetchTournamentMechanicsSourceList({ from: dateKey, to: dateKey })
-    .then((result) => result?.data ?? [])
-    .catch(() => []);
+  const result = await apiFetchTournamentMechanicsSourceList({ from: dateKey, to: dateKey });
+  return {
+    ...result,
+    data: result.data ? buildTournamentMechanicsFallbackExercises(result.data, { includeCancelled: true }) : null,
+  };
+}
+
+async function loadMechanicsSchedule(dateKey: string, includePast: boolean, previous: Exercise[], onAvailable?: (items: Exercise[]) => void) {
+  return loadTournamentDaySchedule({
+    dateKey,
+    previous,
+    onAvailable,
+    loadExercises: () => apiFetchExercisesByVisibleDate(dateKey, { includePast, includeAdjacentDays: false }),
+    loadSource: () => fetchTournamentMechanicsSourceItems(dateKey),
+    loadBookings: async () => (await fetchTournamentBookingItems(includePast))
+      .flatMap(booking => booking.exercise ? [booking.exercise] : []),
+  });
 }
 
 function getClientName(booking: ExerciseBooking, index: number) {
@@ -4465,9 +4456,39 @@ function TournamentManagerModal({
     () => (data?.tournamentType === "mexicano" ? parseMexicanoOptions(data.params) : null),
     [data?.params, data?.tournamentType],
   );
+  const [serverLifecycle, setServerLifecycle] = useState<{ tournamentId: string; params: Record<string, unknown> } | null>(null);
+  const lifecycleParams = resolveTournamentLifecycleParams(data, serverLifecycle);
+  useEffect(() => { if (!isOpen) setServerLifecycle(null); }, [isOpen]);
+  const autoFinishCurrentRef = useRef({ data, onDataChange, lifecycleParams });
+  useEffect(() => { autoFinishCurrentRef.current = { data, onDataChange, lifecycleParams }; }, [data, onDataChange, lifecycleParams]);
+  useEffect(() => {
+    if (!isOpen || !data?.tournamentId) return;
+    let stopped = false;
+    let loading = false;
+    const refresh = async () => {
+      if (loading || navigator.onLine === false) return;
+      loading = true;
+      try {
+        const response = await apiFetchTournamentHistory(data.tournamentId, { forceRefresh: true });
+        const record = response.data?.find(row => row.tournamentId === data.tournamentId);
+        const current = autoFinishCurrentRef.current;
+        if (!stopped && record?.params?.autoFinish && current.data
+          && JSON.stringify(record.params.autoFinish) !== JSON.stringify(current.lifecycleParams?.autoFinish)) {
+          setServerLifecycle({ tournamentId: data.tournamentId, params: record.params });
+          setServerTotals(record.totals); setServerLogs(record.playerLogs);
+          current.onDataChange?.({ ...current.data, params: record.params, rounds: buildTournamentPayloadFromHistory(record)?.rounds ?? current.data.rounds }, {
+            totals: record.totals, playerLogs: record.playerLogs,
+          });
+        }
+      } catch { /* Keep local drafts available during a network failure. */ } finally { loading = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [isOpen, data?.tournamentId]);
   const tournamentFinished = useMemo(
-    () => isTournamentMarkedFinished(data?.params, null),
-    [data?.params],
+    () => isTournamentMarkedFinished(lifecycleParams, null),
+    [lifecycleParams],
   );
   const draftDataSignature = useMemo(() => {
     if (!data) return null;
@@ -4502,7 +4523,7 @@ function TournamentManagerModal({
       { mode: resolveAmericanoScheduleMode(data.tournamentType) },
     );
     let nextRounds = hydratedRounds;
-    if (data.tournamentType === "mexicano" && !tournamentFinished) {
+    if (data.tournamentType === "mexicano" && !isTournamentMarkedFinished(data.params, null)) {
       const partiallySavedRound = hydratedRounds.find((round) => {
         const savedMatches = round.matches.reduce((sum, match) => sum + (isTournamentMatchSaved(match) ? 1 : 0), 0);
         return savedMatches > 0 && savedMatches < round.matches.length;
@@ -4579,7 +4600,7 @@ function TournamentManagerModal({
       setBroadcastError(null);
     }
     draftHydratedSignatureRef.current = draftDataSignature;
-  }, [applyBroadcastServerState, data, draftDataSignature, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions, tournamentFinished]);
+  }, [applyBroadcastServerState, data, draftDataSignature, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions]);
 
   useEffect(() => {
     if (!isOpen || !data?.tournamentId || !isOnline) return;
@@ -4806,6 +4827,7 @@ function TournamentManagerModal({
         {
           tournamentId: data.tournamentId,
           results,
+          params: lifecycleParams?.autoFinish ? { autoFinish: lifecycleParams.autoFinish } : undefined,
         },
         {
           tournamentId: data.tournamentId,
@@ -4922,6 +4944,7 @@ function TournamentManagerModal({
         return;
       }
 
+      if (submission.reason === "review_required") await refreshPendingTournamentQueue();
       const res = submission.response;
       if (res?.data) {
         if (!Array.isArray(res.data.rounds)) {
@@ -5052,7 +5075,7 @@ function TournamentManagerModal({
     setFinishTournamentError(null);
 
     const finishedAt = new Date().toISOString();
-    const currentParams = data.params && typeof data.params === "object" ? data.params as Record<string, unknown> : {};
+    const currentParams = lifecycleParams && typeof lifecycleParams === "object" ? lifecycleParams as Record<string, unknown> : {};
     const isLocalManualTournament =
       currentParams.manualTournament === true
       || currentParams.createdOffline === true
@@ -5084,6 +5107,7 @@ function TournamentManagerModal({
         source: "tournament_finish",
       });
 
+      if (submission.reason === "review_required") await refreshPendingTournamentQueue();
       const res = submission.response;
 
       if (submission.mode === "queued") {
@@ -5159,7 +5183,7 @@ function TournamentManagerModal({
     setResumeTournamentError(null);
     setFinishTournamentError(null);
 
-    const resumeParams = buildTournamentResumeParams(data.params);
+    const resumeParams = buildTournamentResumeParams(lifecycleParams);
 
     try {
       const submission = await submitTournamentResultsWithOfflineFallback(
@@ -5190,6 +5214,7 @@ function TournamentManagerModal({
         return;
       }
 
+      if (submission.reason === "review_required") await refreshPendingTournamentQueue();
       const res = submission.response;
       if (!res?.data) {
         setResumeTournamentError(res?.error?.message || "Не удалось возобновить турнир");
@@ -5201,6 +5226,7 @@ function TournamentManagerModal({
       const nextParams = res.data.params && typeof res.data.params === "object"
         ? res.data.params as Record<string, unknown>
         : resumeParams;
+      setServerLifecycle({ tournamentId: data.tournamentId, params: nextParams });
       const nextRounds = Array.isArray(res.data.rounds)
         ? hydrateAmericanoRounds(
             res.data.rounds,
@@ -5577,10 +5603,10 @@ function TournamentManagerModal({
     tournamentFinished,
   ]);
   const tournamentParams = useMemo(() => (
-    data?.params && typeof data.params === "object"
-      ? data.params as Record<string, unknown>
+    lifecycleParams && typeof lifecycleParams === "object"
+      ? lifecycleParams as Record<string, unknown>
       : {}
-  ), [data?.params]);
+  ), [lifecycleParams]);
   const broadcastStationId = resolveTournamentBroadcastStationId(
     broadcastServerStationId,
     tournamentParams.stationId,
@@ -5623,6 +5649,9 @@ function TournamentManagerModal({
   );
   const finishTournamentNote = useMemo(() => {
     if (tournamentFinished) {
+      if ((tournamentParams.autoFinish as { reason?: string } | undefined)?.reason === "time_limit") {
+        return "Турнир завершён автоматически. Возобновление сохранит результаты и даст ещё 3 часа.";
+      }
       return canResumeTournament
         ? "Турнир завершен вручную. Возобновление сохранит сетку и уже введенные результаты."
         : "Турнир завершен вручную.";
@@ -5643,6 +5672,7 @@ function TournamentManagerModal({
   }, [
     canFinishTournament,
     canResumeTournament,
+    tournamentParams.autoFinish,
     data?.tournamentType,
     hasPartiallyCompletedRound,
     standingsSnapshot.completedMatches,
@@ -6099,7 +6129,7 @@ function TournamentManagerModal({
       ?? syncedWithVivaNotice
       ?? localConductedNotice
       ?? createdOfflineNotice
-      ?? (pendingQueueRecords.length > 0
+      ?? (pendingQueueRecords.some(record => !record.reviewRequired)
         ? "Есть локально сохраненные результаты. Они будут отправлены при появлении связи."
         : null);
   const broadcastTargetOptions = getTournamentBroadcastTargetOptions(broadcastStationId);
@@ -6151,6 +6181,8 @@ function TournamentManagerModal({
             ))}
           </div>
         )}
+        {tournamentAutoFinishNotice(lifecycleParams) && <p role="status" className="tournaments-sync-notice">{tournamentAutoFinishNotice(lifecycleParams)}</p>}
+        {pendingQueueRecords.some(record => record.reviewRequired) && <p role="alert" className="tournaments-sync-notice">Есть поздние результаты, сохранённые на устройстве. Требуется проверка организатором; автоматическая отправка остановлена.</p>}
         {offlineNotice && <div className="tournaments-sync-notice">{offlineNotice}</div>}
         <div className="tournament-tabs">
           {[
@@ -6343,6 +6375,7 @@ function TournamentManagerModal({
                           </span>
                           <input
                             className="tournament-score-input"
+                            disabled={tournamentFinished}
                             type="number"
                             min={0}
                             max={data.targetScore}
@@ -6366,6 +6399,7 @@ function TournamentManagerModal({
                           </span>
                           <input
                             className="tournament-score-input"
+                            disabled={tournamentFinished}
                             type="number"
                             min={0}
                             max={data.targetScore}
@@ -6983,9 +7017,9 @@ export default function TournamentsPage({
     setLoading(true);
     setError(null);
     setCacheNotice(null);
-
-    void loadCachedTournamentSchedule(selectedDateStr).then((cachedItems) => {
-      if (!isCurrentRequest() || appliedFreshItems || !cachedItems) return;
+    const cachedPromise = loadCachedTournamentSchedule(selectedDateStr);
+    void cachedPromise.then(cachedItems => {
+      if (!isCurrentRequest() || appliedFreshItems || !cachedItems?.length) return;
       setItems(cachedItems);
       setCacheNotice("Показываем сохраненное расписание. Обновляем список...");
       setLoading(false);
@@ -6993,55 +7027,32 @@ export default function TournamentsPage({
 
     void (async () => {
       try {
-        const bookingItemsPromise = fetchTournamentBookingItems(includePastTournaments);
-        const sourceTournamentItemsPromise = fetchTournamentMechanicsSourceItems(tournamentMechanicsLookupDate);
-        const exercisesResult = await apiFetchExercisesByVisibleDate(selectedDateStr, {
-          includePast: includePastTournaments,
-          includeAdjacentDays: false,
+        const cachedItems = await cachedPromise;
+        const result = await loadMechanicsSchedule(selectedDateStr, includePastTournaments, cachedItems ?? [], available => {
+          if (!isCurrentRequest()) return;
+          appliedFreshItems = true;
+          setItems(available);
+          setLoading(false);
         });
-
         if (!isCurrentRequest()) return;
-        if (exercisesResult.error && !exercisesResult.data) {
-          throw new Error(exercisesResult.error.message || "Не удалось загрузить упражнения турниров");
-        }
-
         appliedFreshItems = true;
-        const baseItems = mergeTournamentMechanicsExercises(
-          exercisesResult.data ?? [],
-          [],
-          selectedDateStr,
-        );
-        setItems(baseItems);
-        setCacheNotice(null);
+        setItems(result.items);
+        setCacheNotice(result.partial || result.retainedStarted
+          ? "Список обновлён. Уже начавшиеся турниры сохранены из доступного расписания."
+          : null);
         setLoading(false);
-        void saveCachedTournamentSchedule(selectedDateStr, baseItems);
-
-        const [bookingItems, sourceTournamentItems] = await Promise.all([
-          bookingItemsPromise,
-          sourceTournamentItemsPromise,
-        ]);
-        if (!isCurrentRequest()) return;
-
-        const fallbackExercises = buildTournamentMechanicsFallbackExercises(sourceTournamentItems);
-        const mergedExercises = mergeTournamentMechanicsExercises(
-          exercisesResult.data ?? [],
-          fallbackExercises,
-          selectedDateStr,
-        );
-        const finalItems = mergeTournamentExercises(mergedExercises, bookingItems, selectedDateStr);
-        setItems(finalItems);
-        void saveCachedTournamentSchedule(selectedDateStr, finalItems);
+        void saveCachedTournamentSchedule(selectedDateStr, result.items);
       } catch {
         if (!isCurrentRequest()) return;
-        const cachedItems = await loadCachedTournamentSchedule(selectedDateStr);
+        const cachedItems = await cachedPromise;
         if (!isCurrentRequest()) return;
-        if (cachedItems) {
+        if (cachedItems?.length) {
           setItems(cachedItems);
           setCacheNotice("Показываем сохраненное расписание. Синхронизация восстановится при появлении связи.");
-          setLoading(false);
-          return;
+        } else {
+          setItems([]);
+          setError("Не удалось загрузить список турниров");
         }
-        setError("Не удалось загрузить список турниров");
         setLoading(false);
       }
     })();
@@ -7093,6 +7104,20 @@ export default function TournamentsPage({
     setVivaRefreshError(null);
 
     try {
+      if (includePastTournaments) {
+        const cachedItems = await loadCachedTournamentSchedule(requestedDate);
+        const previous = mergeTournamentMechanicsExercises(items, cachedItems ?? [], requestedDate);
+        const refreshed = await loadMechanicsSchedule(requestedDate, true, previous);
+        if (selectedDateKeyRef.current !== requestedDate || scheduleRequestGenerationRef.current !== requestGeneration) return;
+        setItems(refreshed.items);
+        setError(null);
+        setCacheNotice(refreshed.partial || refreshed.retainedStarted
+          ? "Уже начавшиеся турниры сохранены из доступного расписания." : null);
+        void saveCachedTournamentSchedule(requestedDate, refreshed.items);
+        setVivaRefreshNotice(`Список обновлён, турниров: ${refreshed.items.filter(isTournamentExerciseCategory).length}.`);
+        return;
+      }
+
       const result = await apiRefreshTournamentMechanicsFromViva(requestedDate);
       if (result.error || !result.data) {
         throw new Error(result.error?.message || "Не удалось обновить турниры из Viva");
@@ -7140,7 +7165,7 @@ export default function TournamentsPage({
     } finally {
       setVivaRefreshPending(false);
     }
-  }, [canHostTournaments, selectedDateStr, vivaRefreshPending]);
+  }, [canHostTournaments, selectedDateStr, vivaRefreshPending, includePastTournaments, items]);
   const currentProfileId = profile?.id ?? null;
   const localDraftExercises = useMemo(
     () => localDraftSnapshots
@@ -7822,7 +7847,7 @@ export default function TournamentsPage({
                 aria-busy={vivaRefreshPending}
               >
                 <span className="tournaments-viva-refresh-icon" aria-hidden="true">↻</span>
-                <span>{vivaRefreshPending ? "Обновляем из Viva..." : "Обновить из Viva"}</span>
+                <span>{vivaRefreshPending ? "Обновляем..." : includePastTournaments ? "Обновить список" : "Обновить из Viva"}</span>
               </button>
               <span className="tournaments-viva-refresh-hint">
                 Только выбранный день

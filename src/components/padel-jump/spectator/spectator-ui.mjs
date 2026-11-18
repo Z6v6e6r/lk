@@ -14,6 +14,8 @@ export function mountSpectatorView(root, {
   targetFps = 30,
   onVisibleRunsChange,
   onError = () => {},
+  tv = false,
+  rotateMs = 15000,
 } = {}) {
   if (!root || root.nodeType !== 1) throw new TypeError('A mount element is required');
   if (root.childElementCount) throw new TypeError('Use a dedicated empty mount element');
@@ -24,17 +26,19 @@ export function mountSpectatorView(root, {
   const doc = root.ownerDocument, win = doc.defaultView;
   const ownedClass = !root.classList.contains('ph-jump-spectator');
   root.classList.add('ph-jump-spectator');
+  if (tv) root.dataset.tv = '1';
   const template = doc.createElement('template');
   template.innerHTML = `
     <section class="ph-screen" aria-label="Табло ПадлхАБ Jump">
       <header class="ph-header">
         <div class="ph-brand"><img class="ph-brand-image" alt="ПадлхАБ" hidden><div class="ph-app-name"><strong>Jump</strong><span>Экран сообщества</span></div></div>
-        <div class="ph-header-actions"><button type="button" class="ph-main-action" data-action="join" hidden>Играть на телефоне</button><button type="button" class="ph-fullscreen-button" data-action="fullscreen" hidden>На весь экран</button></div>
+        <div class="ph-header-actions"><span class="ph-demo-badge" data-demo hidden></span><span class="ph-tv-connection" data-tv-connection aria-hidden="true"></span><button type="button" class="ph-main-action" data-action="join" hidden>Играть на телефоне</button><button type="button" class="ph-fullscreen-button" data-action="fullscreen" hidden>На весь экран</button></div>
       </header>
       <div class="ph-section-heading"><div class="ph-now-title"><h1>Пока никто не играет</h1><span class="ph-player-count" hidden>0</span></div><div class="ph-view-switch" role="group" aria-label="Вид табло"><button type="button" data-view="games" aria-pressed="true">Игры и рейтинг</button><button type="button" data-view="rating" aria-pressed="false">Только рейтинг</button></div></div>
       <main class="ph-content" data-layout="empty">
-        <section class="ph-live-area" aria-label="Текущие прохождения" hidden><div class="ph-player-picker" role="group" aria-label="Выбрать игрока"></div><div class="ph-courts"></div><p class="ph-live-note">Зрительский режим · движение показано приблизительно</p></section>
+        <section class="ph-live-area" aria-label="Текущие прохождения" hidden><div class="ph-player-picker" role="group" aria-label="Выбрать игрока"></div><div class="ph-courts"></div><div class="ph-roster" hidden><p class="ph-roster-title"></p><ol></ol></div><p class="ph-live-note">Зрительский режим · движение показано приблизительно</p></section>
         <aside class="ph-standings" aria-label="Рейтинг сообщества"><div class="ph-standings-title"><h2>Рейтинг сообщества</h2><span>Лучший заезд каждого</span></div><table class="ph-ranking-table"><caption class="ph-sr-only">Подтверждённые результаты сообщества</caption><colgroup><col class="ph-col-place"><col><col class="ph-col-balls"><col class="ph-col-time"></colgroup><thead><tr><th scope="col">№</th><th scope="col">Игрок</th><th scope="col">Мячи</th><th scope="col">Время</th></tr></thead><tbody><tr><td colspan="4">Рейтинг загружается…</td></tr></tbody></table><p class="ph-ranking-rule">Больше мячей — выше место.<br>При равенстве — меньшее время.</p></aside>
+        <section class="ph-tv-rating" aria-label="Рейтинг сообщества" hidden><div class="ph-tv-rating-head"><h2>Рейтинг сообщества</h2><p data-rating-note>Лучший заезд каждого · больше мячей — выше место</p></div><ol class="ph-podium"></ol><ol class="ph-tv-list"></ol><div class="ph-tv-cta"><span class="ph-ball" aria-hidden="true"></span><div><strong>Кто следующий?</strong><span>Открой ПадлхАБ Jump на телефоне и начни игру в сообществе</span></div><span class="ph-tv-page" data-rating-page></span></div></section>
         <section class="ph-empty-state" aria-label="Ожидание игроков"><div><h2>Кто следующий?</h2><p>Открой Jump на телефоне<br>и начни игру в сообществе.</p></div></section>
       </main>
       <footer class="ph-screen-footer"><span data-connection>Подключаемся…</span><span>ПадлхАБ Jump</span></footer>
@@ -47,6 +51,8 @@ export function mountSpectatorView(root, {
   const cards = new Map(), canvasCards = new WeakMap();
   let order = [], visible = [], selectedIndex = 0, capacity = 1, view = 'games';
   let destroyed = false, raf = null, lastTick = -Infinity;
+  let rosterAt = -Infinity;
+  let ratingRows = [], ratingPage = 0, rotation = null, ratingStatus = 'Рейтинг загружается…', ratingLoaded = false;
   const media = win.matchMedia('(prefers-reduced-motion: reduce)');
   const removers = [];
   const listen = (target, event, handler) => { target.addEventListener(event, handler); removers.push(() => target.removeEventListener(event, handler)); };
@@ -77,7 +83,7 @@ export function mountSpectatorView(root, {
 
   function makeCard(player) {
     const element = doc.createElement('article'); element.className = 'ph-player';
-    element.innerHTML = `<header class="ph-player-heading"><span class="ph-avatar" aria-hidden="true"></span><div class="ph-person"><h2></h2><p></p></div></header><div class="ph-scoreline"><div><span class="ph-label">Мячи</span><div class="ph-score"><span class="ph-ball" aria-hidden="true"></span><strong data-score>—</strong></div></div><div class="ph-time"><span class="ph-label">Время</span><strong data-time>—</strong></div></div><div class="ph-court"><canvas role="img"></canvas><span class="ph-court-station"></span><div class="ph-court-message">Подключаемся к игре…</div></div><footer class="ph-player-footer"><span class="ph-label">Жизни</span><div class="ph-lives" aria-hidden="true"></div><span class="ph-life-count">—</span></footer>`;
+    element.innerHTML = `<header class="ph-player-heading"><span class="ph-avatar" aria-hidden="true"></span><div class="ph-person"><h2></h2><p></p></div><span class="ph-player-demo" hidden>Демо</span></header><div class="ph-scoreline"><div><span class="ph-label">Мячи</span><div class="ph-score"><span class="ph-ball" aria-hidden="true"></span><strong data-score>—</strong></div></div><div class="ph-time"><span class="ph-label">Время</span><strong data-time>—</strong></div></div><div class="ph-court"><canvas role="img"></canvas><span class="ph-court-station"></span><div class="ph-court-message">Подключаемся к игре…</div></div><footer class="ph-player-footer"><span class="ph-label">Жизни</span><div class="ph-lives" aria-hidden="true"></div><span class="ph-life-count">—</span></footer>`;
     const canvas = element.querySelector('canvas');
     canvas.width = 1; canvas.height = 1;
     element.hidden = true;
@@ -91,7 +97,8 @@ export function mountSpectatorView(root, {
     c.element.querySelector('.ph-person p').textContent = c.player.stationLabel || '';
     c.element.querySelector('.ph-court-station').textContent = c.player.stationLabel || '';
     c.element.querySelector('.ph-avatar').textContent = c.player.name.trim().split(/\s+/).slice(0, 2).map(s => Array.from(s)[0] || '').join('').toLocaleUpperCase('ru');
-    c.canvas.setAttribute('aria-label', `Прохождение: ${c.player.name}`);
+    c.canvas.setAttribute('aria-label', `${c.player.demo ? 'Демонстрация' : 'Прохождение'}: ${c.player.name}`);
+    c.element.querySelector('.ph-player-demo').hidden = !c.player.demo;
     c.hudKey = '';
   }
   function resizeCard(c, width, height) {
@@ -123,7 +130,8 @@ export function mountSpectatorView(root, {
   function measureRoot() {
     if (destroyed) return;
     const width = root.getBoundingClientRect().width;
-    const next = Math.min(maxVisiblePlayers, width < 560 ? 1 : width < 1200 ? 2 : 4);
+    // A TV stage is a fixed 16:9 picture: four fields fit at any physical resolution.
+    const next = Math.min(maxVisiblePlayers, tv ? 4 : width < 560 ? 1 : width < 1200 ? 2 : 4);
     if (next !== capacity) { capacity = next; arrange('resize'); }
   }
   const observer = new win.ResizeObserver(entries => {
@@ -157,6 +165,11 @@ export function mountSpectatorView(root, {
     q('h1').textContent = view === 'rating' ? 'Рейтинг сообщества' : activeCount ? 'Сейчас играют' : order.length ? 'Завершённые прохождения' : 'Пока никто не играет';
     q('.ph-player-count').textContent = String(activeCount); q('.ph-player-count').hidden = !activeCount || view === 'rating';
     q('.ph-standings-title').hidden = view === 'rating';
+    q('.ph-tv-rating').hidden = !tv || q('.ph-content').dataset.layout !== 'empty';
+    renderRoster();
+    shell.dataset.layout = q('.ph-content').dataset.layout;
+    shell.dataset.fields = String(visible.length);
+    shell.style.setProperty('--ph-fields', String(Math.max(1, visible.length)));
     for (const id of visible) {
       const c = cards.get(id); ensureRenderer(c);
       const rect = c.canvas.getBoundingClientRect(); resizeCard(c, rect.width, rect.height);
@@ -176,8 +189,42 @@ export function mountSpectatorView(root, {
     c.error = true; const message = c.element.querySelector('.ph-court-message');
     message.textContent = 'Не удалось отобразить игру'; message.hidden = false; report(error, c.player.runId);
   }
+  // TV with more players than fields: everyone stays on screen as a compact chip.
+  function renderRoster() {
+    const roster = q('.ph-roster'), list = roster.querySelector('ol');
+    roster.hidden = !tv || order.length <= capacity || view !== 'games';
+    shell.dataset.roster = roster.hidden ? '0' : order.length > 8 ? '2' : '1';
+    if (roster.hidden) { list.replaceChildren(); return; }
+    roster.querySelector('.ph-roster-title').textContent = `Все в игре · ${order.length}`;
+    list.style.setProperty('--ph-roster-cols', String(Math.min(8, order.length)));
+    list.replaceChildren(...order.map(id => {
+      const c = cards.get(id), li = doc.createElement('li');
+      li.className = 'ph-roster-chip'; li.dataset.run = id;
+      li.classList.toggle('is-visible', visible.includes(id)); li.classList.toggle('is-finished', !!c.player.finished);
+      li.innerHTML = '<span class="ph-roster-name"></span><span class="ph-roster-meta"></span><span class="ph-roster-balls"><span class="ph-ball" aria-hidden="true"></span><b></b></span>';
+      li.querySelector('.ph-roster-name').textContent = c.player.name;
+      fillChip(li, c.last);
+      return li;
+    }));
+  }
+  function fillChip(li, s) {
+    li.querySelector('.ph-roster-meta').textContent = s && STATIONS[s.station] ? `${STATIONS[s.station].name} · ${s.section + 1}/3 · ♥${s.lives}` : 'в игре';
+    li.querySelector('.ph-roster-balls b').textContent = s ? String(s.score) : '—';
+  }
+  function refreshRoster(now) {
+    if (q('.ph-roster').hidden || now - rosterAt < 500) return;
+    rosterAt = now;
+    for (const li of q('.ph-roster ol').children) {
+      const c = cards.get(li.dataset.run); if (!c) continue;
+      // Hidden fields are sampled at 2Hz only for their confirmed numbers; no drawing.
+      if (!visible.includes(c.player.runId)) try { const frame = c.player.getFrame(now); if (frame?.confirmed) c.last = frame.confirmed; } catch (error) { report(error, c.player.runId); }
+      fillChip(li, c.last);
+      li.classList.toggle('is-finished', !!c.player.finished);
+    }
+  }
   function updateHud(c, frame) {
     const s = frame.confirmed;
+    if (s) c.last = s;
     const key = [s?.score, s?.lives, s?.elapsedMs, s?.status, s?.phase, s?.station, s?.section, frame.state, c.player.initialLives].join('|');
     if (key === c.hudKey) return; c.hudKey = key;
     if (s) {
@@ -201,6 +248,36 @@ export function mountSpectatorView(root, {
     const text = frame.state === 'finished' ? 'Игра завершена' : frame.state === 'stale' ? 'Ждём связь с игроком' : !s ? 'Подключаемся к игре…' : phases[s.phase] ?? '';
     message.textContent = text; message.hidden = !text;
   }
+  function renderTvRating() {
+    const podium = q('.ph-podium'), list = q('.ph-tv-list');
+    podium.replaceChildren(); list.replaceChildren();
+    const item = (row, index, big) => {
+      const li = doc.createElement('li'); li.className = big ? `ph-podium-place ph-place-${index + 1}` : 'ph-tv-row';
+      li.innerHTML = '<span class="ph-place"></span><span class="ph-name"></span><span class="ph-balls"><span class="ph-ball" aria-hidden="true"></span><b></b></span><span class="ph-tv-time"></span>';
+      li.querySelector('.ph-place').textContent = String(index + 1);
+      li.querySelector('.ph-name').textContent = row.name; li.querySelector('.ph-name').title = row.name;
+      li.querySelector('.ph-balls b').textContent = String(row.score);
+      li.querySelector('.ph-tv-time').textContent = formatElapsed(row.elapsedMs, true);
+      li.setAttribute('aria-label', `${index + 1} место: ${row.name}, мячей ${row.score}, время ${formatElapsed(row.elapsedMs, true)}`);
+      return li;
+    };
+    ratingRows.slice(0, 3).forEach((row, index) => podium.append(item(row, index, true)));
+    const rest = ratingRows.slice(3), pageSize = 10, pages = Math.max(1, Math.ceil(rest.length / pageSize));
+    ratingPage %= pages;
+    rest.slice(ratingPage * pageSize, ratingPage * pageSize + pageSize).forEach((row, index) => list.append(item(row, 3 + ratingPage * pageSize + index, false)));
+    if (!ratingRows.length) { const li = doc.createElement('li'); li.className = 'ph-tv-empty'; li.textContent = ratingLoaded ? 'Пока нет результатов — стань первым!' : ratingStatus; podium.append(li); }
+    q('[data-rating-page]').textContent = pages > 1 ? `Места ${4 + ratingPage * pageSize}–${Math.min(ratingRows.length, 3 + (ratingPage + 1) * pageSize)} · ${ratingPage + 1}/${pages}` : '';
+  }
+  // A TV has no pointer: rotate long ratings and more than four players automatically.
+  if (tv) rotation = win.setInterval(() => {
+    if (destroyed || doc.hidden) return;
+    if (!q('.ph-tv-rating').hidden && ratingRows.length > 13) { ratingPage++; renderTvRating(); }
+    if (order.length > capacity) { selectedIndex = (Math.floor(selectedIndex / capacity) + 1) * capacity; if (selectedIndex >= order.length) selectedIndex = 0; arrange('rotation'); }
+  }, rotateMs);
+  if (tv) listen(doc, 'keydown', event => {
+    // Remote "OK"/Enter is a user gesture, so it may request fullscreen.
+    if (event.key === 'Enter' || event.key === 'f' || event.key === 'F') fullscreen.click();
+  });
   function tick(now) {
     raf = null; if (destroyed || doc.hidden) return;
     const interval = media.matches ? 1000 : 1000 / targetFps;
@@ -219,6 +296,7 @@ export function mountSpectatorView(root, {
         } catch (error) { failCard(c, error); }
       }
     }
+    refreshRoster(now);
     raf = win.requestAnimationFrame(tick);
   }
   listen(doc, 'visibilitychange', () => {
@@ -230,7 +308,7 @@ export function mountSpectatorView(root, {
     }
   });
   listen(media, 'change', () => { lastTick = -Infinity; for (const c of cards.values()) c.dirty = true; });
-  measureRoot(); if (!doc.hidden) raf = win.requestAnimationFrame(tick);
+  measureRoot(); if (tv) renderTvRating(); if (!doc.hidden) raf = win.requestAnimationFrame(tick);
 
   return Object.freeze({
     updatePlayers(players) {
@@ -266,19 +344,42 @@ export function mountSpectatorView(root, {
         body.append(tr);
       });
       if (!rows.length) { const tr = doc.createElement('tr'), td = doc.createElement('td'); td.colSpan = 4; td.textContent = 'Пока нет результатов'; tr.append(td); body.append(tr); }
+      ratingRows = rows.map(row => ({ name: row.name, score: row.score, elapsedMs: row.elapsedMs })); ratingLoaded = true;
+      if (tv) renderTvRating();
+    },
+    /** Placeholder while no rating has been received (e.g. offline without a cache). */
+    setRatingStatus(text) {
+      if (destroyed) throw new Error('Spectator view is destroyed');
+      if (ratingLoaded) return;
+      ratingStatus = text;
+      const body = q('tbody'), tr = doc.createElement('tr'), td = doc.createElement('td');
+      td.colSpan = 4; td.textContent = text; tr.append(td); body.replaceChildren(tr);
+      if (tv) renderTvRating();
+    },
+    /** Short provenance line under the TV rating, e.g. a cached rating's time. */
+    setRatingNote(text) {
+      if (destroyed) throw new Error('Spectator view is destroyed');
+      q('[data-rating-note]').textContent = text || 'Лучший заезд каждого · больше мячей — выше место';
+    },
+    /** Label shown while offline demonstration games are on screen; null hides it. */
+    setDemo(label) {
+      if (destroyed) throw new Error('Spectator view is destroyed');
+      const badge = q('[data-demo]'); badge.textContent = label || ''; badge.hidden = !label;
+      root.toggleAttribute('data-demo', !!label);
     },
     setConnection(status) {
       if (destroyed) throw new Error('Spectator view is destroyed');
       const labels = { connecting: 'Подключаемся…', connected: 'Табло подключено', offline: 'Связь прервана. Показываем последние данные.' };
       if (!Object.hasOwn(labels, status)) throw new TypeError('Unsupported connection status');
       q('[data-connection]').textContent = labels[status];
+      q('[data-tv-connection]').dataset.status = status;
     },
     destroy() {
       if (destroyed) return; destroyed = true;
-      if (raf !== null) win.cancelAnimationFrame(raf); observer.disconnect(); removers.forEach(remove => remove());
+      if (raf !== null) win.cancelAnimationFrame(raf); if (rotation !== null) win.clearInterval(rotation); observer.disconnect(); removers.forEach(remove => remove());
       if (doc.fullscreenElement === root) doc.exitFullscreen().catch(error => report(error));
       for (const c of cards.values()) releaseRenderer(c);
-      cards.clear(); shell.remove(); if (ownedClass) root.classList.remove('ph-jump-spectator');
+      cards.clear(); shell.remove(); if (ownedClass) root.classList.remove('ph-jump-spectator'); delete root.dataset.tv; root.removeAttribute('data-demo');
     },
   });
 }

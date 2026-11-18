@@ -85,19 +85,17 @@ const empty = (state: "checking" | "limit-used" | "unavailable", label: string):
   state, label, detail: null, basePriceMinor: null, amountMinor: null, paidMinutes: 0, discounted: false,
 });
 
-/** Only complete, current server quotes may replace the ordinary price. No local benefit calculation. */
-export function subscriptionPricePreview(input: {
+type PreviewInput = {
   selectionKey: string;
   durationMinutes: number;
   subscriptionIds: string[];
   quotes: SubscriptionPriceQuote[] | null;
   loading: boolean;
   now: number;
-}): SubscriptionPricePreview {
-  if (input.loading) return empty("checking", "Проверяем подписки…");
-  const unavailable = () => empty("unavailable", "Условия подписки не подтверждены");
+};
+
+function validatedQuotes(input: PreviewInput): SubscriptionPriceQuote[] | null {
   const ids = [...new Set(input.subscriptionIds)];
-  if (!ids.length) return empty("unavailable", "Нет доступной подписки");
   const quotes = input.quotes;
   if (!Array.isArray(quotes) || quotes.some(q => !q || typeof q !== "object")
     || quotes.length !== ids.length || new Set(quotes.map(q => q.subscriptionId)).size !== ids.length
@@ -106,17 +104,31 @@ export function subscriptionPricePreview(input: {
       || !Number.isFinite(q.evaluatedAt) || !Number.isFinite(q.expiresAt)
       || q.evaluatedAt > input.now + 5000 || q.expiresAt <= input.now
       || q.expiresAt <= q.evaluatedAt || q.expiresAt - q.evaluatedAt > 60_000
-      || !minorUnits(q.basePriceMinor))) return unavailable();
+      || !minorUnits(q.basePriceMinor))) return null;
   // A canonical tariff mismatch is uncertainty, not a reason to advertise a smaller amount.
-  if (new Set(quotes.map(q => q.basePriceMinor)).size !== 1) return unavailable();
+  if (new Set(quotes.map(q => q.basePriceMinor)).size !== 1) return null;
   const available = quotes.filter(q => q.status === "AVAILABLE");
   if (available.some(q => !minorUnits(q.amountMinor) || q.amountMinor > q.basePriceMinor
     || !Number.isSafeInteger(q.freeMinutes) || q.freeMinutes < 0
     || !Number.isSafeInteger(q.paidMinutes) || q.paidMinutes < 0
-    || q.freeMinutes + q.paidMinutes !== input.durationMinutes)) return unavailable();
+    || q.freeMinutes + q.paidMinutes !== input.durationMinutes)) return null;
+  return quotes;
+}
+
+/** Only complete, current server quotes may replace the ordinary price. No local benefit calculation. */
+export function subscriptionPricePreview(input: PreviewInput): SubscriptionPricePreview {
+  if (input.loading) return empty("checking", "Проверяем подписки…");
+  const unavailable = () => empty("unavailable", "Условия подписки не подтверждены");
+  const ids = [...new Set(input.subscriptionIds)];
+  if (!ids.length) return empty("unavailable", "Нет доступной подписки");
+  const quotes = validatedQuotes(input);
+  if (!quotes) return unavailable();
+  const available = quotes.filter(q => q.status === "AVAILABLE");
   if (!available.length) return quotes.some(q => q.status === "LIMIT_USED")
     ? empty("limit-used", "Лимит по подписке исчерпан")
-    : empty("unavailable", "Подписка недоступна для этого времени");
+    : empty("unavailable", quotes.every(q => q.reasonCode === "SUBSCRIPTION_DATE_NOT_COVERED")
+      ? "Действие абонемента не распространяется на дату игры"
+      : "Подписка недоступна для этого времени");
   const best = [...available].sort((a, b) => a.amountMinor! - b.amountMinor!
     || a.subscriptionId.localeCompare(b.subscriptionId))[0];
   const amountMinor = best.amountMinor!;
@@ -142,8 +154,9 @@ export function subscriptionSurchargeMinor(preview: SubscriptionPricePreview | u
 /** Validate the whole batch before presenting any individual subscription price. */
 export function subscriptionPricePreviewsById(input: Parameters<typeof subscriptionPricePreview>[0]): Record<string, SubscriptionPricePreview> {
   const batch = subscriptionPricePreview(input);
+  const confirmed = !input.loading && validatedQuotes(input) !== null;
   return Object.fromEntries([...new Set(input.subscriptionIds)].map(id => [id,
-    batch.state === "available" || batch.state === "limit-used"
+    confirmed
       ? subscriptionPricePreview({...input, subscriptionIds: [id], quotes: input.quotes!.filter(q => q.subscriptionId === id)})
       : batch,
   ]));

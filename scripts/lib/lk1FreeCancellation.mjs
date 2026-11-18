@@ -1,0 +1,536 @@
+// Native, zero-money subscription cancellation. The HTTP graph and recovery
+// worker run this same state machine; only the winner of the durable intent CAS
+// may issue SERVICE. Unknown dispatch is reconciled by reads, never repeated.
+export const lk1FreeObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+export const lk1FreeText = v => typeof v === 'string' && v.trim() ? v.trim() : null;
+export const lk1FreePending = Object.freeze(['QUEUED', 'CANCEL_INTENT', 'RETURN_PENDING', 'SEAT_INTENT']);
+export const lk1FreeJobKey = (b, requestId) => `lk1-free-cancel-job:${JSON.stringify([b.tenantKey, b.actorClientId, b.bookingId, requestId])}`;
+export const lk1FreeLockKey = b => `lk1-free-cancel-lock:${JSON.stringify([b.tenantKey, b.clientSubscriptionId.toLowerCase()])}`;
+export function lk1FreeServiceDate(startsAt) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow', year: 'numeric',
+      month: '2-digit', day: '2-digit' }).formatToParts(new Date(startsAt));
+    const part = type => parts.find(p => p.type === type)?.value;
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  } catch { return null; }
+}
+export const lk1FreeNativeOperation = op => lk1FreeObject(op) && lk1FreeObject(op.lk1)
+  && op._id === `lk1-product:${JSON.stringify([op.tenantKey, op.actorClientId, op.operationId])}`
+  && ['group_training', 'tournament', 'open_game'].includes(op.category)
+  && op.lk1.decision?.eligible === true && op.lk1.decision.subscriptionVisitCount === 1
+  && op.lk1.decision.benefit?.finalPriceMinor === 0 && !op.lk1.visitJob
+  && !op.transactionId && !op.visitJob
+  && ['transactionAttemptedAt', 'transactionId', 'transactionIntent', 'checkout']
+    .every(key => op.lk1[key] === undefined)
+  && !op.managedEntitlementOperationId && !op.managedJoinV2 && !op.lk2LegacyJoin
+  && op.lk1.target?.eventId === op.exerciseId && !!lk1FreeText(op.lk1.fingerprint)
+  && op.lk1.target.category === ({ group_training: 'GROUP_TRAINING', tournament: 'TOURNAMENT', open_game: 'GAME' })[op.category]
+  && op.serviceDate === lk1FreeServiceDate(op.lk1.target.startsAt)
+  && !!lk1FreeText(op.lk1.rule?.productId)
+  && [op.tenantKey, op.actorClientId, op.operationId, op.bookingId, op.exerciseId,
+    op.clientSubscriptionId, op.serviceDate, op.updatedAt].every(v => !!lk1FreeText(v))
+  && (!op.upstreamBookingId || op.upstreamBookingId === op.bookingId);
+export const lk1FreeBinding = op => ({ tenantKey: op.tenantKey, actorClientId: op.actorClientId,
+  clientSubscriptionId: op.clientSubscriptionId, bookingId: op.bookingId || null, exerciseId: op.exerciseId,
+  operationKey: op._id, operationId: op.operationId, serviceDate: op.serviceDate,
+  fingerprint: op.lk1.fingerprint });
+
+// The booking gateway exhausts reclaim at five attempts. Each reclaim increments
+// both counters, but preaccept increments only attempts before any provider write.
+// Accept only the old quote/reclaim shape, so added fields (including any lease,
+// booking, debit or managed operation evidence) require separate reconciliation.
+const exhaustedPreparedFields = new Set(['_id', 'tenantKey', 'actorClientId', 'clientSubscriptionId',
+  'operationId', 'exerciseId', 'serviceDate', 'category', 'state', 'attempts', 'lk1', 'createdAt',
+  'updatedAt', 'previousFailure', 'previousFailureAt', 'reclaimCount', 'reclaimedAt']);
+const exhaustedPreparedLk1Fields = new Set(['rule', 'purchaseDate', 'target', 'fingerprint',
+  'dailyVisitPolicyVersion', 'decision']);
+const exhaustedPreparedCode = 'LK1_PREPARED_ATTEMPTS_EXHAUSTED';
+export function lk1FreeExhaustedPrepared(o, binding, at) {
+  if (o?.state !== 'PREPARED' || o.tenantKey !== binding.tenantKey || o.actorClientId !== binding.actorClientId
+    || o.clientSubscriptionId !== binding.clientSubscriptionId || o.attempts !== 5 || o.reclaimCount !== 5
+    || o.previousFailure !== null || o.previousFailureAt !== null || o.reclaimedAt !== o.updatedAt
+    || !Object.keys(o).every(k => exhaustedPreparedFields.has(k))
+    || !lk1FreeNativeOperation({ ...o, bookingId: 'not-dispatched' })
+    || !Object.keys(o.lk1).every(k => exhaustedPreparedLk1Fields.has(k))) return false;
+  const created = Date.parse(o.createdAt), updated = Date.parse(o.updatedAt);
+  return Number.isFinite(created) && created <= updated && Date.parse(at) - updated >= 30 * 60_000;
+}
+
+export const lk1FreeSame = (a, b) => lk1FreeObject(a) && lk1FreeObject(b)
+  && Object.keys(a).sort().join(',') === Object.keys(b).sort().join(',')
+  && Object.keys(a).every(k => a[k] === b[k]);
+export function lk1FreeBooking(value, b) {
+  if (!lk1FreeObject(value)) return null;
+  const present = a => a.filter(v => v !== undefined && v !== null && v !== '');
+  const agrees = (a, expected) => present(a).length > 0
+    && present(a).every(v => typeof v === 'string' && v === expected);
+  if (!agrees([value.id, value.bookingId], b.bookingId)
+    || !agrees([value.clientId, value.client?.id, value.client?.clientId], b.actorClientId)
+    || !agrees([value.exerciseId, value.exercise?.id, value.__lk1ScopedExerciseId], b.exerciseId)
+    || !agrees([value.clientSubscriptionId, value.clientSubscription?.id], b.clientSubscriptionId)
+    || value.paymentType !== 'SUBSCRIPTION'
+    || (value.paymentMethod != null && value.paymentMethod !== 'SUBSCRIPTION')) return null;
+  const flags = present([value.isCancelled, value.cancelled, value.canceled]);
+  const statuses = present([value.status, value.bookingStatus, value.state]);
+  if (!flags.length || flags.some(v => typeof v !== 'boolean') || new Set(flags).size !== 1
+    || statuses.some(v => !['ACTIVE', 'BOOKED', 'CONFIRMED', 'CANCELLED', 'CANCELED'].includes(v))) return null;
+  const cancelled = flags[0];
+  if (statuses.some(v => ['CANCELLED', 'CANCELED'].includes(v) !== cancelled)) return null;
+  return { cancelled };
+}
+export function lk1FreeSubscription(payload, b, productId) {
+  const rows = Array.isArray(payload) ? payload : payload?.content;
+  if (!Array.isArray(rows) || rows.length >= 200 || (!Array.isArray(payload)
+    && (payload.last !== true || (payload.totalElements !== undefined && payload.totalElements !== rows.length)))) return null;
+  const matches = rows.filter(r => r?.subscriptionId === b.clientSubscriptionId);
+  if (matches.length !== 1) return null;
+  const row = matches[0], total = row.visitsTotal, left = row.visitsLeft;
+  if (row.product?.id !== productId || !Number.isSafeInteger(total) || !Number.isSafeInteger(left)
+    || total < 1 || left < 0 || left > total || !Array.isArray(row.bookings)
+    || row.bookings.length !== total - left || row.bookings.length > 1000) return null;
+  const consumptions = [];
+  for (const item of row.bookings) {
+    const id = lk1FreeText(item?.id || item?.bookingId);
+    if (!id || (item.id && item.bookingId && item.id !== item.bookingId)
+      || (item.clientSubscriptionId && item.clientSubscriptionId !== b.clientSubscriptionId)
+      || (item.client?.id && item.client.id !== b.actorClientId)
+      || (item.paymentType && item.paymentType !== 'SUBSCRIPTION')) return null;
+    consumptions.push([id, lk1FreeText(item.exerciseId || item.exercise?.id) || '']);
+  }
+  if (new Set(consumptions.map(x => x[0])).size !== consumptions.length) return null;
+  consumptions.sort((a, z) => a[0].localeCompare(z[0]));
+  return { total, left, targetPresent: consumptions.some(x => x[0] === b.bookingId),
+    other: JSON.stringify(consumptions.filter(x => x[0] !== b.bookingId)) };
+}
+export function lk1FreeReturnedOperation(op) {
+  if (!lk1FreeNativeOperation(op) || op.state !== 'RELEASED'
+    || op.releaseReason !== 'LK1_FREE_VISIT_RETURN_VERIFIED') return false;
+  const p = op.lk1.freeCancellationReturn;
+  return p?.schemaVersion === 1 && p.method === 'SERVICE' && p.count === 1
+    && lk1FreeSame(p.binding, lk1FreeBinding(op)) && !!lk1FreeText(p.requestId)
+    && p.jobKey === lk1FreeJobKey(p.binding, p.requestId)
+    && p.verifiedAt === op.releasedAt && Number.isFinite(Date.parse(p.verifiedAt))
+    && p.before?.targetPresent === true && p.after?.targetPresent === false
+    && Number.isSafeInteger(p.before.left) && p.after.left === p.before.left + 1
+    && p.before.total === p.after.total && p.before.other === p.after.other
+    && op.releaseBookingId === op.bookingId && op.releasedBookingIds?.includes(op.bookingId);
+}
+// Calendar occupancy is separate from a SERVICE/refund receipt. A new quote
+// spends the actual provider balance; missing credits remain recovery evidence.
+export function lk1SeatCandidate(op) {
+  if (!op || ['createAttemptedAt', 'bookingAttemptedAt', 'transactionAttemptedAt', 'transactionIntent', 'checkout',
+    'managedSubscriptionInstanceId', 'managedEntitlementOperationId', 'managedJoinV2', 'lk2LegacyJoin']
+    .some(k => op[k] != null) || op.activationState === 'PENDING') return false;
+  if (lk1FreeNativeOperation(op)) return ['CONFIRMED', 'RELEASED'].includes(op.state)
+    && !lk1FreeReturnedOperation(op);
+  const l = op.lk1, t = l?.transactionIntent, c = l?.checkout;
+  if (op.state === 'RELEASED' && Number.isSafeInteger(l?.decision?.benefit?.finalPriceMinor)
+    && l.decision.benefit.finalPriceMinor > 0 && t?.chargeMinor === l.decision.benefit.finalPriceMinor
+    && t.chargeMinor === c?.toPayMinor && t.actorClientId === op.actorClientId && t.bookingId === op.bookingId
+    && t.studioId === l.target?.stationId && lk1FreeText(t.productId)
+    && lk1FreeText(l.transactionId) && l.transactionId === c.transactionId
+    && Number.isFinite(Date.parse(l.transactionAttemptedAt))
+    && (!l.unpaidCancellation || l.unpaidCancellation.phase === 'CANCELLED')) {
+    const clean = { ...l, decision: { ...l.decision, benefit: { ...l.decision.benefit, finalPriceMinor: 0 } } };
+    for (const key of ['transactionAttemptedAt', 'transactionId', 'transactionIntent', 'checkout']) delete clean[key];
+    return lk1FreeNativeOperation({ ...op, lk1: clean });
+  }
+  const noDispatch = ['bookingId', 'upstreamBookingId', 'acceptedAt', 'correlationId', 'visitJob',
+    'transactionId', 'managedEntitlementOperationId', 'managedJoinV2', 'lk2LegacyJoin']
+    .every(k => op?.[k] == null);
+  return !!(op?.state === 'FAILED' && noDispatch && op.failure?.rawCode !== exhaustedPreparedCode
+    && Number.isInteger(op.failure?.statusCode) && op.failure.statusCode >= 400 && op.failure.statusCode < 500
+    && ['createAttemptedAt', 'bookingAttemptedAt', 'transactionAttemptedAt', 'transactionId',
+      'transactionIntent', 'checkout', 'visitJob'].every(k => op.lk1?.[k] == null)
+    && lk1FreeNativeOperation({ ...op, bookingId: 'unbound-refusal', upstreamBookingId: undefined }));
+}
+export function lk1SeatSubscription(payload, b, productId) {
+  if (!payload || !Array.isArray(payload.content) || payload.last !== true
+    || payload.content.length >= 200 || payload.totalElements !== payload.content.length) return null;
+  const matches = payload.content.filter(s => s?.subscriptionId === b.clientSubscriptionId);
+  if (matches.length !== 1) return null;
+  const sub = matches[0], total = sub.visitsTotal, left = sub.visitsLeft;
+  const agrees = (values, expected) => values.every(v => v == null || v === expected);
+  if (sub.product?.id !== productId || sub.status !== 'ACTIVE' || sub.variant !== 'BY_VISITS'
+    || !agrees([sub.id, sub.clientSubscriptionId], b.clientSubscriptionId)
+    || !agrees([sub.clientId, sub.client?.id, sub.client?.clientId], b.actorClientId)
+    || !Number.isSafeInteger(total) || !Number.isSafeInteger(left) || left < 1 || left > total
+    || !Array.isArray(sub.bookings) || sub.bookings.length > 1000) return null;
+  const ids = new Set();
+  for (const row of sub.bookings) {
+    const id = lk1FreeText(row?.id || row?.bookingId), day = lk1FreeServiceDate(row?.exerciseDate);
+    if (!id || ids.has(id) || id === b.bookingId || !day || day === b.serviceDate
+      || !agrees([row.id, row.bookingId], id)
+      || !agrees([row.clientSubscriptionId, row.clientSubscription?.id], b.clientSubscriptionId)
+      || !agrees([row.clientId, row.client?.id, row.client?.clientId], b.actorClientId)
+      || (row.paymentType != null && row.paymentType !== 'SUBSCRIPTION')
+      || row.isCancelled === true || row.cancelled === true) return null;
+    ids.add(id);
+  }
+  const missingCredits = total - left - ids.size;
+  return missingCredits >= 0 ? { total, left, missingCredits, bookingIds: [...ids].sort() } : null;
+}
+export function lk1SeatReleasedOperation(op) {
+  const p = op?.lk1?.seatRelease;
+  return !!(op?.state === 'RELEASED'
+    && p?.schemaVersion === 1 && p.method === 'NONE' && p.visitReturnVerified === false
+    && p.verifiedAt === op.updatedAt && Number.isFinite(Date.parse(p.verifiedAt))
+    && lk1FreeSame(p.binding, lk1FreeBinding(op)) && p.snapshot?.left >= 1
+    && Number.isSafeInteger(p.snapshot.missingCredits) && p.snapshot.missingCredits >= 0
+    && p.creditRecoveryRequired === (p.snapshot.missingCredits > 0)
+    && p.jobKey === lk1FreeJobKey(p.binding, p.requestId));
+}
+export function lk1FreeBegin({ tenantKey, actorClientId, bookingId, requestId = null, verifyOnly = false, job = null,
+  seatOnly = false, operationKey = null, reservationKey = null }) {
+  const s = { tenantKey, actorClientId, bookingId, requestId: job?.requestId || requestId,
+    verifyOnly, stage: job || seatOnly ? 'operation' : 'booking', job, accepted: false,
+    seatOnly: seatOnly || job?.mode === 'SEAT_ONLY', reservationKey: job?.reservationKey || reservationKey };
+  if (job) { s.binding = job.binding; return { state: s, effect: { kind: 'find', query: { _id: job.binding.operationKey } } }; }
+  if (seatOnly) return { state: s, effect: { kind: 'find', query: { _id: operationKey, tenantKey, actorClientId } } };
+  return { state: s, effect: { kind: 'http', method: 'GET', path: `/api/v1/clients/${encodeURIComponent(actorClientId)}/bookings/${encodeURIComponent(bookingId)}` } };
+}
+export function lk1FreeStep(s, input, at = new Date().toISOString()) {
+  const reply = (status, state, code) => ({ kind: 'reply', status, payload: { ok: status < 400,
+    state, accepted: s.accepted === true, bookingId: s.bookingId, operationId: s.binding?.operationId || '', ...(code ? { details: { code } } : {}),
+    message: state === 'SEAT_RELEASED' ? 'Дневное место освобождено. Возврат посещения проверяется отдельно.'
+      : state === 'RELEASED' ? 'Посещение возвращено, запись отменена.'
+      : state === 'DECLINED' ? 'Отмена не выполнена. Дождитесь завершения текущей записи или проверьте доступный способ возврата.'
+      : state === 'NOT_MANAGED' ? 'Другой контур записи.'
+        : s.accepted ? 'Отмена и возврат посещения проверяются автоматически.'
+          : 'Не удалось подтвердить приём отмены. Запись требует повторной проверки.' } });
+  const pending = code => s.accepted ? reply(202, 'PENDING_CONFIRMATION', code) : reply(503, 'UNVERIFIED', code);
+  const get = (stage, path) => { s.stage = stage; return { kind: 'http', method: 'GET', path }; };
+  const find = (stage, query) => { s.stage = stage; return { kind: 'find', query }; };
+  const update = (stage, query, change, options = {}) => { s.stage = stage; return { kind: 'update', query,
+    change, options: { ...options, writeConcern: { w: 'majority', j: true } } }; };
+  const ack = v => v?.acknowledged === true && v.matchedCount === 1 && v.modifiedCount === 1;
+  const jobQuery = () => ({ _id: s.job._id, phase: s.job.phase, updatedAt: s.job.updatedAt, binding: s.job.binding });
+  const jobRead = () => {
+    if (s.seatOnly && lk1SeatReleasedOperation(s.op)) {
+      s.requestId = s.op.lk1.seatRelease.requestId;
+      s.jobLookupKey = s.op.lk1.seatRelease.jobKey;
+      return find('job', { _id: s.jobLookupKey });
+    }
+    s.jobLookupKey = s.job?._id || (s.requestId ? lk1FreeJobKey(s.binding, s.requestId)
+      : s.op?.lk1.freeCancellationReturn?.jobKey);
+    return s.jobLookupKey ? find('job', { _id: s.jobLookupKey }) : pending('LK1_FREE_CANCEL_BASELINE_MISSING');
+  };
+  const subscriptions = stage => get(stage, `/api/v1/clients/${encodeURIComponent(s.actorClientId)}/subscriptions?includeFinished=true&size=200&page=0`);
+  const booking = stage => {
+    s.bookingPage = { next: stage, page: 0, count: 0, matches: [] };
+    return get('booking_page', `/api/v1/exercises/${encodeURIComponent(s.binding.exerciseId)}/bookings?showCancelled=true&size=200&page=0`);
+  };
+  const finalizeJob = () => update('done_ack', jobQuery(), { $set: { phase: 'DONE', updatedAt: at, completedAt: at } });
+  const pendingOperations = () => find('pending_operations', { tenantKey: s.tenantKey,
+    clientSubscriptionId: s.binding.clientSubscriptionId, 'lk1.decision.subscriptionVisitCount': 1 });
+  const seatBooking = () => {
+    if (s.bookingId) return get('seat_booking', `/api/v1/clients/${encodeURIComponent(s.actorClientId)}/bookings/${encodeURIComponent(s.bookingId)}`);
+    s.seatPage = { page: 0, count: 0 };
+    return get('seat_absence', `/api/v1/exercises/${encodeURIComponent(s.binding.exerciseId)}/bookings?showCancelled=true&size=200&page=0`);
+  };
+  const decline = code => { s.declineCode = code; return update('declined_ack', jobQuery(), { $set: { phase: 'DECLINED', updatedAt: at, reason: code } }); };
+  if (input.error || (input.status !== undefined && (input.status < 200 || input.status >= 300))) return pending('LK1_FREE_CANCEL_READ_UNAVAILABLE');
+  const v = input.payload;
+  if (s.stage === 'booking_page') {
+    const p = s.bookingPage, rows = Array.isArray(v) ? v : v?.content;
+    const last = Array.isArray(v) ? rows.length < 200 : v?.last;
+    if (!p || !Array.isArray(rows) || rows.length > 200 || typeof last !== 'boolean'
+      || (!last && rows.length !== 200)) return pending('LK1_FREE_CANCEL_BOOKING_PAGE_INVALID');
+    p.count += rows.length;
+    p.matches.push(...rows.filter(row => row?.id === s.bookingId || row?.bookingId === s.bookingId));
+    if (!last) {
+      if (++p.page >= 10) return pending('LK1_FREE_CANCEL_BOOKING_PAGE_LIMIT');
+      return get('booking_page', `/api/v1/exercises/${encodeURIComponent(s.binding.exerciseId)}/bookings?showCancelled=true&size=200&page=${p.page}`);
+    }
+    if (v.totalElements !== undefined && v.totalElements !== p.count || p.matches.length !== 1) return pending('LK1_FREE_CANCEL_BOOKING_NOT_UNIQUE');
+    s.stage = p.next;
+    return lk1FreeStep(s, { payload: { ...p.matches[0], __lk1ScopedExerciseId: s.binding.exerciseId } }, at);
+  }
+  if (s.stage === 'booking') {
+    if (!lk1FreeObject(v) || ![v.id, v.bookingId].filter(Boolean).length
+      || [v.id, v.bookingId].filter(Boolean).some(id => id !== s.bookingId)
+      || ![v.clientId, v.client?.id, v.client?.clientId].filter(Boolean).length
+      || [v.clientId, v.client?.id, v.client?.clientId].filter(Boolean).some(id => id !== s.actorClientId)) return reply(409, 'UNVERIFIED', 'LK1_FREE_CANCEL_OWNER_UNVERIFIED');
+    if (v.paymentType !== 'SUBSCRIPTION') return ['ON_PLACE', 'ONE_TIME', 'CLIENT_ONE_TIME'].includes(v.paymentType)
+      ? reply(200, 'NOT_MANAGED') : pending('LK1_FREE_CANCEL_PAYMENT_TYPE_UNVERIFIED');
+    s.bookingRow = v;
+    return find('operation', { tenantKey: s.tenantKey, actorClientId: s.actorClientId,
+      $or: [{ bookingId: s.bookingId }, { upstreamBookingId: s.bookingId }] });
+  }
+  if (s.stage === 'operation') {
+    if (!Array.isArray(v) || v.length > 1) return pending('LK1_FREE_CANCEL_OPERATION_AMBIGUOUS');
+    if (!v.length) return s.job || s.verifyOnly ? pending('LK1_FREE_CANCEL_OPERATION_MISSING') : reply(200, 'NOT_MANAGED');
+    const op = v[0];
+    if (!(s.seatOnly ? lk1SeatCandidate(op) || lk1SeatReleasedOperation(op) : lk1FreeNativeOperation(op))) {
+      if (!s.job && !s.verifyOnly && (!op.lk1 && !op.managedEntitlementOperationId
+        || op.lk1?.decision?.subscriptionVisitCount === 0 || op.lk1?.decision?.benefit?.finalPriceMinor > 0)) return reply(200, 'NOT_MANAGED');
+      return pending('LK1_FREE_CANCEL_OPERATION_UNSUPPORTED');
+    }
+    if (op.tenantKey !== s.tenantKey || op.actorClientId !== s.actorClientId || (op.bookingId || null) !== s.bookingId
+      || (s.binding && !lk1FreeSame(s.binding, lk1FreeBinding(op)))) return pending('LK1_FREE_CANCEL_BINDING_CHANGED');
+    s.op = op; s.binding = lk1FreeBinding(op);
+    if (s.job && (s.job.kind !== 'LK1_FREE_CANCEL_JOB_V1' || !lk1FreeText(s.job.requestId)
+      || s.job._id !== lk1FreeJobKey(s.binding, s.job.requestId)
+      || !lk1FreeSame(s.job.binding, s.binding))) return pending('LK1_FREE_CANCEL_JOB_INVALID');
+    if (lk1FreeReturnedOperation(op)) return jobRead();
+    if (s.seatOnly && !s.job && !lk1SeatReleasedOperation(op) && s.bookingId) {
+      return get('seat_precheck', `/api/v1/clients/${encodeURIComponent(s.actorClientId)}/bookings/${encodeURIComponent(s.bookingId)}`);
+    }
+    if (!s.seatOnly && op.state !== 'CONFIRMED') return pending('LK1_FREE_CANCEL_OPERATION_NOT_CONFIRMED');
+    return jobRead();
+  }
+  if (s.stage === 'seat_precheck') {
+    const state = lk1FreeBooking(v, s.binding);
+    if (state?.cancelled === false) return reply(200, 'NOT_CANCELLED');
+    if (state?.cancelled !== true) return pending('LK1_SEAT_BOOKING_UNVERIFIED');
+    return jobRead();
+  }
+  if (s.stage === 'job') {
+    if (!Array.isArray(v) || v.length > 1) return pending('LK1_FREE_CANCEL_JOB_READ_INVALID');
+    if (!v.length) {
+      if (lk1FreeReturnedOperation(s.op) && s.jobLookupKey !== s.op.lk1.freeCancellationReturn.jobKey) {
+        s.jobLookupKey = s.op.lk1.freeCancellationReturn.jobKey;
+        return find('job', { _id: s.jobLookupKey });
+      }
+      if (s.verifyOnly || s.job) return pending('LK1_FREE_CANCEL_BASELINE_MISSING');
+      if (!lk1FreeText(s.requestId) || !/^[A-Za-z0-9._:-]{8,200}$/.test(s.requestId)) return pending('LK1_FREE_CANCEL_REQUEST_ID_INVALID');
+      return find('prior_job', { kind: 'LK1_FREE_CANCEL_JOB_V1', tenantKey: s.tenantKey,
+        'binding.actorClientId': s.actorClientId, 'binding.bookingId': s.bookingId, phase: { $in: lk1FreePending } });
+    }
+    const job = v[0];
+    if (job.kind !== 'LK1_FREE_CANCEL_JOB_V1' || job.method !== (s.seatOnly ? 'NONE' : 'SERVICE')
+      || (job.mode === 'SEAT_ONLY') !== s.seatOnly || !lk1FreeSame(job.binding, s.binding)
+      || !lk1FreeText(job.requestId) || job._id !== lk1FreeJobKey(s.binding, job.requestId)) return pending('LK1_FREE_CANCEL_JOB_BINDING_INVALID');
+    s.job = job;
+    // A local find after a lost insert ACK is not a durability receipt. This
+    // majority+j write is an ordered barrier before promising background work.
+    return update('job_durable_ack', jobQuery(), { $inc: { durableReadbacks: 1 } });
+  }
+  if (s.stage === 'prior_job') {
+    if (!Array.isArray(v) || v.length > 1000) return pending('LK1_FREE_CANCEL_JOB_READ_INVALID');
+    const dispatched = v.filter(job => job.phase !== 'QUEUED');
+    if (dispatched.length > 1) return pending('LK1_FREE_CANCEL_JOB_AMBIGUOUS');
+    const prior = dispatched[0] || v.sort((a, b) => a._id.localeCompare(b._id))[0];
+    if (prior && (prior.mode === 'SEAT_ONLY') !== s.seatOnly) return pending('LK1_FREE_CANCEL_OTHER_RETURN_PENDING');
+    if (prior) { s.jobLookupKey = prior._id; return find('job', { _id: prior._id }); }
+    if (s.seatOnly) return update('enqueue_ack', { _id: lk1FreeJobKey(s.binding, s.requestId) }, { $setOnInsert: {
+      _id: lk1FreeJobKey(s.binding, s.requestId), requestId: s.requestId,
+      kind: 'LK1_FREE_CANCEL_JOB_V1', tenantKey: s.tenantKey, clientSubscriptionId: s.binding.clientSubscriptionId.toLowerCase(),
+      binding: s.binding, reservationKey: s.reservationKey, mode: 'SEAT_ONLY', method: 'NONE',
+      phase: 'QUEUED', createdAt: at, updatedAt: at } }, { upsert: true });
+    return booking('queue_active');
+  }
+  if (s.stage === 'job_durable_ack') {
+    if (!ack(v)) return pending('LK1_FREE_CANCEL_DURABILITY_UNVERIFIED');
+    s.accepted = true;
+    const job = s.job;
+    if (s.seatOnly && lk1SeatReleasedOperation(s.op)) return job.phase === 'DONE'
+      ? reply(200, 'SEAT_RELEASED') : finalizeJob();
+    if (lk1FreeReturnedOperation(s.op)) return job.phase === 'DONE' ? reply(200, 'RELEASED') : finalizeJob();
+    if (job.phase === 'DECLINED') return reply(409, 'DECLINED', job.reason);
+    if (job.phase === 'DONE') return pending('LK1_FREE_CANCEL_RELEASE_READBACK_REQUIRED');
+    if (!lk1FreePending.includes(job.phase)) return pending('LK1_FREE_CANCEL_JOB_STATE_INVALID');
+    if (job.phase !== 'QUEUED' && !s.seatOnly) return booking('cancelled_booking');
+    return update('lock_upsert', { _id: lk1FreeLockKey(s.binding) }, { $setOnInsert: {
+      kind: 'LK1_FREE_CANCEL_LOCK_V1', tenantKey: s.tenantKey, ownerJobKey: job._id } }, { upsert: true });
+  }
+  if (s.stage === 'queue_active') {
+    if (lk1FreeBooking(v, s.binding)?.cancelled !== false) return pending('LK1_FREE_CANCEL_BASELINE_MISSING');
+    const job = { _id: lk1FreeJobKey(s.binding, s.requestId), requestId: s.requestId,
+      kind: 'LK1_FREE_CANCEL_JOB_V1', tenantKey: s.tenantKey,
+      clientSubscriptionId: s.binding.clientSubscriptionId.toLowerCase(), binding: s.binding,
+      phase: 'QUEUED', method: 'SERVICE', createdAt: at, updatedAt: at };
+    return update('enqueue_ack', { _id: job._id }, { $setOnInsert: job }, { upsert: true });
+  }
+  if (s.stage === 'enqueue_ack') return jobRead(); // Lost ACK never grants PUT authority.
+  if (s.stage === 'lock_upsert') return find('lock', { _id: lk1FreeLockKey(s.binding) });
+  if (s.stage === 'lock') {
+    if (!Array.isArray(v) || v.length !== 1 || v[0].kind !== 'LK1_FREE_CANCEL_LOCK_V1') return pending('LK1_FREE_CANCEL_LOCK_INVALID');
+    s.lock = v[0];
+    if (s.lock.ownerJobKey === s.job._id && s.seatOnly) return find('seat_guard', {
+      _id: `lk1-daily-visit:${JSON.stringify([s.tenantKey, s.binding.clientSubscriptionId.toLowerCase(), s.binding.serviceDate])}` });
+    if (s.lock.ownerJobKey === s.job._id) return pendingOperations();
+    return find('lock_owner', { _id: s.lock.ownerJobKey });
+  }
+  if (s.stage === 'lock_owner') {
+    if (!Array.isArray(v) || v.length !== 1 || !['DONE', 'DECLINED'].includes(v[0].phase)
+      || v[0]._id !== s.lock.ownerJobKey) return pending('LK1_FREE_CANCEL_OTHER_RETURN_PENDING');
+    return update('lock_takeover', { _id: s.lock._id, ownerJobKey: s.lock.ownerJobKey }, { $set: { ownerJobKey: s.job._id } });
+  }
+  if (s.stage === 'lock_takeover') return ack(v) ? find('lock', { _id: s.lock._id }) : pending('LK1_FREE_CANCEL_LOCK_CHANGED');
+  if (s.stage === 'seat_guard') {
+    if (!Array.isArray(v) || v.length > 1) return pending('LK1_SEAT_GUARD_UNVERIFIED');
+    const guard = v[0];
+    s.seatGuardOwned = !!guard && guard.kind === 'LK1_DAILY_VISIT_V1' && guard.ownerOperationKey === s.op._id
+      && guard.ownerOperationId === s.op.operationId && guard.tenantKey === s.tenantKey
+      && guard.clientSubscriptionId === s.binding.clientSubscriptionId.toLowerCase()
+      && guard.serviceDate === s.binding.serviceDate;
+    return pendingOperations();
+  }
+  if (s.stage === 'pending_operations') {
+    if (!Array.isArray(v) || v.length > 1000 || !v.every(lk1FreeObject)) return pending('LK1_FREE_CANCEL_LEDGER_INCOMPLETE');
+    const reservation = o => s.seatOnly && s.seatGuardOwned && o.state === 'PREPARED'
+      && o.actorClientId === s.actorClientId && o.serviceDate === s.binding.serviceDate
+      && !o.upstreamAttemptedAt && !o.bookingId && !o.upstreamBookingId
+      && ['createAttemptedAt', 'bookingAttemptedAt', 'transactionAttemptedAt', 'visitJob'].every(k => !o.lk1?.[k]);
+    const unsafe = v.filter(o => o._id !== s.op._id && !reservation(o) && (!['CONFIRMED', 'RELEASED', 'FAILED'].includes(o.state)
+      || o.lk1?.visitJob && !['DEBIT_CONFIRMED', 'RETURN_CONFIRMED', 'DEBIT_REJECTED', 'CANCELLED_BEFORE_DEBIT'].includes(o.lk1.visitJob.phase)
+      || o.state === 'FAILED' && o.upstreamAttemptedAt && !(o.failure?.statusCode >= 400 && o.failure.statusCode < 500)));
+    if (unsafe.length) {
+      if (s.seatOnly || s.job.phase !== 'QUEUED' || (s.preparedClosures || 0) >= 8
+        || unsafe.some(o => !lk1FreeExhaustedPrepared(o, s.binding, at))) return decline('LK1_FREE_CANCEL_VISIT_IN_FLIGHT');
+      const o = unsafe[0];
+      s.exhaustedPrepared = o;
+      return find('exhausted_prepared_guard', {
+        _id: `lk1-daily-visit:${JSON.stringify([o.tenantKey, o.clientSubscriptionId.toLowerCase(), o.serviceDate])}`,
+      });
+    }
+    if (s.seatOnly && s.op.lk1?.transactionId) return get('seat_transaction', `/api/v1/transactions/${encodeURIComponent(s.op.lk1.transactionId)}`);
+    if (s.seatOnly) return seatBooking();
+    return get('options', `/api/v1/clients/${encodeURIComponent(s.actorClientId)}/bookings/${encodeURIComponent(s.bookingId)}/cancel`);
+  }
+  if (s.stage === 'exhausted_prepared_guard') {
+    if (!Array.isArray(v) || v.length > 1) return pending('LK1_FREE_CANCEL_LEDGER_INCOMPLETE');
+    if (v.length) return decline('LK1_FREE_CANCEL_VISIT_IN_FLIGHT');
+    const o = s.exhaustedPrepared;
+    // The provider path must win its own PREPARED CAS before sending anything.
+    // Seal this exact preimage so a concurrent continuation cannot do so.
+    return update('exhausted_prepared_ack', { _id: o._id, $expr: { $eq: ['$$ROOT', { $literal: o }] } }, {
+      $set: { state: 'FAILED', updatedAt: at, failedAt: at, failure: {
+        statusCode: 409, rawCode: exhaustedPreparedCode,
+        message: 'Попытки записи исчерпаны до отправки запроса в Viva.',
+      } },
+    });
+  }
+  if (s.stage === 'exhausted_prepared_ack') {
+    if (!ack(v)) return pending('LK1_FREE_CANCEL_READ_UNAVAILABLE');
+    s.preparedClosures = (s.preparedClosures || 0) + 1;
+    delete s.exhaustedPrepared;
+    return pendingOperations();
+  }
+  if (s.stage === 'seat_transaction') {
+    const l = s.op.lk1, t = l.transactionIntent;
+    const aliases = [v?.clientId, v?.client?.id, v?.client?.uuid].filter(x => x != null);
+    const status = v?.status, products = v?.products;
+    if (v?.id !== l.transactionId || !aliases.length || aliases.some(id => id !== s.actorClientId)
+      || !Array.isArray(products) || products.length !== 1 || products[0].id !== t.productId
+      || JSON.stringify(products[0].paymentBookingIds) !== JSON.stringify([s.bookingId])
+      || v.toPay !== t.chargeMinor || v.possibleDoublePayment === true
+      || !['PAID', 'REFUND', 'UNPAID'].includes(status)
+      || [v.transactionStatus, v.state].some(x => x != null && x !== status)) return decline('LK1_SEAT_MONEY_UNVERIFIED');
+    if (status === 'REFUND' && (v.refundSum !== t.chargeMinor || !Number.isFinite(Date.parse(v.refundedAt)))) return decline('LK1_SEAT_REFUND_UNVERIFIED');
+    if (status === 'PAID' && (!Number.isFinite(Date.parse(v.paymentDate || v.paidAt))
+      || v.refundSum || v.refundedAt || v.transactionRefunds?.length)) return decline('LK1_SEAT_MONEY_UNVERIFIED');
+    if (status === 'UNPAID' && (v.cardPaymentInfo?.status !== 'REJECTED'
+      || !['EXPIRED', 'CANCELLED'].includes(v.cardPaymentInfo.declineOutcome)
+      || v.paymentDate || v.paidAt || v.refundedAt || v.refundSum || v.deposit
+      || v.transactionRefunds?.length || v.receipts?.some(r => r?.status !== 'new'))) return decline('LK1_SEAT_MONEY_UNVERIFIED');
+    s.financialRecoveryRequired = status === 'PAID';
+    return seatBooking();
+  }
+  if (s.stage === 'seat_booking') {
+    const state = lk1FreeBooking(v, s.binding);
+    if (state?.cancelled !== true) return decline(state?.cancelled === false ? 'LK1_SEAT_BOOKING_ACTIVE' : 'LK1_SEAT_BOOKING_UNVERIFIED');
+    return subscriptions('seat_snapshot');
+  }
+  if (s.stage === 'seat_absence') {
+    const rows = v?.content, page = s.seatPage;
+    if (!page || !Array.isArray(rows) || typeof v.last !== 'boolean' || rows.length > 200
+      || (v.last === false && rows.length !== 200)) return decline('LK1_SEAT_BOOKINGS_INCOMPLETE');
+    for (const row of rows) {
+      if (!lk1FreeObject(row)) return decline('LK1_SEAT_BOOKINGS_INCOMPLETE');
+      const clients = [row.clientId, row.client?.id, row.client?.clientId].filter(x => x != null);
+      if (new Set(clients).size > 1
+        || [row.exerciseId, row.exercise?.id].some(id => id != null && id !== s.binding.exerciseId)
+        || (!clients.length && row.isCancelled !== true)) return decline('LK1_SEAT_BOOKING_UNVERIFIED');
+      if (!clients.includes(s.actorClientId)) continue;
+      if (row.isCancelled !== true || (row.cancelled != null && row.cancelled !== true)
+        || (row.canceled != null && row.canceled !== true)
+        || [row.status, row.bookingStatus].some(status => status != null && !['CANCELLED', 'CANCELED'].includes(status))) {
+        return decline('LK1_SEAT_BOOKING_ACTIVE');
+      }
+    }
+    page.count += rows.length;
+    if (!v.last) {
+      if (++page.page >= 10) return decline('LK1_SEAT_BOOKINGS_INCOMPLETE');
+      return get('seat_absence', `/api/v1/exercises/${encodeURIComponent(s.binding.exerciseId)}/bookings?showCancelled=true&size=200&page=${page.page}`);
+    }
+    if (v.totalElements !== page.count) return decline('LK1_SEAT_BOOKINGS_INCOMPLETE');
+    return subscriptions('seat_snapshot');
+  }
+  if (s.stage === 'seat_snapshot') {
+    const snapshot = lk1SeatSubscription(v, s.binding, s.op.lk1.rule.productId);
+    if (!snapshot) return decline('LK1_SEAT_USAGE_UNVERIFIED');
+    s.seatSnapshot = snapshot; s.seatAt = at;
+    return update('seat_intent_ack', jobQuery(), { $set: { phase: 'SEAT_INTENT', updatedAt: at }, $inc: { seatReadbacks: 1 } });
+  }
+  if (s.stage === 'seat_intent_ack') {
+    if (!ack(v)) return pending('LK1_SEAT_INTENT_UNVERIFIED');
+    s.job = { ...s.job, phase: 'SEAT_INTENT', updatedAt: s.seatAt };
+    const proof = { schemaVersion: 1, method: 'NONE', visitReturnVerified: false,
+      binding: s.binding, snapshot: s.seatSnapshot, creditRecoveryRequired: s.seatSnapshot.missingCredits > 0,
+      financialRecoveryRequired: s.financialRecoveryRequired === true,
+      jobKey: s.job._id, requestId: s.job.requestId, verifiedAt: s.seatAt,
+      previousState: s.op.state, previousReleaseReason: s.op.releaseReason || null };
+    return update('seat_release_ack', { _id: s.op._id, $expr: { $eq: ['$$ROOT', { $literal: s.op }] } }, {
+      $set: { state: 'RELEASED', updatedAt: s.seatAt,
+        ...(s.op.state === 'RELEASED' ? {} : { releasedAt: s.seatAt, releaseReason: 'LK1_CANCELLED_SEAT_VERIFIED',
+          ...(s.bookingId ? { releaseBookingId: s.bookingId } : {}) }),
+        'lk1.seatRelease': proof }, ...(s.bookingId ? { $addToSet: { releasedBookingIds: s.bookingId } } : {}) });
+  }
+  if (s.stage === 'seat_release_ack') return find('seat_release_readback', { _id: s.op._id });
+  if (s.stage === 'seat_release_readback') {
+    if (!Array.isArray(v) || v.length !== 1 || !lk1SeatReleasedOperation(v[0])
+      || v[0].lk1.seatRelease.jobKey !== s.job._id) return decline('LK1_SEAT_OWNER_CHANGED');
+    return finalizeJob();
+  }
+  if (s.stage === 'options') {
+    if (v?.bookingId !== s.bookingId || v.cancellationOptions?.subscription?.available !== true) return decline('LK1_FREE_CANCEL_SERVICE_UNAVAILABLE');
+    return booking('active_booking');
+  }
+  if (s.stage === 'active_booking') {
+    if (lk1FreeBooking(v, s.binding)?.cancelled !== false) return decline('LK1_FREE_CANCEL_ACTIVE_BOOKING_UNVERIFIED');
+    return subscriptions('baseline');
+  }
+  if (s.stage === 'baseline') {
+    const snap = lk1FreeSubscription(v, s.binding, s.op.lk1.rule.productId);
+    if (!snap || !snap.targetPresent) return decline('LK1_FREE_CANCEL_BASELINE_UNAVAILABLE');
+    s.baseline = snap; s.intentAt = at;
+    return update('intent_ack', jobQuery(), { $set: { phase: 'CANCEL_INTENT', updatedAt: at,
+      dispatchAt: at, baseline: snap, optionsVerifiedAt: at } });
+  }
+  if (s.stage === 'intent_ack') {
+    if (!ack(v)) return pending('LK1_FREE_CANCEL_INTENT_ACK_UNKNOWN');
+    s.job = { ...s.job, phase: 'CANCEL_INTENT', updatedAt: s.intentAt,
+      dispatchAt: s.intentAt, baseline: s.baseline };
+    s.stage = 'dispatch_ack';
+    return { kind: 'http', method: 'PUT', path: `/api/v1/clients/${encodeURIComponent(s.actorClientId)}/bookings/${encodeURIComponent(s.bookingId)}/cancel`,
+      body: { refundMethod: 'SERVICE', cancelExercise: false } };
+  }
+  if (s.stage === 'dispatch_ack') return booking('cancelled_booking');
+  if (s.stage === 'cancelled_booking') {
+    if (lk1FreeBooking(v, s.binding)?.cancelled !== true) return pending('LK1_FREE_CANCEL_OUTCOME_PENDING');
+    return subscriptions('returned_subscription');
+  }
+  if (s.stage === 'returned_subscription') {
+    const after = lk1FreeSubscription(v, s.binding, s.op.lk1.rule.productId), before = s.job.baseline;
+    if (!before || !after || !before.targetPresent || after.targetPresent || after.total !== before.total
+      || after.left !== before.left + 1 || after.other !== before.other) return pending('LK1_FREE_CANCEL_RETURN_UNVERIFIED');
+    const proof = { schemaVersion: 1, method: 'SERVICE', count: 1, jobKey: s.job._id, requestId: s.job.requestId,
+      binding: s.binding, before, after, verifiedAt: at };
+    s.proof = proof;
+    return update('release_ack', { _id: s.op._id, state: 'CONFIRMED', updatedAt: s.op.updatedAt,
+      bookingId: s.bookingId, clientSubscriptionId: s.binding.clientSubscriptionId, lk1: s.op.lk1 }, { $set: {
+      state: 'RELEASED', releaseReason: 'LK1_FREE_VISIT_RETURN_VERIFIED', releasedAt: at, updatedAt: at,
+      releaseBookingId: s.bookingId, 'lk1.freeCancellationReturn': proof }, $addToSet: { releasedBookingIds: s.bookingId } });
+  }
+  if (s.stage === 'release_ack') return find('release_readback', { _id: s.op._id });
+  if (s.stage === 'release_readback') {
+    if (!Array.isArray(v) || v.length !== 1 || !lk1FreeReturnedOperation(v[0])
+      || !lk1FreeSame(v[0].lk1.freeCancellationReturn.binding, s.binding)) return pending('LK1_FREE_CANCEL_RELEASE_UNVERIFIED');
+    return finalizeJob();
+  }
+  if (s.stage === 'done_ack') return ack(v) ? reply(200, s.seatOnly ? 'SEAT_RELEASED' : 'RELEASED') : pending('LK1_FREE_CANCEL_JOB_ACK_UNKNOWN');
+  if (s.stage === 'declined_ack') return ack(v) ? reply(409, 'DECLINED', s.declineCode) : pending('LK1_FREE_CANCEL_DECLINE_ACK_UNKNOWN');
+  return pending('LK1_FREE_CANCEL_STAGE_INVALID');
+}

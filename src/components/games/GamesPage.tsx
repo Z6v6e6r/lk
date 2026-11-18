@@ -1,3 +1,8 @@
+import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
+import { mergeRosterMetadata } from "./rosterMetadata";
+import { moscowBookingEndIso } from "../../utils/bookingEndTime";
+import { readAuthToken } from "../../utils/authTokenStorage";
+import { isRequestTimeoutError, runWithAbortTimeout } from "../../utils/requestTimeout";
 import { BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence } from "./bookingConversionEvidence";
 import { observeGameLeave } from "./observeGameLeave";
 import { GameBookingCancellation } from "./GameBookingCancellation";
@@ -37,6 +42,8 @@ import {
   apiFetchMasterServiceGameModes,
   apiCreatePadelGameRecord,
   apiCreatePadelSplitGamePayment,
+  hasPendingPadelSplitCreate,
+  completePadelSplitCreate,
   apiCreatePadelSplitParticipantPayment,
   apiCancelPadelSplitParticipantBookings,
   apiLeavePadelGameAsCurrentUser,
@@ -203,7 +210,7 @@ export interface SelfLeavePreviewOptions {
   request: SelfLeaveRequest;
 }
 
-type Step = "create" | "place" | "time" | "details" | "chat";
+type Step = "create" | "place" | "time" | "details" | "chat" | "unavailable";
 type GamePaymentMode = "self" | "split";
 type SplitShareCount = 2 | 4;
 type SplitCheckoutMode = "subscription" | "one_time";
@@ -4891,6 +4898,7 @@ export default function GamesPage({
   );
   const leaveCurrentUserRequest = selfLeavePreview?.request ?? apiLeavePadelGameAsCurrentUser;
   const [step, setStep] = useState<Step>("create");
+  const isGameUnavailable = step === "unavailable";
   const [studios, setStudios] = useState<Studio[]>([]);
   const [timeslots, setTimeslots] = useState<GameTimeSlot[]>([]);
   const [loadingTimeslots, setLoadingTimeslots] = useState(false);
@@ -4911,6 +4919,10 @@ export default function GamesPage({
   const [loadingSlotPrice, setLoadingSlotPrice] = useState(false);
   const [loadingPay, setLoadingPay] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
+  const [gamePreparationStage, setGamePreparationStage] = useState<"profile" | "slot" | "confirmation" | null>(null);
+  const gamePreparationRef = useRef<AbortController | null>(null);
+  const gameCreationRef = useRef<AbortController | null>(null);
+  const [gameCreationPending, setGameCreationPending] = useState(false);
   const [paymentMode, setPaymentMode] = useState<GamePaymentMode>("self");
   const [splitCheckoutMode, setSplitCheckoutMode] = useState<SplitCheckoutMode>("one_time");
   const [selectedSplitSubscriptionId, setSelectedSplitSubscriptionId] = useState<string | null>(null);
@@ -4967,6 +4979,10 @@ export default function GamesPage({
   const [cancellingUnpaidGame, setCancellingUnpaidGame] = useState(false);
   const [confirmCancelUnpaidGame, setConfirmCancelUnpaidGame] = useState(false);
   const [gameRecordError, setGameRecordError] = useState<string | null>(null);
+  const markGameUnavailable = useCallback(() => {
+    setGameRecordError("Игра недоступна");
+    setStep("unavailable");
+  }, []);
   const [gameRosterError, setGameRosterError] = useState<string | null>(null);
   const [detailsSplitJoinPending, setDetailsSplitJoinPending] = useState<{
     released?: boolean;
@@ -5566,7 +5582,7 @@ export default function GamesPage({
   }, []);
 
   useEffect(() => {
-    if (!profilePhoneNorm) return;
+    if (!profilePhoneNorm || isGameUnavailable) return;
     let cancelled = false;
 
     const run = async () => {
@@ -5584,7 +5600,7 @@ export default function GamesPage({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [profilePhoneNorm, refreshUnreadChats]);
+  }, [profilePhoneNorm, refreshUnreadChats, isGameUnavailable]);
 
   const filteredStudios = studios.filter((s) => {
     if (!studiosQuery.trim()) return true;
@@ -6423,7 +6439,8 @@ export default function GamesPage({
         : activeModeSubServiceIds,
     [selectedSlotSubServiceIds, activeModeSubServiceIds],
   );
-  const revalidateSelectedSlotForPayment = useCallback(async (): Promise<boolean> => {
+  const revalidateSelectedSlotForPayment = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
+    signal?.throwIfAborted();
     if (!studioId || !selectedDate || !courtId || !time) return false;
     const selectedDateKey = formatDateLocalIso(selectedDate);
     const leadTimeError = `Бронирование доступно минимум за ${GAME_BOOKING_MIN_LEAD_MINUTES} минут до начала. Выберите другое время.`;
@@ -6434,12 +6451,14 @@ export default function GamesPage({
 
     try {
       const result = await apiFetchMasterServiceTimeslots(selectedDateKey, {
+        signal,
         studioId,
         masterServiceId: studioMasterServiceId,
         preferredSubServiceId: activeModePreferredSubServiceId,
         preferredSubServiceIds: activeModeSubServiceIds,
         preferredRoomIds: activeModePreferredRoomIds,
       });
+      signal?.throwIfAborted();
       if (result.error) {
         setPayError("Не удалось перепроверить доступность слота. Обновите расписание и попробуйте снова.");
         return false;
@@ -6466,6 +6485,7 @@ export default function GamesPage({
       }
       return true;
     } catch {
+      signal?.throwIfAborted();
       setPayError("Не удалось перепроверить доступность слота. Обновите расписание и попробуйте снова.");
       return false;
     }
@@ -6490,6 +6510,17 @@ export default function GamesPage({
     selectedSlotId ?? "",
     [...resolvedSelectedSubServiceIds].sort().join(","),
   ].join("|");
+  // A changed selection or closed overlay must not finish an old preparation.
+  useEffect(() => () => gamePreparationRef.current?.abort(), [promoSelectionKey]);
+  useEffect(() => {
+    setGameCreationPending(false);
+    setLoadingPay(false);
+    return () => {
+      gamePreparationRef.current?.abort();
+      gameCreationRef.current?.abort();
+      gameCreationRef.current = null;
+    };
+  }, [promoSelectionKey, selectedSplitSubscriptionId]);
   const bookingPreset = useMemo(() => {
     const bookingId = normalizeBookingId(createFromBooking?.bookingId);
     const date = toDateKey(createFromBooking?.date ?? null);
@@ -7256,7 +7287,17 @@ export default function GamesPage({
   const publicCreateSubscriptionSubmitTitle = publicCreateSurchargeMinor != null
     ? `Создать игру по подписке с доплатой ${formatPrice(publicCreateSurchargeMinor / 100)} ₽`
     : "Создать игру по подписке";
-  const publicCreateFinalSubmitTitle = publicCreateNeedsSplitSubscriptionSelection
+  const publicCreateFinalSubmitTitle = loadingPay
+    ? gamePreparationStage === "profile"
+      ? "Проверяем профиль…"
+      : gamePreparationStage === "slot"
+        ? "Проверяем доступность корта…"
+        : gamePreparationStage === "confirmation"
+          ? "Проверяем создание игры…"
+          : "Создаём игру…"
+    : gameCreationPending
+    ? "Проверить создание игры"
+    : publicCreateNeedsSplitSubscriptionSelection
     ? "Выберите абонемент для списания"
     : splitPaymentSelected
     ? (
@@ -7476,6 +7517,7 @@ export default function GamesPage({
     options?: {
       communityMode?: "upsert" | "if_exists" | "skip";
       recordMode?: "merge" | "replace";
+      activeMode?: "if_exists";
     },
   ) => {
     const communityMode = options?.communityMode ?? "if_exists";
@@ -7497,6 +7539,8 @@ export default function GamesPage({
       });
     }
     setActiveGameRecordStore((prev) => {
+      // A delayed conflict for another game may refresh its list entry, not switch this view.
+      if (options?.activeMode === "if_exists" && prev?.id !== incoming.id) return prev;
       const activeId = (gameRecordId || "").trim();
       if (activeId && incoming.id === activeId) {
         return replaceRecord
@@ -7722,10 +7766,6 @@ export default function GamesPage({
       detailsOrganizerPlayer,
     ],
   );
-  const detailsOrganizerHasIdentity = useMemo(() => Boolean(
-    normalizeComparableId(detailsOrganizerPayload.id)
-    || normalizePhoneForGame(detailsOrganizerPayload.phone),
-  ), [detailsOrganizerPayload.id, detailsOrganizerPayload.phone]);
   const detailsMetadata = useMemo<Record<string, unknown>>(
     () => (isRecordObject(activeGameRecord?.metadata) ? activeGameRecord.metadata : {}),
     [activeGameRecord?.metadata],
@@ -8789,7 +8829,12 @@ export default function GamesPage({
       if (!alive || cleanupResult.error) return;
 
       const refreshed = await apiFetchPadelGameRecord(activeGameRecord.id);
-      if (!alive || !refreshed.data?.id) return;
+      if (!alive) return;
+      if (refreshed.status === 404) {
+        markGameUnavailable();
+        return;
+      }
+      if (!refreshed.data?.id) return;
 
       const refreshedRecord = refreshed.data as PadelGameRecord;
       upsertGameRecordInStores(refreshedRecord, { communityMode: "if_exists" });
@@ -8811,6 +8856,7 @@ export default function GamesPage({
     detailsExpiredSplitPendingCleanupKeys,
     subscriptionUsageShadowEnabled,
     upsertGameRecordInStores,
+    markGameUnavailable,
   ]);
 
   useEffect(() => {
@@ -8935,8 +8981,14 @@ export default function GamesPage({
             });
             return;
           }
-          const authoritative = await apiFetchPadelGameRecord(activeGameRecord.id);
+          const authoritative = patchResult.status === 409
+            ? { data: patchResult.conflictRecord ?? null, status: 409 }
+            : await apiFetchPadelGameRecord(activeGameRecord.id);
           if (!alive) return;
+          if (authoritative.status === 404) {
+            markGameUnavailable();
+            return;
+          }
           if (authoritative.data?.id) {
             upsertGameRecordInStores(
               authoritative.data as PadelGameRecord,
@@ -9003,6 +9055,7 @@ export default function GamesPage({
     detailsOrganizerPlayer,
     subscriptionUsageShadowEnabled,
     upsertGameRecordInStores,
+    markGameUnavailable,
   ]);
 
   useEffect(() => {
@@ -9045,6 +9098,9 @@ export default function GamesPage({
       },
     }).then((result) => {
       if (!alive) return;
+      if (result.conflictRecord) {
+        upsertGameRecordInStores(result.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+      }
       if (result.data?.id) {
         upsertGameRecordInStores(result.data as PadelGameRecord, { communityMode: "if_exists" });
       } else {
@@ -9882,7 +9938,8 @@ export default function GamesPage({
     splitSubscriptionRequestRef.current += 1;
   }, []);
 
-  const resolveCurrentClientProfile = useCallback(async () => {
+  const resolveCurrentClientProfile = useCallback(async (signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     if (profileId && profilePhone) {
       return {
         clientId: profileId,
@@ -9890,7 +9947,8 @@ export default function GamesPage({
       };
     }
 
-    const profileResult = await apiFetchProfile();
+    const profileResult = await apiFetchProfile(signal);
+    signal?.throwIfAborted();
     const nextClientId = profileResult.data?.id ?? profileId ?? null;
     const nextClientPhone = profileResult.data?.phone ?? profilePhone ?? null;
     if (nextClientId) setProfileId(nextClientId);
@@ -9901,6 +9959,41 @@ export default function GamesPage({
       clientPhone: nextClientPhone,
     };
   }, [profileId, profilePhone]);
+
+  const prepareGamePayment = useCallback(async (hasPendingCreate?: (profile: {
+    clientId: string | null; clientPhone: string | null;
+  }) => boolean) => {
+    const controller = new AbortController();
+    gamePreparationRef.current = controller;
+    try {
+      // Only reads belong inside this deadline. CREATE/pay must stay outside so
+      // a read that ignores abort cannot create anything after the timeout.
+      return await runWithAbortTimeout(20_000, async (signal) => {
+        setGamePreparationStage("profile");
+        const profile = await resolveCurrentClientProfile(signal);
+        signal.throwIfAborted();
+        // A previous CREATE may already own this slot. This branch is permitted
+        // only when its next request is a GET of that exact pending operation.
+        if (hasPendingCreate?.(profile)) return profile;
+        setGamePreparationStage("slot");
+        const available = await revalidateSelectedSlotForPayment(signal);
+        signal.throwIfAborted();
+        return available ? profile : null;
+      }, controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setPayError(isRequestTimeoutError(error)
+          ? "Проверка данных заняла слишком много времени. Проверьте подключение и повторите проверку."
+          : "Не удалось подготовить игру. Проверьте подключение и попробуйте ещё раз.");
+      }
+      return null;
+    } finally {
+      if (gamePreparationRef.current === controller) {
+        gamePreparationRef.current = null;
+        setGamePreparationStage(null);
+      }
+    }
+  }, [resolveCurrentClientProfile, revalidateSelectedSlotForPayment]);
 
   const fetchCommunityAutopublishTargets = useCallback(async (): Promise<CommunityAutopublishTargetsBundle> => {
     if (!ENABLE_GAME_COMMUNITY_AUTOPUBLISH) {
@@ -10252,6 +10345,10 @@ export default function GamesPage({
       metadata: nextMetadata,
     });
 
+    if (updateResult.conflictRecord) {
+      upsertGameRecordInStores(updateResult.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+    }
+
     const updatedRecord = updateResult.data;
     if (updatedRecord?.id) {
       upsertGameRecordInStores(updatedRecord, { communityMode: "if_exists" });
@@ -10430,6 +10527,10 @@ export default function GamesPage({
       try {
         const result = await apiFetchPadelGameRecord(gameRecordId);
         if (!alive) return;
+        if (result.status === 404) {
+          markGameUnavailable();
+          return;
+        }
 
         const fetchedRecord = result.data ?? null;
         if (fetchedRecord) {
@@ -10552,6 +10653,7 @@ export default function GamesPage({
     resolveGamePaymentByVivaBookings,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
+    markGameUnavailable,
   ]);
 
   const communityAutopublishSelectedIdsSet = useMemo(
@@ -10818,13 +10920,20 @@ export default function GamesPage({
     const fromTime = time;
     const toTime = addMinutesToTime(fromTime, duration);
     const subServiceIds = resolvedSelectedSubServiceIds;
-    const paymentRef = generatePaymentRef();
-    const baseRedirectUrl = buildBaseRedirectUrl(fromDate, {
+    let paymentRef = generatePaymentRef();
+    let baseRedirectUrl = buildBaseRedirectUrl(fromDate, {
       [PAYMENT_REF_QUERY_KEY]: paymentRef,
       splitPayment: "organizer",
     });
 
-    const profile = await resolveCurrentClientProfile();
+    const profile = await prepareGamePayment((actor) => preferredPaymentMode === "subscription"
+      && hasPendingPadelSplitCreate({ date: fromDate, fromTime, toTime, roomId: courtId,
+        clientId: actor.clientId, clientPhone: actor.clientPhone,
+        clientSubscriptionId: preferredClientSubscriptionId, spot: 1 }));
+    if (!profile) {
+      setLoadingPay(false);
+      return;
+    }
     const clientId = profile.clientId;
     const clientPhone = profile.clientPhone;
 
@@ -10853,11 +10962,13 @@ export default function GamesPage({
     const resolvedTotalAmount = paymentAmount != null && Number.isFinite(paymentAmount)
       ? Math.max(0, Math.round(paymentAmount))
       : null;
-    if (!await revalidateSelectedSlotForPayment()) {
-      setLoadingPay(false);
-      return;
-    }
 
+    const creationController = new AbortController();
+    gameCreationRef.current = creationController;
+    const creationSession = readAuthToken();
+    const isCurrentCreation = () => gameCreationRef.current === creationController
+      && !creationController.signal.aborted && readAuthToken() === creationSession;
+    try {
     const paymentResult = await apiCreatePadelSplitGamePayment({
       date: fromDate,
       fromTime,
@@ -10897,13 +11008,24 @@ export default function GamesPage({
             : activeSplitPaymentPromoConfig.shareAmounts.fourPlayers,
         }
         : null,
-    });
+    }, { signal: creationController.signal, onRecovery: () => {
+      if (isCurrentCreation()) {
+        setGamePreparationStage("confirmation");
+      }
+    } });
+    if (!isCurrentCreation()) { setLoadingPay(false); return; }
+    setGamePreparationStage(null);
 
     if (paymentResult.error || !paymentResult.data) {
+      const pending = paymentResult.status === 202 && isRecordObject(paymentResult.error?.raw)
+        && paymentResult.error.raw.state === "PENDING_CONFIRMATION";
       const dailyLimitMessage = resolvedPaymentMode === "subscription"
         ? resolveSubscriptionCategoryDailyLimitErrorMessage(paymentResult.error)
         : null;
-      if (dailyLimitMessage) {
+      if (pending) {
+        setGameCreationPending(true);
+        setPayError(null);
+      } else if (dailyLimitMessage) {
         setPayError(dailyLimitMessage);
       } else if (resolvedPaymentMode === "subscription") {
         setPayError(formatSubscriptionDecisionPresentation(
@@ -10920,6 +11042,9 @@ export default function GamesPage({
       setLoadingPay(false);
       return;
     }
+    setGameCreationPending(false);
+    paymentRef = paymentResult.data.paymentRef || paymentRef;
+    baseRedirectUrl = buildBaseRedirectUrl(fromDate, { [PAYMENT_REF_QUERY_KEY]: paymentRef, splitPayment: "organizer" });
 
     const subscriptionDecisionNotice = resolvedPaymentMode === "subscription"
       ? formatSubscriptionDecisionPresentation(resolveSubscriptionDecisionPresentation({
@@ -10958,9 +11083,10 @@ export default function GamesPage({
     const resolvedPaymentAmount = paymentResult.data.toPay ?? shareAmount;
     const paidAt = new Date().toISOString();
     const organizerPaymentStatus = paymentResult.data.paymentUrl ? "PAYMENT_PENDING" : "PAID";
-    const splitDeadlineAt =
-      paymentResult.data.deadlineAt ??
-      new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString();
+    const recoveredCreate = isRecordObject(paymentResult.data.raw)
+      && paymentResult.data.raw.recovery === "SPLIT_CREATE_RESULT_V1";
+    const splitDeadlineAt = paymentResult.data.deadlineAt
+      ?? (recoveredCreate ? null : new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString());
     const resolvedDirectionId = paymentResult.data.directionId ?? SPLIT_OPEN_GAME_DIRECTION_ID;
     const resolvedExerciseTypeId = paymentResult.data.exerciseTypeId ?? SPLIT_OPEN_GAME_EXERCISE_TYPE_ID;
     const resolvedSplitShareAmount = paymentResult.data.shareAmount ?? shareAmount;
@@ -11048,7 +11174,7 @@ export default function GamesPage({
         timeFrom: fromTime,
         timeTo: toTime,
         timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-        timeToIso: `${fromDate}T${toTime}:00+03:00`,
+        timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
         durationMinutes: duration,
         slotId: selectedSlotId,
         bookingIds: resolvedBookingIds,
@@ -11109,6 +11235,7 @@ export default function GamesPage({
           paidAt,
         },
       });
+      if (!isCurrentCreation()) { setLoadingPay(false); return; }
 
       if (!directCreateResult.data?.id) {
         setPayError(directCreateResult.error?.message || "Не удалось создать split-игру");
@@ -11117,6 +11244,7 @@ export default function GamesPage({
       }
 
       const createdRecord = directCreateResult.data;
+      completePadelSplitCreate(paymentResult.data.operationId);
       const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
       upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
       void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
@@ -11145,6 +11273,7 @@ export default function GamesPage({
         payload,
         resolvedBookingIds,
       );
+      if (!isCurrentCreation()) { setLoadingPay(false); return; }
       if (!persistedDraft.record) {
         setPayError(
           `${persistedDraft.error || "Не удалось сохранить игру в ЛК"}. `
@@ -11155,6 +11284,7 @@ export default function GamesPage({
       }
 
       upsertGameRecordInStores(persistedDraft.record, { communityMode: "upsert" });
+      completePadelSplitCreate(paymentResult.data.operationId);
       enqueuePendingPaymentSync(paymentRef, resolvedBookingIds, "split_pay_click");
       pushCabinetFlashNotice(subscriptionDecisionNotice);
 
@@ -11167,6 +11297,12 @@ export default function GamesPage({
 
     setPayError("Не удалось получить ссылку split-оплаты");
     setLoadingPay(false);
+    } finally {
+      if (gameCreationRef.current === creationController) {
+        gameCreationRef.current = null;
+        setGamePreparationStage(null);
+      }
+    }
   }, [
     studioId,
     studioMasterServiceId,
@@ -11200,8 +11336,7 @@ export default function GamesPage({
     publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
     validateGamePublicationFields,
-    revalidateSelectedSlotForPayment,
-    resolveCurrentClientProfile,
+    prepareGamePayment,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
     previewSubscriptionUsageShadow,
@@ -11258,14 +11393,13 @@ export default function GamesPage({
       [PAYMENT_REF_QUERY_KEY]: paymentRef,
     });
 
-    const profile = await resolveCurrentClientProfile();
-    const clientId = profile.clientId;
-    const clientPhone = profile.clientPhone;
-
-    if (!await revalidateSelectedSlotForPayment()) {
+    const profile = await prepareGamePayment();
+    if (!profile) {
       setLoadingPay(false);
       return;
     }
+    const clientId = profile.clientId;
+    const clientPhone = profile.clientPhone;
 
     const paymentResult = await apiPayMasterService({
       date: fromDate,
@@ -11371,7 +11505,7 @@ export default function GamesPage({
           timeFrom: fromTime,
           timeTo: toTime,
           timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-          timeToIso: `${fromDate}T${toTime}:00+03:00`,
+          timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,
@@ -11495,7 +11629,7 @@ export default function GamesPage({
           timeFrom: fromTime,
           timeTo: toTime,
           timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-          timeToIso: `${fromDate}T${toTime}:00+03:00`,
+          timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,
@@ -11589,8 +11723,7 @@ export default function GamesPage({
     publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
     validateGamePublicationFields,
-    revalidateSelectedSlotForPayment,
-    resolveCurrentClientProfile,
+    prepareGamePayment,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
     previewSubscriptionUsageShadow,
@@ -11764,7 +11897,7 @@ export default function GamesPage({
         studioId: bookingPreset.studioId,
         roomId: bookingPreset.roomId,
         timeFromIso: `${bookingPreset.date}T${bookingPreset.timeFrom}:00+03:00`,
-        timeToIso: `${bookingPreset.date}T${bookingPreset.timeTo}:00+03:00`,
+        timeToIso: moscowBookingEndIso(bookingPreset.date, bookingPreset.timeFrom, bookingPreset.timeTo),
         selfBookings: selfResult.data,
         exerciseBookings: rosterResult.data,
       });
@@ -11828,7 +11961,7 @@ export default function GamesPage({
           timeFrom: bookingPreset.timeFrom,
           timeTo: bookingPreset.timeTo,
           timeFromIso: `${bookingPreset.date}T${bookingPreset.timeFrom}:00+03:00`,
-          timeToIso: `${bookingPreset.date}T${bookingPreset.timeTo}:00+03:00`,
+          timeToIso: moscowBookingEndIso(bookingPreset.date, bookingPreset.timeFrom, bookingPreset.timeTo),
           durationMinutes: bookingPreset.durationMinutes,
           slotId: bookingPreset.slotId,
           bookingIds: bookingIdsForPayload,
@@ -12369,6 +12502,10 @@ export default function GamesPage({
         metadata: nextMetadata,
       });
 
+      if (updateResult.conflictRecord) {
+        upsertGameRecordInStores(updateResult.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+      }
+
       if (updateResult.data?.id) {
         upsertGameRecordInStores(updateResult.data as PadelGameRecord, { communityMode: "if_exists" });
         setDetailsSelectedCommunityUnpublishIds((current) => current.filter((communityId) => (
@@ -12419,11 +12556,12 @@ export default function GamesPage({
         },
         metadata: nextMetadata,
       };
-      if (detailsOrganizerHasIdentity) {
-        payload.organizer = detailsOrganizerPayload;
-      }
 
       const updateResult = await apiUpdatePadelGameRecord(gameRecordId, payload);
+
+      if (updateResult.conflictRecord) {
+        upsertGameRecordInStores(updateResult.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+      }
 
       if (updateResult.data?.id) {
         upsertGameRecordInStores(updateResult.data as PadelGameRecord, { communityMode: "if_exists" });
@@ -12440,8 +12578,6 @@ export default function GamesPage({
     }
   }, [
     gameRecordId,
-    detailsOrganizerPayload,
-    detailsOrganizerHasIdentity,
     detailsParticipants,
     detailsWaitlist,
     activeGameRecord?.invite?.maxPlayers,
@@ -12513,7 +12649,12 @@ export default function GamesPage({
 
     let cancelled = false;
     void apiFetchPadelGameResultState(gameRecordId, { phone: profilePhoneNorm }).then((result) => {
-      if (cancelled || result.error || !result.data) return;
+      if (cancelled) return;
+      if (result.status === 404) {
+        markGameUnavailable();
+        return;
+      }
+      if (result.error || !result.data) return;
       applyMatchResultActionResponse(result.data);
     }).catch(() => {
       // State endpoint is additive; existing game metadata remains the fallback.
@@ -12528,6 +12669,7 @@ export default function GamesPage({
     gameRecordId,
     profilePhoneNorm,
     step,
+    markGameUnavailable,
   ]);
 
   useEffect(() => {
@@ -12564,7 +12706,14 @@ export default function GamesPage({
       }
       requestInFlight = true;
       void apiFetchPadelGameResultState(gameRecordId, { phone: profilePhoneNorm }).then((result) => {
-        if (cancelled || result.error || !result.data) return;
+        if (cancelled) return;
+        if (result.status === 404) {
+          cancelled = true;
+          clearScheduledPoll();
+          markGameUnavailable();
+          return;
+        }
+        if (result.error || !result.data) return;
         applyMatchResultActionResponse(result.data);
       }).catch(() => {
         // Background status polling must not block result interaction.
@@ -12596,6 +12745,7 @@ export default function GamesPage({
     gameRecordId,
     profilePhoneNorm,
     step,
+    markGameUnavailable,
   ]);
 
   const patchGameRoster = useCallback(async (
@@ -12603,10 +12753,14 @@ export default function GamesPage({
     nextWaitlistRaw: PadelGamePlayer[],
     options?: {
       metadata?: Record<string, unknown>;
+      baseRecord?: PadelGameRecord;
       fallbackErrorMessage?: string;
     },
   ) => {
     if (!gameRecordId) return;
+    if (options?.baseRecord && options.baseRecord.id !== gameRecordId) return false;
+    const patchBase = options?.baseRecord ?? activeGameRecord;
+    const patchMaxPlayers = options?.baseRecord ? resolveGameDetailsMaxPlayers(options.baseRecord) : detailsMaxPlayers;
 
     const normalizePlayers = (
       players: PadelGamePlayer[],
@@ -12624,8 +12778,12 @@ export default function GamesPage({
       return Array.from(map.values());
     };
 
-    const normalizedParticipants = normalizePlayers(nextParticipantsRaw, "CONFIRMED")
-      .slice(0, detailsMaxPlayers);
+    const requestedParticipants = normalizePlayers(nextParticipantsRaw, "CONFIRMED");
+    if (options?.baseRecord && requestedParticipants.length > patchMaxPlayers) {
+      setGameRosterError("Состав изменился и превышает число мест. Обновите игру перед проверкой участия.");
+      return false;
+    }
+    const normalizedParticipants = requestedParticipants.slice(0, patchMaxPlayers);
     const normalizedWaitlist = excludePlayersAlreadyInRoster(
       normalizePlayers(nextWaitlistRaw, "WAITLIST"),
       normalizedParticipants,
@@ -12634,26 +12792,27 @@ export default function GamesPage({
     setGameRosterError(null);
     try {
       const payload: Parameters<typeof apiUpdatePadelGameRecord>[1] = {
-        expectedUpdatedAt: activeGameRecord?.updatedAt ?? null,
+        expectedUpdatedAt: patchBase?.updatedAt ?? null,
         participants: normalizedParticipants,
         waitlist: normalizedWaitlist,
         invite: {
-          waitlistEnabled: activeGameRecord?.invite?.waitlistEnabled ?? waitlistEnabled,
-          maxPlayers: detailsMaxPlayers,
+          waitlistEnabled: patchBase?.invite?.waitlistEnabled ?? waitlistEnabled,
+          maxPlayers: patchMaxPlayers,
         },
       };
-      if (detailsOrganizerHasIdentity) {
-        payload.organizer = detailsOrganizerPayload;
-      }
       if (options?.metadata) {
         payload.metadata = options.metadata;
       }
 
       const updateResult = await apiUpdatePadelGameRecord(gameRecordId, payload);
 
+      if (updateResult.conflictRecord) {
+        upsertGameRecordInStores(updateResult.conflictRecord, { communityMode: "if_exists", recordMode: "replace", activeMode: "if_exists" });
+      }
+
       if (updateResult.data?.id) {
         const normalizedRecord = updateResult.data as PadelGameRecord;
-        const mergedRecord = mergePadelGameRecord(activeGameRecord, normalizedRecord);
+        const mergedRecord = mergePadelGameRecord(patchBase, normalizedRecord);
         const recordWithRoster: PadelGameRecord = {
           ...mergedRecord,
           participants: normalizedParticipants,
@@ -12701,8 +12860,6 @@ export default function GamesPage({
   }, [
     gameRecordId,
     detailsMaxPlayers,
-    detailsOrganizerPayload,
-    detailsOrganizerHasIdentity,
     activeGameRecord,
     activeGameRecord?.invite?.maxPlayers,
     activeGameRecord?.invite?.waitlistEnabled,
@@ -12725,8 +12882,10 @@ export default function GamesPage({
       teamSlots?: Array<PadelGamePlayer | null>;
       setPairings?: Array<MatchResultSetPairingSlots | null>;
       extraMetadata?: Record<string, unknown>;
+      baseMetadata?: Record<string, unknown>;
     },
   ): Record<string, unknown> => {
+    const baseMetadata = options?.baseMetadata ?? detailsMetadata;
     const participantPhones = nextParticipants
       .map((player) => normalizePhoneForGame(player.phone))
       .filter((value): value is string => Boolean(value));
@@ -12736,16 +12895,13 @@ export default function GamesPage({
     const organizerPhone = normalizePhoneForGame(detailsOrganizerPayload.phone);
     const splitPaymentSource = isRecordObject(options?.extraMetadata?.splitPayment)
       ? options?.extraMetadata?.splitPayment
-      : (isRecordObject(detailsMetadata.splitPayment) ? detailsMetadata.splitPayment : null);
+      : (isRecordObject(baseMetadata.splitPayment) ? baseMetadata.splitPayment : null);
     const splitPaymentPhones = extractSplitPaymentPhones(splitPaymentSource);
-    return {
-      ...detailsMetadata,
+    return mergeRosterMetadata(baseMetadata, {
       ...(options?.extraMetadata ?? {}),
-      organizerInMatch: options?.organizerInMatch ?? detailsOrganizerInMatch,
-      teamSlots: buildStoredTeamSlots(options?.teamSlots ?? detailsTeamSlots),
-      organizerId: detailsOrganizerPayload.id ?? null,
-      organizerPhone: organizerPhone ?? null,
-      organizerPhoneNorm: organizerPhone ?? null,
+      organizerInMatch: options?.organizerInMatch ?? baseMetadata.organizerInMatch ?? detailsOrganizerInMatch,
+      teamSlots: options?.teamSlots ? buildStoredTeamSlots(options.teamSlots)
+        : (options?.baseMetadata ? baseMetadata.teamSlots ?? [] : buildStoredTeamSlots(detailsTeamSlots)),
       participantPhones,
       waitlistPhones,
       allRelatedPhones: Array.from(new Set([
@@ -12754,11 +12910,10 @@ export default function GamesPage({
         ...participantPhones,
         ...waitlistPhones,
       ].filter((value): value is string => Boolean(value)))),
-    };
+    });
   }, [
     detailsMetadata,
     detailsOrganizerInMatch,
-    detailsOrganizerPayload.id,
     detailsOrganizerPayload.phone,
     detailsTeamSlots,
     buildStoredTeamSlots,
@@ -12856,6 +13011,18 @@ export default function GamesPage({
         error:
           cancelResult.error?.message
           || "Не удалось удалить игрока из групповой записи Viva",
+      };
+    }
+
+    if (typeof cancelPayload?.state === "string"
+      && cancelPayload.state !== "DONE" && cancelPayload.state !== "RETURN_PENDING") {
+      return {
+        ok: false,
+        bookingIds: resolvedBookingIds,
+        summary: cancelPayload,
+        error: typeof cancelPayload.message === "string"
+          ? cancelPayload.message
+          : "Удаление игрока ещё не подтверждено. Обновите игру позже.",
       };
     }
 
@@ -13836,7 +14003,7 @@ export default function GamesPage({
   ]);
 
   const handleRemoveParticipantFromDetails = useCallback(async (player: PadelGamePlayer, index: number) => {
-    if (!canManagePlayersInDetails || updatingGameRoster) return;
+    if (!gameRecordId || !canManagePlayersInDetails || updatingGameRoster) return;
     if (isDetailsOrganizerPlayer(player)) {
       setGameRosterError("Организатора нельзя удалить из игры");
       return;
@@ -13847,6 +14014,24 @@ export default function GamesPage({
     const vivaCancellation = await cancelVivaBookingsForPlayerFromDetails(player, "REMOVED_BY_ORGANIZER");
     if (!vivaCancellation.ok) {
       setGameRosterError(vivaCancellation.error || "Не удалось удалить игрока из групповой записи Viva");
+      return;
+    }
+
+    if (vivaCancellation.summary?.state === "DONE" || vivaCancellation.summary?.state === "RETURN_PENDING") {
+      // Durable leave already wrote the roster. A second PATCH would use the old
+      // version and could overwrite a concurrent rejoin if retried with fresh data.
+      setUpdatingGameRoster(true);
+      const refreshed = await apiFetchPadelGameRecord(gameRecordId).catch(() => null);
+      setUpdatingGameRoster(false);
+      const record = refreshed?.data?.id === gameRecordId ? refreshed.data : null;
+      if (refreshed?.error || !record) {
+        setGameRosterError(refreshed?.error?.message || "Не удалось обновить состав после удаления. Обновите игру.");
+        return;
+      }
+      upsertGameRecordInStores(record, { communityMode: "if_exists", recordMode: "replace" });
+      setGameRosterError(hasActiveGameLeaveMembership(record, { id: player.id, phone: player.phone })
+        ? "Игрок всё ещё состоит в игре или записался снова. Обновите состав перед новым действием."
+        : null);
       return;
     }
 
@@ -13896,6 +14081,8 @@ export default function GamesPage({
     buildDetailsRosterMetadata,
     cancelVivaBookingsForPlayerFromDetails,
     patchGameRoster,
+    gameRecordId,
+    upsertGameRecordInStores,
   ]);
 
   const handleReturnOrganizerToMatchFromDetails = useCallback(async () => {
@@ -14057,6 +14244,7 @@ export default function GamesPage({
 
     if (typeof window !== "undefined" && !isSelfLeavePreviewMode) {
       const accepted = window.confirm("Покинуть игру? Вы потеряете место в составе.");
+      recordSplitLeaveConfirmation(accepted);
       if (!accepted) return;
     }
 
@@ -14379,6 +14567,24 @@ export default function GamesPage({
 
       setDetailsSplitJoinPending(null);
 
+      if (paymentResult.data.checkoutStored) {
+        const checkout = paymentResult.data;
+        if (!checkout.paymentUrl || !checkout.paymentRef || !checkout.bookingId) {
+          setGameRosterError("Не удалось открыть сохранённую оплату. Обновите карточку игры.");
+          return;
+        }
+        enqueuePendingPaymentSync(checkout.paymentRef, [checkout.bookingId], "details_split_join_pay_click");
+        if (!navigateToExternalUrl(checkout.paymentUrl)) {
+          const refreshed = await apiFetchPadelGameRecord(gameRecordId, { cache: "no-store" });
+          if (refreshed.data) {
+            setActiveGameRecordStore(refreshed.data);
+            upsertGameRecordInStores(refreshed.data, { communityMode: "if_exists" });
+          }
+          setGameRosterError("Не удалось открыть страницу оплаты. Ссылка доступна в карточке игры.");
+        }
+        return;
+      }
+
       const subscriptionDecisionNotice = preferredPaymentMode === "subscription"
         ? formatSubscriptionDecisionPresentation(resolveSubscriptionDecisionPresentation({
             action: "JOIN_GAME",
@@ -14449,6 +14655,14 @@ export default function GamesPage({
         return;
       }
 
+      const pendingBaseResult = await apiFetchPadelGameRecord(gameRecordId, { retries: 0, cache: "no-store" });
+      if (pendingBaseResult.error || pendingBaseResult.data?.id !== gameRecordId
+        || resolveGameVivaExerciseId(pendingBaseResult.data) !== (paymentResult.data.exerciseId || exerciseId)) {
+        setGameRosterError("Бронь создана, но не удалось обновить состав. Обновите игру перед проверкой участия.");
+        return;
+      }
+      const pendingBaseRecord = pendingBaseResult.data;
+      const pendingBaseMetadata = isRecordObject(pendingBaseRecord.metadata) ? pendingBaseRecord.metadata : {};
       const bookingIds = paymentResult.data.bookingId ? [paymentResult.data.bookingId] : [];
       enqueuePendingPaymentSync(paymentRef, bookingIds, "details_split_join_pay_click");
 
@@ -14460,19 +14674,13 @@ export default function GamesPage({
       const pendingPaymentSpot = pendingPaymentSpotRaw != null
         ? Math.max(1, Math.floor(pendingPaymentSpotRaw))
         : null;
-      const pendingSplitPaymentSource = isRecordObject(detailsSplitPaymentMetadata)
-        ? detailsSplitPaymentMetadata
-        : (
-          isRecordObject(activeGameRecord.metadata)
-          && isRecordObject((activeGameRecord.metadata as Record<string, unknown>).splitPayment)
-            ? (activeGameRecord.metadata as Record<string, unknown>).splitPayment as Record<string, unknown>
-            : null
-        );
+      const pendingSplitPaymentSource = isRecordObject(pendingBaseMetadata.splitPayment)
+        ? pendingBaseMetadata.splitPayment : null;
       const pendingCurrentSplitPayments = Array.isArray(pendingSplitPaymentSource?.payments)
         ? pendingSplitPaymentSource.payments.filter((item) => isRecordObject(item))
         : [];
       const pendingCurrentSplitBookingIds = parseBookingIdsFromUnknown(pendingSplitPaymentSource?.bookingIds);
-      const pendingCurrentMetadataBookingIds = parseBookingIdsFromUnknown(detailsMetadata.bookingIds);
+      const pendingCurrentMetadataBookingIds = parseBookingIdsFromUnknown(pendingBaseMetadata.bookingIds);
       const pendingFilteredSplitPayments = pendingCurrentSplitPayments.filter((item) => {
         const itemClientId = normalizeComparableId(item.clientId);
         const itemPhoneNorm = normalizePhoneForGame(
@@ -14496,10 +14704,10 @@ export default function GamesPage({
         status: "PENDING",
       };
       const pendingNextParticipants = dedupePlayersByIdentity(
-        detailsParticipants.filter((player) => !isCurrentUserPlayer(player)),
+        (pendingBaseRecord.participants ?? []).filter((player) => !isCurrentUserPlayer(player)),
       );
       const pendingNextWaitlist = dedupePlayersByIdentity([
-        ...detailsWaitlist.filter((player) => !isCurrentUserPlayer(player)),
+        ...(pendingBaseRecord.waitlist ?? []).filter((player) => !isCurrentUserPlayer(player)),
         pendingPlayer,
       ]);
       const pendingNowIso = new Date().toISOString();
@@ -14509,7 +14717,7 @@ export default function GamesPage({
         ...(pendingSplitPaymentSource ?? {}),
         enabled: true,
         status: "ACTIVE",
-        shareCount: detailsSplitShareCount,
+        shareCount: resolveSplitJoinShareCount(pendingSplitPaymentSource?.shareCount, resolveGameDetailsMaxPlayers(pendingBaseRecord)),
         // The server re-derives the share before charging; persist its value so a
         // browser-side fallback can never become the stored participant price.
         shareAmount: toFiniteNumber(paymentResult.data.shareAmount) ?? shareAmount,
@@ -14549,6 +14757,7 @@ export default function GamesPage({
         pendingNextParticipants,
         pendingNextWaitlist,
         {
+          baseMetadata: pendingBaseMetadata,
           extraMetadata: {
             bookingIds: pendingMetadataBookingIds,
             splitPayment: pendingNextSplitPayment,
@@ -14557,6 +14766,7 @@ export default function GamesPage({
       );
       const pendingSaved = await patchGameRoster(pendingNextParticipants, pendingNextWaitlist, {
         metadata: pendingNextMetadata,
+        baseRecord: pendingBaseRecord,
         fallbackErrorMessage: "Не удалось сохранить ожидающую оплату участия",
       });
       if (!pendingSaved) {
@@ -14576,7 +14786,12 @@ export default function GamesPage({
       }
 
       const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && paymentResult.data.toPay <= 0;
-      const refreshed = await apiFetchPadelGameRecord(gameRecordId);
+      const refreshed = await apiFetchPadelGameRecord(gameRecordId, { retries: 0, cache: "no-store" });
+      if (refreshed.error || refreshed.data?.id !== gameRecordId
+        || resolveGameVivaExerciseId(refreshed.data) !== (paymentResult.data.exerciseId || exerciseId)) {
+        setGameRosterError("Бронь создана, но не удалось проверить актуальный состав. Обновите игру.");
+        return;
+      }
       let resolvedRecord: PadelGameRecord | null = null;
       let resolvedParticipants = detailsParticipants;
       let resolvedWaitlist = detailsWaitlist;
@@ -14600,14 +14815,13 @@ export default function GamesPage({
         const paymentSpot = paymentSpotRaw != null ? Math.max(1, Math.floor(paymentSpotRaw)) : null;
         const nowIso = new Date().toISOString();
         const hasCurrentUserInParticipants = resolvedParticipants.some((player) => isCurrentUserPlayer(player));
-        const hasCurrentUserInWaitlist = resolvedWaitlist.some((player) => isCurrentUserPlayer(player));
-        const shouldJoinAsConfirmed = hasCurrentUserInParticipants
-          ? true
-          : hasCurrentUserInWaitlist
-            ? false
-            : (paymentSpot != null
-              ? paymentSpot <= detailsMaxPlayers
-              : resolvedParticipants.length < detailsMaxPlayers);
+        const hasCurrentUserInWaitlist = resolvedWaitlist.some((player) => (
+          isCurrentUserPlayer(player) && String(player.status || "").toUpperCase() === "WAITLIST"
+        ));
+        const confirmedMaxPlayers = resolveGameDetailsMaxPlayers(resolvedRecord ?? pendingBaseRecord);
+        const shouldJoinAsConfirmed = hasCurrentUserInParticipants || (!hasCurrentUserInWaitlist
+          && resolvedParticipants.length < confirmedMaxPlayers
+          && (paymentSpot == null || paymentSpot <= confirmedMaxPlayers));
 
         const joinPlayerBase: PadelGamePlayer = {
           id: currentClientId,
@@ -14673,7 +14887,7 @@ export default function GamesPage({
           ...(splitPaymentSource ?? {}),
           enabled: true,
           status: "ACTIVE",
-          shareCount: detailsSplitShareCount,
+          shareCount: resolveSplitJoinShareCount(splitPaymentSource?.shareCount, confirmedMaxPlayers),
           shareAmount: toFiniteNumber(paymentResult.data.shareAmount) ?? shareAmount,
           bookingIds: Array.from(new Set([
             ...parseBookingIdsFromUnknown(currentBookingIds),
@@ -14731,7 +14945,7 @@ export default function GamesPage({
           ],
         };
         const nextMetadataBookingIds = Array.from(new Set([
-          ...parseBookingIdsFromUnknown(detailsMetadata.bookingIds),
+          ...parseBookingIdsFromUnknown(isRecordObject(resolvedRecord?.metadata) ? resolvedRecord.metadata.bookingIds : null),
           ...parseBookingIdsFromUnknown(currentBookingIds),
           ...parseBookingIdsFromUnknown(matchedCurrentSplitPayment?.bookingIds),
           matchedCurrentSplitPayment?.bookingId,
@@ -14739,6 +14953,7 @@ export default function GamesPage({
         ].filter(Boolean)));
 
         const nextMetadata = buildDetailsRosterMetadata(nextParticipants, nextWaitlist, {
+          baseMetadata: isRecordObject(resolvedRecord?.metadata) ? resolvedRecord.metadata : {},
           extraMetadata: {
             bookingIds: nextMetadataBookingIds,
             splitPayment: nextSplitPayment,
@@ -14747,6 +14962,7 @@ export default function GamesPage({
 
         await patchGameRoster(nextParticipants, nextWaitlist, {
           metadata: nextMetadata,
+          baseRecord: resolvedRecord ?? pendingBaseRecord,
           fallbackErrorMessage: "Не удалось синхронизировать состав игры после списания абонемента",
         });
       }
@@ -14783,6 +14999,7 @@ export default function GamesPage({
     profileGrade,
     profileRatingNumeric,
     patchGameRoster,
+    buildDetailsRosterMetadata,
     detailsDurationMinutes,
     previewSubscriptionUsageShadow,
     subscriptionUsageShadowJoinPreview,
@@ -14919,6 +15136,25 @@ export default function GamesPage({
     if (navigateToCabinetFromGamesDetails()) return;
     onBack();
   }, [onBack]);
+
+  if (step === "unavailable") {
+    return (
+      <div className="app-container game-container">
+        <div className="page-header">
+          <button className="back-btn" type="button" onClick={onBack}>← Назад</button>
+          <div className="page-title">Игра недоступна</div>
+        </div>
+        <div className="game-section">
+          <div className="game-empty" role="status">
+            Игра больше недоступна. Вернитесь в кабинет и обновите список игр.
+          </div>
+          <button className="section-cta" type="button" onClick={onBack}>
+            Вернуться в кабинет
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (step === "place") {
     return (
@@ -16129,6 +16365,7 @@ export default function GamesPage({
                 <span className="details-roster-join-status-reason">{detailsSplitJoinPending.reason}</span>
               )}
               <button
+                data-lk-leave-action="GAME_JOIN"
                 type="button"
                 className="details-roster-action"
                 disabled={joiningSplitPayment}
@@ -16212,6 +16449,7 @@ export default function GamesPage({
                         shouldShowCurrentUserLeaveActionInDetails && isCurrentUserPlayer(player) && (
                           <button
                             type="button"
+                            data-lk-leave-action="GAME_LEAVE"
                             className="details-roster-action details-roster-leave"
                             onClick={() => {
                               void handleLeaveCurrentUserFromDetails();
@@ -16301,6 +16539,7 @@ export default function GamesPage({
                         shouldShowCurrentUserLeaveActionInDetails && isCurrentUserPlayer(player) && (
                           <button
                             type="button"
+                            data-lk-leave-action="GAME_LEAVE"
                             className="details-roster-action details-roster-leave"
                             onClick={() => {
                               void handleLeaveCurrentUserFromDetails();
@@ -16590,7 +16829,7 @@ export default function GamesPage({
     return (
       <div className="app-container game-container">
         <div className="page-header">
-          <button className="page-back" onClick={onBack} type="button">
+          <button data-lk-leave-action="GAME_BACK" className="page-back" onClick={onBack} type="button">
             ← Назад
           </button>
           <div className="page-title">Детали матча</div>
@@ -17136,6 +17375,7 @@ export default function GamesPage({
                       Оплатить
                     </button>
                     <button
+                      data-lk-leave-action="GAME_LEAVE"
                       className="game-join-split-pay-option"
                       type="button"
                       disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
@@ -17148,6 +17388,7 @@ export default function GamesPage({
                   </div>
                 ) : detailsCurrentUserLeavePayment ? (
                   <button
+                    data-lk-leave-action="GAME_LEAVE"
                     className="game-join-split-pay-option"
                     type="button"
                     disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
@@ -17188,6 +17429,7 @@ export default function GamesPage({
                         onJoin={id => { void handleSplitJoinCurrentUserFromDetails("subscription", id); }} />
                     )}
                     <button
+                      data-lk-leave-action="GAME_JOIN"
                       className="game-join-split-pay-option game-join-split-pay-option-primary"
                       type="button"
                       disabled={!canCurrentUserJoinSplitGameInDetails}
@@ -17201,6 +17443,7 @@ export default function GamesPage({
                 )
               ) : (
                 <button
+                  data-lk-leave-action="GAME_JOIN"
                   className="section-cta"
                   type="button"
                   onClick={() => {
@@ -17222,6 +17465,7 @@ export default function GamesPage({
               <button
                 className="section-cta section-cta-secondary"
                 type="button"
+                data-lk-leave-action="GAME_BACK"
                 onClick={handleOpenCabinetFromDetails}
               >
                 Вернуться в личный кабинет
@@ -17358,7 +17602,7 @@ export default function GamesPage({
   return (
     <div className="app-container game-container">
       <div className="page-header">
-        <button className="page-back" onClick={onBack} type="button">
+        <button data-lk-leave-action="GAME_BACK" className="page-back" onClick={onBack} type="button">
           Закрыть
         </button>
         <div className="page-title">Создание игры</div>
@@ -17957,6 +18201,23 @@ export default function GamesPage({
                   </div>
                 )
             )}
+            {(loadingPay || gameCreationPending) && !subscriptionUsageShadowEnabled && (
+              <div className="game-create-progress" role="status" aria-live="polite" aria-atomic="true">
+                <strong>
+                  {gamePreparationStage === "profile"
+                    ? "Проверяем профиль…"
+                    : gamePreparationStage === "slot"
+                      ? "Проверяем доступность корта…"
+                      : gamePreparationStage === "confirmation" || gameCreationPending
+                        ? "Проверяем создание игры…"
+                        : "Создаём игру…"}
+                </strong>
+                <span>{gameCreationPending && !loadingPay
+                  ? "Подтверждение пока не получено. Нажмите «Проверить создание игры»: проверим ту же попытку без повторного создания."
+                  : "Ожидаем подтверждение. Это может занять некоторое время."}</span>
+                <div className={`game-create-progress-track${gameCreationPending && !loadingPay ? " is-paused" : ""}`} aria-hidden="true" />
+              </div>
+            )}
             <button
               className={`game-submit game-submit-booking game-submit-inline ${canProceedToPayment && !subscriptionUsageShadow.busy ? "active" : ""}`}
               onClick={() => {
@@ -17975,12 +18236,13 @@ export default function GamesPage({
                 }
               }}
               type="button"
+              aria-busy={loadingPay}
               disabled={!canProceedToPayment
                 || loadingPay
                 || subscriptionUsageShadow.busy
                 || (!subscriptionUsageShadowEnabled && publicCreateNeedsSplitSubscriptionSelection)}
             >
-              <span className="game-submit-main">
+              <span className="game-submit-main" aria-live="polite">
                 {subscriptionUsageShadowEnabled
                   ? subscriptionUsageShadow.busy
                     ? "Проверяем ограничения..."
@@ -18029,7 +18291,7 @@ export default function GamesPage({
                 )}
               </>
             )}
-            {payError && <div className="game-empty game-pay-error">{payError}</div>}
+            {payError && <div className="game-empty game-pay-error" role="alert">{payError}</div>}
           </div>
         )}
 

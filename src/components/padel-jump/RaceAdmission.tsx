@@ -51,8 +51,8 @@ export default function RaceAdmission({ onChangeProfile }: { onChangeProfile: ()
         ? <EventRegistrationForm key={entry.eventNotice?.revision} notice={entry.eventNotice} onCancel={() => setAttempt(n => n + 1)} onSubmit={async data => { await submit(data); return null; }} />
         : <EnrollmentForm fields={entry.fields} busy={busy} onSubmit={data => void submit(data)} />)}
 
-      {entry?.state === 'scheduled' && <p role="status">Мероприятие ещё не началось. Регистрация и игра откроются {entry.eventNotice && new Date(entry.eventNotice.policy.startsAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })} (МСК).</p>}
-      {entry?.state === 'closed' && <p role="status">Мероприятие завершено. Новые анкеты и заезды закрыты.</p>}
+      {entry?.state === 'scheduled' && <p role="status">{entry.eventNotice?.retentionMode === 'submitted-year-v1' ? 'Игра откроется' : 'Мероприятие ещё не началось. Регистрация и игра откроются'} {entry.eventNotice && new Date(entry.eventNotice.policy.startsAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })} (МСК).{entry.eventNotice?.retentionMode === 'submitted-year-v1' && ' Вступление в сообщество и анкета доступны в любое время.'}</p>}
+      {entry?.state === 'closed' && <p role="status">{entry.eventNotice?.retentionMode === 'submitted-year-v1' ? 'Игра мероприятия завершена. Вступление в сообщество и анкета по-прежнему доступны.' : 'Мероприятие завершено. Новые анкеты и заезды закрыты.'}</p>}
 
       {entry?.state === 'pending' && <p role="status">Заявка на вступление ожидает подтверждения организатором. Игра откроется после подтверждения.</p>}
       {entry?.state === 'blocked' && <p role="alert">Участие в сообществе ограничено. Обратись к организатору.</p>}

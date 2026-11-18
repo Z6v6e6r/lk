@@ -8,7 +8,8 @@ import ts from 'typescript';
 const config = { AUTH_RUNTIME_KEYCLOAK_BASE: 'https://identity.example.test', AUTH_RUNTIME_TENANT_KEY: 'fixture-tenant' };
 const jwt = (claims = {}) => 'header.' + Buffer.from(JSON.stringify({ sub: 'fixture-subject', iss: config.AUTH_RUNTIME_KEYCLOAK_BASE + '/realms/clients', azp: 'widget', scope: 'openid profile', phone_number: 'fixture-phone', exp: Date.now() / 1000 + 10, ...claims })).toString('base64url') + '.signature';
 
-function harness({ token = jwt(), refresh = 'fixture-refresh', response = { access_token: jwt(), refresh_token: 'rotated' }, ok = true, pending = null, location = '', beforeReply } = {}) {
+function harness({ token = jwt(), refresh = 'fixture-refresh', response = { access_token: jwt(), refresh_token: 'rotated' }, ok = true, pending = null, location = '', beforeReply, consentsSynced = true } = {}) {
+  const continuations = [];
   const state = [], effects = [], listeners = new Map(), timers = new Map(), requests = [], persisted = [], cache = new Map();
   let clears = 0, sessionClears = 0, consentClears = 0, consentSyncs = 0, nextTimer = 1;
   const storage = { readVivaAccessToken: () => token, readVivaRefreshToken: () => refresh,
@@ -27,9 +28,9 @@ function harness({ token = jwt(), refresh = 'fixture-refresh', response = { acce
       if (id.includes('authRuntime')) return config;
       if (id.endsWith('/authShared')) return { AuthContext: { Provider: 'provider' } };
       if (id.endsWith('/analytics') || id.endsWith('/pushNotifications')) return new Proxy({}, { get: () => () => {} });
-      if (id.endsWith('/authConsents')) return { syncPendingAuthConsents: async () => { consentSyncs++; }, hasRetryablePendingAuthConsents: () => true, clearPendingAuthConsents: () => { consentClears++; }, stageAuthConsents: async () => true };
+      if (id.endsWith('/authConsents')) return { syncPendingAuthConsents: async () => { consentSyncs++; return consentsSynced; }, hasRetryablePendingAuthConsents: () => true, clearPendingAuthConsents: () => { consentClears++; }, stageAuthConsents: async () => true };
       if (id.endsWith('/vivaAuthStorage')) return storage;
-      if (id.endsWith('/vivaOAuth')) return { isVivaOAuthCallbackUrl: load('src/utils/vivaOAuth.ts').isVivaOAuthCallbackUrl, readPendingVivaOAuth: () => pending, clearPendingVivaOAuth: () => {}, cleanupVivaOAuthCallbackUrl: () => {}, startVivaOAuthRedirect: () => {} };
+      if (id.endsWith('/vivaOAuth')) return { completeVivaOAuthContinuation: value => { continuations.push(value); return true; }, isVivaOAuthCallbackUrl: load('src/utils/vivaOAuth.ts').isVivaOAuthCallbackUrl, readPendingVivaOAuth: () => pending, clearPendingVivaOAuth: () => {}, cleanupVivaOAuthCallbackUrl: () => {}, startVivaOAuthRedirect: () => {} };
       if (id.endsWith('/lkIdleDataGuard')) return { isLkIdleRequestPausedError: () => false };
       const base = path.resolve(path.dirname(filename), id);
       return load(fs.existsSync(base) ? base : base + '.ts');
@@ -43,7 +44,7 @@ function harness({ token = jwt(), refresh = 'fixture-refresh', response = { acce
   };
   const helpers = load('src/utils/vivaSessionCompatibility.ts');
   const component = load('src/context/VivaAuthProvider.tsx').VivaAuthProvider({ children: null });
-  return { helpers, state, requests, persisted, timers, runEffects: () => effects.forEach(fn => fn()), refresh: () => listeners.get('document:visibilitychange')(), login: component.props.value.login,
+  return { continuations, helpers, state, requests, persisted, timers, runEffects: () => effects.forEach(fn => fn()), refresh: () => listeners.get('document:visibilitychange')(), login: component.props.value.login,
     counts: () => ({ clears, sessionClears, consentClears, consentSyncs }), token: () => token, setTokens: (a, r) => { token = a; refresh = r; } };
 }
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)); };
@@ -118,4 +119,15 @@ test('mount checks current storage before clearing an old incompatible render sn
   h.setTokens(newer, 'new-refresh'); h.runEffects(); await settle();
   assert.equal(h.token(), newer); assert.equal(h.counts().sessionClears, 0);
   assert.equal(h.state[0], true); assert.equal(h.state[2], null);
+});
+
+
+test('OAuth continuation signal is emitted only after matching state, successful compatible exchange and consent sync', async () => {
+  const pending = { state: 'fixture-state', provider: 'yandex', codeVerifier: 'fixture-verifier', redirectUri: 'https://cabinet.example.test', returnTo: '', continuation: { id: 'fixture-continuation' } };
+  for (const change of [{}, { location: '?code=fixture-code&state=other' }, { ok: false }, { response: { access_token: jwt({ scope: 'profile' }) } }, { consentsSynced: false }]) {
+    const h = harness({ token: null, refresh: null, pending, location: '?code=fixture-code&state=fixture-state', ...change });
+    h.runEffects(); await settle();
+    assert.equal(h.continuations.length, Object.keys(change).length === 0 ? 1 : 0);
+  }
+  const restored = harness(); restored.runEffects(); await settle(); assert.equal(restored.continuations.length, 0);
 });

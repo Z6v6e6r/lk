@@ -1,0 +1,15 @@
+{
+  "kind": "SUBSCRIPTION_ROUTER_DIAGNOSTIC_GENERATION_V1",
+  "predecessor": "subscription_stale_release_generation.json",
+  "deploymentAuthorized": false,
+  "note": "Source-only diagnostic successor. No payment behavior, flow import or runtime activation. Historical source generations remain frozen.",
+  "targets": [
+    {
+      "id": "566ae4b886c37ae5",
+      "fileName": "fn_tournament_subscription_purchase_router.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+      "preimageSha256": "917dd30375dab1602a311d61be3d6d024d4925d8ab21e642cce166f9a6983e91",
+      "candidateSha256": "3daa1011529b3688a1a33a527ea75bc96facbb3ce49ce43a4a6790694d820c01"
+    }
+  ]
+}

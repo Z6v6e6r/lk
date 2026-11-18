@@ -5,6 +5,7 @@ import {
   getTournamentOfflineResultQueueScope,
   mergeTournamentOfflineResultPayloads,
   shouldQueueTournamentResultError,
+  tournamentResultNeedsReview,
 } from "./tournamentOfflineSyncPolicy";
 
 export {
@@ -12,6 +13,7 @@ export {
   getTournamentOfflineResultQueueScope,
   mergeTournamentOfflineResultPayloads,
   shouldQueueTournamentResultError,
+  tournamentResultNeedsReview,
 } from "./tournamentOfflineSyncPolicy";
 
 const DB_NAME = "padlhub.lk.tournament-offline.v1";
@@ -47,6 +49,7 @@ export interface TournamentOfflineResultQueueRecord {
   tournamentId: string;
   payload: AmericanoResultsPayload;
   attempts: number;
+  reviewRequired?: boolean;
   nextAttemptAt: number;
   lastAttemptAt: number | null;
   lastError: string | null;
@@ -106,9 +109,17 @@ function buildTimestamp() {
   return new Date().toISOString();
 }
 
+function getResultSession(payload: AmericanoResultsPayload): number | null {
+  const timing = payload.params?.autoFinish;
+  if (!timing || typeof timing !== "object") return null;
+  const session = (timing as Record<string, unknown>).session;
+  return typeof session === "number" ? session : null;
+}
+
 function getTournamentResultJobId(tournamentId: string, payload: AmericanoResultsPayload): string {
   const scope = getTournamentOfflineResultQueueScope(payload);
-  return `${tournamentId}:${scope}`;
+  const session = getResultSession(payload);
+  return `${tournamentId}:${scope}${session == null ? "" : `:session:${session}`}`;
 }
 
 function shouldUseIndexedDb(): boolean {
@@ -293,11 +304,13 @@ async function readPendingQueue(): Promise<TournamentOfflineResultQueueRecord[]>
 async function findPendingQueueRecordByScope(
   tournamentId: string,
   scope: string,
+  session: number | null,
 ): Promise<TournamentOfflineResultQueueRecord | null> {
   const records = await readPendingQueue();
   return records.find((record) => (
     record.tournamentId === tournamentId
     && getTournamentOfflineResultQueueScope(record.payload) === scope
+    && getResultSession(record.payload) === session
   )) ?? null;
 }
 
@@ -313,11 +326,13 @@ export async function loadPendingTournamentResultQueue(
 async function findPendingQueueRecordsByScope(
   tournamentId: string,
   scope: string,
+  session: number | null,
 ): Promise<TournamentOfflineResultQueueRecord[]> {
   const records = await readPendingQueue();
   return records.filter((record) => (
     record.tournamentId === tournamentId
     && getTournamentOfflineResultQueueScope(record.payload) === scope
+    && getResultSession(record.payload) === session
   ));
 }
 
@@ -345,7 +360,7 @@ export async function enqueuePendingTournamentResultSync(
   const now = Date.now();
   const timestamp = new Date(now).toISOString();
   const scope = getTournamentOfflineResultQueueScope(payload);
-  const previous = await findPendingQueueRecordByScope(tournamentId, scope);
+  const previous = await findPendingQueueRecordByScope(tournamentId, scope, getResultSession(payload));
   const jobId = previous?.jobId ?? getTournamentResultJobId(tournamentId, payload);
   const record: TournamentOfflineResultQueueRecord = {
     jobId,
@@ -356,6 +371,7 @@ export async function enqueuePendingTournamentResultSync(
         : payload) as AmericanoResultsPayload,
     ),
     attempts: previous?.attempts ?? 0,
+    reviewRequired: previous?.reviewRequired ?? false,
     nextAttemptAt: now,
     lastAttemptAt: previous?.lastAttemptAt ?? null,
     lastError: previous?.lastError ?? null,
@@ -392,7 +408,7 @@ export async function flushPendingTournamentResultSyncJob(jobId: string): Promis
   const response = await apiUpdateAmericanoResults(current.payload);
   if (response.error || !response.data) {
     const message = response.error?.message || "Не удалось синхронизировать результат";
-    await markPendingTournamentResultSyncFailure(current.jobId, message);
+    await markPendingTournamentResultSyncFailure(current.jobId, message, tournamentResultNeedsReview(response.error));
     return {
       processed: 1,
       pending: await getPendingTournamentResultSyncCount(),
@@ -427,7 +443,7 @@ export async function clearPendingTournamentResultQueueByPayload(
   if (!normalizedTournamentId) return;
 
   const scope = getTournamentOfflineResultQueueScope(payload);
-  const records = await findPendingQueueRecordsByScope(normalizedTournamentId, scope);
+  const records = await findPendingQueueRecordsByScope(normalizedTournamentId, scope, getResultSession(payload));
   await Promise.all(records.map((record) => deleteOne(QUEUE_STORE, record.jobId)));
 }
 
@@ -445,6 +461,7 @@ export async function clearPendingTournamentResultQueueByTournamentId(
 export async function markPendingTournamentResultSyncFailure(
   jobId: string,
   messageRaw: string,
+  reviewRequired = false,
 ): Promise<void> {
   const normalizedJobId = toStringSafe(jobId);
   if (!normalizedJobId) return;
@@ -461,6 +478,7 @@ export async function markPendingTournamentResultSyncFailure(
     nextAttemptAt,
     lastAttemptAt: now,
     lastError: messageRaw.trim() || "unknown",
+    reviewRequired,
     updatedAt: new Date(now).toISOString(),
   });
 }
@@ -503,6 +521,11 @@ export async function submitTournamentResultsWithOfflineFallback(
   }
 
   const response = await apiUpdateAmericanoResults(payload);
+  if (tournamentResultNeedsReview(response.error)) {
+    const queued = await enqueuePendingTournamentResultSync(payload, options);
+    if (queued) await markPendingTournamentResultSyncFailure(queued.jobId, response.error!.message, true);
+    return { mode: "online", response, jobId: queued?.jobId, reason: "review_required" };
+  }
   if (response.error && shouldQueueTournamentResultError(response.error)) {
     const queued = await enqueuePendingTournamentResultSync(payload, options);
     if (!queued) {
@@ -575,7 +598,7 @@ function selectQueueItems(
 
   if (normalizedForceTournamentId) {
     const forced = items.find((item) => item.tournamentId === normalizedForceTournamentId);
-    if (forced && forced.nextAttemptAt <= now) {
+    if (forced && !forced.reviewRequired && forced.nextAttemptAt <= now) {
       selected.push(forced);
     }
   }
@@ -585,7 +608,7 @@ function selectQueueItems(
     if (normalizedForceTournamentId && item.tournamentId === normalizedForceTournamentId) {
       continue;
     }
-    if (item.nextAttemptAt > now) continue;
+    if (item.reviewRequired || item.nextAttemptAt > now) continue;
     selected.push(item);
   }
 
@@ -617,7 +640,7 @@ export async function processPendingTournamentResultSyncQueue(options?: {
 
     if (response.error || !response.data) {
       const message = response.error?.message || "Не удалось синхронизировать результат";
-      await markPendingTournamentResultSyncFailure(item.jobId, message);
+      await markPendingTournamentResultSyncFailure(item.jobId, message, tournamentResultNeedsReview(response.error));
       failed.push({
         jobId: item.jobId,
         tournamentId: item.tournamentId,

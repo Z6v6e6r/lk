@@ -17,6 +17,8 @@ export interface SubscriptionBillingOption {
   readonly priceMinor: number | null;
   /** Crossed-out former price shown next to `priceMinor` when a discount applies. */
   readonly priceCompareMinor?: number | null;
+  /** Continue a saved checkout even when the current catalogue quote is unavailable. */
+  readonly canResume?: boolean;
   readonly ctaDisabled?: boolean;
   readonly ctaLabel?: string;
   readonly statusMessage?: string;

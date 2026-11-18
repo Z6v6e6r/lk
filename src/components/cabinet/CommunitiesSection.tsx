@@ -1,4 +1,5 @@
 import { EventRegistrationForm } from './EventRegistrationForm';
+import { EXHIBITION_COMMUNITY_ID } from '../padel-jump/exhibition';
 import { parseEventNotice, type EventNotice } from '../../utils/communityApi';
 import { EventCommunityPanel } from './EventCommunityPanel';
 import type { EventRegistration } from '../../utils/communityApi';
@@ -3758,7 +3759,7 @@ export function CommunitiesSection({
   };
 
   const handleJoinOpenCommunity = useCallback(async (community: CommunityRecord) => {
-    if (community.communityType === 'EVENT') { setEventJoin({community}); return; }
+    if (community.communityType === 'EVENT' && community.id !== EXHIBITION_COMMUNITY_ID) { setEventJoin({community}); return; }
     setJoiningCommunityId(community.id);
     setDetailError(null);
     setAccessMessage(null);
@@ -3770,6 +3771,10 @@ export function CommunitiesSection({
     setJoiningCommunityId(null);
 
     if (response.error) {
+      if (response.status === 422 && response.data?.eventNotice) {
+        setEventJoin({community,notice:response.data.eventNotice});
+        return;
+      }
       setAccessMessage(
         communityErrorMessage(response.error, "Не удалось вступить в сообщество"),
       );
@@ -3799,7 +3804,14 @@ export function CommunitiesSection({
     const response = eventJoin.community
       ? await apiAddCommunityMember(eventJoin.community.id, {member: currentMember, eventRegistration: registration})
       : await apiJoinCommunityByInvite({inviteCode: eventJoin.inviteCode, inviteLink: eventJoin.inviteLink, member: currentMember, eventRegistration: registration});
-    if (response.error) return response.status === 422 ? 'Проверьте ФИО, компанию и электронную почту.' : communityErrorMessage(response.error, 'Не удалось сохранить анкету. Повторите попытку.');
+    if (response.error) {
+      const freshNotice=response.data?.eventNotice;
+      if (response.status === 422 && freshNotice && (freshNotice.revision !== registration.policyRevision || freshNotice.retentionMode !== registration.retentionMode)) {
+        setEventJoin(current=>current ? {...current,notice:freshNotice} : current);
+        return 'Условия анкеты обновились. Проверьте срок хранения и отправьте анкету ещё раз.';
+      }
+      return response.status === 422 ? 'Проверьте ФИО, компанию и электронную почту.' : communityErrorMessage(response.error, 'Не удалось сохранить анкету. Повторите попытку.');
+    }
     applyActionResponse(response.data);
     if (response.data?.community) { setFocusedCommunityId(response.data.community.id); setSelectedCommunityId(response.data.community.id); }
     setEventJoin(null); setIsInviteOpen(false); setInviteValue('');
@@ -5227,8 +5239,8 @@ export function CommunitiesSection({
         ))}
       </div>
 
-      <Modal isOpen={!!eventJoin} onClose={() => setEventJoin(null)} title="Анкета участника мероприятия">
-        {eventJoin && <EventRegistrationForm notice={eventJoin.notice || parseEventNotice({policy:eventJoin.community?.typeSettings?.registrationPolicy,revision:eventJoin.community?.typeSettingsRevision})} onSubmit={handleEventRegistration} onCancel={() => setEventJoin(null)} />}
+      <Modal isOpen={!!eventJoin} onClose={() => setEventJoin(null)} title={eventJoin?.notice?.retentionMode === 'submitted-year-v1' ? 'Анкета участника сообщества' : 'Анкета участника мероприятия'}>
+        {eventJoin && <EventRegistrationForm notice={eventJoin.notice || (eventJoin.community?.id !== EXHIBITION_COMMUNITY_ID ? parseEventNotice({policy:eventJoin.community?.typeSettings?.registrationPolicy,revision:eventJoin.community?.typeSettingsRevision}) : undefined)} onSubmit={handleEventRegistration} onCancel={() => setEventJoin(null)} />}
       </Modal>
 
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Создать сообщество">
@@ -5637,7 +5649,7 @@ export function CommunitiesSection({
               </div>
             )}
 
-            {selectedCommunity.communityType === 'EVENT' && activeCommunityTab === 'FEED' && <EventCommunityPanel key={selectedCommunity.id} community={selectedCommunity} onRegister={() => setEventJoin({community:selectedCommunity})} />}
+            {selectedCommunity.communityType === 'EVENT' && activeCommunityTab === 'FEED' && <EventCommunityPanel key={selectedCommunity.id} community={selectedCommunity} onRegister={() => selectedCommunity.id === EXHIBITION_COMMUNITY_ID ? void handleJoinOpenCommunity(selectedCommunity) : setEventJoin({community:selectedCommunity})} />}
 
             {activeCommunityTab === "FEED" && (
               <>

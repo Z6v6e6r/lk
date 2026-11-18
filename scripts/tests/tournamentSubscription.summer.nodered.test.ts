@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { releaseAnnualClaim } from "../lib/annualClaimRelease.mjs";
 import { annualHistory } from "../lib/annualSubscriptionHistory.mjs";
 
 type NodeRedMsg = Record<string, unknown>;
@@ -5969,4 +5970,274 @@ test("the status prepare node accepts the friendship_two_hours counter and forwa
     { req: { query: { counterKey: "not_a_counter" } } },
   ) as unknown[];
   assert.equal(asRecord(unsupported[1]).statusCode, 400);
+});
+
+// Cross-path regressions: scheduled local inventory release, then runtime
+// provider confirmation. All DB/provider messages are intercepted synthetic plans.
+const releasedRuntimeSource = fs.readFileSync('scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js', 'utf8');
+const runReleasedRuntime = (msg: NodeRedMsg, globalValues: GlobalValues = {}) => {
+  const warnings: Array<Record<string, unknown>> = [];
+  const result = new Function('msg', 'node', 'global', 'env', releasedRuntimeSource)(msg,
+    { warn: (value: string) => warnings.push(JSON.parse(value)) }, { get: (key: string) => globalValues[key] }, { get() {} });
+  return { result, warnings };
+};
+function releasedRuntimeFixture(nextStatus = 'PAYMENT_PENDING', reconcile = true) {
+  const initial = JSON.parse(fs.readFileSync('scripts/tests/fixtures/annualHubLedger.networkFriendshipEpoch.json', 'utf8'));
+  const reservation = initial.reservations.find((r: any) => r.state === 'PAYMENT_PENDING');
+  const released = releaseAnnualClaim(initial, { paymentRef: reservation.paymentRef, now: '2026-09-11T19:00:00.000Z' });
+  assert.equal(released.ok, true);
+  const sale = { ...structuredClone(reservation.saleRecord),
+    _id: `hub-sale:${initial.inventoryId}:${reservation.paymentRef}`,
+    transactionId: reservation.transactionId, dispatchGeneration: reservation.dispatchGeneration,
+    status: 'PAYMENT_PENDING', paymentUrl: 'https://checkout.example.test/fixture',
+    paymentPolling: { status: 'FAILED', reason: 'PAYMENT_LINK_EXPIRED', checks: 10,
+      nextCheckAt: '2026-09-12T00:00:00.000Z' } };
+  const ctx = { ...structuredClone(sale), action: 'confirm', step: 'piter_confirm_result', reconcile,
+    expectedAmountMinor: sale.amountMinor,
+    providerMethod: 'GET', providerUrl: 'https://api.example.test/subscriptions', providerHeaders: {},
+    confirmResult: { nextStatus, reconcile, transactionId: sale.transactionId, toPayMinor: sale.amountMinor,
+      paid: nextStatus === 'PAID', paymentUrl: sale.paymentUrl,
+      response: { ok: true, status: nextStatus, paymentUrl: sale.paymentUrl, nested: { checkout: sale.paymentUrl } } } };
+  return { ledger: released.next, sale, ctx, initial };
+}
+function releasedRuntimeValidate(f: ReturnType<typeof releasedRuntimeFixture>) {
+  const a = runReleasedRuntime({ _summerSubscriptionCtx: f.ctx });
+  assert.deepEqual(a.warnings, []);
+  assert.equal(a.result[0]._summerSubscriptionCtx.step, 'piter_confirm_validate');
+  const b = runReleasedRuntime({ ...a.result[0], payload: [f.ledger] });
+  assert.deepEqual(b.warnings, []);
+  assert.equal(b.result[0]._summerSubscriptionCtx.step, 'piter_released_sale_validate');
+  const c = runReleasedRuntime({ ...b.result[0], payload: [f.sale] });
+  assert.deepEqual(c.warnings, []);
+  assert.equal(c.result[0]._summerSubscriptionCtx.step, 'piter_confirm_validate');
+  return runReleasedRuntime({ ...c.result[0], payload: [f.ledger] });
+}
+const releasedExactAck = () => ({ acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null });
+const releasedNoMatch = () => ({ acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 0, upsertedId: null });
+function releasedApplyLedgerPlan(ledger: any, msg: any) {
+  const next = structuredClone(ledger), [filter, update] = msg.payload;
+  assert.equal(filter.revision, next.revision);
+  const wanted = filter.reservations.$elemMatch;
+  const r = next.reservations.find((r: any) => r.paymentRef === wanted.paymentRef);
+  assert.ok(wanted.state.$in.includes(r.state));
+  assert.equal(wanted.releaseReason, r.releaseReason); assert.equal(wanted.releasedAt, r.releasedAt);
+  for (const [key, value] of Object.entries(update.$set)) {
+    if (key.startsWith('reservations.$.')) r[key.slice('reservations.$.'.length)] = value;
+    else next[key] = value;
+  }
+  for (const [key, value] of Object.entries(update.$inc)) next[key] += Number(value);
+  assert.equal(annualHistory.validate(next), true);
+  return next;
+}
+
+test('released HUB pending/failed projects inventory receipt without changing counters or recovery polling', () => {
+  for (const status of ['PAYMENT_PENDING', 'FAILED']) {
+    const f = releasedRuntimeFixture(status), before = structuredClone(f.ledger);
+    const out = releasedRuntimeValidate(f);
+    assert.deepEqual(out.warnings, []); assert.equal(out.result[1], null); assert.equal(out.result[4], null);
+    const write = out.result[2], [filter, update, options] = write.payload;
+    assert.equal(options.upsert, false); assert.equal(filter.transactionId, f.sale.transactionId);
+    assert.equal(filter.amountMinor, f.sale.amountMinor); assert.equal(filter.inventoryLedgerSchemaVersion, 3);
+    assert.deepEqual(filter.counterEpoch, f.sale.counterEpoch);
+    assert.ok(!filter.status.$in.includes('PAID')); assert.ok(!filter.status.$in.includes('PAID_PENDING_INSTANCE_BINDING'));
+    assert.ok(!filter.status.$in.includes('REFUNDED'));
+    if (status === 'PAYMENT_PENDING') assert.ok(!filter.status.$in.includes('FAILED'));
+    assert.equal(update.$set.status, status); assert.equal(update.$set.paymentUrl, null);
+    assert.deepEqual(Object.keys(update).sort(), ['$set']);
+    assert.equal(update.$set.paymentPolling, undefined);
+    const projected = { ...f.sale, ...update.$set };
+    assert.deepEqual(projected.paymentPolling, f.sale.paymentPolling);
+    assert.equal(projected.localInventoryRelease.reason, 'REPAIR_STALE_LOCAL_RESERVATION_PROVIDER_NON_TERMINAL');
+    assert.deepEqual(f.ledger, before);
+    assert.deepEqual(runReleasedRuntime({ ...write, payload: releasedExactAck() }).result, [null, null, null, null, null]);
+    // An uncertain projection ACK must prove the receipt and hidden checkout URL.
+    const read = runReleasedRuntime({ ...write, payload: releasedNoMatch() }).result[0];
+    assert.equal(read._summerSubscriptionCtx.step, 'piter_confirm_sale_readback');
+    assert.deepEqual(runReleasedRuntime({ ...read, payload: [projected] }).result, [null, null, null, null, null]);
+    const bad = { ...projected }; delete bad.localInventoryRelease;
+    assert.equal(runReleasedRuntime({ ...read, payload: [bad] }).warnings[0].code, 'PITER_CONFIRM_SALE_NOT_DURABLE');
+  }
+});
+
+test('released HUB late PAID accounts money once and retains managed-instance verification after ACK/readback', () => {
+  for (const previousDay of [false, true]) {
+    const f = releasedRuntimeFixture('PAID');
+    if (previousDay) {
+      f.ledger.dailyDate = '2026-09-12';
+      Object.assign(f.ledger, annualHistory.counts(f.ledger, f.ledger.dailyDate));
+    }
+    const out = releasedRuntimeValidate(f), write = out.result[1];
+    assert.deepEqual(out.warnings, []); assert.equal(out.result[2], null); assert.equal(out.result[4], null);
+    const [filter, update] = write.payload;
+    assert.deepEqual(update.$inc, { revision: 1, takenCount: 1, paidCount: 1, ...(previousDay ? {} : { dailyPaidCount: 1 }) });
+    assert.deepEqual(filter.reservations.$elemMatch.state, { $in: ['FAILED'] });
+    const paid = releasedApplyLedgerPlan(f.ledger, write);
+    assert.equal(paid.reservedCount, f.ledger.reservedCount); assert.equal(paid.takenCount, f.ledger.takenCount + 1);
+    const r = paid.reservations.find((r: any) => r.paymentRef === f.sale.paymentRef);
+    assert.ok(r.releasedAt); assert.ok(r.releaseReason); assert.equal(r.state, 'PAID');
+    for (const ack of [releasedExactAck(), releasedNoMatch()]) {
+      let next = runReleasedRuntime({ ...structuredClone(write), payload: ack });
+      if (next.result[0]) next = runReleasedRuntime({ ...next.result[0], payload: [paid] });
+      assert.equal(next.result[1], null); assert.equal(next.result[2], null);
+      assert.equal(next.result[4].method, 'GET');
+      assert.equal(next.result[4]._summerSubscriptionCtx.step, 'managed_sale_instance_readback');
+    }
+    // A fresh repeated PAID observation never emits another counter increment.
+    const retry = releasedRuntimeFixture('PAID'); retry.ledger = paid;
+    const replay = releasedRuntimeValidate(retry);
+    assert.equal(replay.result[1], null); assert.equal(replay.result[0]._summerSubscriptionCtx.step, 'piter_confirm_replay_find');
+    const done = runReleasedRuntime({ ...replay.result[0], payload: [paid] });
+    assert.equal(done.result[1], null); assert.equal(done.result[4].method, 'GET');
+  }
+});
+
+test('released HUB CAS loser cannot project a payment or bypass identity readback', () => {
+  const f = releasedRuntimeFixture('PAID'), write = releasedRuntimeValidate(f).result[1];
+  const read = runReleasedRuntime({ ...write, payload: releasedNoMatch() }).result[0];
+  const unchanged = runReleasedRuntime({ ...read, payload: [f.ledger] });
+  assert.deepEqual(unchanged.result, [null, null, null, null, null]);
+  assert.equal(unchanged.warnings[0].code, 'PITER_CONFIRM_LEDGER_NOT_DURABLE');
+  const paid = releasedApplyLedgerPlan(f.ledger, write);
+  paid.reservations.find((r: any) => r.paymentRef === f.sale.paymentRef).releasedAt = '2026-09-11T20:00:00.000Z';
+  assert.equal(runReleasedRuntime({ ...read, payload: [paid] }).warnings[0].code, 'HUB_RELEASE_RECEIPT_CHANGED');
+});
+
+test('released HUB rejects absent/tampered markers and frozen identity/schema/epoch drift', () => {
+  const changes: Array<(f: ReturnType<typeof releasedRuntimeFixture>) => void> = [
+    f => { delete f.ledger.reservations.find((r: any) => r.paymentRef === f.sale.paymentRef).releaseReason; },
+    f => { f.ledger.reservations.find((r: any) => r.paymentRef === f.sale.paymentRef).releaseReason = 'OTHER'; },
+    f => { f.ledger.reservations.find((r: any) => r.paymentRef === f.sale.paymentRef).releasedAt = 'not-a-date'; },
+    f => { f.ledger.reservations.find((r: any) => r.paymentRef === f.sale.paymentRef).releasedAt = '2026-09-11T17:00:00.000Z'; },
+    f => { f.ledger.reservations.find((r: any) => r.paymentRef === f.sale.paymentRef).releasedAt = '2099-01-01T00:00:00.000Z'; },
+    f => { f.ctx.requestFingerprint = 'fixture-other'; },
+    f => { f.ctx.dispatchGeneration++; },
+    f => { f.ctx.transactionId = 'fixture-other'; },
+    f => { f.ctx.expectedAmountMinor++; },
+    f => { f.ctx.inventoryLedgerSchemaVersion = 1; },
+    f => { f.ctx.counterEpoch = { ...f.ctx.counterEpoch, startedAt: '2026-09-10T01:00:00.000Z' }; },
+  ];
+  for (const change of changes) {
+    const f = releasedRuntimeFixture('PAID'); change(f); f.ctx.step = 'piter_confirm_validate';
+    const out = runReleasedRuntime({ payload: [f.ledger], _summerSubscriptionCtx: f.ctx });
+    assert.deepEqual(out.result, [null, null, null, null, null]); assert.equal(out.warnings.length, 1);
+  }
+  for (const status of ['PAID', 'PAYMENT_PENDING', 'FAILED']) {
+    const f = releasedRuntimeFixture(status); f.sale.status = 'REFUNDED';
+    f.ctx.step = 'piter_confirm_validate';
+    const read = runReleasedRuntime({ payload: [f.ledger], _summerSubscriptionCtx: f.ctx }).result[0];
+    const out = runReleasedRuntime({ ...read, payload: [f.sale] });
+    assert.equal(out.warnings[0].code, 'HUB_RELEASED_SALE_CONFLICT');
+    assert.deepEqual(out.result, [null, null, null, null, null]);
+  }
+});
+
+test('released HUB foreground response waits for sale durability and late paid projection retains release proof', () => {
+  const f = releasedRuntimeFixture('PAYMENT_PENDING', false);
+  const write = releasedRuntimeValidate(f).result[2];
+  const done = runReleasedRuntime({ ...write, payload: releasedExactAck() });
+  assert.equal(done.result[3].statusCode, 200); assert.equal(done.result[3].payload.status, 'FAILED');
+  assert.equal(done.result[3].payload.paymentUrl, null); assert.equal(done.result[3].payload.archived, true);
+  const paid = releasedRuntimeFixture('PAID'); const lateWrite = releasedRuntimeValidate(paid).result[1];
+  const ctx = lateWrite._summerSubscriptionCtx;
+  ctx.step = 'managed_sale_projection_start';
+  ctx.managedSaleProjection = { statusCode: 200, response: { ok: true, status: 'PAID' }, set: { status: 'PAID' } };
+  const projection = runReleasedRuntime({ _summerSubscriptionCtx: ctx }).result[1];
+  assert.deepEqual(projection.payload[1].$set.localInventoryRelease, ctx.localInventoryRelease);
+  assert.ok(!projection.payload[0].status.$in.includes('REFUNDED'));
+  assert.equal(projection.payload[0].transactionId, paid.sale.transactionId);
+});
+
+
+test('released HUB source successor is exact and preserves the frozen predecessor and all unrelated flow nodes', async () => {
+  const { patchStaleAnnualRelease } = await import('../patch_stale_annual_release.mjs');
+  const { execFileSync } = await import('node:child_process');
+  const source = execFileSync('git', ['show', '45a287a63c595ba86cf19a999e177f4780f80f49:scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js'], { encoding: 'utf8' });
+  const node = { id: 'piter_atomic_router_20260903', type: 'function', func: source, outputs: 5,
+    wires: [['piter_ledger_find_20260903'], ['piter_ledger_update_20260903'], ['piter_sale_update_20260903'], ['10fe94a32b8adc35'], ['fdc3f25f39199546']] };
+  const flow = [node, { id: 'fixture-unrelated', type: 'function', func: 'return msg;', wires: [[]] }];
+  const before = structuredClone(flow), changed = patchStaleAnnualRelease(flow);
+  assert.deepEqual(flow, before); assert.deepEqual(changed[1], flow[1]);
+  assert.deepEqual({ ...changed[0], func: source }, node);
+  assert.equal(changed[0].func, releasedRuntimeSource);
+  for (const mutate of [
+    (f: any[]) => f.push({ ...f[0] }),
+    (f: any[]) => { f[0].func += '// drift'; },
+    (f: any[]) => { f[0].wires[1] = []; },
+    (f: any[]) => { f[0].type = 'http request'; },
+  ]) {
+    const invalid = structuredClone(flow); mutate(invalid); const snapshot = structuredClone(invalid);
+    assert.throws(() => patchStaleAnnualRelease(invalid)); assert.deepEqual(invalid, snapshot);
+  }
+  assert.throws(() => patchStaleAnnualRelease(changed), /STALE_RELEASE_PREIMAGE_CHANGED/);
+});
+
+
+test('released HUB failed foreground never revives cached checkout and stale binding never downgrades paid/refunded', () => {
+  const f = releasedRuntimeFixture('FAILED', false);
+  const write = releasedRuntimeValidate(f).result[2];
+  const done = runReleasedRuntime({ ...write, payload: releasedExactAck() });
+  assert.equal(done.result[3].payload.paymentUrl, null);
+  assert.equal(JSON.stringify(done.result[3].payload).includes('checkout.example.test'), false);
+  for (const withRelease of [true, false]) {
+    const paid = releasedRuntimeFixture('PAID'); const lateWrite = releasedRuntimeValidate(paid).result[1];
+    const ctx = lateWrite._summerSubscriptionCtx;
+    if (!withRelease) delete ctx.localInventoryRelease;
+    ctx.step = 'managed_sale_projection_start';
+    ctx.managedSaleProjection = { statusCode: 202, response: { status: 'PENDING_INSTANCE_BINDING' }, set: { status: 'PAID_PENDING_INSTANCE_BINDING' } };
+    const projection = runReleasedRuntime({ _summerSubscriptionCtx: ctx }).result[1];
+    const filter = projection.payload[0].status;
+    if (filter.$in) assert.ok(!filter.$in.includes('PAID') && !filter.$in.includes('REFUNDED'));
+    else assert.deepEqual(filter.$nin, ['REFUNDED', 'PAID']);
+    const read = runReleasedRuntime({ ...projection, payload: releasedNoMatch() }).result[0];
+    const out = runReleasedRuntime({ ...read, payload: [{ status: 'PAID' }] });
+    assert.deepEqual(out.result, [null, null, null, null, null]);
+    assert.equal(out.warnings[0].code, 'MANAGED_SALE_PROJECTION_NOT_DURABLE');
+  }
+});
+
+test('released HUB real Mongo CAS, late paid over-cap, stale projection and duplicate receipt are safe', {
+  skip: !process.env.STALE_RELEASE_TEST_MONGO_URI,
+}, async () => {
+  const uri = process.env.STALE_RELEASE_TEST_MONGO_URI!;
+  assert.match(uri, /^mongodb:\/\/127\.0\.0\.1:\d+\/?$/, 'only an isolated localhost Mongo is permitted');
+  const { MongoClient } = await import('mongodb');
+  const { randomUUID } = await import('node:crypto');
+  const client = new MongoClient(uri, { serverSelectionTimeoutMS: 5000 });
+  await client.connect();
+  const db = client.db('stale_release_test_' + randomUUID().replaceAll('-', ''));
+  try {
+    const collection = db.collection('sales');
+    const f = releasedRuntimeFixture('PAID');
+    await collection.insertMany([structuredClone(f.ledger), structuredClone(f.sale)]);
+    const stale = releasedRuntimeFixture();
+    const staleWrite = releasedRuntimeValidate(stale).result[2];
+    const paidWrite = releasedRuntimeValidate(f).result[1];
+    const results = await Promise.all(Array.from({ length: 8 }, () => collection.updateOne(...paidWrite.payload)));
+    assert.equal(results.filter(r => r.modifiedCount === 1).length, 1);
+    const final = await collection.findOne({ _id: f.ledger._id });
+    assert.equal(final!.paidCount, f.ledger.paidCount + 1); assert.equal(final!.reservedCount, f.ledger.reservedCount);
+    assert.equal(final!.takenCount, f.ledger.takenCount + 1); assert.equal(annualHistory.validate(final), true);
+    // A local receipt can be retried without changing polling cadence or counters.
+    assert.equal((await collection.updateOne(...staleWrite.payload)).matchedCount, 1);
+    assert.equal((await collection.updateOne(...staleWrite.payload)).matchedCount, 1);
+    const saved = await collection.findOne({ _id: f.sale._id });
+    assert.deepEqual(saved!.paymentPolling, f.sale.paymentPolling);
+    await collection.updateOne({ _id: f.sale._id }, { $set: { status: 'PAID' } });
+    assert.equal((await collection.updateOne(...staleWrite.payload)).matchedCount, 0);
+    assert.equal((await collection.findOne({ _id: f.sale._id }))!.status, 'PAID');
+    // Already paid money is counted even when a replacement consumed capacity;
+    // normal admission must then stop new purchases rather than discard that fact.
+    const ctx = { ...structuredClone(f.ctx), step: 'piter_ledger_find', action: 'purchase',
+      paymentRef: 'fixture-new-sale', requestFingerprint: 'fixture-new-fingerprint',
+      ledger: final, totalLimit: f.ledger.takenCount, dailyLimit: 1 };
+    assert.ok(final!.takenCount > ctx.totalLimit);
+    const globals = { summer_subscription_hub_lk1_sales_enabled: true, summer_subscription_sales_20260909_enabled: true,
+      subscriptions_lk1_product_policy: ctx.hubLk1Sale.policy, subscriptions_lk1_hub_sale_runtime: ctx.hubLk1Sale,
+      subscription_counter_epoch_started_at: ctx.counterEpoch.startedAt };
+    const denied = runReleasedRuntime({ _summerSubscriptionCtx: ctx, payload: [final] }, globals);
+    assert.equal(denied.warnings[0].code, 'PITER_INVENTORY_EXHAUSTED');
+    const dailyCtx = { ...ctx, totalLimit: final!.takenCount + 10, dailyLimit: Math.max(1, final!.dailyPaidCount) };
+    const dailyDenied = runReleasedRuntime({ _summerSubscriptionCtx: dailyCtx, payload: [final] }, globals);
+    assert.equal(dailyDenied.warnings[0].code, 'HUB_DAILY_INVENTORY_EXHAUSTED');
+  } finally { await db.dropDatabase(); await client.close(); }
 });

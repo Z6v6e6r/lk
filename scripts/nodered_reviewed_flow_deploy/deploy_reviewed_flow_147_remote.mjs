@@ -412,6 +412,10 @@ export function createReviewedFlowRuntime({
   };
 
   const apply = (options) => {
+    const failureRecovery = options.failureRecovery ?? "restore-source";
+    if (!["restore-source", "retain-candidate"].includes(failureRecovery)) {
+      throw new Error("Invalid apply failure recovery policy");
+    }
     const stamp = safeTimestamp(options.stamp);
     // A v3 editor lease is a custody boundary; reject it before inspecting any
     // ordinary candidate or reaching a path that could later publish/restart.
@@ -472,6 +476,20 @@ export function createReviewedFlowRuntime({
         deploymentLeaseSeconds: deploymentLeaseMs / 1000,
       };
     } catch (error) {
+      if (failureRecovery === "retain-candidate") {
+        // New durable effects can exist as soon as the candidate starts. Keep
+        // forward-compatible source and non-expiring custody even if rename
+        // succeeded but publication fsync or the restart acknowledgement failed.
+        let retainedSha256 = "UNVERIFIED";
+        let leaseState = "RETAINED";
+        try {
+          assertProtectedFileModes(liveFlowPath, { uid, gid, modes: [0o600, 0o644] });
+          retainedSha256 = sha256(fs.readFileSync(liveFlowPath));
+        } catch { /* Unknown bytes are never permission to restore old source. */ }
+        try { deploymentLease = refreshDeploymentLease(deploymentLease, prepared.contract, "applying"); }
+        catch { leaseState = "REFRESH_UNVERIFIED"; }
+        throw new Error(`Candidate deployment requires forward recovery; source rollback disabled; retainedSha256=${retainedSha256}; restartAttempted=${restartAttempted}; runtime=UNVERIFIED; lease=${leaseState}: ${error.message}`);
+      }
       let rollbackComplete = false;
       try {
         // rename may have published the candidate even when its directory fsync
@@ -1384,7 +1402,7 @@ export function main() {
   const result = action === "preflight"
     ? runtime.preflight(common)
     : action === "apply"
-      ? runtime.apply({ ...common, stamp: getArg("--stamp") })
+      ? runtime.apply({ ...common, stamp: getArg("--stamp"), failureRecovery: getArg("--failure-recovery") ?? undefined })
       : action === "rollback"
         ? runtime.rollback({
           deploymentId: common.deploymentId,

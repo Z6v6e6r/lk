@@ -6,9 +6,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { patchVskTournamentEvaluator } from '../lib/vskTournamentDiscount.mjs';
 
 const EVALUATOR_FILE = new URL('../nodered_lk1_hub_nodes/evaluator.js', import.meta.url);
-const evaluatorSource = fs.readFileSync(EVALUATOR_FILE, 'utf8');
+const evaluatorSource = patchVskTournamentEvaluator(fs.readFileSync(EVALUATOR_FILE, 'utf8'));
 
 const HUB_PRODUCT_ID = 'db7a5250-7369-4f43-8ac5-9111be24bc74';
 // A plan product (РА) the evaluator must treat exactly like any other UUID.
@@ -304,4 +305,32 @@ test('the free-first rule stays outside the game path', () => {
   assert.equal(decision.benefit.kind, 'FREE_ENTITLEMENT');
   assert.equal(decision.subscriptionVisitCount, 1);
   assert.equal(decision.benefit.finalPriceMinor, 0);
+});
+
+const vskTournamentTarget = { category: 'TOURNAMENT',
+  eventId: '732d1932-4133-48c3-aed4-5ad1abf94e79',
+  externalEventTypeId: 'viva:direction:6977:type:2349', basePriceMinor: 550000 };
+test('VSK tournament always grants the included 50% monetary benefit without a visit', () => {
+  for (const usedEventsToday of [0, 1]) {
+    const decision = evaluate(lk1Input({ target: vskTournamentTarget,
+      usage: { freeFirstEvent: { covered: true, usedEventsToday, visitsLeft: 30 } } })).decision;
+    assert.equal(decision.eligible, true);
+    assert.equal(decision.subscriptionVisitCount, 0);
+    assert.equal(decision.eventDiscountPercent, 50);
+    assert.equal(decision.benefit.finalPriceMinor, 275000);
+  }
+});
+test('VSK monetary exception does not widen policy, binding or other tournament scope', () => {
+  assert.equal(evaluate(lk1Input({ target: vskTournamentTarget,
+    rule: { tournamentDiscountPercent: 0 } })).decision.eligible, false);
+  assert.equal(evaluate(lk1Input({ target: vskTournamentTarget,
+    binding: { policyProductId: PLAN_PRODUCT_ID, ownedProductId: HUB_PRODUCT_ID,
+      clientSubscriptionId: 'fixture:owned-sub' } })).decision.eligible, false);
+  for (const target of [{ ...vskTournamentTarget, eventId: 'another-event' },
+    { ...vskTournamentTarget, externalEventTypeId: 'viva:direction:6306:type:2349' }]) {
+    const decision = evaluate(lk1Input({ target,
+      usage: { freeFirstEvent: { covered: true, usedEventsToday: 0, visitsLeft: 30 } } })).decision;
+    assert.equal(decision.subscriptionVisitCount, 1);
+    assert.equal(decision.benefit.finalPriceMinor, 0);
+  }
 });

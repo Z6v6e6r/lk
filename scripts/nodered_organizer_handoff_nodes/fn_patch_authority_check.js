@@ -16,8 +16,14 @@ if (Object.prototype.hasOwnProperty.call(body, "metadata")) {
     else delete body.metadata[key];
   }
 }
+if (Object.prototype.hasOwnProperty.call(body, "expectedUpdatedAt")
+  && body.expectedUpdatedAt !== (game.updatedAt ?? null)) {
+  msg.statusCode = 409;
+  msg.payload = { code: "GAME_PATCH_VERSION_CONFLICT", error: "Игра уже изменилась. Обновите данные" };
+  return [null, msg];
+}
 if (body.resultRosterSnapshot) body.resultRosterSnapshot.organizer = game.organizer;
-msg._organizerGuardSnapshot = { updatedAt: game.updatedAt, organizer: game.organizer };
+msg._organizerGuardSnapshot = { updatedAt: game.updatedAt, organizer: game.organizer, privateGame: game };
 msg.payload = body;
 delete msg._organizerGuardBody;
 return [msg, null];

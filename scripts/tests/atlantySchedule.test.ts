@@ -617,3 +617,13 @@ test("«N в ряд» из конфига не ломает мобильную �
   // Базовая (мобильная) ширина карточки остаётся за --atlanty-card-width.
   assert.match(cssSource, /\.atlanty-slide \{[\s\S]*?width: var\(--atlanty-card-width\)/);
 });
+
+
+test('unverified booking categories stay visible and cannot open any booking mode', async () => {
+  const { resolveAtlantyEventBookingMode } = await import('../../src/utils/atlantyScheduleModel.ts');
+  for (const mode of ['lk', 'viva']) {
+    assert.equal(resolveAtlantyEventBookingMode(mode, ['6975:1613', '6975:2349'], '6975:2349'), 'disabled');
+    assert.equal(resolveAtlantyEventBookingMode(mode, ['6975:1613', '6975:2349'], '5278:839'), mode);
+    assert.equal(resolveAtlantyEventBookingMode(mode, undefined, '6180:2349'), mode);
+  }
+});

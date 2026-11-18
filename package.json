@@ -149,6 +149,7 @@
     "test:runtime-config": "node --experimental-strip-types --test scripts/tests/overlayBundleUrl.test.ts scripts/tests/supportEventPayload.apiClient.test.ts",
     "test:recovery-audits": "node --test scripts/tests/recoveryAuditTools.test.mjs",
     "test:hung-claim-release": "node --test scripts/tests/hungClaimRelease.test.mjs",
+    "test:tournament-auto-finish": "node --experimental-strip-types --test scripts/tests/tournamentAutoFinish.test.mjs",
     "test:tournament-category": "node --experimental-strip-types --test scripts/tests/tournamentCategory.test.ts",
     "test:tff-community-backfill": "node --experimental-strip-types --test scripts/tests/timeForFriendsCommunityBackfill.test.mjs",
     "test:published-tournament-membership-plan": "node --test scripts/tests/publishedTournamentMembershipPlan.test.mjs",
@@ -195,7 +196,7 @@
     "test:viva-token-history-deploy": "node --test scripts/tests/vivaTokenHistoryDeploy.test.mjs",
     "test:tournament-prepare-recovery": "node --test scripts/tests/tournamentPrepareRecovery.test.mjs",
     "test:community-monthly": "node --experimental-strip-types --test scripts/tests/communityMonthly.test.ts scripts/tests/communityMonthlyFinalization.test.mjs scripts/tests/communityMonthlyReports.test.mjs",
-    "test:tournament-session": "node --experimental-strip-types --test scripts/tests/lkIdleDataGuard.test.ts scripts/tests/tournamentIdleSession.test.mjs scripts/tests/padelJumpIdleActivity.test.mjs",
+    "test:tournament-session": "node --experimental-strip-types --test scripts/tests/lkIdleDataGuard.test.ts scripts/tests/tournamentIdleSession.test.mjs scripts/tests/padelJumpIdleActivity.test.mjs scripts/tests/overlayLifecycle.test.mjs",
     "test:fpr-level-mongo": "node scripts/run_fpr_level_mongo_tests.mjs",
     "test:fpr-broadcast": "node --experimental-strip-types --test scripts/tests/tournamentBroadcast.test.ts scripts/tests/fprBroadcast.test.ts",
     "test:community-rating": "node --experimental-strip-types --test scripts/tests/communityRating.calculations.test.ts scripts/tests/communityRating.facts.test.ts scripts/tests/communityRating.aggregates.test.ts scripts/tests/communityRating.persistence.test.ts scripts/tests/communityRating.recalculation.test.ts scripts/tests/communityRating.noderedFlow.test.ts scripts/tests/communityPlayerRatingApi.nodered.test.ts scripts/tests/trainingVisitsSync.test.ts scripts/tests/communityMonthly.test.ts scripts/tests/communityMonthlyFinalization.test.mjs scripts/tests/communityMonthlyReports.test.mjs scripts/tests/communityRatingCalendarMonth.test.ts scripts/tests/communityRatingPeriodUi.test.ts scripts/tests/communityJumpRanking.test.mjs scripts/tests/fpr6x25.test.ts scripts/tests/fpr6x25.nodered.test.ts scripts/tests/fprManagerContinuity.test.mjs scripts/tests/fprEventIntegration.test.mjs scripts/tests/fprEngineUpgrade.test.mjs scripts/tests/fprCommunityLeague.test.ts scripts/tests/fprCommunityRating.test.ts scripts/tests/fprTournamentRating.test.ts scripts/tests/fprRatingReplay.test.ts scripts/tests/fprLevelLedger.test.mjs scripts/tests/fprLevelResults.test.ts scripts/tests/fprCanonicalStart.test.ts scripts/tests/fprCanonicalStart.nodered.test.mjs scripts/tests/fprCanonicalDryRun.test.mjs",
@@ -244,7 +245,7 @@
     "test:managed-subscription-dev-runtime": "node --experimental-strip-types --test scripts/tests/managedSubscriptionDevRuntime.test.ts scripts/tests/subscriptionUsageTestRoute.test.ts scripts/tests/subscriptionUsageTestBooking.test.ts scripts/tests/subscriptionUsageShadow.test.ts scripts/tests/subscriptionUsageShadowIntegration.test.ts",
     "test:atlanty-schedule": "node --experimental-strip-types --test scripts/tests/atlantySchedule.test.ts scripts/tests/atlantyTildaBlocks.test.ts scripts/tests/atlantyLkBookingWindow.test.ts",
     "test:padel-day": "node --experimental-strip-types --test scripts/tests/padelDaySchedule.test.ts scripts/tests/padelDay.nodered.test.ts scripts/tests/padelDay.deploy.test.ts",
-    "test:correlated-error-diagnostics": "node --test scripts/tests/correlatedErrorDiagnostics.test.mjs scripts/tests/clientErrorDiagnostics.test.mjs",
+    "test:correlated-error-diagnostics": "node --test scripts/tests/correlatedErrorDiagnostics.test.mjs scripts/tests/clientErrorDiagnostics.test.mjs scripts/tests/splitLeaveDiagnostics.test.mjs",
     "test:referral-subscription": "node --experimental-strip-types --test scripts/tests/referralSubscription.nodered.test.ts",
     "rating:recalculate": "node --experimental-strip-types scripts/recalculate_community_rating.mjs",
     "rating:recalculate:all": "node scripts/recalculate_community_rating_all.mjs",
@@ -279,7 +280,8 @@
     "test:lk1-pro-training-energy-exclusions-generation": "node --test scripts/tests/proTrainingEnergyExclusionHotfix.test.mjs",
     "build:jump-live": "node --experimental-strip-types scripts/build_padel_jump_live.mjs",
     "test:jump-live": "node --experimental-strip-types --test scripts/tests/padelJump*.test.ts scripts/tests/padelJump*.test.mjs scripts/tests/vivaOAuth.test.ts && python3 scripts/tests/padelJumpDeployment.test.py",
-    "test:fpr-canonical-start": "node --experimental-strip-types --test scripts/tests/fprCanonicalStart.test.ts scripts/tests/fprCanonicalStart.nodered.test.mjs scripts/tests/fprCanonicalDryRun.test.mjs"
+    "test:fpr-canonical-start": "node --experimental-strip-types --test scripts/tests/fprCanonicalStart.test.ts scripts/tests/fprCanonicalStart.nodered.test.mjs scripts/tests/fprCanonicalDryRun.test.mjs",
+    "test:support-photos": "node --experimental-strip-types --test scripts/tests/supportPhotos*.test.mjs scripts/tests/supportEventPayload.apiClient.test.ts"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",

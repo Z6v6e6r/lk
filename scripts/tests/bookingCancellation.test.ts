@@ -162,7 +162,7 @@ test("booking cancellation verification rejects an exact active row", () => {
   assert.equal(result.record?.id, "booking-2");
 });
 
-test("active booking wins over a conflicting cancelled history projection", () => {
+test("conflicting active and cancelled projections require reconciliation", () => {
   const result = resolveBookingCancellationVerification(
     "booking-race",
     [{
@@ -175,7 +175,8 @@ test("active booking wins over a conflicting cancelled history projection", () =
     }],
   );
 
-  assert.equal(result.state, "active");
+  assert.equal(result.state, "unverified");
+  assert.equal(result.reason, "CONFLICTING_EVIDENCE");
   assert.equal(result.record?.isCancelled, false);
 });
 

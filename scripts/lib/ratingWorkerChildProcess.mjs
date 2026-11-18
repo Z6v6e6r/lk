@@ -26,5 +26,9 @@ export function spawnRatingWorkerChild(args, options = {}) {
     maxBuffer: options.maxBuffer ?? 200 * 1024 * 1024,
     timeout: timeoutMs,
     killSignal: "SIGTERM",
+    // An orphaned mutating child must retain the lock if its runner dies.
+    ...(options.lockFd === undefined ? {} : {
+      stdio: ['pipe', 'pipe', 'pipe', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', options.lockFd],
+    }),
   });
 }

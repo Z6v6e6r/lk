@@ -2,12 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { execFileSync } from 'node:child_process';
 import { composeMonthlyFriendshipCustody, monthlyFriendshipIds as ids } from '../compose_monthly_friendship_custody.mjs';
 import { monthlyFriendshipSource } from '../lib/monthlyFriendshipSource.mjs';
 const read = name => fs.readFileSync(new URL('../nodered_games_nodes/fn_tournament_subscription_' + name + '.js', import.meta.url), 'utf8');
+// The source-only composer retains its reviewed preimage. Current annual-runtime
+// successors must not silently widen this independent monthly release contract.
+const frozenAtomic = execFileSync('git', ['show', '45a287a63c595ba86cf19a999e177f4780f80f49:scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js'], { encoding: 'utf8' });
+const frozenPurchaseRouter = execFileSync('git', ['show', 'f166b3cb74459e68dc0322304fab3c0b5f61f9c7:scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js'], { encoding: 'utf8' });
 const fixture = () => {
   const z = 'fixture-subscriptions', fn = (name, outputs, wires) => ({ id: ids[name], type: 'function', z, outputs, wires,
-    func: read(name === 'atomic' ? 'piter_atomic_router' : name), name: 'fixture-' + name });
+    func: name === 'atomic' ? frozenAtomic : name === 'purchase_router' ? frozenPurchaseRouter : read(name), name: 'fixture-' + name });
   return [
     { id: z, type: 'tab', label: 'Fixture subscriptions' },
     fn('status_response', 3, [[ids.response],[],[]]), fn('purchase_limit', 3, [[ids.http],[ids.response],[]]),
@@ -65,4 +70,21 @@ test('installing monthly custody preserves old non-custody PAID confirmation out
   const before = original(structuredClone(input), global), after = composed(structuredClone(input), global);
   assert.equal(after[4], undefined); assert.ok(after[1]); assert.equal(after[2].payload.status, 'PAID');
   assert.equal(JSON.stringify(after), JSON.stringify(before));
+});
+
+
+test('frozen monthly custody composer refuses the new annual release successor', () => {
+  const flow = fixture();
+  flow.find(n => n.id === ids.atomic).func = read('piter_atomic_router');
+  const before = structuredClone(flow);
+  assert.throws(() => compose(flow), /MONTHLY_SOURCE_PREIMAGE_DRIFT:atomic/);
+  assert.deepEqual(flow, before);
+});
+
+test('frozen monthly custody composer refuses the unbound diagnostic successor', () => {
+  const flow = fixture();
+  flow.find(n => n.id === ids.purchase_router).func = read('purchase_router');
+  const before = structuredClone(flow);
+  assert.throws(() => compose(flow), /MONTHLY_SOURCE_PREIMAGE_DRIFT:purchase_router/);
+  assert.deepEqual(flow, before);
 });

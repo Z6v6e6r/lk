@@ -3,6 +3,7 @@ import { recoverStationMessageOutbox } from './lib/stationMessageOwner.mjs';
 import { processCommunityPolicies } from './lib/communityPolicyProjection.mjs';
 import { readFprLevelActivation, loadFprLevelContext, processFprLevelLedger, processFprProjectionOutbox } from './lib/fprLevelLedger.mjs';
 import { readFprLevelIdentityHistory } from "./lib/fprLevelIdentity.mjs";
+import { withRatingDataLock } from "./lib/ratingDataLock.mjs";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -1127,7 +1128,7 @@ async function recalculateCommunities(db, communityIds, nowIso, dryRun) {
   };
 }
 
-async function processProjectionOutbox(db, projectionUrl, nowIso, dryRun) {
+async function processProjectionOutbox(db, projectionUrl, nowIso, dryRun, withRowLock = work => work()) {
   const rows = await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).find({
     fprProjection: { $ne: true },
     status: { $in: ["PENDING", "FAILED_RETRYABLE"] },
@@ -1136,7 +1137,12 @@ async function processProjectionOutbox(db, projectionUrl, nowIso, dryRun) {
   }).sort({ createdAt: 1 }).limit(100).toArray();
   const result = { scanned: rows.length, synced: 0, failed: 0 };
   if (dryRun) return result;
-  for (const row of rows) {
+  for (const candidate of rows) await withRowLock(async () => {
+    // A roster bootstrap may have superseded this row while another was sent.
+    const row = await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).findOne({
+      _id: candidate._id, status: { $in: ["PENDING", "FAILED_RETRYABLE"] },
+    });
+    if (!row) return;
     const attemptAt = new Date().toISOString();
     try {
       const response = await fetch(projectionUrl, {
@@ -1159,7 +1165,7 @@ async function processProjectionOutbox(db, projectionUrl, nowIso, dryRun) {
       );
       result.failed += 1;
     }
-  }
+  });
   return result;
 }
 
@@ -1195,6 +1201,7 @@ async function runWorker() {
   const mongoUri = getArg("--mongo-uri", process.env.MONGO_URI || process.env.MONGODB_URI);
   const dbName = getArg("--db", process.env.MONGO_DB || "games");
   const dryRun = hasFlag("--dry-run");
+  const withDataLock = dryRun ? work => work() : withRatingDataLock;
   const outPath = getArg("--out");
   const projectionUrl = getArg("--projection-url", process.env.RATING_PROJECTION_URL || "http://127.0.0.1:1880/lk/onboarding/level");
   const tffAutoEnrollmentEnabled = String(process.env.TFF_AUTO_ENROLLMENT_ENABLED || "").trim().toLowerCase() === "true";
@@ -1251,15 +1258,18 @@ async function runWorker() {
       });
     }
     const fprConfig = readFprLevelActivation();
-    const fprContext = await loadFprLevelContext(db, fprConfig);
-    const ledger = await processTournamentLedger(db, {
-      sinceIso: mode === "full" ? notBeforeIso : overlapStart,
-      notBeforeIso,
-      nowIso: startedAt,
-      dryRun,
-      excludedTournamentIds: fprContext.protectedIds,
+    const { ledger, fprLedger } = await withDataLock(async () => {
+      const fprContext = await loadFprLevelContext(db, fprConfig);
+      const ledger = await processTournamentLedger(db, {
+        sinceIso: mode === "full" ? notBeforeIso : overlapStart,
+        notBeforeIso,
+        nowIso: startedAt,
+        dryRun,
+        excludedTournamentIds: fprContext.protectedIds,
+      });
+      const fprLedger = await processFprLevelLedger(db, client, { context: fprContext, config: fprConfig, nowIso: startedAt, dryRun });
+      return { ledger, fprLedger };
     });
-    const fprLedger = await processFprLevelLedger(db, client, { context: fprContext, config: fprConfig, nowIso: startedAt, dryRun });
     const communityPolicies = await processCommunityPolicies(db, { sinceIso: mode === 'full' ? notBeforeIso : overlapStart, nowIso: startedAt, dryRun });
     const stationMessages = await recoverStationMessageOutbox(db, { dryRun, maxCommunities: 50, maxMessages: 100, deadlineMs: 10000 });
     const timeForFriendsEnrollment = await processTimeForFriendsAutoEnrollments(db, {
@@ -1271,10 +1281,13 @@ async function runWorker() {
       providerRosterEnabled: tffProviderRosterEnabled,
       providerRosterMaxFetches: tffProviderRosterMaxFetches,
     });
-    const eventProjection = await projectChangedLedgerPlayers(db, overlapStart, startedAt, dryRun);
-    const compatibilityReconciliation = mode === "full"
-      ? await reconcileCompatibilityProjection(db, startedAt, dryRun)
-      : { scanned: 0, changed: 0, skipped: true };
+    const { eventProjection, compatibilityReconciliation } = await withDataLock(async () => {
+      const eventProjection = await projectChangedLedgerPlayers(db, overlapStart, startedAt, dryRun);
+      const compatibilityReconciliation = mode === "full"
+        ? await reconcileCompatibilityProjection(db, startedAt, dryRun)
+        : { scanned: 0, changed: 0, skipped: true };
+      return { eventProjection, compatibilityReconciliation };
+    });
     const communityRatingMonthStartTs = getCommunityRatingMonthStartTs(Date.parse(startedAt));
     const communityIds = await resolveRatingWorkerCommunityIds(db, {
       mode, sinceIso: overlapStart, registry, nowTs: Date.parse(startedAt),
@@ -1284,8 +1297,8 @@ async function runWorker() {
     const uniqueCommunityIds = unique(communityIds);
     const community = await recalculateCommunities(db, uniqueCommunityIds, startedAt, dryRun);
     const fprVivaProjection = fprConfig.dispatchEnabled
-      ? await processFprProjectionOutbox(db, projectionUrl, startedAt, dryRun) : { enabled: false };
-    const vivaProjection = await processProjectionOutbox(db, projectionUrl, startedAt, dryRun);
+      ? await processFprProjectionOutbox(db, projectionUrl, startedAt, dryRun, withDataLock) : { enabled: false };
+    const vivaProjection = await processProjectionOutbox(db, projectionUrl, startedAt, dryRun, withDataLock);
     const finishedAt = new Date().toISOString();
     const summary = {
       ok: true,

@@ -122,11 +122,15 @@ if (fprBody.tournamentType === "fpr_6x25") {
     const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
       ? Object.fromEntries(Object.keys(value).sort().map(key => [key,stable(value[key])])) : value;
     if (JSON.stringify(stable(state)) !== JSON.stringify(stable(input))) throw new Error("FPR_INITIAL_PROTOCOL_MISMATCH");
+    // Normalize only new server inserts; cached clients still send the event end.
+    const deadlinePolicy = { version: 1, extensionMinutes: 45, baseEndsAt: state.endsAt };
+    state.endsAt = new Date(Date.parse(state.endsAt) + 45 * 60_000).toISOString();
+    fpr.validateFprState(state);
     if (Date.parse(state.leagueSnapshotAt) > Date.now() + 60000 || Date.parse(state.endsAt) <= Date.now() + 180000) throw new Error("FPR_CREATE_TIME_INVALID");
     const participants = Array.isArray(fprBody.participants) ? fprBody.participants : [];
     if (participants.length !== state.players.length || new Set(participants.map(p => p.id)).size !== state.players.length
       || participants.some(p => !state.players.some(player => player.id === p.id))) throw new Error("FPR_ROSTER_MISMATCH");
-    const projected = fpr.fprProjection(state, fprBody.params);
+    const projected = fpr.fprProjection(state, { ...fprBody.params, fprDeadlinePolicy: deadlinePolicy });
     delete projected.params.broadcast;
     const document = {
       tournamentId: state.tournamentId, tournamentType: "fpr_6x25", tenantKey: fprBody.tenantKey || null,

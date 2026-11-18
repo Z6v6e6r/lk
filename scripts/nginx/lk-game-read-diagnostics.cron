@@ -1,0 +1,2 @@
+# Dedicated state/config avoids the distribution's /var/log/nginx/*.log policy.
+17 * * * * root /usr/sbin/logrotate --state /var/lib/logrotate/lk-game-read-diagnostics.status /etc/lk-game-read-diagnostics.logrotate
