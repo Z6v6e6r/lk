@@ -39,6 +39,8 @@ import { resolveCommunityJoinRouteData } from "./utils/communityJoinRoute";
 import { appendCurrentAuthModeToNavigableUrl } from "./utils/authMode";
 import { readPostAuthReturnUrl } from "./utils/authReturn";
 import { ResidencyPurchasePage } from "./residency/ResidencyPurchasePage";
+import { ResidencyLifecyclePurchasePage } from "./residency/ResidencyLifecyclePurchasePage";
+import { readResidencyLifecycleRoute } from "./residency/residencyLifecycleRoute";
 import { isResidencyPurchaseRoute } from "./residency/residencyPurchase";
 import type { GamesMountData, OpenGamesOptions } from "./types/gamesOverlay";
 import type { LevelsInfoMountData, OpenLevelsInfoOptions } from "./types/levelsInfoOverlay";
@@ -1018,6 +1020,11 @@ function AppContent() {
 }
 
 export default function App() {
+  if (typeof window !== "undefined" && readResidencyLifecycleRoute(window.location.search)) {
+    // The personal pilot uses the same verified LK1 session but a separate screen and
+    // API. The old buyResidency=1 page below is untouched and remains the rollback.
+    return <AuthProvider authMode="auto"><ResidencyLifecyclePurchasePage /></AuthProvider>;
+  }
   if (typeof window !== "undefined" && isResidencyPurchaseRoute(window.location.search)) {
     return <ResidencyPurchasePage />;
   }

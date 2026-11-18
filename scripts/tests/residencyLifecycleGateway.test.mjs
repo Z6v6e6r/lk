@@ -26,6 +26,39 @@ test("config is disabled by default and requires storage when enabled", () => {
   assert.equal(helpers.readConfig(env({ LK_RESIDENCY_LIFECYCLE_RATE_LIMIT_PER_MINUTE: "500" })).rateLimit, 120);
 });
 
+test("personal pilot create settings are closed by default and bound to the verified tenant", () => {
+  const defaults = helpers.readConfig(env({}));
+  assert.equal(defaults.createEnabled, false);
+  assert.equal(defaults.createAudience, "pilot");
+  assert.equal(defaults.pilotUsers instanceof Set, true);
+  assert.equal(defaults.pilotUsers.size, 0);
+  assert.equal(defaults.pilotUsersError, null);
+
+  const allowed = helpers.readConfig(env({
+    LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED: "true",
+    LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE: "pilot",
+    LK_RESIDENCY_LIFECYCLE_PILOT_USERS: JSON.stringify(["iSkq6G:pilot-user"]),
+  }));
+  assert.equal(allowed.createEnabled, true);
+  assert.equal(allowed.pilotUsers.has("iSkq6G:pilot-user"), true);
+  assert.equal(allowed.pilotUsersError, null);
+
+  const wrongTenant = helpers.readConfig(env({ LK_RESIDENCY_LIFECYCLE_PILOT_USERS: JSON.stringify(["other:pilot-user"]) }));
+  assert.equal(wrongTenant.pilotUsers, null);
+  assert.equal(wrongTenant.pilotUsersError, "PILOT_USERS");
+  for (const raw of ["not-json", "[]", JSON.stringify(["no-tenant"]), JSON.stringify(["iSkq6G:"]), JSON.stringify(["iSkq6G:a", "iSkq6G:a"])]) {
+    assert.equal(helpers.readConfig(env({ LK_RESIDENCY_LIFECYCLE_PILOT_USERS: raw })).pilotUsersError, "PILOT_USERS");
+  }
+  assert.equal(helpers.readConfig(env({ LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE: "everyone" })).createAudience, null);
+
+  // A broken personal list must not block servicing an existing order: the runtime
+  // configuration check only covers storage/provider/URLs, not the create audience.
+  const base = { LK_RESIDENCY_LIFECYCLE_ENABLED: "true", LK_RESIDENCY_LIFECYCLE_MONGO_URI: "mongodb://127.0.0.1:27017",
+    LK_RESIDENCY_LIFECYCLE_MONGO_DB: "lk", LK_RESIDENCY_LIFECYCLE_CUP_API_URL: "https://cup.example/api",
+    LK_RESIDENCY_LIFECYCLE_CUP_INTEGRATION_TOKEN: "t".repeat(40), LK_RESIDENCY_LIFECYCLE_PILOT_USERS: "broken" };
+  assert.equal(helpers.runtimeConfigError(helpers.readConfig(env(base))), null);
+});
+
 test("runtime configuration fails closed before any request", () => {
   const base = { LK_RESIDENCY_LIFECYCLE_ENABLED: "true", LK_RESIDENCY_LIFECYCLE_MONGO_URI: "mongodb://127.0.0.1:27017",
     LK_RESIDENCY_LIFECYCLE_MONGO_DB: "lk", LK_RESIDENCY_LIFECYCLE_CUP_API_URL: "https://cup.example/api",

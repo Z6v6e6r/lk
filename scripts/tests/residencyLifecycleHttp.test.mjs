@@ -56,6 +56,10 @@ function memoryStore() {
       return [...orders.values()].find((o) => o.tenantId === tenantId && o.userId === userId
         && ["PENDING_PAYMENT", "PAID", "PAID_ACTIVATION_PENDING", "ACTIVATION_FAILED", "PAID_REQUIRES_REVIEW"].includes(o.state)) || null;
     },
+    async listUnresolvedOrders(tenantId, userId, limit) {
+      return [...orders.values()].filter((o) => o.tenantId === tenantId && o.userId === userId
+        && ["PENDING_PAYMENT", "PAID", "PAID_ACTIVATION_PENDING", "ACTIVATION_FAILED", "PAID_REQUIRES_REVIEW"].includes(o.state)).slice(0, limit);
+    },
     async listExpiredPending() { return []; },
   };
 }
@@ -64,7 +68,7 @@ function response(body, status = 200) {
   return { status, headers: { get: () => "application/json" }, async text() { return JSON.stringify(body); } };
 }
 
-function harness(engineConfig) {
+function harness(engineConfig, createPolicy = () => ({ allowed: true })) {
   const state = { paid: false, failed: false, subscription: null, createCalls: 0, activationCalls: 0, cupCalls: 0,
     now: NOW.getTime(), lastCreateBody: null };
   const fetchImpl = async (url) => {
@@ -112,7 +116,7 @@ function harness(engineConfig) {
       discounts: { async quote({ baseAmountMinor }) { return { discountLines: [], totalMinor: baseAmountMinor }; } },
     });
   };
-  const api = createResidencyLifecycleApi({ createLifecycle });
+  const api = createResidencyLifecycleApi({ createLifecycle, createPolicy });
   return { api, state, store };
 }
 
@@ -196,8 +200,83 @@ test("full user journey: catalog -> checkout -> payment -> CUP activation -> sta
   assert.equal(renewed.body.order.renewal.baseValidUntil, "2026-12-18T09:05:00.000Z");
 });
 
+test("personal pilot gate denies creation before any order, provider call or idempotency lookup", async () => {
+  const denied = harness(undefined, ({ tenantId, userId }) => tenantId === TENANT && userId === "pilot-user"
+    ? { allowed: true } : { allowed: false, statusCode: 403, code: "RESIDENCY_CREATE_NOT_ALLOWED", message: "not allowed" });
+  const refused = await denied.api.handle(req("POST", "/lk/residency/orders", { mode: "NEW", expectedTotalMinor: 79000 },
+    { "Idempotency-Key": KEY }, { tenantId: TENANT, userId: "ordinary-user", actorToken: "u".repeat(32) }));
+  assert.equal(refused.statusCode, 403);
+  assert.equal(refused.body.code, "RESIDENCY_CREATE_NOT_ALLOWED");
+  assert.equal(denied.state.createCalls, 0);
+
+  // A body/query/localStorage-style switch is not an identity: the denied actor gets the
+  // gate before parsing, and even an allowed actor cannot make "test" a create parameter.
+  const bodySwitchDenied = await denied.api.handle(req("POST", "/lk/residency/orders",
+    { mode: "NEW", expectedTotalMinor: 79000, test: true }, { "Idempotency-Key": KEY },
+    { tenantId: TENANT, userId: "ordinary-user", actorToken: "u".repeat(32) }));
+  assert.equal(bodySwitchDenied.statusCode, 403);
+  const bodySwitchAllowed = await denied.api.handle(req("POST", "/lk/residency/orders",
+    { mode: "NEW", expectedTotalMinor: 79000, test: true }, { "Idempotency-Key": KEY },
+    { tenantId: TENANT, userId: "pilot-user", actorToken: "u".repeat(32) }));
+  assert.equal(bodySwitchAllowed.statusCode, 400);
+  assert.equal(bodySwitchAllowed.body.code, "RESIDENCY_REQUEST_INVALID");
+
+  const allowed = await denied.api.handle(req("POST", "/lk/residency/orders", { mode: "NEW", expectedTotalMinor: 79000 },
+    { "Idempotency-Key": KEY }, { tenantId: TENANT, userId: "pilot-user", actorToken: "u".repeat(32) }));
+  assert.equal(allowed.statusCode, 200);
+  assert.equal(denied.state.createCalls, 1);
+});
+
+test("stopping the pilot keeps existing order reads, reconcile and activation available", async () => {
+  let createEnabled = true;
+  const policy = ({ tenantId, userId }) => !createEnabled
+    ? { allowed: false, statusCode: 503, code: "RESIDENCY_ORDERS_DISABLED", message: "disabled" }
+    : tenantId === TENANT && userId === "pilot-user"
+      ? { allowed: true }
+      : { allowed: false, statusCode: 403, code: "RESIDENCY_CREATE_NOT_ALLOWED", message: "not allowed" };
+  const { api, state } = harness(undefined, policy);
+  const pilotActor = { tenantId: TENANT, userId: "pilot-user", actorToken: "u".repeat(32) };
+  const created = await api.handle(req("POST", "/lk/residency/orders", { mode: "NEW", expectedTotalMinor: 79000 },
+    { "Idempotency-Key": KEY }, pilotActor));
+  assert.equal(created.statusCode, 200);
+  const orderId = created.body.order.orderId;
+
+  createEnabled = false;
+  const replay = await api.handle(req("POST", "/lk/residency/orders", { mode: "NEW", expectedTotalMinor: 79000 },
+    { "Idempotency-Key": KEY }, pilotActor));
+  assert.equal(replay.statusCode, 503);
+  assert.equal(replay.body.code, "RESIDENCY_ORDERS_DISABLED");
+  assert.equal(state.createCalls, 1);
+
+  // The started order keeps its identity and handler: unresolved lookup, payment link,
+  // reconcile and later activation are not blocked by the stopped create switch.
+  const unresolved = await api.handle(req("GET", "/lk/residency/orders?state=unresolved", undefined, {}, pilotActor));
+  assert.equal(unresolved.statusCode, 200);
+  assert.equal(unresolved.body.count, 1);
+  assert.equal(unresolved.body.orders[0].orderId, orderId);
+  const payment = await api.handle(req("GET", "/lk/residency/orders/" + orderId + "/payment", undefined, {}, pilotActor));
+  assert.equal(payment.statusCode, 200);
+  assert.equal(payment.body.paymentUrl, "https://bank.example/pay/1");
+
+  state.paid = true;
+  state.subscription = { subscriptionId: SUB, productId: RESIDENCY_PRODUCT_ID, clientId: CLIENT, status: "ACTIVE",
+    purchaseDate: "2026-11-18T09:05:00.000Z", activationDate: "2026-11-18T09:05:00.000Z" };
+  const activated = await api.handle(req("POST", "/lk/residency/orders/" + orderId + "/reconcile", { eventId: "evt-after-stop" },
+    { "Idempotency-Key": KEY2 }, pilotActor));
+  assert.equal(activated.statusCode, 200);
+  assert.equal(activated.body.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(state.activationCalls, 1);
+});
+
+test("missing create policy is a closed gate, not an implicit allow", async () => {
+  const api = createResidencyLifecycleApi({ createLifecycle: () => ({ async catalog() { return {}; } }) });
+  const result = await api.handle(req("POST", "/lk/residency/orders", { expectedTotalMinor: 79000 }, { "Idempotency-Key": KEY }));
+  assert.equal(result.statusCode, 503);
+  assert.equal(result.body.code, "RESIDENCY_CREATE_POLICY_INVALID");
+});
+
 test("provider errors keep their stable status and code without leaking a body", async () => {
-  const api = createResidencyLifecycleApi({ createLifecycle: () => ({ async catalog() {
+  const api = createResidencyLifecycleApi({ createPolicy: () => ({ allowed: true }), createLifecycle: () => ({ async catalog() {
     const error = new Error("upstream text with private data");
     error.code = "RESIDENCY_UPSTREAM_TIMEOUT";
     error.statusCode = 504;

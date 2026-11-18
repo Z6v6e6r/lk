@@ -260,7 +260,28 @@ LK2 consumer-only outcomes (the owner may not have been called):
 | 503 `RESIDENCY_OWNER_UNAVAILABLE`, `RESIDENCY_OWNER_RESPONSE_INVALID` | transport/timeout/invalid answer | **unknown** — the owner may have created the order | **yes** | keep | same-key replay; unresolved lookup if the key or orderId was lost |
 | 503 `RESIDENCY_OWNER_CONFIGURATION_INVALID` | owner configuration refusal passed through | no for this request; see the owner rows | **yes** | keep | repeat after configuration is fixed; unresolved lookup |
 
-### Client-side state (not a tariff)
+#### Old checkout, new checkout and rollback
+
+The published old client creates a Viva transaction directly in the browser and has no
+server lifecycle row. The new owner creates a durable order before its own Viva POST.
+Neither path can see the other's pending attempt from its own storage. The pilot therefore:
+
+- refuses to start when the old checkout marker
+  `padlhub_zero_checkout_attempt_v1:residency` exists, and links to the old page for
+  recovery instead of creating a second order;
+- keeps one server-side unresolved order per user, one idempotency key per confirmed
+  operation, and one reconcile/activation handler for a started order;
+- is exposed only as a direct personal entry, not as a simultaneous production button.
+  The old page remains the only production purchase entry until Alexey accepts the pilot.
+
+This is a deliberate switch boundary, not a claim that the two browser flows share a
+transaction. A provider-side idempotency key or a shared server attempt registry for the
+old path would require changing the published old client or a provider contract and is
+not implemented here. Rolling the frontend back to `?buyResidency=1` does not roll back
+the Node-RED module, Mongo orders or Viva transactions; keep serving them with
+`ENABLED=true, CREATE_ENABLED=false` until every started order is terminal or ACTIVE.
+
+## Client-side state (not a tariff)
 
 A client may persist the exact confirmed `expectedTotalMinor`, the mode, the Idempotency-Key and
 the returned orderId for replay. That is an operation snapshot needed to repeat the same request
@@ -500,7 +521,10 @@ a second payment owner or a local entitlement model.
 
 | Variable | Meaning |
 | --- | --- |
-| LK_RESIDENCY_LIFECYCLE_ENABLED | Must be exactly true; default off. |
+| LK_RESIDENCY_LIFECYCLE_ENABLED | Service switch. Must be exactly true; default off. When true, reads, reconcile, cancel and activation of existing orders work. |
+| LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED | New-order switch, exactly true; default off. Off returns 503 `RESIDENCY_ORDERS_DISABLED` on POST /orders only and never blocks existing-order servicing. |
+| LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE | `pilot` (default) or `all`. `pilot` allows only the verified users in the allowlist; any other value is a closed gate. |
+| LK_RESIDENCY_LIFECYCLE_PILOT_USERS | JSON array of exact `tenantId:userId` verified Keycloak claims, e.g. `["iSkq6G:<sub>"]`. Empty or malformed means no one can create (servicing still works). |
 | LK_RESIDENCY_LIFECYCLE_MONGO_URI, ..._MONGO_DB | Order storage. |
 | LK_RESIDENCY_LIFECYCLE_VIVA_API_URL | Default https://api.vivacrm.ru. |
 | LK_RESIDENCY_LIFECYCLE_CUP_API_URL, ..._CUP_INTEGRATION_TOKEN | CUP residency evidence. |
@@ -516,6 +540,31 @@ a second payment owner or a local entitlement model.
 | LK_RESIDENCY_LIFECYCLE_TIMEOUT_MS | Upstream timeout, 500..15000 ms. |
 | LK_RESIDENCY_LIFECYCLE_RATE_LIMIT_PER_MINUTE | Per-user mutation/read limit, 1..120. |
 | LK_RESIDENCY_LIFECYCLE_ENSURE_INDEXES | true only for a reviewed first install; default false verifies the indexes and fails closed. |
+
+### Personal pilot access and servicing
+
+The personal pilot is a **server-side allowlist of verified identities**, not a URL or
+localStorage flag. After the Keycloak userinfo check, the gateway builds `tenantId:userId`
+from `sub` and the tenant claim and applies the policy to `POST /orders` only:
+
+- `LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED=false` → 503 `RESIDENCY_ORDERS_DISABLED`;
+- `CREATE_AUDIENCE=pilot` and the identity is not listed → 403
+  `RESIDENCY_CREATE_NOT_ALLOWED`;
+- a malformed list/audience → 503 `RESIDENCY_CREATE_POLICY_INVALID` (closed, not open);
+- `CREATE_AUDIENCE=all` is an explicit reviewed rollout decision, never a default.
+
+The gate runs before the idempotency lookup, before the durable order and before any
+Viva POST. A `test` query/body/localStorage value is never read by the policy, and an
+unknown body field is still 400. Ordinary accounts can read only their own catalog/status
+and their own existing orders; they cannot create a new one.
+
+Stopping the pilot must not abandon a started purchase. With
+`CREATE_ENABLED=false` the following stay available for the authenticated owner:
+`GET /orders?state=unresolved`, `GET /orders/{id}`, `GET /orders/{id}/payment`,
+`POST /orders/{id}/reconcile` and `POST /orders/{id}/cancel`. The started order keeps its
+order id, payment link and activation handler; the client must recover it by reading,
+never by creating a new key. Flipping `LK_RESIDENCY_LIFECYCLE_ENABLED=false` still stops
+the whole API (all routes 503) and is a deeper stop method that does not delete orders.
 
 The Viva Admin token is read from the existing Node-RED global
 vivacrm_access_token; the actor's Viva token is the request Bearer. Neither is
@@ -588,17 +637,27 @@ being skipped. Locally the same suite skips when neither variable is set.
      read recovers it;
    - stop CUP or Viva and confirm UNAVAILABLE/retryable, never NONE or a second
      charge; restore and confirm recovery.
-6. Enable LK_RESIDENCY_LIFECYCLE_ENABLED=true only after the check; keep the flag as
-   the stop method. Disabling blocks new operations but does not delete orders.
+6. Enable `LK_RESIDENCY_LIFECYCLE_ENABLED=true` only after the check. Keep
+   `LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED=false` for the compatibility smoke, then set
+   `CREATE_ENABLED=true`, `CREATE_AUDIENCE=pilot` and exactly one verified
+   `tenantId:userId` in `LK_RESIDENCY_LIFECYCLE_PILOT_USERS`. Add a
+   `lk1pilot` return target pointing at
+   `https://padlhub.su/lk_new?phResidencyLifecycleReturn=1`.
+7. Stop method: `CREATE_ENABLED=false` stops new orders but keeps reads/reconcile/
+   activation. `ENABLED=false` stops the whole API. Neither deletes orders or Viva
+   transactions. Disabling a flag does not undo past external operations.
 
 Real money, publication, provider writes outside the sandbox, import and deploy are
 separate approvals. This source change performs none of them.
 
 ## Remaining dependencies (not claimed complete)
 
-- LK1 client wiring: ResidencyPurchasePage/zeroCheckoutPayment still use the
-  existing browser checkout. A follow-up must switch the UI to this API behind
-  VITE_RESIDENCY_LIFECYCLE_ENABLED and keep the current page as the fallback.
+- LK1 client wiring: the personal pilot page is `?buyResidency=lifecycle` (bank return
+  `?phResidencyLifecycleReturn=1`), implemented in
+  `src/residency/ResidencyLifecyclePurchasePage.tsx`. The existing
+  `?buyResidency=1` page, `zeroCheckoutPayment` and `/lk/residency/passes` are
+  unchanged and remain the fallback. The pilot page is not linked from production UI;
+  it is a direct entry for the allowlisted account.
 - LK2 adapter: implemented in the separate LK2 consumer PR; the contract above is the
   stable surface. The LK2 consumer needs its own Viva actor token (session-bound) and
   the `lk2` return target configured here.

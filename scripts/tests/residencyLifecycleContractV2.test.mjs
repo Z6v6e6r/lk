@@ -137,7 +137,7 @@ function harness(overrides = {}) {
     config: { returnTargets: state.returnTargets, defaultReturnTarget: "widget", dispatchLeaseMs: 120000 },
   });
   let lifecycle = buildLifecycle();
-  const api = createResidencyLifecycleApi({ createLifecycle: () => lifecycle });
+  const api = createResidencyLifecycleApi({ createLifecycle: () => lifecycle, createPolicy: () => ({ allowed: true }) });
   const actor = { tenantId: TENANT, userId: USER, actorToken: "u".repeat(32) };
   const request = (method, path, body, headers = {}, who = actor) => ({ method, path, body, actor: who, headers });
   return {

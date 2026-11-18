@@ -1,0 +1,23 @@
+Residency LK1 pilot — read-only host and bundle evidence (2026-11-18)
+
+Host lk-primary-147 (read-only)
+  Node-RED 4.0.9, Node.js 22.23.2, pm2 process node-red online
+  /root/.node-red/flows.json: 5,678 nodes, 316 http in
+  no /lk/residency/* http-in route
+  no lk_residency_lifecycle_* node id
+  installed custom node: node-red-contrib-padlhub-max-outbox only
+  flags: SUBSCRIPTIONS_RESIDENCY_BOOKING_ENABLED=false
+         SUBSCRIPTIONS_RESIDENCY_PREVIEW_ENABLED=true
+  no LK_RESIDENCY_LIFECYCLE_* variable in the running process
+
+Published frontend
+  https://padlhub.su/lk/release.json
+  version 20261118T144752Z
+  source 8ff3735e7106815db702f47c2ec5faa0f91a88c4
+  branch codex/child-tournament-release-147-20261118
+  /var/www/html/lk-frontend-current -> 8ff3735e...-73d7d0ebffa0f2d5
+  bundle.js sha256 79789bf8a5d755ed7c6391208b76a058738f39b393f3cd85175b08bbfb097a7f
+  bundle.js bytes 2,946,687
+  old bundle paths include /lk/residency/passes and summer-subscription routes;
+  no residency/orders path and no new refusal codes
+

@@ -29,6 +29,27 @@ function readEnv(env, name, fallback) {
 }
 
 const RETURN_TARGET_KEY = /^[a-z][a-z0-9_-]{0,31}$/;
+const PILOT_USER = /^[A-Za-z0-9._:@-]{1,128}:[A-Za-z0-9._:@-]{1,256}$/;
+const CREATE_AUDIENCES = new Set(["pilot", "all"]);
+
+/**
+ * Personal pilot access is an allowlist of verified `tenantId:userId` claims. It is
+ * configuration, never a request parameter: the URL/localStorage switch only chooses the
+ * UI, the server decides from the Keycloak userinfo identity.
+ */
+function readPilotUsers(raw, tenantKey) {
+  if (typeof raw !== "string" || !raw.trim()) return { users: new Set(), error: null };
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return { users: null, error: "PILOT_USERS" }; }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > 500) return { users: null, error: "PILOT_USERS" };
+  const users = new Set();
+  for (const entry of parsed) {
+    if (typeof entry !== "string" || !PILOT_USER.test(entry) || users.has(entry)) return { users: null, error: "PILOT_USERS" };
+    if (!entry.startsWith(tenantKey + ":")) return { users: null, error: "PILOT_USERS" };
+    users.add(entry);
+  }
+  return { users, error: null };
+}
 
 function returnUrl(value) {
   if (typeof value !== "string" || !value) return null;
@@ -75,7 +96,13 @@ function readConfig(env) {
   const allowOrigin = readEnv(env, "LK_RESIDENCY_LIFECYCLE_ALLOW_ORIGIN", "*");
   const rateLimit = Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_RATE_LIMIT_PER_MINUTE", "20"));
   const returnTargets = readReturnTargets(env, successUrl, failUrl);
+  const createAudience = readEnv(env, "LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE", "pilot");
+  const pilotUsers = readPilotUsers(readEnv(env, "LK_RESIDENCY_LIFECYCLE_PILOT_USERS", ""), tenantKey);
   return {
+    createEnabled: readEnv(env, "LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED", "false") === "true",
+    createAudience: CREATE_AUDIENCES.has(createAudience) ? createAudience : null,
+    pilotUsers: pilotUsers.users,
+    pilotUsersError: pilotUsers.error,
     returnTargets: returnTargets.targets,
     returnTargetsError: returnTargets.error,
     defaultReturnTarget: readEnv(env, "LK_RESIDENCY_LIFECYCLE_DEFAULT_RETURN_TARGET", "widget"),
@@ -236,8 +263,30 @@ module.exports = function registerResidencyLifecycleApi(RED) {
             }
             const store = storeModule.createMongoResidencyLifecycleStore({ collection });
             const globalContext = () => node.context().global;
+            if (config.pilotUsersError || !config.createAudience) {
+              node.warn(JSON.stringify({ event: "residency_lifecycle_create_policy_invalid",
+                reason: config.pilotUsersError || "AUDIENCE" }));
+            }
+            const createPolicy = ({ tenantId, userId }) => {
+              // A stopped pilot keeps servicing existing orders: reads, reconcile and
+              // activation never pass through this function. Only a new order is refused.
+              if (!config.createEnabled) {
+                return { allowed: false, statusCode: 503, code: "RESIDENCY_ORDERS_DISABLED",
+                  message: "New residency orders are disabled" };
+              }
+              if (!config.createAudience || config.pilotUsersError) {
+                return { allowed: false, statusCode: 503, code: "RESIDENCY_CREATE_POLICY_INVALID",
+                  message: "Residency pilot access is not configured" };
+              }
+              if (config.createAudience === "all") return { allowed: true };
+              const identity = tenantId + ":" + userId;
+              if (config.pilotUsers instanceof Set && config.pilotUsers.has(identity)) return { allowed: true };
+              return { allowed: false, statusCode: 403, code: "RESIDENCY_CREATE_NOT_ALLOWED",
+                message: "Residency pilot access is not enabled for this account" };
+            };
             const api = http.createResidencyLifecycleApi({
               allowOrigin: config.allowOrigin,
+              createPolicy,
               createLifecycle: (actor) => {
                 const ports = provider.createVivaCupResidencyPorts({
                   fetch: globalThis.fetch,
