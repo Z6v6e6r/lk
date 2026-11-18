@@ -57,7 +57,7 @@ function withSplitPayments(record: PadelGameRecord, payments: Array<Record<strin
 function restoreServerGame(initial: PadelGameRecord): PadelGameRecord {
   let record = readServerGame() || initial;
   const settle = routeParams.get('settle');
-  const pending = splitPayments(record).find(item => item.clientId === viewer.id && item.status === 'PAYMENT_PENDING');
+  const pending = [...splitPayments(record)].reverse().find(item => item.clientId === viewer.id && item.status === 'PAYMENT_PENDING');
   if (pending && (settle === 'paid' || settle === 'cancelled')) {
     const payments = splitPayments(record).map(item => item === pending ? { ...item, status: settle === 'paid' ? 'PAID' : 'CANCELLED' } : item);
     record = withSplitPayments(record, payments);
@@ -66,25 +66,55 @@ function restoreServerGame(initial: PadelGameRecord): PadelGameRecord {
   writeServerGame(record);
   return record;
 }
-function createSplitParticipantPayment(): unknown {
+// Stand-only synthetic transport for the real apiClient one-time split JOIN.
+// Like a server outside the paid-join pilot, every POST creates a payment for
+// its own paymentRef (no deduplication), so duplicate commands are visible.
+const sentJoinPaymentRefs: string[] = [];
+(window as unknown as { __previewJoinPosts: string[] }).__previewJoinPosts = sentJoinPaymentRefs;
+function syntheticJoinResponse(body: Record<string, unknown>): Response {
   const outcome = routeParams.get('joinOutcome') || 'pending';
-  if (outcome === 'refused') return { __previewError: { status: 409, message: 'Последнее место уже занято. Оплата не создана.' } };
-  // network: transport failure reported as a result (status null), payment created.
-  // lost-invisible: payment created at the provider but not yet visible in the game record.
-  if (outcome === 'lost-invisible') throw new Error('Synthetic transport: response lost; payment not yet projected');
-  const existing = splitPayments(game).find(item => item.clientId === viewer.id && item.status === 'PAYMENT_PENDING');
-  const sequence = splitPayments(game).length + 1;
+  const paymentRef = String(body.paymentRef || '');
+  sentJoinPaymentRefs.push(paymentRef);
+  try { // money commands survive reloads like server logs do
+    const key = `server-posts:${routeParams.get('reset') || '0'}`;
+    sessionStorage.setItem(key, JSON.stringify([...JSON.parse(sessionStorage.getItem(key) || '[]'), paymentRef]));
+  } catch { /* in-page list remains */ }
+  const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+  if (outcome === 'refused') return json(409, { message: 'Последнее место уже занято. Оплата не создана.' });
+  if (outcome === 'lost-invisible') throw new TypeError('Synthetic transport: response lost; payment not yet projected');
   const now = Date.now();
-  const payment = existing || {
-    clientId: viewer.id, phone: viewer.phone, status: 'PAYMENT_PENDING', paymentRef: `demo-ref-${sequence}`,
-    bookingId: `demo-booking-${sequence}`, paymentUrl: '/game_join?joinGame=demo-game&bankReturn=1',
+  const payment = {
+    clientId: viewer.id, phone: viewer.phone, status: 'PAYMENT_PENDING', paymentRef,
+    bookingId: `demo-booking-${paymentRef}`, paymentUrl: 'https://bank.preview.invalid/game_join?joinGame=demo-game&bankReturn=1',
     createdAt: new Date(now).toISOString(), deadlineAt: new Date(now + 15 * 60_000).toISOString(),
   };
-  if (!existing) { game = withSplitPayments(game, [...splitPayments(game), payment]); writeServerGame(game); }
+  game = withSplitPayments(game, [...splitPayments(game), payment]);
+  writeServerGame(game);
   if (outcome === 'lost-unreadable') failNextRecordRead = true;
-  if (outcome === 'network') return { __previewError: { status: null, message: 'Ошибка сети' } };
-  if (outcome === 'lost' || outcome === 'lost-unreadable') throw new Error('Synthetic transport: response lost after the payment was created');
-  return { checkoutStored: true, paymentUrl: payment.paymentUrl, paymentRef: payment.paymentRef, bookingId: payment.bookingId, toPay: game.metadata?.joinPrice };
+  if (outcome === 'lost' || outcome === 'network' || outcome === 'lost-unreadable') throw new TypeError('Synthetic transport: response lost after the payment was created');
+  return json(201, {
+    mode: 'join', gameId: game.id, paymentRef, operationId: paymentRef, exerciseId: 'demo-exercise', bookingId: payment.bookingId,
+    transactionId: `demo-transaction-${paymentRef}`, paymentUrl: payment.paymentUrl, settlementState: 'PAYMENT_REQUIRED',
+    selectedPaymentMode: 'one_time', toPay: 1500, toPayMinor: 150000, amountMinor: 150000, checkoutStored: true,
+  });
+}
+function installSyntheticTransport() {
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href);
+    const method = (init?.method || 'GET').toUpperCase();
+    if (method === 'POST' && /\/lk\/games\/[^/]+\/split\/join$/.test(url.pathname)) {
+      return syntheticJoinResponse(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>);
+    }
+    if (method === 'GET' && /\/lk\/games\/[^/]+$/.test(url.pathname)) {
+      if (failNextRecordRead) { failNextRecordRead = false; throw new TypeError('Synthetic transport: game read unavailable'); }
+      return new Response(JSON.stringify(game), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return realFetch(input, init);
+  };
+  try {
+    if (!localStorage.getItem('padlhub_auth_token_v1')) localStorage.setItem('padlhub_auth_token_v1', JSON.stringify({ token: 'preview-synthetic-token', expiresAt: null }));
+  } catch { /* request() then reports the missing session */ }
 }
 let game: PadelGameRecord = {
   id: 'demo-game', status: 'PAID', inviteUrl: '/game_join?joinGame=demo-game', revision: 1,
@@ -99,6 +129,7 @@ let game: PadelGameRecord = {
     ...(gamePayMode === 'split' ? { splitPayment: { enabled: true, mode: 'split', shareCount: 4, exerciseId: 'demo-exercise', shareAmount: PREVIEW_COURT_HOURLY_PRICE * 1.5 / 4, payments: [] } } : {}) },
 };
 game = restoreServerGame(game);
+installSyntheticTransport();
 const registrations = new Map<string, boolean>();
 function roster(count: number): PadelGamePlayer[] {
   return Array.from({ length: count }, (_, index) => ({ ...demoPlayers[index % demoPlayers.length], id: `demo-roster-${index}`, phone: `7000000${String(index + 1000).padStart(4, '0')}`, name: index < 4 ? demoPlayers[index].name : `Участник ${String.fromCharCode(1040 + index)} Тестовый` }));
@@ -174,10 +205,7 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
   apiFetchOnboardingStations: () => studios,
   apiFetchPadelAvailableGames: (params) => { game = { ...game, booking: game.booking ? { ...game.booking, date: String(input(params).date || eventDate) } : null }; return { games: [game], total: 1, hasMore: false }; },
   apiFetchPadelGamesByPhone: () => [],
-  apiFetchPadelGameRecord: () => {
-    if (failNextRecordRead) { failNextRecordRead = false; return { __previewError: { status: 503, message: 'Synthetic transport: game read unavailable' } }; }
-    return game;
-  },
+  apiFetchPadelGameRecord: () => game,
   apiUpdatePadelGameRecord: (_id, patch) => {
     // Like the real store, keep one roster entry per player (by phone, then id)
     // when a client roster sync sends players it derived from team slots.
@@ -205,7 +233,6 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
     writeServerGame(game);
     return { game, status: 'LEFT' };
   },
-  apiCreatePadelSplitParticipantPayment: () => createSplitParticipantPayment(),
   apiPayMasterService: () => ({ paymentUrl: null, toPay: 0, bookingIds: ['demo-booking'], exerciseId: 'demo-exercise', paid: true }),
   apiFetchBookings: () => [], apiFetchSubscriptions: () => [], apiFetchSubscriptionDailyLimitBookings: () => [],
   apiFetchPadelChatsByPhone: () => ({ chats: [] }), apiFetchPadelGameResultState: () => ({ game }), apiFetchPadelLiveRatings: () => [], apiSearchPadelPlayers: () => demoPlayers,

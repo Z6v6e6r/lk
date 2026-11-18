@@ -96,14 +96,19 @@ interface AttemptStorage { getItem(key: string): string | null; setItem(key: str
 export class SplitCreateAttempts {
   private readonly refs = new Map<string, string>();
   private readonly storage: AttemptStorage | null;
-  private readonly key = 'lk_split_create_attempt_refs_v1:';
+  private readonly key: string;
   private storageWritable = true;
-  constructor(storage: AttemptStorage | null = null) { this.storage = storage; }
+  // A second journal (e.g. one-time split JOIN) uses its own key prefix.
+  constructor(storage: AttemptStorage | null = null, key = 'lk_split_create_attempt_refs_v1:') {
+    this.storage = storage;
+    this.key = key;
+  }
   private sync(operationId: string): void {
     if (!this.storage || !this.storageWritable) return;
     let raw: string | null;
     try { raw = this.storage.getItem(this.key + operationId); } catch { this.storageWritable = false; return; }
-    if (!raw) return;
+    // Another window completed the attempt: drop the stale memory copy.
+    if (!raw) { this.refs.delete(operationId); return; }
     if (raw.length > 512) throw new Error('SPLIT_CREATE_JOURNAL_INVALID');
     let value: unknown;
     try { value = JSON.parse(raw); } catch { throw new Error('SPLIT_CREATE_JOURNAL_INVALID'); }

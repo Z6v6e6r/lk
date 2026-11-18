@@ -12,17 +12,16 @@ import { JoinSubscriptionOptions } from "./JoinSubscriptionOptions";
 import { StorefrontJoinCheckout } from "../storefront-checkout/StorefrontJoinCheckout";
 import { STOREFRONT_CHECKOUT_ENABLED } from "../storefront-checkout/storefrontCheckoutFlag";
 import {
-  canClearSplitJoinUnknown,
-  isAmbiguousCreateStatus,
-  isSplitJoinBlocked,
-  type SplitJoinUnknown,
-} from "./splitJoinOutcome";
+  getHeldSplitJoinPaymentRef,
+  resolveSplitJoinAttempt,
+  settleSplitJoinAttemptFromRecord,
+} from "../../utils/apiClient";
 import { SubscriptionOptionPrice } from "./SubscriptionOptionPrice";
 import { createSubscriptionPriceTarget, createJoinSubscriptionPriceTarget, subscriptionSurchargeMinor } from "./subscriptionPricePreview";
 import { useSubscriptionPricePreview } from "./useSubscriptionPricePreview";
 import { SubscriptionPricePreviewAside } from "./SubscriptionPricePreviewAside";
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type {
   Booking,
   GamePlayFormat,
@@ -3805,27 +3804,6 @@ function resolveCancelledStateByBookings(bookings: Booking[]): boolean {
   return bookings.some((booking) => booking.isCancelled === true);
 }
 
-/** True when the record has a split-payment item (any status) for this user. */
-function recordHasSplitPaymentForUser(
-  record: PadelGameRecord | null | undefined,
-  userIdRaw: unknown,
-  userPhoneRaw: string | null | undefined,
-): boolean {
-  const metadata = record && isRecordObject(record.metadata) ? record.metadata : null;
-  const splitPayment = metadata && isRecordObject(metadata.splitPayment) ? metadata.splitPayment : null;
-  const payments = splitPayment && Array.isArray(splitPayment.payments) ? splitPayment.payments : [];
-  const userId = normalizeComparableId(userIdRaw);
-  const userPhone = normalizePhoneForGame(userPhoneRaw ?? null);
-  return payments.some((item) => {
-    if (!isRecordObject(item)) return false;
-    const itemId = normalizeComparableId(item.clientId);
-    const itemPhone = normalizePhoneForGame(
-      typeof item.phoneNorm === "string" ? item.phoneNorm : (typeof item.phone === "string" ? item.phone : null),
-    );
-    return Boolean((userId && itemId && userId === itemId) || (userPhone && itemPhone && userPhone === itemPhone));
-  });
-}
-
 function normalizeComparableId(value: unknown): string | null {
   const normalized = normalizeBookingId(value);
   return normalized ? normalized.toLowerCase() : null;
@@ -5025,9 +5003,9 @@ export default function GamesPage({
   const [updatingGameRoster, setUpdatingGameRoster] = useState(false);
   const [updatingGameMeta, setUpdatingGameMeta] = useState(false);
   const [joiningSplitPayment, setJoiningSplitPayment] = useState(false);
-  // Set when a one-time split-join create may have reached the provider but its
-  // outcome is unknown. Bound to that game; see splitJoinOutcome.ts.
-  const [splitJoinUnknown, setSplitJoinUnknown] = useState<SplitJoinUnknown | null>(null);
+  // Re-render trigger for the persisted one-time split-join attempt journal
+  // (apiClient). The journal itself survives reloads and is shared across windows.
+  const [, bumpSplitJoinAttempt] = useReducer((value: number) => value + 1, 0);
   const [splitPendingNowTs, setSplitPendingNowTs] = useState(() => Date.now());
   const [, setRestoringPaidGame] = useState(false);
   const [participants, setParticipants] = useState<PadelGamePlayer[]>([]);
@@ -8622,12 +8600,15 @@ export default function GamesPage({
     && !hasCurrentUserActiveSplitPayment
     && detailsHasFreeSlots
   );
+  // An unresolved one-time join attempt for this game: its exact paymentRef is held
+  // until the game record proves it paid or server-terminal. No timer releases it.
+  const heldSplitJoinPaymentRef = getHeldSplitJoinPaymentRef(gameRecordId);
   const canCurrentUserJoinSplitGameInDetails = canCurrentUserCheckSplitSubscriptionsInDetails
-    && !isSplitJoinBlocked(splitJoinUnknown, gameRecordId, splitPendingNowTs, SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES)
     && !leavePendingMessage
     && !updatingGameRoster
     && !updatingGameMeta
-    && !joiningSplitPayment;
+    && !joiningSplitPayment
+    && !heldSplitJoinPaymentRef;
   const detailsSplitSubscriptionOptions = useMemo(() => (
     detailsSplitSubscriptions
       .map((subscription) => {
@@ -14397,28 +14378,38 @@ export default function GamesPage({
   const recheckSplitJoinOutcome = useCallback(async () => {
     if (!gameRecordId) return;
     const checkedGameId = gameRecordId;
-    const reread = await apiFetchPadelGameRecord(checkedGameId, { cache: "no-store", retries: 0 }).catch(() => null);
+    const state = await resolveSplitJoinAttempt(checkedGameId).catch(() => null);
+    bumpSplitJoinAttempt();
     if (activeGameRecordIdRef.current !== checkedGameId) return;
-    if (!reread?.data) {
-      setGameRosterError("Не удалось проверить статус игры. Повторите проверку позже.");
-      return;
+    if (state?.record) {
+      setActiveGameRecordStore(state.record);
+      upsertGameRecordInStores(state.record, { communityMode: "if_exists" });
     }
-    setActiveGameRecordStore(reread.data);
-    upsertGameRecordInStores(reread.data, { communityMode: "if_exists" });
-    const cleared = canClearSplitJoinUnknown({
-      recordShowsUserPayment: recordHasSplitPaymentForUser(reread.data, profileId, profilePhoneNorm ?? profilePhone),
-      unknown: splitJoinUnknown,
-      gameId: checkedGameId,
-      nowTs: Date.now(),
-      deadlineMinutes: SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES,
-    });
-    if (cleared) {
-      setSplitJoinUnknown(null);
+    if (!state || state.evidence === "unreadable") {
+      setGameRosterError("Не удалось проверить статус игры. Повторите проверку позже.");
+    } else if (state.evidence === "absent") {
+      setGameRosterError("Исходная попытка оплаты пока не видна в игре. Новая оплата недоступна, пока её результат не подтверждён.");
+    } else if (state.evidence === "pending") {
       setGameRosterError(null);
     } else {
-      setGameRosterError("Оплата пока не видна в игре. Новая оплата будет доступна после окончания окна оплаты; проверьте статус позже.");
+      setGameRosterError(null);
     }
-  }, [gameRecordId, profileId, profilePhoneNorm, profilePhone, splitJoinUnknown, setActiveGameRecordStore, upsertGameRecordInStores]);
+  }, [gameRecordId, setActiveGameRecordStore, upsertGameRecordInStores]);
+  // Evidence can also arrive with any ordinary record refresh (bank return, roster sync).
+  useEffect(() => {
+    if (!gameRecordId || !activeGameRecord || !getHeldSplitJoinPaymentRef(gameRecordId)) return;
+    const evidence = settleSplitJoinAttemptFromRecord(gameRecordId, activeGameRecord);
+    if (evidence === "paid" || evidence === "terminal") bumpSplitJoinAttempt();
+  }, [gameRecordId, activeGameRecord]);
+  // Another window may start or resolve an attempt for this game.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key.startsWith("lk_split_join_attempt_refs_v1:")) bumpSplitJoinAttempt();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
   const handleSplitJoinCurrentUserFromDetails = useCallback(async (
     preferredPaymentMode: "subscription" | "one_time",
     preferredClientSubscriptionId?: string | null,
@@ -14598,12 +14589,15 @@ export default function GamesPage({
       if (
         preferredPaymentMode === "one_time"
         && (paymentResult.error || !paymentResult.data)
-        && isAmbiguousCreateStatus(paymentResult.error?.status)
+        && getHeldSplitJoinPaymentRef(gameRecordId)
       ) {
-        // Network failure, timeout or 5xx: the one-time create may exist at the
-        // provider and a retry would use a new paymentRef (H090).
-        setSplitJoinUnknown({ gameId: gameRecordId, since: Date.now() });
-        setGameRosterError("Ответ на создание оплаты не получен, оплата могла быть создана. Проверьте статус оплаты перед повторной попыткой.");
+        // apiClient keeps the exact attempt held unless the server definitively
+        // refused it (H090): network failure, timeout, 5xx, or a local refusal
+        // because an earlier attempt is still unresolved.
+        const attemptCode = (paymentResult.error?.raw as { code?: unknown } | undefined)?.code;
+        setGameRosterError(typeof attemptCode === "string" && attemptCode.startsWith("SPLIT_JOIN_ATTEMPT_") && paymentResult.error?.message
+          ? paymentResult.error.message
+          : "Ответ на создание оплаты не получен, оплата могла быть создана. Проверьте статус оплаты перед повторной попыткой.");
         return;
       }
       if (paymentResult.error || !paymentResult.data) {
@@ -15040,31 +15034,13 @@ export default function GamesPage({
         });
       }
     } catch {
-      if (!createDispatched) {
-        setGameRosterError("Не удалось создать оплату участия");
-      } else {
-        // The create may exist at the provider (H090). Only this user's payment
-        // item in a fresh read proves it; a successful but empty read does not.
-        const reread = await apiFetchPadelGameRecord(gameRecordId, { cache: "no-store", retries: 0 })
-          .catch(() => null);
-        const stillOnGame = activeGameRecordIdRef.current === gameRecordId;
-        if (reread?.data && stillOnGame) {
-          setActiveGameRecordStore(reread.data);
-          upsertGameRecordInStores(reread.data, { communityMode: "if_exists" });
-        }
-        const proven = Boolean(reread?.data)
-          && recordHasSplitPaymentForUser(reread?.data, profileId, profilePhoneNorm ?? profilePhone);
-        if (proven) {
-          setSplitJoinUnknown(null);
-          if (stillOnGame) setGameRosterError("Ответ на создание оплаты не получен, но оплата найдена в игре.");
-        } else {
-          setSplitJoinUnknown({ gameId: gameRecordId, since: Date.now() });
-          if (stillOnGame) {
-            setGameRosterError("Ответ на создание оплаты не получен, оплата могла быть создана. Проверьте статус оплаты перед повторной попыткой.");
-          }
-        }
-      }
+      // A dispatched one-time attempt stays held in the apiClient journal until
+      // the game record proves its outcome; never present it as a refusal.
+      setGameRosterError(createDispatched && getHeldSplitJoinPaymentRef(gameRecordId)
+        ? "Ответ на создание оплаты не получен, оплата могла быть создана. Проверьте статус оплаты перед повторной попыткой."
+        : "Не удалось создать оплату участия");
     } finally {
+      bumpSplitJoinAttempt();
       setJoiningSplitPayment(false);
       if (preferredPaymentMode === "subscription") {
         detailsSubscriptionSubmitInFlightRef.current = false;
@@ -17486,7 +17462,7 @@ export default function GamesPage({
                     navigateToExternalUrl(detailsCurrentUserPendingSplitPaymentPaymentUrl);
                   }}
                   onLeave={() => { void handleLeaveCurrentUserFromDetails(); }}
-                  outcomeUnknown={isSplitJoinBlocked(splitJoinUnknown, gameRecordId, splitPendingNowTs, SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES)}
+                  outcomeUnknown={Boolean(heldSplitJoinPaymentRef)}
                   onRecheck={() => { void recheckSplitJoinOutcome(); }}
                 />
               ) : isDetailsSplitPaymentGame ? (
@@ -17562,7 +17538,7 @@ export default function GamesPage({
                         disabled={!canCurrentUserJoinSplitGameInDetails} shareLabel={`1/${detailsSplitShareCount}`}
                         onJoin={id => { void handleSplitJoinCurrentUserFromDetails("subscription", id); }} />
                     )}
-                    {isSplitJoinBlocked(splitJoinUnknown, gameRecordId, splitPendingNowTs, SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES) && (
+                    {Boolean(heldSplitJoinPaymentRef) && (
                       <button
                         className="game-join-split-pay-option"
                         type="button"

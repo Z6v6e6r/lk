@@ -44,7 +44,9 @@ function previewApis(): Plugin {
       const source = readFileSync(resolve(root, file), 'utf8');
       const names = [...source.matchAll(/export\s+(?:async\s+)?function\s+(\w+)/g)]
         .map(match => match[1])
-        .filter(key => name === 'analytics' || key.startsWith('api') || key === 'request');
+        .filter(key => name === 'analytics' || key.startsWith('api') || key === 'request')
+        // The one-time split JOIN uses the real apiClient over the synthetic fetch transport.
+        .filter(key => !(name === 'apiClient' && key === 'apiCreatePadelSplitParticipantPayment'));
       return [
         `export * from ${JSON.stringify(`/@fs/${resolve(root, file)}?preview-original`)};`,
         `import { call } from '/dev/booking-preview/fixtures.ts';`,
@@ -85,7 +87,8 @@ export default defineConfig({
   }],
   define: {
     'import.meta.env.VITE_PUBLIC_INVITE_ORIGIN': JSON.stringify(''),
-    'import.meta.env.VITE_LK1_STOREFRONT_CHECKOUT': JSON.stringify('1'),
+    // PREVIEW_STOREFRONT_CHECKOUT=0 renders the legacy join UI over the same synthetic transport.
+    'import.meta.env.VITE_LK1_STOREFRONT_CHECKOUT': JSON.stringify(process.env.PREVIEW_STOREFRONT_CHECKOUT === '0' ? '0' : '1'),
     'import.meta.env.VITE_CABINET_URL': JSON.stringify(`${hosting.base}dev/booking-preview/frame.html?screen=game-list`),
   },
   server: { host: '127.0.0.1', port: 5173, strictPort: true },
