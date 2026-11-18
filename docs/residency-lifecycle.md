@@ -29,9 +29,11 @@ From the verified Viva product and the published CUP policy:
   transaction), not at Viva visit-counter activation;
 - automatic renewal is **not** part of the product. A renewal is a new purchase; the
   existing active instance remains valid until its own activeTo. The new instance must
-  be purchased after the renewal order was created and its CUP window must extend the
-  current validUntil; otherwise activation is refused (INSTANCE_BEFORE_ORDER /
-  RENEWAL_WINDOW_NOT_EXTENDED) and the old rights are untouched;
+  be purchased after the renewal order was created, start no later than the current
+  validUntil (5 minutes of clock skew) and end at least current validUntil + the
+  product term (5 minutes of slack). Otherwise activation is refused
+  (INSTANCE_BEFORE_ORDER / RENEWAL_WINDOW_NOT_EXTENDED) and the old rights are
+  untouched; a renewal that would absorb remaining days is refused;
 - no residency **price** discount is published. The lifecycle therefore returns an
   empty discountLines array and totalMinor = baseAmountMinor. The benefits above
   are consumed by the existing booking owner, not duplicated here.
@@ -141,7 +143,11 @@ States: PENDING_PAYMENT, PAYMENT_FAILED, EXPIRED, CANCELLED, PAID,
 PAID_ACTIVATION_PENDING, ACTIVE, ACTIVATION_FAILED, PAID_REQUIRES_REVIEW.
 PAID is a receipt, never current entitlement. Only ACTIVE carries a residency window.
 The order is durable before the Viva POST, so a crash or lost response leaves a
-DISPATCHING/UNKNOWN local attempt, never a second POST. The Viva transaction id is
+DISPATCHING/UNKNOWN local attempt, never a second POST. A failed/lost create with no
+delivered link is closed and its active slot released; a crash leaves DISPATCHING
+until a two-minute dispatch lease expires, then the order is closed and the slot
+released. A PENDING response without a provider transaction id is never advertised
+as payable: it is closed with TRANSACTION_ID_MISSING. The Viva transaction id is
 internal and is not present in any client DTO.
 
 ### Order state
@@ -168,7 +174,8 @@ GET /orders/{orderId}/payment
 A lost create response is recovered by reading the original transaction/order, never
 by POSTing a second transaction. A cancelled, expired or paid order never returns a
 stale payment link; expiry also checks the original transaction before closing, and a
-live link without a provider id is never silently voided.
+live link without a provider id is never advertised. A crashed DISPATCHING attempt is
+released after the dispatch lease instead of permanently blocking the customer.
 
 ### Reconcile / payment callback
 
@@ -198,10 +205,10 @@ CUP's context.instance.activeFrom/activeTo.
 POST /orders/{orderId}/cancel with Idempotency-Key. Cancellable only while not
 paid and not active. The owner reads the original transaction first: PAID refuses the
 cancel, and an unreadable or still-PENDING status fails closed (409
-RESIDENCY_PAYMENT_STATUS_UNKNOWN) instead of cancelling an in-flight payment. An
-ambiguous DISPATCHING/UNKNOWN order without a provider id cannot be cancelled without
-support. A paid order waiting for activation must not be cancelled into an automatic
-refund (409 RESIDENCY_ORDER_PAID).
+RESIDENCY_PAYMENT_STATUS_UNKNOWN) instead of cancelling an in-flight payment. A
+DISPATCHING/UNKNOWN attempt without a provider id is closed by the create/lease path,
+not by this command. A paid order waiting for activation must not be cancelled into an
+automatic refund (409 RESIDENCY_ORDER_PAID).
 
 ### Error envelope
 
@@ -223,7 +230,10 @@ RESIDENCY_PAYMENT_AMOUNT_MISMATCH, RESIDENCY_PAYMENT_OWNERSHIP_MISMATCH,
 RESIDENCY_PRODUCT_TERMS_MISMATCH, RESIDENCY_SUBSCRIPTION_OWNERSHIP_CONFLICT,
 RESIDENCY_EVIDENCE_INVALID, RESIDENCY_PAYMENT_STATUS_UNAVAILABLE,
 RESIDENCY_PAYMENT_STATUS_UNKNOWN, RESIDENCY_SUBSCRIPTIONS_PARTIAL,
-RESIDENCY_RATE_LIMITED, RESIDENCY_INTERNAL.
+RESIDENCY_RATE_LIMITED, RESIDENCY_INTERNAL. Activation error codes include
+INSTANCE_NOT_FOUND, INSTANCE_BEFORE_ORDER, INSTANCE_LOOKUP_UNAVAILABLE,
+ACTIVATION_UNAVAILABLE, RENEWAL_WINDOW_NOT_EXTENDED, DISPATCH_LEASE_EXPIRED,
+DISPATCH_OUTCOME_UNKNOWN and TRANSACTION_ID_MISSING.
 No code, message or log carries a token, phone, provider id, PII or raw provider body.
 
 ## Idempotency and double-charge guards

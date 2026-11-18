@@ -79,6 +79,8 @@ export function createResidencyLifecycle(deps) {
   if (!uuid(productId)) throw new Error("RESIDENCY_PRODUCT_ID_INVALID");
   const maxPaymentAgeMs = Number.isSafeInteger(config.maxPaymentAgeMs) && config.maxPaymentAgeMs > 0
     ? config.maxPaymentAgeMs : 30 * 60 * 1000;
+  const dispatchLeaseMs = Number.isSafeInteger(config.dispatchLeaseMs) && config.dispatchLeaseMs > 0
+    ? config.dispatchLeaseMs : 2 * 60 * 1000;
 
   const nowIso = () => new Date(clock.now()).toISOString();
 
@@ -320,17 +322,31 @@ export function createResidencyLifecycle(deps) {
         productId: product.productId, amountMinor: pricing.totalMinor, currency: product.currency,
       });
     } catch {
-      const updated = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
-        payment: { ...order.payment, status: "UNKNOWN", lastCheckedAt: nowIso() },
+      // The client never received a payment link, so the attempt can be closed and
+      // its active slot released without a second charge. A provider transaction that
+      // was created but never returned is support-reconciled, not re-POSTed.
+      const updated = await transition(order, ORDER_STATES.CANCELLED, {
+        payment: { ...order.payment, status: "UNKNOWN", paymentUrl: null, lastCheckedAt: nowIso() },
+        activation: { ...order.activation, state: "NOT_STARTED", lastErrorCode: "DISPATCH_OUTCOME_UNKNOWN" },
       });
-      return { order: publicOrder(updated), idempotentReplay: false, recoveryRequired: true };
+      return { order: publicOrder(updated), idempotentReplay: false, recoveryRequired: true, reviewRequired: true };
     }
     if (!payment || !money(payment.amountMinor) || payment.amountMinor !== pricing.totalMinor
       || !["PENDING", "PAID"].includes(payment.status)) {
-      const updated = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
-        payment: { ...order.payment, status: "UNKNOWN", lastCheckedAt: nowIso() },
+      const updated = await transition(order, ORDER_STATES.CANCELLED, {
+        payment: { ...order.payment, status: "UNKNOWN", paymentUrl: null, lastCheckedAt: nowIso() },
+        activation: { ...order.activation, state: "NOT_STARTED", lastErrorCode: "DISPATCH_OUTCOME_UNKNOWN" },
       });
-      return { order: publicOrder(updated), idempotentReplay: false, recoveryRequired: true };
+      return { order: publicOrder(updated), idempotentReplay: false, recoveryRequired: true, reviewRequired: true };
+    }
+    if (payment.status === "PENDING" && !text(payment.providerTransactionId, 128)) {
+      // A payable link without a provider id cannot be verified, recovered or safely
+      // voided. Do not advertise it; close the attempt and release the slot.
+      const updated = await transition(order, ORDER_STATES.CANCELLED, {
+        payment: { ...order.payment, status: "UNKNOWN", paymentUrl: null, lastCheckedAt: nowIso() },
+        activation: { ...order.activation, state: "NOT_STARTED", lastErrorCode: "TRANSACTION_ID_MISSING" },
+      });
+      return { order: publicOrder(updated), idempotentReplay: false, recoveryRequired: true, reviewRequired: true };
     }
 
     const nextState = payment.status === "PAID" ? ORDER_STATES.PAID : ORDER_STATES.PENDING_PAYMENT;
@@ -353,6 +369,16 @@ export function createResidencyLifecycle(deps) {
   }
 
   async function expireIfDue(order) {
+    if (order.state === ORDER_STATES.PENDING_PAYMENT && ["DISPATCHING", "UNKNOWN"].includes(order.payment.status)
+      && !order.payment.providerTransactionId) {
+      if (clock.now() < Date.parse(order.createdAt) + dispatchLeaseMs) return order;
+      // A crash left an attempt with no provider id and no link was delivered.
+      // Close it and free the active slot instead of locking the customer out.
+      return transition(order, ORDER_STATES.CANCELLED, {
+        payment: { ...order.payment, status: "UNKNOWN", paymentUrl: null, lastCheckedAt: nowIso() },
+        activation: { ...order.activation, state: "NOT_STARTED", lastErrorCode: "DISPATCH_LEASE_EXPIRED" },
+      });
+    }
     if (order.state !== ORDER_STATES.PENDING_PAYMENT || order.payment.status !== "PENDING" || !order.payment.expiresAt) return order;
     if (clock.now() < Date.parse(order.payment.expiresAt)) return order;
     if (!order.payment.providerTransactionId) {
@@ -469,7 +495,9 @@ export function createResidencyLifecycle(deps) {
   }
 
   async function activate(order) {
-    if (![ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING, ORDER_STATES.ACTIVATION_FAILED].includes(order.state)) return order;
+    const eligible = [ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING, ORDER_STATES.ACTIVATION_FAILED].includes(order.state)
+      || (order.state === ORDER_STATES.PENDING_PAYMENT && ["DISPATCHING", "UNKNOWN"].includes(order.payment.status));
+    if (!eligible) return order;
     if (order.state === ORDER_STATES.ACTIVE) return order;
     const inFlightSince = iso(order.activation.startedAt) ? Date.parse(order.activation.startedAt) : null;
     if (order.activation.state === "IN_FLIGHT" && inFlightSince !== null && clock.now() - inFlightSince < 120000) {
@@ -528,12 +556,17 @@ export function createResidencyLifecycle(deps) {
     }
     if (result?.state === "ACTIVE" && iso(result.validFrom) && iso(result.validUntil)
       && Date.parse(result.validUntil) > Date.parse(result.validFrom)) {
-      if (order.mode === "RENEWAL" && iso(order.renewalBaseValidUntil)
-        && Date.parse(result.validUntil) <= Date.parse(order.renewalBaseValidUntil)) {
-        return transition(order, ORDER_STATES.ACTIVATION_FAILED, {
-          activation: { ...order.activation, state: "REJECTED", attempts: order.activation.attempts + 1,
-            lastErrorCode: "RENEWAL_WINDOW_NOT_EXTENDED", clientSubscriptionId: instance.clientSubscriptionId },
-        });
+      if (order.mode === "RENEWAL" && iso(order.renewalBaseValidUntil)) {
+        const base = Date.parse(order.renewalBaseValidUntil);
+        const expectedEnd = base + order.product.termDays * 86400000;
+        const startsWithoutGap = Date.parse(result.validFrom) <= base + 5 * 60 * 1000;
+        const endsWithoutLoss = Date.parse(result.validUntil) >= expectedEnd - 5 * 60 * 1000;
+        if (!startsWithoutGap || !endsWithoutLoss) {
+          return transition(order, ORDER_STATES.ACTIVATION_FAILED, {
+            activation: { ...order.activation, state: "REJECTED", attempts: order.activation.attempts + 1,
+              lastErrorCode: "RENEWAL_WINDOW_NOT_EXTENDED", clientSubscriptionId: instance.clientSubscriptionId },
+          });
+        }
       }
       return transition(order, ORDER_STATES.ACTIVE, {
         payment: order.payment.status === "PAID" ? order.payment : {

@@ -262,7 +262,8 @@ test("renewal of an active residency is allowed and preserves the current order"
   const first = await lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
   // Confirm + activate the first order.
   const payments = {
-    async create() { throw new Error("must not create"); },
+    async create() { return { status: "PENDING", providerTransactionId: "txn-2", paymentUrl: "https://bank.example/pay/2",
+      amountMinor: 79000, expiresAt: "2026-11-18T09:20:00.000Z" }; },
     async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
   };
   const activation = {
@@ -336,22 +337,30 @@ test("an invalid discount that exceeds the base amount fails closed", async () =
   assert.equal(calls.create, 0);
 });
 
-test("Viva create failure persists an UNKNOWN order and a retry reads it back without a second charge", async () => {
+test("a Viva create failure closes the attempt without a second charge and frees the slot", async () => {
   let createCalls = 0;
   const payments = {
-    async create() { createCalls += 1; throw new Error("socket hang up"); },
-    async read() { return { status: "PENDING", amountMinor: 79000, paymentUrl: "https://bank.example/pay/recovered", expiresAt: "2026-11-18T09:20:00.000Z", providerTransactionId: "txn-1" }; },
+    async create() {
+      createCalls += 1;
+      if (createCalls === 1) throw new Error("socket hang up");
+      return { status: "PENDING", providerTransactionId: "txn-2", paymentUrl: "https://bank.example/pay/2",
+        amountMinor: 79000, expiresAt: "2026-11-18T09:20:00.000Z" };
+    },
+    async read() { return { status: "UNKNOWN" }; },
   };
   const { lifecycle } = build({ payments });
   const first = await lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
   assert.equal(first.recoveryRequired, true);
+  assert.equal(first.order.state, ORDER_STATES.CANCELLED);
   assert.equal(first.order.payment.status, "UNKNOWN");
+  assert.equal(first.order.payment.paymentUrl, null);
   assert.equal(createCalls, 1);
   const replay = await lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
   assert.equal(replay.idempotentReplay, true);
   assert.equal(createCalls, 1);
-  const payment = await lifecycle.getPayment({ tenantId: TENANT, userId: USER, orderId: first.order.orderId });
-  assert.equal(payment.paymentUrl, "https://bank.example/pay/recovered");
+  const replacement = await lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY2, mode: "NEW" });
+  assert.equal(replacement.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.notEqual(replacement.order.orderId, first.order.orderId);
 });
 
 test("CUP activation failure keeps the order PAID_ACTIVATION_PENDING and recovers on the next reconcile", async () => {
@@ -621,4 +630,55 @@ test("two concurrent callbacks do not call CUP activation twice", async () => {
   ]);
   assert.equal(activationCalls, 1);
   assert.ok([left.order.state, right.order.state].includes(ORDER_STATES.ACTIVE));
+});
+
+test("a crashed DISPATCHING attempt recovers through CUP evidence before its lease expires", async () => {
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  const row = creator.store.orders.get(created.order.orderId);
+  row.payment.status = "DISPATCHING";
+  row.payment.providerTransactionId = null;
+  row.payment.paymentUrl = null;
+  creator.store.orders.set(created.order.orderId, row);
+  const recovered = build({ store: creator.store, activation: {
+    async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async activate() { return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT }; },
+  } });
+  const result = await recovered.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-cup" });
+  assert.equal(result.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(result.order.payment.status, "PAID");
+  assert.equal(result.order.residency.validUntil, VALID_UNTIL);
+});
+
+test("a crashed DISPATCHING attempt is released after the lease instead of locking the user out", async () => {
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  const row = creator.store.orders.get(created.order.orderId);
+  row.payment.status = "DISPATCHING";
+  row.payment.providerTransactionId = null;
+  row.payment.paymentUrl = null;
+  creator.store.orders.set(created.order.orderId, row);
+  creator.setNow(Date.parse("2026-11-18T09:03:00.000Z"));
+  const released = await creator.lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(released.order.state, ORDER_STATES.CANCELLED);
+  assert.equal(released.order.activation.lastErrorCode, "DISPATCH_LEASE_EXPIRED");
+  assert.equal(released.order.payment.paymentUrl, null);
+  const replacement = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY2, mode: "NEW" });
+  assert.equal(replacement.order.state, ORDER_STATES.PENDING_PAYMENT);
+});
+
+test("a renewal that absorbs remaining days is rejected as a lost window", async () => {
+  const baseUntil = "2026-11-23T09:05:00.000Z";
+  const creator = build({ statusValue: { state: RESIDENCY_STATES.ACTIVE, validFrom: VALID_FROM, validUntil: baseUntil, source: "CUP", observedAt: PAID_AT } });
+  const renewed = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "RENEWAL" });
+  const payments = { async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; } };
+  const activation = { async findInstance() { return { clientSubscriptionId: "sub-new", purchasedAt: PAID_AT }; },
+    async activate() { return { state: "ACTIVE", validFrom: "2026-11-18T09:05:00.000Z",
+      validUntil: "2026-12-18T09:05:00.000Z", source: "CUP", observedAt: PAID_AT }; } };
+  const lifecycle = build({ store: creator.store, payments, activation,
+    statusValue: { state: RESIDENCY_STATES.ACTIVE, validFrom: VALID_FROM, validUntil: baseUntil, source: "CUP", observedAt: PAID_AT } });
+  const result = await lifecycle.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: renewed.order.orderId, idempotencyKey: KEY2, eventId: "evt-renew" });
+  assert.equal(result.order.state, ORDER_STATES.ACTIVATION_FAILED);
+  assert.equal(result.order.activation.lastErrorCode, "RENEWAL_WINDOW_NOT_EXTENDED");
 });
