@@ -352,7 +352,14 @@ test("a CUP-confirmed discount is applied exactly once and changes the provider 
     statusValue: { state: RESIDENCY_STATES.ACTIVE, validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT },
   });
   built.setNow(Date.parse(VALID_UNTIL));
-  const created = await built.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "RENEWAL" });
+  // Consent is the exact displayed total. A discount learned only at quote time must be
+  // shown to the user and confirmed, not applied silently under a higher consent.
+  await expectCode(
+    built.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "RENEWAL" }),
+    409,
+    "RESIDENCY_PRICE_CHANGED",
+  );
+  const created = await built.lifecycle.createOrder({ expectedTotalMinor: 71100, tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "RENEWAL" });
   assert.deepEqual(created.order.pricing.discountLines.map((line) => line.code), ["resident-renewal"]);
   assert.equal(created.order.pricing.totalMinor, 71100);
 });

@@ -3,7 +3,9 @@
 Status: source implementation, default off. No Node-RED import, index apply, provider
 call, publication or deploy is performed by this change.
 
-Contract version: `residency-lifecycle.v2` (additive over v1; `schemaVersion` stays 1).
+Contract version: `residency-lifecycle.v2`; `schemaVersion` stays 1. The response DTO is
+additive over v1, but the **create request is not backward-compatible**: `expectedTotalMinor` is
+mandatory (see [Compatibility](#compatibility-expectedtotalminor-is-a-breaking-create-change)).
 
 ## Ownership (verified 2026-11-18)
 
@@ -127,17 +129,42 @@ product instance. A provider/CUP failure is UNAVAILABLE with a stable reason, ne
 NONE. Dates are copied from CUP evidence; the lifecycle never computes a window from
 the local clock.
 
+### Compatibility: `expectedTotalMinor` is a breaking create change
+
+Keeping `schemaVersion: 1` does **not** make a mode-only request compatible. The version describes
+the response shape; this change adds a mandatory request field and changes what a valid create
+means.
+
+- The previous client sends `{ "mode": "NEW" }`. That request is refused with
+  `400 RESIDENCY_PRICE_CONSENT_REQUIRED` **before the idempotency lookup** and creates nothing.
+  For the same reason it cannot be used to replay an already-created order.
+- An order written by the previous owner head (`adc9c644`) has no `consent` block and an old
+  request hash. It remains durable, readable and reconcilable, but it is not replayable:
+  a mode-only retry gets the same 400, and a new-format retry with the same key gets
+  `409 RESIDENCY_IDEMPOTENCY_CONFLICT`.
+- Recovery for either case is the server-authorized lookup
+  `GET /orders?state=unresolved` (then `GET /orders/{orderId}` or `POST .../reconcile`). The
+  client must not create a new key to "repair" the old attempt.
+- Every consumer and client must send the exact total it displayed to the user. The LK2 consumer
+  rejects a body without `expectedTotalMinor` before calling this owner; the web client must add
+  the field in its own PR.
+
 ### Create or renew
 
 POST /orders with Idempotency-Key and body
 `{ "mode": "NEW" | "RENEWAL", "expectedTotalMinor": 79000, "expectedProductId": "<uuid>" }`.
 
-- `expectedTotalMinor` is **required**: the client confirms the price it showed to the
-  user. A missing value is 400 `RESIDENCY_PRICE_CONSENT_REQUIRED`; a confirmed amount
-  below the server-computed total (or a different `expectedProductId`) is 409
-  `RESIDENCY_PRICE_CHANGED` with `details`, before any durable order and before any
-  provider POST. The consent is bound into the idempotency request hash, so the same key
-  with a different confirmed price is 409 `RESIDENCY_IDEMPOTENCY_CONFLICT`.
+- `expectedTotalMinor` is **required** and means the **exact** total the client displayed to
+  the user. A missing or non-positive value is 400 `RESIDENCY_PRICE_CONSENT_REQUIRED`. The
+  confirmed total must equal the server-computed total: a lower **or higher** value, or a
+  different `expectedProductId`, is 409 `RESIDENCY_PRICE_CHANGED` with `details`
+  (`expectedTotalMinor`, `totalMinor`, `currency`, `productId`), before any durable order and
+  before any provider POST. A discount that appears only at quote time is a price change: the
+  client must re-read the catalog, show the new total and confirm it again. The consent is bound
+  into the idempotency request hash, so the same key with a different confirmed total is 409
+  `RESIDENCY_IDEMPOTENCY_CONFLICT` once an order exists. Until the catalog publishes the same
+  discount lines/total, a quote-time discount is a closed refusal, not a silent lower charge;
+  enabling discount purchases requires a catalog change (a separate review).
 - NEW is refused with 409 RESIDENCY_RENEWAL_REQUIRED while an active residency
   exists; use RENEWAL. RENEWAL requires an active residency
   (409 RESIDENCY_RENEWAL_NOT_ELIGIBLE).
@@ -198,6 +225,49 @@ The order is durable before the Viva POST.
 `DISPATCHING` value is never exposed (it is normalized to UNKNOWN in **both** the order
 and the payment endpoint).
 
+### Create outcomes and error table
+
+"Before lookup" means the check runs before `findOrderByKey`; those outcomes therefore say
+nothing about whether an order already exists for the key. "After lookup" means the key was
+looked up and no order with that key existed at that moment (a concurrent request can still race).
+"After insert" means the durable order exists before the provider POST.
+
+| Result (HTTP) | Check point | Order created by this request? | Earlier operation can exist? | Client key | Required recovery |
+| --- | --- | --- | --- | --- | --- |
+| 400 `RESIDENCY_PRICE_CONSENT_REQUIRED` | before lookup | no | **yes** — especially a mode-only retry or an old-format order | keep | `GET /orders?state=unresolved` if an earlier attempt may exist |
+| 409 `RESIDENCY_PRICE_CHANGED` (product) | before lookup | no | **yes** | keep | unresolved lookup / correct product |
+| 400 `RESIDENCY_REQUEST_INVALID` (JSON), 413 `RESIDENCY_REQUEST_TOO_LARGE`, 415 `RESIDENCY_CONTENT_TYPE_INVALID` | HTTP layer, before lookup | no | **yes** | keep | unresolved lookup if the key may have been used |
+| 400 `RESIDENCY_MODE_INVALID`, `RESIDENCY_REQUEST_INVALID`, `RESIDENCY_RETURN_TARGET_INVALID`, `RESIDENCY_IDEMPOTENCY_KEY_REQUIRED` | before lookup | no | **yes** | keep a valid key | unresolved lookup if the key may have been used |
+| 401 `RESIDENCY_AUTH_REQUIRED` / 403 permission | before lookup | no | **yes** | keep | authenticate/re-authorize, repeat same key |
+| 409 `RESIDENCY_IDEMPOTENCY_CONFLICT` | after lookup; key already maps to an order | no new order | **yes** — that key's order | keep | read/replay the original request, or unresolved lookup |
+| 503 `RESIDENCY_STATUS_UNAVAILABLE` | after lookup, before insert | no | no for this key at lookup (concurrent race only) | may discard | retry after status recovers; unresolved lookup if the response was lost |
+| 409 `RESIDENCY_RENEWAL_NOT_ELIGIBLE`, `RESIDENCY_RENEWAL_REQUIRED`, `RESIDENCY_RENEWAL_TOO_EARLY` | after lookup, before insert | no | no for this key at lookup | may discard | refresh status/catalog; `RENEWAL_TOO_EARLY` carries `eligibleAt` |
+| 409 `RESIDENCY_ORDER_ALREADY_PENDING` | after lookup, before insert | no | **yes** — another unresolved order for the user | discard this attempt's key | `GET /orders?state=unresolved`; never create a new key |
+| 503 `RESIDENCY_CATALOG_UNAVAILABLE`, `RESIDENCY_PRICING_UNAVAILABLE`, `RESIDENCY_PRICING_INVALID` | after lookup, before insert | no | no for this key at lookup | may discard | retry after configuration/quote recovers |
+| 409 `RESIDENCY_PRICE_CHANGED` (total) | after lookup, after quote | no | no for this key at lookup | may keep; no order exists | re-read catalog, show and confirm the exact new total, then retry |
+| 409 `RESIDENCY_ORDER_CONFLICT` | insert race | no by this request | **yes** — a concurrent order may exist | keep | unresolved lookup or same-key replay |
+| 200 `PAYMENT_FAILED` | after insert; provider explicit 4xx refusal | **yes**, terminal | provider refused; no financial operation from that request | use a new key for a retry | read the terminal order |
+| 200 `PENDING_PAYMENT`, payment `PENDING` | after insert; provider accepted | **yes** | **yes** — provider operation exists | keep | pay or reconcile |
+| 200 `PENDING_PAYMENT`, payment `UNKNOWN` | after insert; provider outcome ambiguous | **yes** | **yes** — provider operation may exist | keep | reconcile/read; `UNKNOWN_OUTCOME`; never a new key |
+| 200 `PAID` / `ACTIVE` | after insert | **yes** | provider payment exists | terminal | read; activation/reconcile |
+
+LK2 consumer-only outcomes (the owner may not have been called):
+
+| Result (HTTP) | When | Order created by this request? | Earlier operation can exist? | Client key | Required recovery |
+| --- | --- | --- | --- | --- | --- |
+| 503 `RESIDENCY_ORDERS_DISABLED`, `RESIDENCY_PRODUCT_NOT_CONFIGURED`, `RESIDENCY_TENANT_NOT_SUPPORTED` | before the owner call | no | **yes** | keep | fix configuration/tenant; unresolved lookup |
+| 409 `RESIDENCY_REAUTH_REQUIRED`, 503 `RESIDENCY_REAUTH_UNAVAILABLE` | before the owner call | no | **yes** | keep | re-authorize the Viva delegation, repeat the same key |
+| 503 `RESIDENCY_OWNER_UNAVAILABLE`, `RESIDENCY_OWNER_RESPONSE_INVALID` | transport/timeout/invalid answer | **unknown** — the owner may have created the order | **yes** | keep | same-key replay; unresolved lookup if the key or orderId was lost |
+| 503 `RESIDENCY_OWNER_CONFIGURATION_INVALID` | owner configuration refusal passed through | no for this request; see the owner rows | **yes** | keep | repeat after configuration is fixed; unresolved lookup |
+
+### Client-side state (not a tariff)
+
+A client may persist the exact confirmed `expectedTotalMinor`, the mode, the Idempotency-Key and
+the returned orderId for replay. That is an operation snapshot needed to repeat the same request
+and to refuse a different total; it is **not** a local price or tariff. Every amount is still read
+from the server, and the owner validates exact equality. Never persist a payment link, token or
+provider id.
+
 ### Recovery states (public, persisted through reads)
 
 `recovery` is a projection of durable order fields, so it survives a restart, a lost
@@ -241,10 +311,14 @@ is **not** the provider's payment lifetime. When it elapses:
 - a provider read that returns PAID recovers the order and activates it;
 - a provider read that returns FAILED (a terminal provider status) is a confirmed basis
   for `PAYMENT_FAILED` and releases the slot;
-- PENDING, UNKNOWN, a missing read or an unavailable read never expiring the order,
-  never releasing the slot and never hiding a still-payable link; the order stays
-  PENDING_PAYMENT with `payment.overdue=true` and recovery
-  `AWAITING_CONFIRMATION`.
+- PENDING, UNKNOWN, a missing read or an unavailable read never expire the order, never
+  release the slot and never hide a still-payable link. The local TTL does **not** close
+  PENDING or UNKNOWN automatically:
+  - a local `payment.status=PENDING` past `expiresAt` keeps `PENDING_PAYMENT`, reports
+    `payment.overdue=true` and recovery `AWAITING_CONFIRMATION` (action `RETRY_RECONCILE`);
+  - a local `payment.status=UNKNOWN` (ambiguous dispatch) keeps `PENDING_PAYMENT` and recovery
+    `UNKNOWN_OUTCOME` (action `RETRY_RECONCILE`) with `overdue=false`; passing the TTL does not
+    convert it to `AWAITING_CONFIRMATION`, `EXPIRED` or a new purchase.
 - A late PAID is accepted from every non-terminal state; a legacy EXPIRED row is still
   recovered. A CANCELLED order is never revived.
 
@@ -462,7 +536,12 @@ cannot.
    CORS and the store binding.
 5. Contract check with a synthetic client on the test stand:
    - GET /catalog returns 79 000, the exact terms and a per-user renewal block;
-   - POST /orders without `expectedTotalMinor` is 400 and creates nothing;
+   - POST /orders without `expectedTotalMinor` (the previous mode-only client) is 400 and
+     creates nothing; a resulting order is not replayed by that request;
+   - POST /orders with `expectedTotalMinor` below **and** above the server total is 409
+     `RESIDENCY_PRICE_CHANGED` with zero provider POSTs; only exact equality creates;
+   - after an order is created, a new-format request with the same key and a different total is
+     409 `RESIDENCY_IDEMPOTENCY_CONFLICT`; the same key and the same body returns the same order;
    - POST /orders twice with one key returns one order and one Viva transaction;
    - an unpaid order returns PENDING_PAYMENT and no residency row;
    - after a sandbox card payment, reconcile returns ACTIVE with CUP dates;
@@ -473,8 +552,13 @@ cannot.
    - after activation, POST /orders {mode:"RENEWAL"} is 409
      RESIDENCY_RENEWAL_TOO_EARLY with zero Viva POSTs, and becomes eligible at
      `eligibleAt`;
-   - an unpaid order past its local TTL still returns the pending order and the link; a
-     later sandbox PAID read recovers it;
+   - an order created by the previous head (no `consent`, old request hash) is not replayable by
+     either request format; `GET /orders?state=unresolved` returns it and a late provider PAID
+     reconciles it to ACTIVE;
+   - an unpaid order past its local TTL still returns the pending order and the link with
+     `overdue=true` and recovery `AWAITING_CONFIRMATION`; an ambiguous dispatch stays
+     `UNKNOWN_OUTCOME` with `overdue=false`; neither is closed by the TTL; a later sandbox PAID
+     read recovers it;
    - stop CUP or Viva and confirm UNAVAILABLE/retryable, never NONE or a second
      charge; restore and confirm recovery.
 6. Enable LK_RESIDENCY_LIFECYCLE_ENABLED=true only after the check; keep the flag as

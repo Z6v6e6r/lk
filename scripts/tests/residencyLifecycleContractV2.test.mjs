@@ -166,13 +166,63 @@ test("price consent is mandatory and bound to the durable order", async () => {
   const conflict = await h.api.handle(h.request("POST", "/lk/residency/orders", createBody("NEW", { expectedTotalMinor: 70000 }), H(KEY)));
   assert.equal(conflict.statusCode, 409);
   assert.equal(conflict.body.code, "RESIDENCY_IDEMPOTENCY_CONFLICT");
-  // A confirmed amount below the current price refuses the purchase before the provider.
-  const fresh = harness();
-  const cheap = await fresh.api.handle(fresh.request("POST", "/lk/residency/orders", createBody("NEW", { expectedTotalMinor: 100 }), H(KEY)));
-  assert.equal(cheap.statusCode, 409);
-  assert.equal(cheap.body.code, "RESIDENCY_PRICE_CHANGED");
-  assert.equal(cheap.body.details.totalMinor, 79000);
-  assert.equal(fresh.state.createCalls, 0);
+  // Consent is exact: both a lower and a higher confirmed amount are a change. Neither
+  // creates an order or reaches the provider.
+  for (const expectedTotalMinor of [100, 80000]) {
+    const fresh = harness();
+    const changed = await fresh.api.handle(
+      fresh.request("POST", "/lk/residency/orders", createBody("NEW", { expectedTotalMinor }), H(KEY)),
+    );
+    assert.equal(changed.statusCode, 409);
+    assert.equal(changed.body.code, "RESIDENCY_PRICE_CHANGED");
+    assert.equal(changed.body.details.expectedTotalMinor, expectedTotalMinor);
+    assert.equal(changed.body.details.totalMinor, 79000);
+    assert.equal(fresh.state.createCalls, 0);
+    assert.equal(fresh.store.orders.size, 0);
+  }
+});
+
+test("a previous-format mode-only order is not replayed but stays recoverable", async () => {
+  const h = harness();
+  const created = await h.api.handle(h.request("POST", "/lk/residency/orders", createBody(), H(KEY)));
+  assert.equal(created.statusCode, 200);
+  const orderId = created.body.order.orderId;
+  // Shape of an order written by adc9c644: no consent block and an old request hash.
+  const legacy = h.store.orders.get(orderId);
+  assert.ok(legacy);
+  delete legacy.consent;
+  legacy.requestHash = "legacy-mode-only-request-hash";
+  h.store.orders.set(orderId, legacy);
+
+  // A mode-only retry is refused before the idempotency lookup: it cannot prove absence.
+  const modeOnly = await h.api.handle(h.request("POST", "/lk/residency/orders", { mode: "NEW" }, H(KEY)));
+  assert.equal(modeOnly.statusCode, 400);
+  assert.equal(modeOnly.body.code, "RESIDENCY_PRICE_CONSENT_REQUIRED");
+  assert.equal(h.state.createCalls, 1);
+  assert.equal(h.store.orders.size, 1);
+
+  // The new-format retry with the same key finds the old order but cannot replay it.
+  const replay = await h.api.handle(h.request("POST", "/lk/residency/orders", createBody(), H(KEY)));
+  assert.equal(replay.statusCode, 409);
+  assert.equal(replay.body.code, "RESIDENCY_IDEMPOTENCY_CONFLICT");
+  assert.equal(h.state.createCalls, 1);
+
+  // The durable order is still the authorized recovery path.
+  const unresolved = await h.api.handle(h.request("GET", "/lk/residency/orders?state=unresolved", undefined, H(KEY2)));
+  assert.equal(unresolved.statusCode, 200);
+  assert.equal(unresolved.body.count, 1);
+  assert.equal(unresolved.body.orders[0].orderId, orderId);
+  assert.equal(unresolved.body.orders[0].consent, null);
+
+  // A late provider result still activates the previous-format order.
+  h.state.readStatus = "PAID";
+  h.state.readTransactionId = "txn-1";
+  h.state.instance = { clientSubscriptionId: "sub-legacy", purchasedAt: PAID_AT };
+  const reconciled = await h.api.handle(
+    h.request("POST", "/lk/residency/orders/" + orderId + "/reconcile", {}, H(KEY3)),
+  );
+  assert.equal(reconciled.statusCode, 200);
+  assert.equal(reconciled.body.order.state, ORDER_STATES.ACTIVE);
 });
 
 test("the return target is a configured key, never a caller-supplied redirect", async () => {
