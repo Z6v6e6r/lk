@@ -648,6 +648,22 @@ export function createResidencyLifecycle(deps) {
     }
     // A PAID order waiting for activation must not be cancelled into a refund automatically.
     if (order.payment.status === "PAID") fail(409, "RESIDENCY_ORDER_PAID", "A paid order requires activation or review");
+    // An in-flight payment can settle after a local cancel. Read the original transaction
+    // first; a PAID result refuses the cancel and an unreadable result fails closed.
+    if (order.state === ORDER_STATES.PENDING_PAYMENT && order.payment.providerTransactionId) {
+      let read;
+      try {
+        read = await payments.read({
+          tenantId: order.tenantId, userId: order.userId, orderId: order.orderId,
+          amountMinor: order.pricing.totalMinor, providerTransactionId: order.payment.providerTransactionId,
+        });
+      } catch {
+        fail(503, "RESIDENCY_PAYMENT_STATUS_UNAVAILABLE", "Payment status is unavailable; retry before cancelling");
+      }
+      if (read?.status === "PAID") {
+        fail(409, "RESIDENCY_ORDER_PAID", "A paid order requires activation or review");
+      }
+    }
     const cancelled = await transition(order, ORDER_STATES.CANCELLED, {
       payment: { ...order.payment, paymentUrl: null },
     });

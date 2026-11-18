@@ -190,8 +190,10 @@ CUP's context.instance.activeFrom/activeTo.
 ### Cancel
 
 POST /orders/{orderId}/cancel with Idempotency-Key. Cancellable only while not
-paid and not active. A paid order waiting for activation must not be cancelled into an
-automatic refund (409 RESIDENCY_ORDER_PAID).
+paid and not active. The owner reads the original transaction first: PAID refuses the
+cancel, and an unreadable status fails closed instead of cancelling an in-flight payment.
+A paid order waiting for activation must not be cancelled into an automatic refund
+(409 RESIDENCY_ORDER_PAID).
 
 ### Error envelope
 

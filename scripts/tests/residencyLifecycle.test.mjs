@@ -443,3 +443,25 @@ test("a create that is immediately PAID activates before the response", async ()
   assert.equal(created.order.residency.state, RESIDENCY_STATES.ACTIVE);
   assert.equal(calls.activate, 1);
 });
+
+test("cancelling a pending order checks the original transaction first", async () => {
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  const paidLifecycle = build({ store: creator.store, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  } });
+  await expectCode(paidLifecycle.lifecycle.cancel({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2 }), 409, "RESIDENCY_ORDER_PAID");
+  assert.equal(creator.store.orders.get(created.order.orderId).state, ORDER_STATES.PENDING_PAYMENT);
+
+  const unavailable = build({ store: creator.store, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { throw new Error("provider down"); },
+  } });
+  await expectCode(unavailable.lifecycle.cancel({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2 }), 503, "RESIDENCY_PAYMENT_STATUS_UNAVAILABLE");
+  assert.equal(creator.store.orders.get(created.order.orderId).state, ORDER_STATES.PENDING_PAYMENT);
+
+  const pending = build({ store: creator.store });
+  const cancelled = await pending.lifecycle.cancel({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2 });
+  assert.equal(cancelled.order.state, ORDER_STATES.CANCELLED);
+});
