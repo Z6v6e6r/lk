@@ -27,7 +27,7 @@ if (managed && !internal) {
   if (rows.length !== 1) return fail('TOURNAMENT_AMBIGUOUS', 'Требуется проверка записей турнира');
   if (fpr && resume) return fail('TOURNAMENT_CLOSED', 'Протокол ФПР не поддерживает возобновление');
   if (!resume && !correction && (genericFinished || fprFinished)) return fail('TOURNAMENT_CLOSED', 'Турнир завершён. Результаты сохранены локально для проверки организатором');
-  if (!resume && !correction && Date.parse(lifecycle.deadlineAt) <= Date.parse(nowIso)) return fail('TOURNAMENT_DEADLINE_REACHED', 'Три часа истекли. Результаты сохранены локально для проверки организатором');
+  if (!resume && !correction && Date.parse(lifecycle.deadlineAt) <= Date.parse(nowIso)) return fail('TOURNAMENT_DEADLINE_REACHED', 'Время турнира истекло. Результаты сохранены локально для проверки организатором');
   if (resume && !genericFinished) return fail('TOURNAMENT_NOT_CLOSED', 'Возобновить можно только завершённый турнир');
 }
 // Request params must never replace server timing, including on legacy tournaments.
@@ -44,7 +44,9 @@ let next = managed ? { ...lifecycle } : null;
 // FPR is created ready; its first server-confirmed round start arms the timer.
 if (!next && fpr && original.params?.fpr6x25?.status === 'ready'
     && getParam('fpr6x25')?.status === 'in_progress') {
-  next = { version: 1, session: 1, startedAt: nowIso, deadlineAt: new Date(Date.parse(nowIso) + 10800000).toISOString() };
+  const durationMs = AUTO_FINISH_DURATION_MS(original);
+  next = { version: 1, session: 1, startedAt: nowIso, deadlineAt: new Date(Date.parse(nowIso) + durationMs).toISOString(),
+    ...(durationMs !== 10800000 ? { durationMs } : {}) };
 }
 if (next && resume) next = {
   version: 1, session: next.session + 1, startedAt: next.startedAt,

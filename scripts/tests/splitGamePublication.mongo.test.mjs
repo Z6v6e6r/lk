@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MongoClient } from 'mongodb';
+import { splitPublicationLegacyGuard, PUBLICATION_LEGACY_ROUTES } from '../lib/splitPublicationLegacyGuard.mjs';
 import { runPublicationBatch } from '../split_game_publication_worker.mjs';
 import { normalizePublicationIntent, normalizeBookingContract, publishConfirmedOperation } from '../lib/splitGamePublication.mjs';
 
@@ -36,6 +37,31 @@ test('Mongo replica: concurrent workers, commit loss/restart and cancellation ar
     assert.equal((await operations.findOne({ _id: operation._id })).lk1.publication.state, 'PUBLISHED');
     const first = await games.findOne({});
     assert.equal(first.organizer.id, operation.actorClientId); assert.equal(first.settings.isPrivate, true);
+    // Execute the actual guard against Mongo, not a simulated ownership result.
+    const legacy = async url => {
+      const msg = { payload: { paymentRef: 'another-tab-ref', tenantKey: null,
+        booking: { exerciseId: operation.exerciseId, bookingIds: [operation.bookingId] }, participants: [] },
+        req: { method: 'POST', url, query: {}, headers: {} } };
+      const query = splitPublicationLegacyGuard(msg, { get: () => 'fixture' })[1];
+      assert.ok(query);
+      msg.payload = await operations.find(...query.payload).toArray();
+      const output = splitPublicationLegacyGuard(msg, { get: () => 'fixture' });
+      assert.equal(output[0], null); assert.equal(output[1], null); assert.equal(output[2].statusCode, 409);
+    };
+    // Worker first, then a delayed old tab: preserve legitimate later roster/settings.
+    await games.updateOne({ _id: first._id }, { $set: { participants: [{ id: 'fixture-new-player' }],
+      'settings.isPrivate': false, revision: 7 } });
+    const edited = await games.findOne({});
+    for (const url of PUBLICATION_LEGACY_ROUTES) await legacy(url);
+    assert.deepEqual(await games.findOne({}), edited);
+    // Legacy first and concurrent with worker: only the worker can become a writer.
+    await games.deleteMany({}); await operations.replaceOne({ _id: operation._id }, operation);
+    await legacy('/lk/games/confirm');
+    assert.equal(await games.countDocuments({}), 0);
+    await Promise.all([legacy('/lk/games'), legacy('/lk/games/drafts'),
+      runPublicationBatch(db, { apply: true, tenantKey: 'fixture', withTransaction: transaction })]);
+    assert.equal(await games.countDocuments({}), 1);
+    assert.equal((await operations.findOne({ _id: operation._id })).lk1.publication.state, 'PUBLISHED');
     // Roll back both collections on a crash after the publication body, before commit.
     await games.deleteMany({}); await operations.replaceOne({ _id: operation._id }, operation);
     await assert.rejects(transaction(async session => {

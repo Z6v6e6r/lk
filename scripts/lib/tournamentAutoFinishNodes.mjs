@@ -6,6 +6,14 @@ import { isTournamentFinalized } from './tournamentFinalization.mjs';
 export const AUTO_FINISH_NODES = {
   prepare: '4f0f1ce8189a9e8c', write: '2e70b2e547e77c00', ack: '745f991e11130b08',
 };
+export function tournamentAutoFinishDurationMs(tournament) {
+  const policy = tournament.params?.fprDeadlinePolicy;
+  const extendedFpr = tournament.tournamentType === 'fpr_6x25'
+    && policy?.version === 1 && policy.extensionMinutes === 45
+    && Number.isFinite(Date.parse(policy.baseEndsAt))
+    && Date.parse(tournament.params?.fpr6x25?.endsAt) === Date.parse(policy.baseEndsAt) + 45 * 60_000;
+  return (extendedFpr ? 225 : 180) * 60_000;
+}
 export function isAutoFinishProtocolClosed(tournament) {
   // A summary can be completed merely because every currently scheduled match is scored.
   // The managed session remains editable until explicit finish or its deadline.
@@ -18,6 +26,7 @@ export function buildAutoFinishNode(source, kind) {
   if (source.includes('tournament_auto_finish_' + kind + '_v1')) throw new Error('AUTO_FINISH_ALREADY_INSTALLED');
   const template = fs.readFileSync(fileURLToPath(new URL('../nodered_tournament_auto_finish_nodes/' + kind + '.js', import.meta.url)), 'utf8');
   const helper = `const AUTO_FINISH_WRITE_FIELDS = ${JSON.stringify(TOURNAMENT_WRITE_FIELDS)};\n`
+    + `const AUTO_FINISH_DURATION_MS = ${tournamentAutoFinishDurationMs.toString()};\n`
     + `const AUTO_FINISH_IS_FINAL = ${isTournamentFinalized.toString().replaceAll('isRecord(', 'autoFinishIsRecord(')};\n`
     + `const AUTO_FINISH_IS_CLOSED = ${isAutoFinishProtocolClosed.toString().replaceAll("isTournamentFinalized(", "AUTO_FINISH_IS_FINAL(")};\n`
     + 'const autoFinishIsRecord = value => Boolean(value) && typeof value === "object" && !Array.isArray(value);\n';

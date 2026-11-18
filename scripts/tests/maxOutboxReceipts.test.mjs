@@ -7,7 +7,7 @@ import { preparePatch } from '../prepare_max_outbox_receipts.mjs';
 const require = createRequire(import.meta.url);
 const register = require('../../node-red/max-outbox-adapter/max-outbox-send.js');
 const { deliver } = register;
-const command = () => ({ id: 'synthetic-command', leaseToken: randomUUID(), text: 'synthetic text',
+const command = () => ({ id: 'synthetic-command', meta: { maxOutboxProtocol: 'max-lease-v1' }, leaseToken: randomUUID(), text: 'synthetic text',
   targetExternalChatId: 'chat-fixture', leasedUntil: new Date(Date.now() + 60000).toISOString() });
 const provider = (status, body, headers) => new Response(JSON.stringify(body), { status, headers });
 const run = (file, msg) => new Function('msg', 'env', fs.readFileSync(file, 'utf8'))(msg, { get: () => null });
@@ -195,19 +195,19 @@ test('fenced dispatch preserves safe diagnostics without exporting send fields o
 
 test('registered runtime node emits receipt only and completes handler on failure', async () => {
   let Type, handler, complete = 0, sent;
-  const RED = { nodes: { registerType: (_type, fn) => { Type = fn; }, getNode: () => null,
+  const RED = { nodes: { registerType: (name, fn) => { if (name === 'max-outbox-send') Type = fn; }, getNode: () => null,
     createNode: node => { node.on = (event, fn) => { if (event === 'input') handler = fn; }; node.warn = () => {}; } } };
   register(RED); new Type({ bot: 'synthetic' });
   await handler({ supportOutbox: command(), payload: 'private' }, value => { sent = value; }, () => { complete++; });
   assert.equal(complete, 1); assert.equal(sent.maxOutboxReceipt.kind, 'fail');
-  assert.deepEqual(Object.keys(sent), ['maxOutboxReceipt']);
+  assert.deepEqual(Object.keys(sent), ['maxOutboxReceipt', 'maxOutboxLeaseUntil']);
 });
 
 
 test('node lifecycle deduplicates same lease and close aborts without success receipt', async () => {
   const original = globalThis.fetch;
   let calls = 0, Type, providerStarted; const started = new Promise(resolve => { providerStarted = resolve; }); const handlers = new Map(); const warnings = [];
-  const RED = { nodes: { registerType: (_t, fn) => { Type = fn; }, getNode: () => ({ token: 'synthetic-token' }),
+  const RED = { nodes: { registerType: (name, fn) => { if (name === 'max-outbox-send') Type = fn; }, getNode: () => ({ token: 'synthetic-token' }),
     createNode: node => { node.on = (event, fn) => handlers.set(event, fn); node.warn = x => warnings.push(x); } } };
   try {
     globalThis.fetch = async (_url, options) => {
@@ -232,7 +232,7 @@ test('node lifecycle deduplicates same lease and close aborts without success re
 test('receipt output failure completes handler without repeating provider send', async () => {
   const original = globalThis.fetch;
   let Type, input, calls = 0, completed = 0; const warnings = [];
-  const RED = { nodes: { registerType: (_t, fn) => { Type = fn; }, getNode: () => ({ token: 'synthetic' }),
+  const RED = { nodes: { registerType: (name, fn) => { if (name === 'max-outbox-send') Type = fn; }, getNode: () => ({ token: 'synthetic' }),
     createNode: node => { node.on = (event, fn) => { if (event === 'input') input = fn; }; node.warn = x => warnings.push(x); } } };
   try {
     globalThis.fetch = async () => { calls++; return provider(200, { message: { body: { mid: 'accepted' } } }); };
@@ -258,5 +258,40 @@ test('observed MAX permanent refusal codes survive as safe receipts with one tra
     assert.equal(result.kind, 'fail');
     assert.deepEqual(result.failure, { status, code });
     assert.ok(!JSON.stringify(result).includes('private-'));
+  }
+});
+
+
+test('sender capacity emits proven local deferral and completed cache expires with lease, not ten minutes', async () => {
+  let Type; const handlers = {}, outputs = [];
+  const RED = { nodes: { registerType: (name, fn) => { if (name === 'max-outbox-send') Type = fn; }, getNode: () => ({ token: 'synthetic-only' }),
+    createNode: node => { node.on = (event, fn) => { handlers[event] = fn; }; node.warn = () => {}; } } };
+  delete require.cache[require.resolve('../../node-red/max-outbox-adapter/max-outbox-send.js')];
+  const freshRegister = require('../../node-red/max-outbox-adapter/max-outbox-send.js');
+  freshRegister(RED); new Type({});
+  const savedFetch = globalThis.fetch, savedNow = Date.now; let at = savedNow(), calls = 0;
+  Date.now = () => at;
+  globalThis.fetch = async () => { calls++; return provider(200, { message: { body: { mid: 'synthetic' } } }); };
+  try {
+    for (let i = 0; i < 1000; i++) await handlers.input({ supportOutbox: { ...command(), targetExternalChatId: 'synthetic-capacity-' + i } }, v => outputs.push(v), () => {});
+    assert.equal(calls, 1000);
+    const refused = { ...command(), targetExternalChatId: 'synthetic-over-capacity', leasedUntil: new Date(at + 90000).toISOString() };
+    await handlers.input({ supportOutbox: refused }, v => outputs.push(v), () => {});
+    assert.equal(calls, 1000); assert.equal(outputs.at(-1).maxOutboxReceipt.failure.code, 'local_deferred');
+    at += 61000;
+    // CUP may have accepted the deferral and issued a new token. This still-valid
+    // old token must never reach the provider after completed cache entries expire.
+    await handlers.input({ supportOutbox: refused }, v => outputs.push(v), () => {});
+    assert.equal(calls, 1000); assert.equal(outputs.at(-1).maxOutboxReceipt.failure.code, 'local_deferred');
+    await handlers.input({ supportOutbox: { ...command(), targetExternalChatId: 'synthetic-capacity-0' } }, v => outputs.push(v), () => {});
+    assert.equal(calls, 1001); assert.equal(outputs.at(-1).maxOutboxReceipt.kind, 'ack');
+    handlers.close();
+  } finally { globalThis.fetch = savedFetch; Date.now = savedNow; }
+});
+
+test('archive/hold presence and untagged legacy commands never reach provider', async () => {
+  for (const meta of [undefined, { maxOutboxProtocol: 'max-lease-v1', legacyMaxArchive: null },
+    { maxOutboxProtocol: 'max-lease-v1', legacyMaxRestartCustody: null }]) {
+    assert.equal(await deliver({ ...command(), meta }, 'synthetic', { fetchImpl: () => assert.fail('No provider call') }), null);
   }
 });

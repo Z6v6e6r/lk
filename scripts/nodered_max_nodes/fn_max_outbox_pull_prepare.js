@@ -13,7 +13,7 @@ const apiBase = (() => {
 })();
 const integrationToken = (() => {
   try {
-    return toStr(env.get("SUPPORT_INTEGRATION_TOKEN"));
+    return toStr(env.get("SUPPORT_MAX_OUTBOX_INTEGRATION_TOKEN") || env.get("SUPPORT_INTEGRATION_TOKEN"));
   } catch {
     return null;
   }

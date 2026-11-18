@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { splitCreateResultFunctionSource, SPLIT_CREATE_RESULT_IDS } from './lib/splitCreateResultFlow.mjs';
+import { PUBLICATION_LEGACY_ROUTES, PUBLICATION_GUARD_IDS, buildPublicationLegacyGuardNodes } from './lib/splitPublicationLegacyGuard.mjs';
 
 const contract = fs.readFileSync(new URL('./nodered_game_publication_nodes/contract.js', import.meta.url), 'utf8');
 const once = (s, from, to) => {
@@ -66,5 +68,30 @@ export function buildSplitPublicationCandidate(flow, expectedHashes) {
   }
   const composed = composeSplitPublicationSources(sources), candidate = structuredClone(flow);
   for (const [key, id] of Object.entries(targets)) candidate.find(n => n.id === id).func = composed[key];
+  // Deploy the result reader and the legacy fence in the same reviewed candidate.
+  // New opt-ins must never run with an old GET reader or unguarded browser writer.
+  const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+  const exact = (id, type, hash) => {
+    const rows = flow.filter(n => n.id === id && n.type === type);
+    if (rows.length !== 1 || !/^[a-f0-9]{64}$/.test(hash || '')
+      || sha(JSON.stringify(rows[0])) !== hash) throw new Error('Publication boundary exact preimage mismatch');
+    return rows[0];
+  };
+  const create = exact('e656cff36a8cd210', 'function', expectedHashes.createNode);
+  const result = exact(SPLIT_CREATE_RESULT_IDS.handler, 'function', expectedHashes.resultNode);
+  const mongo = exact(SPLIT_CREATE_RESULT_IDS.find, 'mongodb4', expectedHashes.resultMongoNode);
+  if (result.outputs !== 3 || result.z !== create.z || mongo.z !== create.z || !mongo.clientNode
+    || mongo.collection !== 'lk_subscription_daily_booking_ops' || mongo.operation !== 'find')
+    throw new Error('Publication boundary graph mismatch');
+  const routes = flow.filter(n => n.type === 'http in' && n.method === 'post' && PUBLICATION_LEGACY_ROUTES.includes(n.url))
+    .sort((a, b) => a.url.localeCompare(b.url));
+  if (routes.length !== 6 || new Set(routes.map(n => n.url)).size !== 6
+    || sha(JSON.stringify(routes)) !== expectedHashes.legacyRoutes
+    || routes.some(n => n.z !== create.z || JSON.stringify(n.wires) !== JSON.stringify([[create.id]]))
+    || flow.some(n => Object.values(PUBLICATION_GUARD_IDS).includes(n.id)))
+    throw new Error('Publication legacy routes preimage mismatch');
+  candidate.find(n => n.id === result.id).func = splitCreateResultFunctionSource();
+  for (const route of routes) candidate.find(n => n.id === route.id).wires = [[PUBLICATION_GUARD_IDS.guard]];
+  candidate.push(...buildPublicationLegacyGuardNodes(create.z, mongo.clientNode, create.id));
   return candidate;
 }

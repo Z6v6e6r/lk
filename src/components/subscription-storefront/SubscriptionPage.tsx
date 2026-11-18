@@ -1,6 +1,7 @@
 import { hasZeroAttempt, resolveZeroOffer } from './zeroCheckoutPayment';
 import { startCheckout } from './zeroCheckoutMount';
 import { fastOfferKey } from './zeroCheckoutOffers';
+import { usePendingCheckoutReconciliation } from './usePendingCheckoutReconciliation';
 import { SubscriptionPromoCodeDialog } from './SubscriptionPromoCodeDialog';
 import { useEffect, useRef, useState } from 'react';
 import { apiFetchTournamentSubscriptionStatus, apiGetSubscriptionProduct } from '../../utils/apiClient';
@@ -184,6 +185,11 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
         ctaDisabled: (key === 'friendship' ? error : !status || !canContinue(status, error)),
       }];
     });
+  const checkingPayments = usePendingCheckoutReconciliation(basePlans.flatMap(plan =>
+    plan.billingOptions.flatMap(option => {
+      const key = fastOfferKey(plan.id, option.id);
+      return key ? [key] : [];
+    })), !previewView && !isAtlantyVariant);
   const plans = basePlans.map(plan => {
     const pending = plan.billingOptions.some(option => {
       const key = fastOfferKey(plan.id, option.id);
@@ -193,8 +199,9 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     return { ...plan, ctaDisabled: false, billingOptions: plan.billingOptions.map(option => {
       const key = fastOfferKey(plan.id, option.id);
       const canResume = Boolean(key && hasZeroAttempt(key));
+      const checking = Boolean(key && checkingPayments.includes(key));
       return { ...option, canResume, ctaDisabled: canResume ? false : plan.ctaDisabled || option.ctaDisabled,
-        ...(canResume ? { ctaLabel: 'Продолжить оплату', statusMessage: undefined } : {}) };
+        ...(canResume ? { ctaLabel: checking ? 'Проверяем оплату…' : 'Продолжить оплату', ctaDisabled: checking, statusMessage: undefined } : {}) };
     }) };
   });
   const view = previewView ?? (isAtlantyVariant

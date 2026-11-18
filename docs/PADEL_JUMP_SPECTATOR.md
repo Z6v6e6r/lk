@@ -2,7 +2,9 @@
 
 Owner: PadlHub Jump. Audience: the existing public event/community wall.
 Outcome: confirmed game states and existing best-per-profile results displayed with
-local read-only interpolation, never a second physics simulation or a video stream.
+local read-only presentation smoothing, never a second outcome-deciding simulation or
+a video stream (owner request 2026-11-12: on a TV over a weak network, motion may be
+approximate as long as stage, start/failure/finish and time roughly match).
 Stop signal: mismatched engine/rule/schema, missing scene/event baseline, persistent
 playout budget overflow, or unexpected change to authoritative race behaviour.
 Stop method: retain the old immutable frontend; do not activate the new page until
@@ -119,22 +121,52 @@ A changed server clock epoch is anchored before ingesting new attempts, preventi
 the previous service uptime from permanently putting new playback in the future.
 
 Adaptive delay includes source cadence, positive arrival jitter and state age. Delay
-is changed through `setDelayMs` with monotonic presentation; the default cap is
-4000ms. Exceeding it holds the last frame, labels the connection and requests fresh
-state with deduplication. This does not manufacture continuing play or a defeat.
+is changed through `setDelayMs` with monotonic presentation; the cap is 4000ms on a
+phone and 10000ms on the TV stage (a late picture is acceptable there). Exceeding it
+requests fresh state with deduplication. It never manufactures a defeat or a result.
 
 Ball, camera, platforms and moving objects use the same delayed pair of scenes;
-score/lives/level/time/result stay on the confirmed left state. Segment changes
-never blend across maps/deaths. Extrapolation is deliberately **zero** because sparse
-linear velocity could cross game obstacles; 150ms is an upper starting limit, not
-permission to predict collisions. Disconnection holds the last legal image and says
-“Ждём связь с игроком”. Recovery/background return never simulate missed input.
+score/lives/level/result stay on the confirmed left state. Segment changes (start,
+failure, retry, level, finish) are shown as confirmed and never blended.
+
+`smooth-motion.mjs` is presentation only:
+
+- between two confirmed samples the ball follows a ballistic arc from the left
+  sample's velocity (gravity + platform-top bounces), corrected to land exactly on
+  the right sample; a mismatch over 160 units falls back to an eased curve;
+- with no fresh confirmed motion (holding/buffering/stale) the ball *coasts* on an
+  autopilot for up to 12s on TV (6s elsewhere): it bounces on the scene's platforms,
+  never leaves the screen and never shows a local failure; after the budget the
+  picture holds with “Ждём связь с игроком”;
+- recovery eases from the coasted picture to the confirmed one over ~650ms;
+- the running clock ticks locally between confirmations, monotonic and at most 2.5s
+  ahead; the final time is always the confirmed one.
+
+None of this feeds the HUD score/lives, the ranking or any server.
 
 These are measurement starting points, not bandwidth/FPS guarantees. Requests for
 current snapshots and event scenes still have real payload cost. If sustained transit
 exceeds the configured presentation budget the wall truthfully holds rather than
 claiming smooth playback. Use a smaller visible group/fallback profile where needed.
 Real asymmetric networks and the exhibition TV still need separate acceptance.
+
+## TV stage and offline fallback
+
+`LiveScreen` enables the 16:9 TV stage with `?tv=1` or automatically on a landscape
+(≥1.55, ≥900px) exhibition wall; `?tv=0` disables it (four players hide the sidebar). `spectator-tv.css` lays out a
+fixed 1920×1080 stage in `--u` units (identical on 960×540 boxes and 4K panels):
+up to four large fields with name/balls/time/lives, a top-10 sidebar, and when nobody
+plays a full-screen rating (podium + places 4–13, pages rotate every 15s, CTA band).
+Players beyond four and long ratings rotate automatically; Enter/F on a remote
+requests fullscreen. Buttons and view switches are hidden on the stage.
+
+The last confirmed rating is cached in `localStorage` and shown, with its time, when
+the board cannot be read. After 15s without any successful read (45s after a previous
+success) and with nobody playing, the TV shows labelled demonstration games
+(`demo-runs.mjs`: real engine and art, autopilot, “Демонстрация” badge and “Демо”
+tags). They never enter the rating and disappear on the next successful read.
+`?jumpDemo=1..7|loop` (6 = seven players, 7 = sixteen — demo only, the live server admits at most 12) runs a fully offline wall (no network reads, sample rating) —
+used to record the stand's fallback videos.
 
 ## Checks
 

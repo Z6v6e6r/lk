@@ -1,0 +1,174 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.default = default_1;
+const max_bot_api_1 = require("@maxhub/max-bot-api");
+function default_1(RED) {
+    function MaxBotSend(config) {
+        RED.nodes.createNode(this, config);
+        const configId = config.bot;
+        if (!configId) {
+            this.error("No MAX bot configuration selected");
+            this.status({ fill: "red", shape: "ring", text: "no config" });
+            return;
+        }
+        const configNode = RED.nodes.getNode(configId);
+        if (!configNode || !configNode.token) {
+            this.error("MAX bot token is not configured");
+            this.status({ fill: "red", shape: "ring", text: "invalid config" });
+            return;
+        }
+        const bot = new max_bot_api_1.Bot(String(configNode.token));
+        this.on("input", async (msg, send, done) => {
+            try {
+                const commands = msg.commands;
+                const deleteId = msg.deleteId || msg.payload?.deleteId;
+                const chatId = msg.chatId || config.defaultChatId;
+                const userId = msg.userId;
+                if (!chatId && !userId && !deleteId && !commands) {
+                    throw new Error("chatId/userId/deleteId is not provided (set in msg.chatId/msg.userId/msg.deleteId, node config)");
+                }
+                let text = '';
+                let attachments = undefined;
+                if (typeof msg.payload === 'object') {
+                    text = msg.payload.text || '';
+                    const mediaType = msg.payload.type;
+                    const source = msg.payload.source;
+                    if (mediaType && source) {
+                        const isUrl = typeof source === 'string' && (source.startsWith('http://') || source.startsWith('https://'));
+                        let attachment;
+                        if (mediaType === 'image') {
+                            if (isUrl) {
+                                attachment = new max_bot_api_1.ImageAttachment({ url: source });
+                            }
+                            else {
+                                const result = await bot.api.upload.image({ source });
+                                if ('url' in result) {
+                                    attachment = new max_bot_api_1.ImageAttachment({ url: result.url });
+                                }
+                                else if ('photos' in result) {
+                                    attachment = new max_bot_api_1.ImageAttachment({ photos: result.photos });
+                                }
+                                else {
+                                    attachment = new max_bot_api_1.ImageAttachment({ token: result.token });
+                                }
+                            }
+                        }
+                        else if (mediaType === 'video') {
+                            if (isUrl) {
+                                const response = await fetch(source);
+                                if (!response.ok) {
+                                    throw new Error(`Failed to download video from URL: ${response.status} ${response.statusText}`);
+                                }
+                                const buffer = Buffer.from(await response.arrayBuffer());
+                                const uploadRes = await bot.api.raw.uploads.getUploadUrl({ type: 'video' });
+                                const { url: uploadUrl, token: videoToken } = uploadRes;
+                                const formData = new FormData();
+                                formData.append('data', new Blob([buffer]), 'video.mp4');
+                                await fetch(uploadUrl, {
+                                    method: 'POST',
+                                    body: formData,
+                                });
+                                attachment = new max_bot_api_1.VideoAttachment({ token: videoToken });
+                            }
+                            else {
+                                const result = await bot.api.upload.video({ source });
+                                attachment = new max_bot_api_1.VideoAttachment({ token: result.token });
+                            }
+                        }
+                        else if (mediaType === 'file') {
+                            if (isUrl) {
+                                const response = await fetch(source);
+                                if (!response.ok) {
+                                    throw new Error(`Failed to download file from URL: ${response.status} ${response.statusText}`);
+                                }
+                                const buffer = await response.arrayBuffer();
+                                const result = await bot.api.upload.file({ source: Buffer.from(buffer) });
+                                attachment = new max_bot_api_1.FileAttachment({ token: result.token });
+                            }
+                            else {
+                                const result = await bot.api.upload.file({ source });
+                                attachment = new max_bot_api_1.FileAttachment({ token: result.token });
+                            }
+                        }
+                        else if (mediaType === 'audio') {
+                            if (isUrl) {
+                                const response = await fetch(source);
+                                if (!response.ok) {
+                                    throw new Error(`Failed to download audio from URL: ${response.status} ${response.statusText}`);
+                                }
+                                const buffer = Buffer.from(await response.arrayBuffer());
+                                const uploadRes = await bot.api.raw.uploads.getUploadUrl({ type: 'audio' });
+                                const { url: uploadUrl, token: audioToken } = uploadRes;
+                                const formData = new FormData();
+                                formData.append('data', new Blob([buffer]), 'audio.mp3');
+                                await fetch(uploadUrl, {
+                                    method: 'POST',
+                                    body: formData,
+                                });
+                                attachment = new max_bot_api_1.AudioAttachment({ token: audioToken });
+                            }
+                            else {
+                                const result = await bot.api.upload.audio({ source });
+                                attachment = new max_bot_api_1.AudioAttachment({ token: result.token });
+                            }
+                        }
+                        if (attachment) {
+                            attachments = [attachment.toJson()];
+                        }
+                    }
+                }
+                else {
+                    text = msg.payload?.toString() || '';
+                }
+                if (!text && !deleteId && !commands && !attachments) {
+                    throw new Error("message text is empty (msg.payload)");
+                }
+                this.status({ fill: "blue", shape: "ring", text: "sending..." });
+                let result;
+                if (deleteId) {
+                    result = await bot.api.deleteMessage(deleteId);
+                }
+                else if (commands) {
+                    result = await bot.api.setMyCommands(commands);
+                }
+                else {
+                    let extra = undefined;
+                    if (typeof msg.payload === 'object') {
+                        extra = { ...msg.payload };
+                        if (attachments) {
+                            extra.attachments = attachments;
+                        }
+                    }
+                    result = (!chatId && userId) ?
+                        await bot.api.sendMessageToUser(userId, text, extra) :
+                        await bot.api.sendMessageToChat(chatId, text, extra);
+                }
+                this.status({ fill: "green", shape: "dot", text: "sent" });
+                msg.payload = result;
+                if (this.outputs === 2) {
+                    send([msg, null]);
+                }
+                else {
+                    send(msg);
+                }
+                done();
+            }
+            catch (err) {
+                this.status({ fill: "red", shape: "ring", text: "error" });
+                if (this.outputs === 2) {
+                    msg.error = err;
+                    send([null, msg]);
+                }
+                else {
+                    this.error(err, msg);
+                }
+                done();
+            }
+        });
+        this.on("close", () => {
+            this.status({});
+        });
+    }
+    RED.nodes.registerType("maxbot-send", MaxBotSend);
+}
+//# sourceMappingURL=maxbot-send.js.map

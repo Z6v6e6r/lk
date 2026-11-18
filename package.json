@@ -245,7 +245,7 @@
     "test:managed-subscription-dev-runtime": "node --experimental-strip-types --test scripts/tests/managedSubscriptionDevRuntime.test.ts scripts/tests/subscriptionUsageTestRoute.test.ts scripts/tests/subscriptionUsageTestBooking.test.ts scripts/tests/subscriptionUsageShadow.test.ts scripts/tests/subscriptionUsageShadowIntegration.test.ts",
     "test:atlanty-schedule": "node --experimental-strip-types --test scripts/tests/atlantySchedule.test.ts scripts/tests/atlantyTildaBlocks.test.ts scripts/tests/atlantyLkBookingWindow.test.ts",
     "test:padel-day": "node --experimental-strip-types --test scripts/tests/padelDaySchedule.test.ts scripts/tests/padelDay.nodered.test.ts scripts/tests/padelDay.deploy.test.ts",
-    "test:correlated-error-diagnostics": "node --test scripts/tests/correlatedErrorDiagnostics.test.mjs scripts/tests/clientErrorDiagnostics.test.mjs",
+    "test:correlated-error-diagnostics": "node --test scripts/tests/correlatedErrorDiagnostics.test.mjs scripts/tests/clientErrorDiagnostics.test.mjs scripts/tests/splitLeaveDiagnostics.test.mjs",
     "test:referral-subscription": "node --experimental-strip-types --test scripts/tests/referralSubscription.nodered.test.ts",
     "rating:recalculate": "node --experimental-strip-types scripts/recalculate_community_rating.mjs",
     "rating:recalculate:all": "node scripts/recalculate_community_rating_all.mjs",
@@ -280,7 +280,8 @@
     "test:lk1-pro-training-energy-exclusions-generation": "node --test scripts/tests/proTrainingEnergyExclusionHotfix.test.mjs",
     "build:jump-live": "node --experimental-strip-types scripts/build_padel_jump_live.mjs",
     "test:jump-live": "node --experimental-strip-types --test scripts/tests/padelJump*.test.ts scripts/tests/padelJump*.test.mjs scripts/tests/vivaOAuth.test.ts && python3 scripts/tests/padelJumpDeployment.test.py",
-    "test:fpr-canonical-start": "node --experimental-strip-types --test scripts/tests/fprCanonicalStart.test.ts scripts/tests/fprCanonicalStart.nodered.test.mjs scripts/tests/fprCanonicalDryRun.test.mjs"
+    "test:fpr-canonical-start": "node --experimental-strip-types --test scripts/tests/fprCanonicalStart.test.ts scripts/tests/fprCanonicalStart.nodered.test.mjs scripts/tests/fprCanonicalDryRun.test.mjs",
+    "test:support-photos": "node --experimental-strip-types --test scripts/tests/supportPhotos*.test.mjs scripts/tests/supportEventPayload.apiClient.test.ts"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",

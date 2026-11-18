@@ -5,14 +5,14 @@ import { randomUUID } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const register = require('../../node-red/max-outbox-adapter/max-outbox-send.js');
 const { deliver, createRateScheduler } = register;
-const command = target => ({ id: randomUUID(), leaseToken: randomUUID(), connector: 'MAX_BOT',
+const command = target => ({ id: randomUUID(), meta: { maxOutboxProtocol: 'max-lease-v1' }, leaseToken: randomUUID(), connector: 'MAX_BOT',
   text: 'synthetic', targetExternalChatId: target, leasedUntil: new Date(Date.now() + 60000).toISOString() });
 const accepted = () => new Response(JSON.stringify({ message: { body: { mid: 'synthetic' } } }), { status: 200 });
 
 test('same dialog is serialized with at least 500ms between starts across node instances/connectors', async () => {
   const original = globalThis.fetch, handlers = [], starts = [];
   let Type, active = 0, maximumActive = 0;
-  const RED = { nodes: { registerType: (_name, type) => { Type = type; },
+  const RED = { nodes: { registerType: (name, type) => { if (name === 'max-outbox-send') Type = type; },
     getNode: () => ({ token: 'synthetic' }), createNode: node => {
       node.on = (name, fn) => { if (name === 'input') handlers.push(fn); }; node.warn = () => {};
     } } };

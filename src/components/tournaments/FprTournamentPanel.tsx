@@ -90,10 +90,14 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
       .finally(() => { if (active) setBindingLoading(false); });
     return () => { active = false; };
   }, [sourceExerciseId, context.communityBinding, reload]);
-  const { fixed: fixedCommunity, choices, communityId, communityName, publishedNames, error: selectionError } = useMemo(
+  const { fixed, choices, communityId: selectedId, communityName: selectedName, publishedNames,
+    needsCommunityList, error: selectionError } = useMemo(
     () => resolveFprCommunitySelection(binding, communities, selectedCommunityId),
     [binding, communities, selectedCommunityId],
   );
+  const fixedCommunity = fixed || Boolean(initialState);
+  const communityId = initialState?.communityRating?.communityId ?? selectedId;
+  const communityName = initialState?.communityRating?.communityName ?? selectedName;
   useEffect(() => { setValues({}); }, [communityId]);
   useEffect(() => {
     let active = true;
@@ -181,19 +185,21 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
     } catch (e) { setError(message(e)); }
     finally { setBusy(false); }
   };
-  const loading = bindingLoading || leagueLoading || (!fixedCommunity && communityLoading);
-  const loadError = bindingError || selectionError || leagueError || (!fixedCommunity ? communityError : null);
+  const loading = bindingLoading || leagueLoading || (needsCommunityList && communityLoading);
+  const loadError = bindingError || selectionError || leagueError || (needsCommunityList ? communityError : null);
   return <div className="fpr-panel">
     <fieldset disabled={Boolean(initialState) || busy || Boolean(pending)}>
-      {fixedCommunity ? <>
-        <p><strong>Опубликован в сообществе:</strong> {publishedNames.length ? publishedNames.join(", ") : communityName}</p>
-        {publishedNames.length > 1 && communityId && <p><strong>Сообщество для рейтинга:</strong> {communityName}</p>}
-      </> : !bindingLoading && !bindingError && <label>Сообщество «Время на друзей» для рейтинга
-        <select value={communityId} disabled={communityLoading} onChange={e => setSelectedCommunityId(e.target.value)}>
-          <option value="">Выберите сообщество</option>
-          {choices.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}
-        </select>
-      </label>}
+      {publishedNames.length > 0 && <p><strong>Опубликован в сообществах:</strong> {publishedNames.join(", ")}</p>}
+      {fixedCommunity ? <p><strong>Сообщество для посева первого раунда:</strong> {communityName}</p>
+        : !bindingLoading && !bindingError && <label>{publishedNames.length > 1
+          ? "Сообщество для посева первого раунда"
+          : "Сообщество «Время на друзей» для рейтинга"}
+          <select value={communityId} disabled={needsCommunityList && communityLoading} onChange={e => setSelectedCommunityId(e.target.value)}>
+            <option value="">Выберите сообщество</option>
+            {choices.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}
+          </select>
+        </label>}
+      {publishedNames.length > 1 && !fixedCommunity && <p>Места и очки выбранного сообщества определяют посев первого раунда. Выбор сохраняется в протоколе.</p>}
       {loading && <p role="status">Загружаем данные сообщества…</p>}
       {loadError && <p role="alert" className="fpr-error">{loadError} <button type="button" onClick={() => setReload(v => v + 1)}>Повторить загрузку</button></p>}
       {!loading && !loadError && !choices.length && !fixedCommunity && <p>Нет доступных сообществ «Время на друзей» для выбора.</p>}
@@ -218,7 +224,7 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
     </fieldset>
     {initialState && <p>Настройки сохранённого турнира. Состав и результаты сохранены.</p>}
     {error && <p role="alert" className="fpr-error">{error}</p>}
-    {initialState ? <button className="section-cta" type="button" onClick={onResume}>Вернуться к турниру</button> : <button className="section-cta" type="button" disabled={busy || (!pending && (loading || Boolean(loadError) || !league)) || presentPlayers.length < 4 || presentPlayers.length > 28 || !organizerId} onClick={() => void save()}>
+    {initialState ? <button className="section-cta" type="button" onClick={onResume}>Вернуться к турниру</button> : <button className="section-cta" type="button" disabled={busy || (!pending && (loading || Boolean(loadError) || !league || league.communityId !== communityId)) || presentPlayers.length < 4 || presentPlayers.length > 28 || !organizerId} onClick={() => void save()}>
       {busy ? "Сохраняем протокол…" : pending ? "Повторить создание с тем же ID" : "Создать протокол ФПР 6×25"}
     </button>}
   </div>;

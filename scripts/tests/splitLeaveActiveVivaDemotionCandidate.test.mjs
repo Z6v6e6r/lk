@@ -15,7 +15,7 @@ const read = (fileName) => fs.readFileSync(path.join(ROOT, "scripts/nodered_game
 // Current owner packet only; historical deployed/candidate source commits stay frozen.
 const OWNER_SOURCE_SHA256 = {
   "fn_split_leave_prepare.js": "97f271609187a14c210a7996743f16031c403d4db39296db4936ee854005706e",
-  "fn_split_leave_router.js": "99a6cecec71c886644fef122e75d891559d231d29767b1c8c494f16c508c0fab"
+  "fn_split_leave_router.js": "ae95ec7c5390ed7c84cc962aefc7fe121aec55c802ef9034f93883ea8de62cfe"
 };
 
 test("active-viva demotion keeps historical pins and binds current source to the reviewed successor", () => {

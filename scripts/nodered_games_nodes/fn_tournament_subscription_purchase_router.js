@@ -521,6 +521,64 @@ const buildRecordQuery = (ctx) => {
   return query;
 };
 
+// BEGIN generated subscriptionRouterBackgroundDiagnostic
+function subscriptionRouterBackgroundDiagnostic(step, status, error, getCrypto) {
+  const steps = [
+    'managed_sale_readiness', 'token_purchase', 'load_products', 'preview_promo',
+    'create_transaction', 'token_confirm', 'confirm_recovery_list', 'confirm_lookup',
+    'schema3_hub_instance_discovery', 'managed_sale_instance_readback', 'managed_sale_binding_confirm',
+  ];
+  const errors = new Map([
+    ['Summer subscription context is missing', 'CONTEXT_MISSING'],
+    ['Продажа подписки временно закрыта', 'SUBSCRIPTION_ADMISSION_CLOSED'],
+    ['Новые продажи ХАБ не включены в этот выпуск', 'HUB_NEW_SALES_RELEASE_DISABLED'],
+    ['Контур managed-продажи ХАБ не готов', 'MANAGED_SALE_READINESS_UNAVAILABLE'],
+    ['Сервисная авторизация Viva не настроена', 'VIVA_SERVICE_AUTH_NOT_CONFIGURED'],
+    ['Viva token error', 'VIVA_TOKEN_ERROR'],
+    ['Failed to load Viva subscriptions', 'VIVA_SUBSCRIPTIONS_LOAD_FAILED'],
+    ['Viva returned no subscriptions', 'VIVA_SUBSCRIPTIONS_EMPTY'],
+    ['Цена Viva-продукта не соответствует ценовой партии', 'VIVA_PRODUCT_PRICE_MISMATCH'],
+    ['Параметры активации Viva-продукта не соответствуют годовому предложению', 'VIVA_PRODUCT_ACTIVATION_MISMATCH'],
+    ['Предложение изменилось. Примените промокод снова.', 'PROMO_OFFER_CHANGED'],
+    ['Продажи этого периода закрыты', 'COUNTER_EPOCH_ADMISSION_CLOSED'],
+    ['Стоимость изменилась или промокод не подтверждён. Примените его снова.', 'PROMO_NOT_CONFIRMED'],
+    ['Результат покупки не подтверждён. Проверьте личный кабинет перед повторной оплатой.', 'PURCHASE_RESULT_UNCONFIRMED'],
+    ['Failed to create Viva transaction', 'VIVA_TRANSACTION_CREATE_FAILED'],
+    ['Viva вернула неверную сумму к оплате', 'VIVA_TRANSACTION_AMOUNT_MISMATCH'],
+    ['Viva transaction has no paymentUrl', 'VIVA_TRANSACTION_PAYMENT_URL_MISSING'],
+    ['Транзакция Viva требует ручной сверки', 'VIVA_TRANSACTION_MANUAL_RECONCILIATION_REQUIRED'],
+    ['Не удалось проверить транзакции Viva по клиенту', 'VIVA_TRANSACTIONS_READ_FAILED'],
+    ['Список транзакций Viva требует постраничной сверки', 'VIVA_TRANSACTIONS_PAGINATION_INCOMPLETE'],
+    ['Транзакция Viva не определена однозначно', 'VIVA_TRANSACTION_AMBIGUOUS'],
+    ['Экземпляр подписки Viva требует сверки', 'VIVA_SUBSCRIPTION_RECONCILIATION_REQUIRED'],
+    ['Failed to fetch Viva transaction', 'VIVA_TRANSACTION_FETCH_FAILED'],
+    ['Транзакция Viva не прошла повторную проверку', 'VIVA_TRANSACTION_RECHECK_FAILED'],
+    ['Подтверждение Viva требует сверки; состояние покупки не изменено', 'VIVA_CONFIRMATION_RECONCILIATION_REQUIRED'],
+    ['Unsupported summer subscription step', 'UNSUPPORTED_STEP'],
+  ]);
+  const event = {
+    event: 'subscription_router_background_failed',
+    code: 'SUBSCRIPTION_ROUTER_BACKGROUND_FAILED',
+    statusCode: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
+    step: typeof step === 'string' && steps.includes(step) ? step : 'UNKNOWN',
+    originalError: typeof error === 'string' ? errors.get(error) || 'UNKNOWN' : 'UNKNOWN',
+    correlationHash: null,
+    correlationScope: 'WARNING_EVENT',
+  };
+  try {
+    const crypto = getCrypto();
+    // A fresh server nonce, never a payment/client ID, _msgid, header, raw error
+    // or pre-existing "hash". No key provisioning or persistent state required.
+    const nonce = crypto.randomUUID();
+    if (typeof nonce === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(nonce)) {
+      const digest = crypto.createHash('sha256').update(`lk-subscription-router-warning-v1\0${nonce}`).digest('hex');
+      if (typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest)) event.correlationHash = `c1:${digest}`;
+    }
+  } catch { /* Crypto unavailable: retain safe enums with a null correlation. */ }
+  return event;
+}
+// END generated subscriptionRouterBackgroundDiagnostic
+
 const fail = (status, error, details) => {
   const response = Object.assign({}, msg, {
     statusCode: status,
@@ -532,10 +590,12 @@ const fail = (status, error, details) => {
     },
   });
   if (msg._summerSubscriptionCtx?.reconcile === true) {
-    if (typeof node !== "undefined" && typeof node.warn === "function") {
-      node.warn(JSON.stringify({ event: "subscription_router_background_failed",
-        code: "SUBSCRIPTION_ROUTER_BACKGROUND_FAILED", statusCode: status }));
-    }
+    try {
+      if (typeof node !== "undefined" && typeof node.warn === "function") {
+        node.warn(JSON.stringify(subscriptionRouterBackgroundDiagnostic(
+          msg._summerSubscriptionCtx?.step, status, error, () => global.get("crypto"))));
+      }
+    } catch { /* Diagnostics must not change the failure response or routing. */ }
     return [null, null, null, response];
   }
   return [null, null, response, response];

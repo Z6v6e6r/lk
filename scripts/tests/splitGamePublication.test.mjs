@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { buildSplitCreateResultNodes, SPLIT_CREATE_RESULT_IDS } from '../lib/splitCreateResultFlow.mjs';
+import { PUBLICATION_LEGACY_ROUTES, PUBLICATION_GUARD_IDS } from '../lib/splitPublicationLegacyGuard.mjs';
 import { normalizePublicationIntent, publicationPlan, publishConfirmedOperation, renderPublication } from '../lib/splitGamePublication.mjs';
 import { composeSplitPublicationSources, buildSplitPublicationCandidate } from '../patch_split_game_publication.mjs';
 import { makePublicationFixture as operation, publicationIntentFixture as intent, publicationBookingContractFixture as bookingContract } from './fixtures/splitGamePublicationFixture.mjs';
@@ -164,12 +166,31 @@ test('source-driven adapter preserves Node-RED wiring and rejects missing/change
     func, z: 'fixture-tab', wires: [['fixture-sink']] }));
   graph.push({ id: 'fixture-sink', type: 'debug', name: 'fixture sink', func: '', z: 'fixture-tab', wires: [] });
   const hashes = Object.fromEntries(Object.entries(sources).map(([k, value]) => [k, crypto.createHash('sha256').update(value).digest('hex')]));
+  const create = { id: 'e656cff36a8cd210', type: 'function', z: 'fixture-tab', name: 'Prepare game upsert',
+    func: read('nodered_games_nodes/fn_create.js'), outputs: 4, wires: [[], [], [], []] };
+  graph.push(create, ...buildSplitCreateResultNodes('fixture-tab', 'fixture-mongo'));
+  const routes = PUBLICATION_LEGACY_ROUTES.map((url, i) => ({ id: 'legacy-' + i, type: 'http in',
+    method: 'post', url, z: 'fixture-tab', wires: [[create.id]] })).sort((a,b) => a.url.localeCompare(b.url));
+  graph.push(...routes);
+  const hashNode = n => crypto.createHash('sha256').update(JSON.stringify(n)).digest('hex');
+  Object.assign(hashes, { createNode: hashNode(create),
+    resultNode: hashNode(graph.find(n => n.id === SPLIT_CREATE_RESULT_IDS.handler)),
+    resultMongoNode: hashNode(graph.find(n => n.id === SPLIT_CREATE_RESULT_IDS.find)), legacyRoutes: hashNode(routes) });
   const candidate = buildSplitPublicationCandidate(graph, hashes);
   for (const original of graph) {
     const result = candidate.find(n => n.id === original.id);
-    assert.deepEqual({ ...result, func: original.func }, original);
+    if (routes.some(r => r.id === original.id)) assert.deepEqual(result.wires, [[PUBLICATION_GUARD_IDS.guard]]);
+    else assert.deepEqual(Object.hasOwn(original, 'func') ? { ...result, func: original.func } : result, original);
   }
-  assert.deepEqual(graph.at(-1), candidate.at(-1));
+  assert.equal(candidate.length, graph.length + 4);
+  const guard = candidate.find(n => n.id === PUBLICATION_GUARD_IDS.guard);
+  assert.deepEqual(guard.wires, [[create.id], [PUBLICATION_GUARD_IDS.find], [PUBLICATION_GUARD_IDS.response]]);
+  assert.deepEqual(candidate.find(n => n.id === PUBLICATION_GUARD_IDS.catch).scope, [PUBLICATION_GUARD_IDS.find]);
+  assert.deepEqual(candidate.find(n => n.id === PUBLICATION_GUARD_IDS.find).wires, [[guard.id]]);
+  assert.deepEqual(candidate.find(n => n.id === PUBLICATION_GUARD_IDS.response).wires, []);
+  for (const field of ['createNode', 'resultNode', 'resultMongoNode', 'legacyRoutes'])
+    assert.throws(() => buildSplitPublicationCandidate(graph, { ...hashes, [field]: 'a'.repeat(64) }), /preimage/);
+  assert.throws(() => buildSplitPublicationCandidate(graph.filter(n => n.id !== routes[0].id), hashes), /preimage/);
   assert.throws(() => buildSplitPublicationCandidate(graph, { ...hashes, gateway: 'a'.repeat(64) }), /preimage/);
   // Execute the real decision/insert step, starting before any decision is attached
   // to ctx.lk1. Capturing at quote creation would silently miss this publication.

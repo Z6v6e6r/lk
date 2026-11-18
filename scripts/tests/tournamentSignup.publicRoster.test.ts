@@ -96,7 +96,7 @@ test("public tournament page loads roster through anonymous participants endpoin
     pageSource,
     /apiFetchTournamentParticipants\(normalizedExerciseId,\s*\{[\s\S]*?auth:\s*false,[\s\S]*?retries:\s*0,[\s\S]*?signal:\s*options\.signal/,
   );
-  assert.match(apiClientSource, /auth:\s*options\.auth\s*\?\?\s*true/);
+  assert.match(apiClientSource, /const auth = options\.auth\s*\?\?\s*true/);
 });
 
 test("public tournament list never fans out participant requests", () => {

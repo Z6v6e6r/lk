@@ -967,6 +967,56 @@ const epochMatches = (left, right) => subscriptionCounterEpoch.validDescriptor(l
   && subscriptionCounterEpoch.validDescriptor(right)
   && left.id === right.id && left.startedAt === right.startedAt
   && left.timeZone === right.timeZone && left.membership === right.membership;
+// Local inventory expiry is not a provider-terminal financial failure. Keep its
+// receipt on the sale while the existing hourly recovery watch remains active.
+const localReleaseReceipt = (ledger, reservation, ctx) => {
+  const releasedAt = Date.parse(reservation?.releasedAt);
+  if (!parseVivaTimestamp(reservation?.releasedAt, { requireZone: true })) return null;
+  const deadlines = [reservation?.expiresAt, reservation?.paymentExpiresAt]
+    .map(value => Date.parse(value)).filter(Number.isFinite);
+  if (!isHub(ctx) || ledger?.schemaVersion !== 3
+    || !["FAILED", "PAID"].includes(reservation?.state)
+    || reservation?.releaseReason !== "REPAIR_STALE_LOCAL_RESERVATION_PROVIDER_NON_TERMINAL"
+    || !Number.isFinite(releasedAt) || releasedAt > Date.now() || !deadlines.length
+    || releasedAt < Math.max(...deadlines)) return null;
+  return { reason: reservation.releaseReason, releasedAt: reservation.releasedAt };
+};
+const sameReleaseReceipt = (left, right) => Boolean(left && right
+  && left.reason === right.reason && left.releasedAt === right.releasedAt);
+const releasedSaleMatches = (record, ctx) => Boolean(record
+  && record._id === saleId(ctx) && record.counterKey === ctx.counterKey
+  && record.inventoryId === ctx.inventoryId && record.paymentRef === ctx.paymentRef
+  && record.requestFingerprint === ctx.requestFingerprint && record.transactionId === ctx.transactionId
+  && dispatchGeneration(record.dispatchGeneration) === dispatchGeneration(ctx.dispatchGeneration)
+  && record.amountMinor === ctx.expectedAmountMinor && record.inventoryLedgerSchemaVersion === 3
+  && (!subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId) || epochMatches(record.counterEpoch, ctx.counterEpoch))
+  && ["PAYMENT_PENDING", "PROVIDER_UNKNOWN", "FAILED", "PAID_PENDING_INSTANCE_BINDING", "PAID"].includes(record.status));
+const projectReleasedSale = (ctx) => {
+  const result = ctx.confirmResult;
+  {
+    // Both pending and explicitly failed observations close the old checkout.
+    // Build the response anew: provider/cached bodies can contain nested URLs.
+    result.response = paymentPolling.response({ ok: true, status: "PAYMENT_PENDING" }, {
+      status: "PAYMENT_PENDING", paymentRef: ctx.paymentRef, transactionId: ctx.transactionId,
+      createdAt: ctx.saleRecord?.createdAt,
+      paymentPolling: { status: "FAILED", reason: "PAYMENT_LINK_EXPIRED" },
+    });
+  }
+  ctx.step = "piter_confirm_sale_ack";
+  return saleUpdate(ctx, {
+    _id: saleId(ctx), counterKey: ctx.counterKey, inventoryId: ctx.inventoryId,
+    paymentRef: ctx.paymentRef, requestFingerprint: ctx.requestFingerprint,
+    transactionId: ctx.transactionId, dispatchGeneration: generationFilter(ctx.dispatchGeneration),
+    inventoryLedgerSchemaVersion: 3, amountMinor: ctx.expectedAmountMinor,
+    ...(ctx.counterEpoch ? { counterEpoch: ctx.counterEpoch } : {}),
+    status: { $in: result.nextStatus === "FAILED"
+      ? ["PAYMENT_PENDING", "PROVIDER_UNKNOWN", "FAILED"] : ["PAYMENT_PENDING", "PROVIDER_UNKNOWN"] },
+  }, { $set: {
+    status: result.nextStatus, localInventoryRelease: ctx.localInventoryRelease,
+    // Never revive a locally expired checkout, even if Viva still returns its URL.
+    paymentUrl: null, lastCheckedAt: new Date().toISOString(),
+  } }, { upsert: false });
+};
 const saleProjectionMatches = (record, ctx, expectedStatus, result = {}) => Boolean(
   record
   && record._id === saleId(ctx)
@@ -981,9 +1031,11 @@ const saleProjectionMatches = (record, ctx, expectedStatus, result = {}) => Bool
     && (ctx.hubLk1Sale == null || normalizeFrozenHubSale(ctx.hubLk1Sale) !== null)
     && JSON.stringify(normalizeFrozenHubSale(record.hubLk1Sale)) === JSON.stringify(normalizeFrozenHubSale(ctx.hubLk1Sale))
   ))
-  && (expectedStatus !== "PAYMENT_PENDING" || (toStr(result.transactionId) && toStr(result.paymentUrl)))
+  && (!ctx.localInventoryRelease || sameReleaseReceipt(record.localInventoryRelease, ctx.localInventoryRelease))
+  && (expectedStatus !== "PAYMENT_PENDING" || ctx.localInventoryRelease || (toStr(result.transactionId) && toStr(result.paymentUrl)))
   && (result.transactionId == null || record.transactionId === result.transactionId)
-  && (result.paymentUrl == null || record.paymentUrl === result.paymentUrl)
+  && (ctx.localInventoryRelease && expectedStatus !== "PAID"
+    ? record.paymentUrl === null : result.paymentUrl == null || record.paymentUrl === result.paymentUrl)
   && (result.providerAttemptedAt == null || record.providerAttemptedAt === result.providerAttemptedAt)
 );
 const finishProviderProjection = () => {
@@ -1658,6 +1710,15 @@ if (ctx.step === "piter_confirm_result") {
   return ledgerFind(ctx, "piter_confirm_validate");
 }
 
+if (ctx.step === "piter_released_sale_validate") {
+  const record = rows(msg.payload)[0];
+  if (!releasedSaleMatches(record, ctx)) {
+    return fail(503, "Освобождённая покупка требует сверки", "HUB_RELEASED_SALE_CONFLICT");
+  }
+  ctx.localReleaseSaleChecked = true;
+  return ledgerFind(ctx, "piter_confirm_validate");
+}
+
 if (ctx.step === "piter_confirm_validate") {
   const result = ctx.confirmResult || {};
   const expectedAmount = ctx.expectedAmountMinor;
@@ -1666,6 +1727,8 @@ if (ctx.step === "piter_confirm_validate") {
   const recoveredTransaction = ctx.transactionRecovered === true
     && existing
     && !toStr(existing.transactionId);
+  const receipt = localReleaseReceipt(ledger, existing, ctx);
+  const locallyReleased = existing?.state === "FAILED" && receipt !== null;
   if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit || 400, ctx)
     || !existing
     || (ledger.schemaVersion === 3 && (existing.saleRecord?.inventoryLedgerSchemaVersion !== 3 || ctx.inventoryLedgerSchemaVersion !== 3))
@@ -1676,7 +1739,8 @@ if (ctx.step === "piter_confirm_validate") {
     || existing.priceMinor !== ctx.expectedAmountMinor
     || !(["PAYMENT_PENDING", "PROVIDER_UNKNOWN"].includes(existing.state)
       || (recoveredTransaction && existing.state === "DISPATCHING")
-      || existing.state === result.nextStatus)) {
+      || existing.state === result.nextStatus
+      || locallyReleased)) {
     return fail(503, "Atomic ledger не прошёл проверку перед подтверждением", "PITER_CONFIRM_LEDGER_INVALID");
   }
   if (subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId)
@@ -1686,14 +1750,24 @@ if (ctx.step === "piter_confirm_validate") {
   }
   ctx.ledgerSchemaVersion = ledger.schemaVersion;
   ctx.ledgerQuotaAdjustment = [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : null;
+  if (receipt) {
+    ctx.localInventoryRelease = receipt;
+    if (!ctx.localReleaseSaleChecked) return saleFind(ctx, "piter_released_sale_validate");
+  } else {
+    delete ctx.localInventoryRelease;
+  }
+  if (locallyReleased && result.nextStatus !== "PAID") return projectReleasedSale(ctx);
+  // A replay of a previously settled late payment must not increment twice.
+  if (receipt && existing.state === "PAID") return ledgerFind(ctx, "piter_confirm_replay_find");
   const nowIso = new Date().toISOString();
   ctx.step = "piter_confirm_ledger_ack";
   const inc = { revision: 1 };
   if (result.nextStatus === "PAID") {
-    inc.reservedCount = -1;
+    if (locallyReleased) inc.takenCount = 1;
+    else inc.reservedCount = -1;
     inc.paidCount = 1;
     if (isHub(ctx) && existing.dailyDate === ledger.dailyDate) {
-      inc.dailyReservedCount = -1;
+      if (!locallyReleased) inc.dailyReservedCount = -1;
       inc.dailyPaidCount = 1;
     }
   } else if (result.nextStatus === "FAILED") {
@@ -1718,7 +1792,8 @@ if (ctx.step === "piter_confirm_validate") {
       transactionId: recoveredTransaction ? { $in: [null, ""] } : ctx.transactionId,
       dispatchGeneration: generationFilter(ctx.dispatchGeneration),
       priceMinor: expectedAmount,
-      state: { $in: recoveredTransaction
+      ...(locallyReleased ? { releaseReason: receipt.reason, releasedAt: receipt.releasedAt } : {}),
+      state: { $in: locallyReleased ? ["FAILED"] : recoveredTransaction
         ? ["DISPATCHING", "PROVIDER_UNKNOWN"]
         : ["PAYMENT_PENDING", "PROVIDER_UNKNOWN"] },
     } },
@@ -1787,6 +1862,10 @@ if (ctx.step === "piter_confirm_ledger_ack") {
 if (ctx.step === "piter_confirm_replay_find") {
   const ledger = rows(msg.payload).find((row) => row?._id === ledgerId(ctx));
   const existing = ledger?.reservations?.find((item) => item?.paymentRef === ctx.paymentRef);
+  const receipt = localReleaseReceipt(ledger, existing, ctx);
+  if (ctx.localInventoryRelease && !sameReleaseReceipt(receipt, ctx.localInventoryRelease)) {
+    return fail(503, "Освобождение резерва изменилось", "HUB_RELEASE_RECEIPT_CHANGED");
+  }
   if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit || 400, ctx)
     || !ledgerQuotaMatches(ledger, ctx)
     || !existing
@@ -1886,9 +1965,25 @@ if (ctx.step === "managed_sale_projection_start") {
     return fail(503, "Проекция продажи не подготовлена", "MANAGED_SALE_PROJECTION_INVALID");
   }
   ctx.step = "managed_sale_projection_ack";
+  if (ctx.localInventoryRelease) {
+    ctx.managedSaleProjection.set.localInventoryRelease = ctx.localInventoryRelease;
+  }
   return ledgerUpdate(ctx, {
     _id: saleId(ctx),
     requestFingerprint: ctx.requestFingerprint,
+    // A delayed binding failure must not downgrade a concurrent paid projection,
+    // including a later recovery cycle that no longer carries the release ctx.
+    status: { $nin: ctx.managedSaleProjection.set.status === "PAID_PENDING_INSTANCE_BINDING"
+      ? ["REFUNDED", "PAID"] : ["REFUNDED"] },
+    ...(ctx.localInventoryRelease ? {
+      counterKey: ctx.counterKey, inventoryId: ctx.inventoryId, paymentRef: ctx.paymentRef,
+      transactionId: ctx.transactionId, dispatchGeneration: generationFilter(ctx.dispatchGeneration),
+      inventoryLedgerSchemaVersion: 3, amountMinor: ctx.expectedAmountMinor,
+      ...(ctx.counterEpoch ? { counterEpoch: ctx.counterEpoch } : {}),
+      status: { $in: ctx.managedSaleProjection.set.status === "PAID_PENDING_INSTANCE_BINDING"
+        ? ["PAYMENT_PENDING", "PROVIDER_UNKNOWN", "FAILED", "PAID_PENDING_INSTANCE_BINDING"]
+        : ["PAYMENT_PENDING", "PROVIDER_UNKNOWN", "FAILED", "PAID_PENDING_INSTANCE_BINDING", "PAID"] },
+    } : {}),
   }, {
     $set: ctx.managedSaleProjection.set,
   });

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
+import { newestReviewedSourceSha256 } from "../lib/subscriptionSourceGenerationPins.mjs";
 import {
   PITER_ATOMIC_BINDING_INITIALIZER_SOURCE,
   PITER_ATOMIC_ERROR_SOURCE,
@@ -16,8 +17,7 @@ import {
 const ROOT = path.resolve(import.meta.dirname, "../..");
 // Historical topology bindings stay frozen. Explicitly pin the current atomic
 // function for this core-topology fixture; the polling graph has its own tests.
-const atomicOptions = { atomicRouterSha256: JSON.parse(fs.readFileSync(new URL('../lk1_error_source_generation.json', import.meta.url))).targets
-  .find(t => t.fileName === 'fn_tournament_subscription_piter_atomic_router.js').candidateSha256 };
+const atomicOptions = { atomicRouterSha256: newestReviewedSourceSha256('fn_tournament_subscription_piter_atomic_router.js') };
 const FUNCTION_DIR = path.join(ROOT, "scripts/nodered_games_nodes");
 
 function validFlow() {
@@ -122,4 +122,12 @@ test('both original polling and archive successor hashes require complete topolo
       assert.equal(isTopologyDependentPiterSourceHash(target.candidateSha256), true);
     }
   }
+});
+
+
+test('current atomic successor never silently satisfies a frozen predecessor topology pin', () => {
+  const oldHash = JSON.parse(fs.readFileSync(new URL('../lk1_error_source_generation.json', import.meta.url))).targets
+    .find(t => t.fileName === 'fn_tournament_subscription_piter_atomic_router.js').candidateSha256;
+  assert.notEqual(atomicOptions.atomicRouterSha256, oldHash);
+  assert.throws(() => assertPiterAtomicTopology(validFlow(), { atomicRouterSha256: oldHash }), /func mismatch/);
 });

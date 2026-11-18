@@ -1,7 +1,9 @@
+import { moscowBookingEndIso } from "./bookingEndTime";
 import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
 import type { SubscriptionPriceQuote, SubscriptionPriceTarget } from "../components/games/subscriptionPricePreview.ts";
+import { normalizeSupportPhotos, type SupportPhoto } from "./supportPhotos";
 import {
   TENANT_KEY,
   API_BASE,
@@ -19,8 +21,11 @@ import { invalidateSubscriptionSnapshot, readSubscriptionSnapshot, requestChange
 import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscriptionSnapshotData";
 import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
+import { captureSplitLeaveInitiator } from "./splitLeaveDiagnostics";
 import { UUID } from "./errorDiagnosticsCore.mjs";
-import { abortCause, diagnosticId, routeTemplate } from "./errorDiagnostics";
+import { gamePatchDiagnosticUrl } from "./gamePatchDiagnostics.mjs";
+import { abortCause, callerBuild, diagnosticId, routeTemplate } from "./errorDiagnostics";
+import { correlateGameReadRequest } from "./gameReadCorrelation";
 import type {
   BookingCancellationAction,
   BookingCancellationOptionsResponse,
@@ -50,6 +55,9 @@ import { isRequestTimeoutError, runWithAbortTimeout } from "./requestTimeout.ts"
 import { SubscriptionRejoinTracker } from "./subscriptionRejoin.ts";
 import { nativeSubscriptionCancellationVerified, pollNativeSubscriptionCancellation, nativeCancellationRequestId } from "./nativeSubscriptionCancellation";
 import { SplitPaymentAmbiguityGuard } from "./splitPaymentAmbiguityGuard.ts";
+import { SplitCreateAttempts, isAmbiguousSplitCreate, recoverSplitCreateResult,
+  pendingSplitCreateResult, type SplitCreateResultBinding } from "./splitCreateRecovery.ts";
+import { createTournamentParticipantReader } from "./tournamentParticipantRead.ts";
 import {
   buildPadelAvailableGamesQuery,
   type PadelAvailableGamesQueryOptions,
@@ -2301,7 +2309,8 @@ function scoreMasterService(service: MasterServiceOption, studioId: string): num
   return hasStudio + nameBoost + service.roomsCount;
 }
 
-async function resolveMasterServiceIdByStudio(studioId: string): Promise<string | null> {
+async function resolveMasterServiceIdByStudio(studioId: string, signal?: AbortSignal): Promise<string | null> {
+  signal?.throwIfAborted();
   if (!studioId) return null;
   const cached = masterServiceByStudioCache.get(studioId);
   if (cached) return cached;
@@ -2325,7 +2334,9 @@ async function resolveMasterServiceIdByStudio(studioId: string): Promise<string 
       method: "GET",
       auth: true,
       retries: 1,
+      signal,
     });
+    signal?.throwIfAborted();
     if (result.error) continue;
 
     const services = extractMasterServiceItems(result.data)
@@ -2350,7 +2361,8 @@ async function resolveMasterServiceIdByStudio(studioId: string): Promise<string 
   return null;
 }
 
-async function bootstrapMasterService(masterServiceId: string, studioId?: string | null) {
+async function bootstrapMasterService(masterServiceId: string, studioId?: string | null, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   if (!masterServiceId) return;
 
   const cacheKey = `${masterServiceId}:${studioId ?? ""}`;
@@ -2360,43 +2372,55 @@ async function bootstrapMasterService(masterServiceId: string, studioId?: string
   const baseSubServicesUrl = `${base}/subServices?`;
   const studiosUrl = `${base}/studios?`;
 
+  signal?.throwIfAborted();
   await request<unknown>(`${base}/meta`, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
 
+  signal?.throwIfAborted();
   await request<unknown>(baseSubServicesUrl, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
 
+  signal?.throwIfAborted();
   const studiosResult = await request<unknown>(studiosUrl, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
+  signal?.throwIfAborted();
   const timeZone =
     extractMasterServiceTimeZone(studiosResult.data, studioId) ??
     masterServiceTimeZoneCache.get(masterServiceId) ??
     "Europe/Moscow";
   masterServiceTimeZoneCache.set(masterServiceId, timeZone);
 
+  signal?.throwIfAborted();
   await request<unknown>(`${API_BASE}/api/v1/time?timeZone=${encodeURIComponent(timeZone)}`, {
     method: "GET",
     retries: 1,
+    signal,
   });
 
   if (studioId) {
+    signal?.throwIfAborted();
     const studioSubServicesResult = await request<unknown>(
       `${base}/subServices?studioId=${encodeURIComponent(studioId)}&showAll=true`,
       {
         method: "GET",
         auth: true,
         retries: 1,
+        signal,
       },
     );
+    signal?.throwIfAborted();
     const studioGameModes = extractStudioGameModes(studioSubServicesResult.data, studioId);
     masterServiceStudioGameModesCache.set(cacheKey, studioGameModes);
 
@@ -2419,6 +2443,7 @@ async function bootstrapMasterService(masterServiceId: string, studioId?: string
     }
   }
 
+  signal?.throwIfAborted();
   masterServiceBootstrapCache.add(cacheKey);
 }
 
@@ -3518,6 +3543,7 @@ export interface SupportDialogMessage {
   sender: SupportDialogMessageSender | null;
   deleted: boolean;
   metadata: Record<string, unknown> | null;
+  attachments: SupportPhoto[];
 }
 
 export interface SupportDialogMessagesPage {
@@ -3529,6 +3555,7 @@ export interface SupportDialogMessagesPage {
 }
 
 export interface SupportDialogEventPayload {
+  attachments?: SupportPhoto[];
   connector?: string | null;
   channel?: string;
   direction?: "INBOUND" | "OUTBOUND" | "SYSTEM";
@@ -4093,6 +4120,7 @@ export interface RequestOptions extends RequestInit {
   diagnosticContext?: { logicalOperation: string; attempt: number };
   auth?: boolean;
   retries?: number;
+  nonRetryableStatuses?: readonly number[];
   baseUrl?: string;
   signal?: AbortSignal;
   cacheTtlMs?: number;
@@ -4178,6 +4206,7 @@ async function rawRequest<T>(
     diagnosticContext,
     baseUrl = API_BASE,
     retries: _retries,
+    nonRetryableStatuses: _nonRetryableStatuses,
     cacheTtlMs: _cacheTtlMs,
     dedupe: _dedupe,
     fallbackBaseUrls: _fallbackBaseUrls,
@@ -4218,12 +4247,14 @@ async function rawRequest<T>(
   const requestStarted = performance.now();
   let diagnosticRequestId: string | undefined;
   try { diagnosticRequestId = diagnosticId(); } catch { /* unavailable crypto -> UNKNOWN */ }
+  const correlationAttached = correlateGameReadRequest(headers, fullUrl, fetchOptions.method, diagnosticRequestId);
   const diagnosticAttempt = diagnosticContext ? ++diagnosticContext.attempt : 1;
   let diagnosticRoute = "UNKNOWN";
   try { diagnosticRoute = routeTemplate(new URL(fullUrl, window.location.href).pathname); } catch { /* unknown */ }
   const requestDiagnostic = () => ({ requestId: diagnosticRequestId, logicalOperation: diagnosticContext?.logicalOperation,
     attempt: diagnosticAttempt, routeTemplate: diagnosticRoute, method: fetchOptions.method ?? "GET",
-    durationMs: performance.now() - requestStarted, abortCause: abortCause(fetchOptions.signal), stage: "api_request" });
+    durationMs: performance.now() - requestStarted, abortCause: abortCause(fetchOptions.signal),
+    callerBuild: callerBuild(), correlationAttached, stage: "api_request" });
 
   try {
     response = await fetch(fullUrl, { ...fetchOptions, headers });
@@ -4306,7 +4337,17 @@ export async function request<T>(
   url: string,
   options: RequestOptions = {},
 ): Promise<ApiResult<T>> {
-  try { options = { ...options, diagnosticContext: { logicalOperation: diagnosticId(), attempt: 0 } }; } catch { /* no crypto */ }
+  let diagnosticContext: RequestOptions["diagnosticContext"];
+  try {
+    const supplied = options.diagnosticContext;
+    const valid = supplied && typeof supplied.logicalOperation === "string" && UUID.test(supplied.logicalOperation) && Number.isSafeInteger(supplied.attempt)
+      && supplied.attempt >= 0 && supplied.attempt < 10000;
+    diagnosticContext = valid
+      ? { logicalOperation: supplied.logicalOperation, attempt: supplied.attempt }
+      : { logicalOperation: diagnosticId(), attempt: 0 };
+  } catch { /* Missing crypto or malformed diagnostic claims cannot stop the request. */ }
+  captureSplitLeaveInitiator(url, options.method ?? "GET", diagnosticContext?.logicalOperation);
+  options = { ...options, diagnosticContext };
   const cacheConfig = resolveRequestCacheConfig(url, options);
 
   if (cacheConfig) {
@@ -4468,7 +4509,7 @@ async function requestWithBaseUrlFallback<T>(
   const runRequest = (baseUrl: string) => {
     const requestOptions = { ...options, baseUrl };
     return retries > 0
-      ? withRetry(() => rawRequest<T>(url, requestOptions), { retries })
+      ? withRetry(() => rawRequest<T>(url, requestOptions), { retries, nonRetryableStatuses: options.nonRetryableStatuses })
       : rawRequest<T>(url, requestOptions);
   };
 
@@ -4542,7 +4583,7 @@ async function executeRequestWithResolvedBaseUrls<T>(
   }
 
   return retries > 0
-    ? withRetry(() => rawRequest<T>(url, options), { retries })
+    ? withRetry(() => rawRequest<T>(url, options), { retries, nonRetryableStatuses: options.nonRetryableStatuses })
     : rawRequest<T>(url, options);
 }
 
@@ -4638,7 +4679,8 @@ async function withRetry<T>(
   {
     retries = 2,
     baseDelayMs = 300,
-  }: { retries?: number; baseDelayMs?: number } = {},
+    nonRetryableStatuses = [],
+  }: { retries?: number; baseDelayMs?: number; nonRetryableStatuses?: readonly number[] } = {},
 ): Promise<ApiResult<T>> {
   const isSuccessStatus = (status: ApiStatus) =>
     status === 304 || (typeof status === "number" && status >= 200 && status < 300);
@@ -4647,7 +4689,7 @@ async function withRetry<T>(
   while (true) {
     try {
       const res = await fn();
-      if (isLkIdleRequestPausedError(res.error?.raw)) {
+      if (isLkIdleRequestPausedError(res.error?.raw) || (res.status != null && nonRetryableStatuses.includes(res.status))) {
         return res;
       }
       if (!isSuccessStatus(res.status)) {
@@ -4682,11 +4724,13 @@ async function withRetry<T>(
   }
 }
 
-export async function apiFetchProfile() {
+export async function apiFetchProfile(signal?: AbortSignal) {
+  signal?.throwIfAborted();
   return request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
     method: "GET",
     auth: true,
     retries: 1,
+    signal,
   });
 }
 
@@ -4788,6 +4832,7 @@ export async function apiFetchBookings(
   options: {
     size?: number;
     fresh?: boolean;
+    page?: number;
   } = {},
 ) {
   const size = Number.isFinite(options.size)
@@ -4797,7 +4842,8 @@ export async function apiFetchBookings(
     ? `/end-user/api/v2/${TENANT_KEY}/bookings/history?includeCanceled=true&size=${size}`
     : `/end-user/api/v2/${TENANT_KEY}/bookings?size=${size}`;
 
-  return request<BookingsResponse>(url, {
+  const page = Number.isSafeInteger(options.page) && Number(options.page) > 0 ? `&page=${options.page}` : "";
+  return request<BookingsResponse>(url + page, {
     method: "GET",
     auth: true,
     retries: 1,
@@ -4892,14 +4938,41 @@ export async function apiVerifyBookingCancellation(
   let lastStatus: ApiStatus = null;
   let lastError: ApiError | null = null;
 
+  const readComplete = async (history: boolean): Promise<ApiResult<BookingsResponse>> => {
+    const first = await apiFetchBookings(history, { size: 1000, fresh: true });
+    if (first.error || !first.data) return first;
+    const validRows = (v: Booking[]) => Array.isArray(v)
+      && v.every(row => row && typeof row.id === "string" && row.id.trim());
+    const pages = first.data.totalPages;
+    if (!Number.isSafeInteger(pages) || pages < 0 || pages > 20 || !validRows(first.data.content)
+      || first.data.pageable?.pageNumber > 0) return {
+      data: null, status: 503, error: { status: 503, message: "Не удалось полностью проверить записи" },
+    };
+    const content = [...first.data.content];
+    for (let page = 1; page < pages; page++) {
+      const next = await apiFetchBookings(history, { size: 1000, fresh: true, page });
+      if (next.error || !next.data) return next;
+      if (next.data.totalPages !== pages || !validRows(next.data.content)
+        || next.data.pageable?.pageNumber !== page) return { data: null, status: 409,
+        error: { status: 409, message: "Список записей изменился во время проверки. Обновите его." } };
+      content.push(...next.data.content);
+    }
+    if (new Set(content.map(row => row.id)).size !== content.length
+      || (Number.isSafeInteger(first.data.totalElements) && first.data.totalElements !== content.length)) {
+      return { data: null, status: 503, error: { status: 503, message: "Не удалось полностью проверить записи" } };
+    }
+    return { ...first, data: { ...first.data, content } };
+  };
+
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const [activeResult, historyResult] = await Promise.all([
-      apiFetchBookings(false, { size: 1000 }),
-      apiFetchBookings(true, { size: 1000 }),
+      readComplete(false),
+      readComplete(true),
     ]);
     lastStatus = historyResult.status ?? activeResult.status;
     lastError = historyResult.error || activeResult.error;
-    lastVerification = resolveBookingCancellationVerification(
+    lastVerification = lastError ? { bookingId, state: "unverified", record: null,
+      reason: "INCOMPLETE_EVIDENCE" } : resolveBookingCancellationVerification(
       bookingId,
       (activeResult.data?.content ?? []) as BookingCancellationVerificationRecord[],
       (historyResult.data?.content ?? []) as BookingCancellationVerificationRecord[],
@@ -4924,8 +4997,8 @@ export async function apiVerifyBookingCancellation(
     error: {
       status: activeBooking ? 409 : (lastError?.status ?? lastStatus ?? 409),
       message: activeBooking
-        ? "Viva всё ещё держит запись активной. Попробуйте отменить ещё раз."
-        : "Не удалось подтвердить отмену записи в Viva. Запись оставлена в личном кабинете.",
+        ? "Отмена пока не подтверждена: запись остаётся активной. Обновите список записей перед дальнейшими действиями."
+        : "Не удалось подтвердить отмену записи. Обновите статус; повторная отмена пока не требуется.",
       raw: {
         verification: lastVerification,
         cause: lastError?.raw ?? null,
@@ -4985,7 +5058,7 @@ export async function apiCancelBooking(
   return request<unknown>(`/end-user/api/v1/${TENANT_KEY}/bookings/${encodeURIComponent(bookingId)}`, {
     method: "DELETE",
     auth: true,
-    retries: 1,
+    retries: 0,
     ...(payload ? { body: JSON.stringify(payload) } : {}),
   });
 }
@@ -5594,6 +5667,8 @@ function sanitizeTournamentParticipantsPayload<T>(payload: T): T {
   return (nextPayload ?? payload) as T;
 }
 
+const readTournamentParticipants = createTournamentParticipantReader<ExerciseBooking[]>();
+
 export async function apiFetchTournamentParticipants(
   exerciseId: string,
   options: {
@@ -5601,18 +5676,32 @@ export async function apiFetchTournamentParticipants(
     auth?: boolean;
     retries?: number;
     signal?: AbortSignal;
+    fresh?: boolean;
   } = {},
 ) {
   const base = getServ2Origin();
-  const result = await request<ExerciseBooking[]>(
-    `${base}/lk/tournaments/participants?exerciseId=${exerciseId}`,
-    {
+  const url = `${base}/lk/tournaments/participants?exerciseId=${encodeURIComponent(exerciseId)}`;
+  const auth = options.auth ?? true;
+  // Raw reads also serve booking mutation verification: preserve their fresh-read path.
+  const result = options.sanitize === false
+    ? await request<ExerciseBooking[]>(url, {
       method: "GET",
-      auth: options.auth ?? true,
+      auth,
       retries: options.retries ?? 1,
       signal: options.signal,
-    },
-  );
+    })
+    : await (() => {
+      const session = auth ? readAuthToken() : null;
+      return readTournamentParticipants({
+        key: JSON.stringify([base, exerciseId, auth, session]),
+        signal: options.signal,
+        fresh: options.fresh,
+        isCurrentSession: () => !auth || readAuthToken() === session,
+        // This leaf owns its three busy-key retries. Generic retries would multiply
+        // attempts and retry unrelated rate limits; retries:0 callers still get recovery.
+        run: (signal) => request<ExerciseBooking[]>(url, { method: "GET", auth, retries: 0, signal }),
+      });
+    })();
   return {
     ...result,
     data: result.data && options.sanitize !== false
@@ -6845,6 +6934,7 @@ function normalizeSupportDialogMessage(payload: unknown): SupportDialogMessage |
     connector: pickString(payload, ["connector"]),
     text,
     textPreview: pickString(payload, ["textPreview", "preview"]) ?? text,
+    attachments: normalizeSupportPhotos(payload.attachments),
     createdAt,
     createdTs,
     sender: normalizeSupportDialogMessageSender(payload.sender) ?? normalizeSupportDialogMessageSender(payload),
@@ -7165,7 +7255,10 @@ export async function apiFetchPadelAvailableGames(options: PadelAvailableGamesQu
   };
 }
 
-export async function apiFetchPadelGameRecord(gameId: string) {
+export async function apiFetchPadelGameRecord(
+  gameId: string,
+  options: Pick<RequestOptions, "retries" | "cache"> = {},
+) {
   const normalizedGameId = gameId.trim();
   if (!normalizedGameId) {
     return {
@@ -7186,10 +7279,14 @@ export async function apiFetchPadelGameRecord(gameId: string) {
       method: "GET",
       baseUrl,
       retries: 1,
+      ...options,
+      nonRetryableStatuses: [404],
     });
     if (response.error) {
       if (!firstError) {
-        firstError = response.error;
+        firstError = response.status === 404
+          ? { ...response.error, message: "Игра недоступна" }
+          : response.error;
         firstStatus = response.status;
       }
       continue;
@@ -7798,7 +7895,8 @@ export async function apiCreateSupportDialogEvent(payload: SupportDialogEventPay
     || normalizePhoneForChat(payload.phoneNumber || "")
     || normalizePhoneForChat(payload.primaryPhone || "");
 
-  if (!text || !phone) {
+  const attachments = normalizeSupportPhotos(payload.attachments);
+  if ((!text && !attachments.length) || !phone) {
     return {
       data: null as SupportDialogEventResponse | null,
       error: {
@@ -7836,7 +7934,8 @@ export async function apiCreateSupportDialogEvent(payload: SupportDialogEventPay
         displayName,
         phone,
         text,
-        kind: "TEXT",
+        kind: attachments.length ? "MEDIA" : "TEXT",
+        attachments,
         ...(stationId ? { stationId, selectedStationId: stationId } : {}),
         ...(stationName ? { stationName, selectedStationName: stationName } : {}),
         meta: {
@@ -7854,7 +7953,8 @@ export async function apiCreateSupportDialogEvent(payload: SupportDialogEventPay
         phone,
         primaryPhone: phone,
         text,
-        kind: "TEXT",
+        kind: attachments.length ? "MEDIA" : "TEXT",
+        attachments,
         connector,
         channel: (payload.channel || "WEB").trim().toUpperCase(),
         ...(stationId ? { stationId, selectedStationId: stationId } : {}),
@@ -7902,6 +8002,7 @@ async function writePadelGameRecord(
   requestOptions: {
     retries?: number;
     keepalive?: boolean;
+    diagnosticContext?: RequestOptions["diagnosticContext"];
   } = {},
 ): Promise<ApiResult<PadelGameRecord>> {
   const baseUrl = getServ2Origin() || "";
@@ -7921,6 +8022,7 @@ async function writePadelGameRecord(
       baseUrl,
       retries,
       keepalive,
+      diagnosticContext: requestOptions.diagnosticContext,
       body: JSON.stringify(payload),
     });
 
@@ -8389,10 +8491,15 @@ export async function apiFetchPadelGameByPaymentRef(
   };
 }
 
+export interface PadelGameRecordUpdateResult extends ApiResult<PadelGameRecord> {
+  // A conflict refresh is for replacing local state, never evidence of a successful PATCH.
+  conflictRecord?: PadelGameRecord | null;
+}
+
 export async function apiUpdatePadelGameRecord(
   gameId: string,
   payload: Partial<PadelGameRecordPayload>,
-) {
+): Promise<PadelGameRecordUpdateResult> {
   const normalizedGameId = gameId.trim();
   if (!normalizedGameId) {
     return {
@@ -8402,12 +8509,33 @@ export async function apiUpdatePadelGameRecord(
     };
   }
 
+  let url = `/lk/games/${encodeURIComponent(normalizedGameId)}`;
+  let diagnosticContext: RequestOptions["diagnosticContext"];
+  try {
+    diagnosticContext = { logicalOperation: diagnosticId(), attempt: 0 };
+    url = gamePatchDiagnosticUrl(url, { callerBuild: callerBuild(), logicalOperation: diagnosticContext.logicalOperation });
+  } catch { /* No diagnostic failure may prevent a mutation. */ }
+
   const writeResult = await writePadelGameRecord(
-    [{ url: `/lk/games/${encodeURIComponent(normalizedGameId)}`, method: "PATCH" }],
+    [{ url, method: "PATCH" }],
     payload as unknown as Record<string, unknown>,
     normalizedGameId,
     payload.invite?.inviteUrl?.trim() || null,
+    // Replaying a mutation cannot resolve a stale version or an ambiguous network outcome.
+    { retries: 0, diagnosticContext },
   );
+  if (writeResult.status === 409 && writeResult.error) {
+    let conflictRecord: PadelGameRecord | null = null;
+    try {
+      const refreshed = await apiFetchPadelGameRecord(normalizedGameId, { retries: 0, cache: "no-store" });
+      if (!refreshed.error && refreshed.data?.id === normalizedGameId) {
+        conflictRecord = refreshed.data;
+      }
+    } catch {
+      // Preserve the original conflict even when the readback is unavailable.
+    }
+    return { ...writeResult, data: null, conflictRecord };
+  }
   return hydratePadelGameRecordAfterWrite(writeResult);
 }
 
@@ -8570,6 +8698,7 @@ async function requestPadelGameResultAction(
       baseUrl,
       auth: true,
       retries: action === "submit" ? 0 : 1,
+      ...(action === "state" ? { nonRetryableStatuses: [404] } : {}),
       ...(submitController ? { signal: submitController.signal } : {}),
       ...(method === "POST" ? { body: JSON.stringify(payload ?? {}) } : {}),
     });
@@ -8594,7 +8723,9 @@ async function requestPadelGameResultAction(
   if (response.error) {
     return {
       data: null,
-      error: response.error,
+      error: action === "state" && response.status === 404
+        ? { ...response.error, message: "Игра недоступна" }
+        : response.error,
       status: response.status,
     };
   }
@@ -9018,6 +9149,7 @@ async function requestPadelSplitPayment(
   splitRequest: ReturnType<typeof buildPadelSplitRequest>,
   baseUrl: string,
   params: PadelSplitPaymentParams,
+  signal?: AbortSignal,
 ): Promise<ApiResult<unknown>> {
   const ambiguityGuard = getBrowserPadelSplitAmbiguityGuard();
   const ambiguityScope = buildPadelSplitAmbiguityScope(splitRequest, params);
@@ -9040,6 +9172,7 @@ async function requestPadelSplitPayment(
     ...splitRequest.options,
     retries: 0,
     body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
+    ...(signal ? { signal } : {}),
   };
 
   if (params.paymentMode !== "subscription") {
@@ -9052,6 +9185,7 @@ async function requestPadelSplitPayment(
     const response = await runWithAbortTimeout(
       PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS,
       (signal) => request<unknown>(splitRequest.path, { ...requestOptions, signal }),
+      requestOptions.signal ?? undefined,
     );
     const ambiguous = hasPadelSplitAmbiguousState(response.data)
       || hasPadelSplitAmbiguousState(response.error?.raw)
@@ -9085,6 +9219,8 @@ async function requestPadelSplitPayment(
 interface PadelSplitPendingPollOptions {
   delaysMs?: readonly number[];
   wait?: (delayMs: number) => Promise<void>;
+  signal?: AbortSignal;
+  onRecovery?: () => void;
 }
 
 async function requestPadelSplitJoinWithPendingPoll(
@@ -9112,34 +9248,71 @@ async function requestPadelSplitJoinWithPendingPoll(
   return response;
 }
 
-// Split create can answer PENDING_CONFIRMATION as well: the gateway may have accepted the
-// request while Viva or the entitlement service still owes the booking readback. The LK game
-// record is created by the browser only after a confirmed response, so a single pending answer
-// used to leave a confirmed booking without a game. Re-issue the same operationId inside the
-// bounded schedule; the operation keeps its atomic claim and one-time creates never poll.
+let browserSplitCreateAttempts: SplitCreateAttempts | null = null;
+function getSplitCreateAttempts(): SplitCreateAttempts {
+  if (!browserSplitCreateAttempts) {
+    let storage: Storage | null = null;
+    try { if (typeof window !== "undefined") storage = window.localStorage; } catch { /* active-tab memory fallback */ }
+    browserSplitCreateAttempts = new SplitCreateAttempts(storage);
+  }
+  return browserSplitCreateAttempts;
+}
+type SplitCreateIdentity = Pick<PadelSplitPaymentParams, "date" | "fromTime" | "toTime" | "roomId"
+  | "clientId" | "clientPhone" | "clientSubscriptionId" | "spot">;
+export function hasPendingPadelSplitCreate(params: SplitCreateIdentity): boolean {
+  return getSplitCreateAttempts().has(buildPadelSplitIdempotencyKey("create", params as PadelSplitPaymentParams));
+}
+export function completePadelSplitCreate(operationId: string | null | undefined): void {
+  if (operationId) getSplitCreateAttempts().complete(operationId);
+}
+
+// An accepted/ambiguous CREATE is never replayed. Only the authenticated GET reader
+// may recover its result. Keep the original paymentRef until the LK card is saved.
 async function requestPadelSplitCreateWithPendingPoll(
   splitRequest: ReturnType<typeof buildPadelSplitRequest>,
   baseUrl: string,
   params: PadelSplitPaymentParams,
   options: PadelSplitPendingPollOptions | null = null,
 ): Promise<ApiResult<unknown>> {
-  const resolvedOptions = options ?? {};
-  const delaysMs = resolvedOptions.delaysMs ?? SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS;
-  const wait = resolvedOptions.wait ?? (async (delayMs) => {
-    await new Promise((resolve) => {
-      globalThis.setTimeout(resolve, delayMs);
-    });
-  });
-  let response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
-  if (params.paymentMode !== "subscription") return response;
-  for (const delayMs of delaysMs) {
-    if (response.error || !resolvePadelSplitPendingError(response.data, response.status)) {
-      return response;
-    }
-    await wait(delayMs);
-    response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
+  if (params.paymentMode !== "subscription") return requestPadelSplitPayment(splitRequest, baseUrl, params, options?.signal);
+  const session = readAuthToken();
+  const stopped = () => ({ data: null, status: 409, error: { status: 409,
+    message: "Проверка остановлена. Откройте бронирования в личном кабинете.", raw: { code: "SPLIT_CREATE_RESULT_CANCELLED" } } });
+  if (!session || options?.signal?.aborted) return stopped();
+  const splitCreateAttempts = getSplitCreateAttempts();
+  const attempt = splitCreateAttempts.begin(splitRequest.operationId, params.paymentRef || "");
+  params = { ...params, paymentRef: attempt.paymentRef };
+  let response: ApiResult<unknown>;
+  try {
+    response = attempt.recoveryOnly
+      ? pendingSplitCreateResult(splitRequest.operationId)
+      : await requestPadelSplitPayment(splitRequest, baseUrl, params, options?.signal);
+  } catch (error) {
+    if (readAuthToken() !== session || options?.signal?.aborted) return stopped();
+    throw error;
   }
-  return response;
+  if (readAuthToken() !== session || options?.signal?.aborted) return stopped();
+  if (!isAmbiguousSplitCreate(response)) {
+    if (response.error) splitCreateAttempts.complete(splitRequest.operationId);
+    return response;
+  }
+  options?.onRecovery?.();
+  const binding: SplitCreateResultBinding = {
+    operationId: splitRequest.operationId, paymentRef: attempt.paymentRef,
+    clientSubscriptionId: params.clientSubscriptionId || "", studioId: params.studioId, roomId: params.roomId,
+    fromTime: `${params.date}T${params.fromTime}:00+03:00`,
+    toTime: moscowBookingEndIso(params.date, params.fromTime, params.toTime),
+  };
+  const query = new URLSearchParams({ operationId: binding.operationId });
+  const recovered = await recoverSplitCreateResult(binding, (remainingMs) => runWithAbortTimeout(remainingMs,
+    (signal) => request<unknown>(`/lk/games/split/create-result?${query}`, {
+      method: "GET", baseUrl, auth: true, retries: 0, cache: "no-store", signal,
+    }), options?.signal), {
+    signal: options?.signal, session: readAuthToken, delaysMs: options?.delaysMs, wait: options?.wait,
+  });
+  if (!recovered.error && recovered.status === 200 && isRecord(recovered.data)
+    && typeof recovered.data.paymentRef === "string") splitCreateAttempts.adopt(splitRequest.operationId, recovered.data.paymentRef);
+  return recovered;
 }
 
 export async function apiCreatePadelSplitGamePayment(
@@ -9204,7 +9377,7 @@ export async function apiCreatePadelSplitGamePayment(
   }
   if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode, {
     action: "create",
-    paymentRef,
+    paymentRef: getSplitCreateAttempts().paymentRef(splitRequest.operationId) ?? paymentRef,
     operationId: splitRequest.operationId,
   })) {
     return {
@@ -9219,6 +9392,9 @@ export async function apiCreatePadelSplitGamePayment(
   }
   if (params.paymentMode === "subscription") {
     markPadelSplitDecisionSettled(splitRequest, params);
+    // Legacy free-success packets omit operationId. The verified request owns
+    // this reference; retain it so LK persistence can close the right journal entry.
+    parsed.operationId = splitRequest.operationId;
   }
 
   return {
@@ -9403,7 +9579,7 @@ export async function apiCancelPadelSplitParticipantBookings(
       body: JSON.stringify({
         bookingIds,
         ...(bookingItems.length > 0 ? { bookingItems } : {}),
-        exerciseId: payload.exerciseId ?? null,
+        // Split leave resolves the exercise from the stored game, not the caller.
         clientId: payload.clientId ?? payload.playerId ?? bookingItems.find((item) => item.clientId)?.clientId ?? null,
         playerId: payload.playerId ?? null,
         playerPhone: payload.playerPhone ?? null,
@@ -9424,6 +9600,13 @@ export async function apiTransferPadelGameOrganizer(
     `/lk/games/${encodeURIComponent(gameId.trim())}/organizer/transfer`,
     { method: "POST", baseUrl: getServ2Origin() || "", auth: true, retries: 0,
       body: JSON.stringify({ successorId, expectedUpdatedAt }) },
+  );
+}
+
+export async function apiReconcilePadelGameCancellation(gameId: string) {
+  return request<{ ok: boolean; gameId: string; state: "CANCELLED" | "ACTIVE" | "ACTIVE_REPLACEMENT" | "UNVERIFIED" }>(
+    `/lk/games/${encodeURIComponent(gameId.trim())}/cancellation/status`,
+    { method: "POST", auth: true, retries: 0, baseUrl: getServ2Origin() || "", body: "{}" },
   );
 }
 
@@ -9854,7 +10037,7 @@ export async function apiFetchMasterServicePromoDiscounts(params: MasterServiceP
   }
 
   const fromDateTimeLocal = `${fromDate}T${fromTime}:00`;
-  const toDateTimeLocal = `${fromDate}T${toTime}:00`;
+  const toDateTimeLocal = moscowBookingEndIso(fromDate, fromTime, toTime).slice(0, -6);
   const discountsUrl =
     `${API_BASE}/end-user/api/v1/${TENANT_KEY}/promo/discounts`
     + `?productIds=${encodeURIComponent(subServiceIds.join(","))}`
@@ -9984,9 +10167,9 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
   }
 
   const fromDateTimeWithOffset = `${fromDate}T${fromTime}:00+03:00`;
-  const toDateTimeWithOffset = `${fromDate}T${toTime}:00+03:00`;
+  const toDateTimeWithOffset = moscowBookingEndIso(fromDate, fromTime, toTime);
   const fromDateTimeLocal = `${fromDate}T${fromTime}:00`;
-  const toDateTimeLocal = `${fromDate}T${toTime}:00`;
+  const toDateTimeLocal = moscowBookingEndIso(fromDate, fromTime, toTime).slice(0, -6);
   const clientId = params.clientId?.trim() || null;
   let promoDiscountAmount: number | null = null;
   if (clientId) {
@@ -10208,6 +10391,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
 export async function apiFetchMasterServiceTimeslots(
   date: string,
   options: {
+    signal?: AbortSignal;
     studioId?: string | null;
     masterServiceId?: string | null;
     preferredSubServiceId?: string | null;
@@ -10215,11 +10399,13 @@ export async function apiFetchMasterServiceTimeslots(
     preferredRoomIds?: string[];
   } = {},
 ) {
+  const signal = options.signal;
+  signal?.throwIfAborted();
   const explicitMasterServiceId = options.masterServiceId?.trim() || null;
   const studioId = options.studioId?.trim() || null;
   const resolvedByStudio =
     ENABLE_MASTER_SERVICE_AUTO_DISCOVERY && !explicitMasterServiceId && studioId
-      ? await resolveMasterServiceIdByStudio(studioId)
+      ? await resolveMasterServiceIdByStudio(studioId, signal)
       : null;
   const fallbackMasterServiceId = studioId ? null : DEFAULT_GAMES_MASTER_SERVICE_ID;
   const masterServiceId =
@@ -10227,6 +10413,7 @@ export async function apiFetchMasterServiceTimeslots(
     resolvedByStudio ??
     fallbackMasterServiceId;
 
+  signal?.throwIfAborted();
   if (!masterServiceId) {
     return {
       data: [] as GameTimeSlot[],
@@ -10240,7 +10427,8 @@ export async function apiFetchMasterServiceTimeslots(
     };
   }
 
-  await bootstrapMasterService(masterServiceId, studioId);
+  await bootstrapMasterService(masterServiceId, studioId, signal);
+  signal?.throwIfAborted();
 
   const cacheKey = `${masterServiceId}:${studioId ?? ""}`;
   const explicitPreferredIds = uniqueIds(options.preferredSubServiceIds ?? []).filter((value) =>
@@ -10283,10 +10471,12 @@ export async function apiFetchMasterServiceTimeslots(
       method: "POST",
       auth: true,
       retries: 1,
+      signal,
       body: JSON.stringify(requestPayload),
     },
   );
 
+  signal?.throwIfAborted();
   if (result.error) {
     return {
       data: [] as GameTimeSlot[],

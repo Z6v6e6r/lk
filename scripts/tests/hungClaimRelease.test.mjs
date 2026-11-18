@@ -366,7 +366,7 @@ test('the confirmed class fails closed on live, fresh, unbound and ambiguous sta
   assert.equal(decide({ exerciseId: null }).reason, 'EXERCISE_ID_MISSING');
 });
 
-test('a released orphaned claim keeps its money evidence and CAS snapshot', () => {
+test('a confirmed money booking stays held for payment and visit reconciliation', () => {
   const op = operation({
     state: 'CONFIRMED',
     bookingId: 'fixture-booking-0001',
@@ -379,13 +379,26 @@ test('a released orphaned claim keeps its money evidence and CAS snapshot', () =
     ttlMs,
     includeConfirmed: true,
   });
-  assert.equal(decision.releasable, true);
+  assert.equal(decision.releasable, false);
+  assert.equal(decision.reason, 'RELATED_OPERATION_REQUIRES_RECONCILIATION');
   const command = buildHungClaimReleaseCommand({ operation: op, now: NOW });
   // The money leg must survive the release: no `$unset` of lk1, and the CAS pins it.
   assert.deepEqual(command.query.lk1, { $eq: op.lk1 });
   assert.deepEqual(Object.keys(command.update.$unset), ['pendingUntil', 'leaseUntil', 'precreateLeaseUntil']);
   assert.equal(command.update.$set.releaseReason, RELEASE_REASON);
   assert.equal(command.update.$set.state, 'RELEASED');
+});
+
+test('confirmed visit, payment and create markers cannot be released by booking evidence alone', () => {
+  for (const key of ['transactionAttemptedAt', 'transactionId', 'transactionIntent', 'checkout', 'visitJob']) {
+    const op = operation({ state: 'CONFIRMED', bookingId: 'fixture-booking-0001', lk1: { [key]: 'present' } });
+    const decision = planHungClaimRelease({ operation: op, bookings: [booking({ isCancelled: true })], now: NOW, includeConfirmed: true });
+    assert.equal(decision.releasable, false, key);
+    assert.equal(decision.reason, 'RELATED_OPERATION_REQUIRES_RECONCILIATION');
+  }
+  const op = operation({ state: 'CONFIRMED', bookingId: 'fixture-booking-0001', lk1: { decision: { subscriptionVisitCount: 1 } } });
+  assert.equal(planHungClaimRelease({ operation: op, bookings: [], now: NOW, includeConfirmed: true }).reason,
+    'SUBSCRIPTION_RETURN_REQUIRES_RECONCILIATION');
 });
 
 test('cursor traverses permanently skipped prefixes and wraps without updatedAt', async () => {

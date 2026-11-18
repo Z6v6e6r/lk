@@ -48,7 +48,7 @@ test('raw API errors have one logical operation, distinct attempts, proven abort
  const module = load(snippet, {}, {
   API_BASE: 'https://synthetic.invalid', requestChangesSubscriptions: () => false, invalidateSubscriptionSnapshot() {},
   trackClientError: (source, error, context) => events.push(helpers.clientDiagnostic(context)),
-  UUID: core.UUID, diagnosticId: randomUUID, routeTemplate: core.routeTemplate, abortCause: helpers.abortCause,
+  UUID: core.UUID, diagnosticId: randomUUID, routeTemplate: core.routeTemplate, abortCause: helpers.abortCause, callerBuild: () => "UNKNOWN", correlateGameReadRequest: () => false,
   isLkIdleRequestPausedError: () => false, isRecord: v => v && typeof v === 'object', pickString: () => null,
   window: { location: { href: 'https://synthetic.invalid' } },
   fetch: async (url, options) => { requests.push({ url, options }); if (failNetwork) throw Error('private transport');

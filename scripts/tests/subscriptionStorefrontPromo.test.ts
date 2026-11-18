@@ -986,3 +986,179 @@ test('known 2.0 terminal receipt clears only matching pending custody without an
     if (['mismatch', 'paid', 'unknown-id'].includes(mode)) assert.equal(probes, 0);
   }
 });
+
+function reconciliationFixture(overrides: Record<string, unknown> = {}) {
+  let effect: (() => (() => void) | undefined) | undefined;
+  let state: readonly string[] = [];
+  let token: string | null = 'fixture-session';
+  let hidden = false;
+  let opened = false;
+  let now = 0;
+  const listeners = new Map<string, () => void>();
+  const timers = new Map<number, () => void>();
+  const notices: string[] = [];
+  const resumes: string[] = [];
+  let profiles = 0;
+  const adapter = loadModule<typeof import('../../src/components/subscription-storefront/usePendingCheckoutReconciliation')>(
+    'components/subscription-storefront/usePendingCheckoutReconciliation.ts', {
+      useEffect: (fn: typeof effect) => { effect = fn; },
+      useState: () => [state, (next: readonly string[] | ((previous: readonly string[]) => readonly string[])) => { state = typeof next === 'function' ? next(state) : next; }],
+      useAuth: () => ({ isAuthenticated: true, isRestoringSession: false, isLoading: false, needsPhoneVerification: false }),
+      checkoutSessionToken: () => token,
+      checkoutTransportMatches: (value: string | null) => value === token && !!value,
+      resolveCheckoutPhone: async () => { profiles++; return fixturePhone; },
+      hasRecordedZeroAttempt: () => true,
+      hasZeroAttempt: () => true,
+      isCheckoutOpen: () => opened,
+      isCheckoutReturn: () => false,
+      resumeZeroPayment: async (key: string) => { resumes.push(key); return { status: 'pending' }; },
+      ...overrides,
+    }, {
+      Date: { now: () => now },
+      setTimeout: (fn: () => void) => { timers.set(1, fn); return 1; },
+      clearTimeout: (id: number) => timers.delete(id),
+      CustomEvent: class {
+        type: string; options: { detail: string };
+        constructor(type: string, options: { detail: string }) { this.type = type; this.options = options; }
+      },
+      window: {
+        addEventListener: (name: string, fn: () => void) => listeners.set(name, fn),
+        removeEventListener: (name: string) => listeners.delete(name),
+        dispatchEvent: (event: { options: { detail: string } }) => notices.push(event.options.detail),
+      },
+      document: {
+        get hidden() { return hidden; },
+        addEventListener: (name: string, fn: () => void) => listeners.set(name, fn),
+        removeEventListener: (name: string) => listeners.delete(name),
+      },
+    });
+  return {
+    start: (keys = ['friendship', 'friendship-two-hours', 'academy'], enabled = true) => {
+      adapter.usePendingCheckoutReconciliation(keys, enabled);
+      return effect?.();
+    },
+    state: () => Array.from(state), notices, resumes, profiles: () => profiles,
+    setToken: (value: string | null) => { token = value; },
+    setHidden: (value: boolean) => { hidden = value; },
+    setOpen: (value: boolean) => { opened = value; },
+    advance: () => { now += 30_000; },
+    fire: (name: string) => listeners.get(name)?.(),
+    timeout: () => timers.get(1)?.(),
+    listeners,
+  };
+}
+const flushReconciliation = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test('page reconciliation checks only supported visible offers and never consumes redirect/restart as a purchase', async () => {
+  for (const status of ['restart', 'redirect', 'paid', 'pending']) {
+    const called: string[] = [];
+    const f = reconciliationFixture({ resumeZeroPayment: async (key: string) => {
+      called.push(key); return { status, message: 'fixture result', paymentUrl: 'https://bank.example/should-not-open' };
+    } });
+    const stop = f.start(['friendship', 'academy']);
+    assert.deepEqual(f.state(), ['friendship']);
+    await flushReconciliation();
+    assert.deepEqual(called, ['friendship']);
+    assert.deepEqual(f.state(), []);
+    assert.equal(f.notices.length, ['restart', 'paid'].includes(status) ? 1 : 0);
+    f.fire('focus'); await flushReconciliation(); assert.equal(called.length, 1);
+    f.advance(); f.fire('focus'); await flushReconciliation(); assert.equal(called.length, 2);
+    stop?.(); assert.equal(f.listeners.size, 0);
+  }
+});
+
+test('page reconciliation skips preview, auth/transport restoration, bank return, hidden and interactive checkout', async () => {
+  for (const mode of ['preview', 'auth', 'transport', 'return', 'hidden', 'open', 'legacy-only']) {
+    const f = reconciliationFixture({
+      ...(mode === 'auth' ? { useAuth: () => ({ isAuthenticated: true, isRestoringSession: true }) } : {}),
+      ...(mode === 'transport' ? { checkoutTransportMatches: () => false } : {}),
+      ...(mode === 'return' ? { isCheckoutReturn: () => true } : {}),
+      ...(mode === 'legacy-only' ? { hasRecordedZeroAttempt: () => false } : {}),
+    });
+    f.setHidden(mode === 'hidden'); f.setOpen(mode === 'open');
+    const stop = f.start(undefined, mode !== 'preview');
+    await flushReconciliation();
+    assert.equal(f.profiles(), 0, mode); assert.equal(f.resumes.length, 0, mode);
+    stop?.();
+  }
+});
+
+test('page reconciliation invalidates late confirmation after timeout, session change, hide, checkout or unmount', async () => {
+  for (const mode of ['timeout', 'session', 'hidden', 'open', 'unmount']) {
+    let finish!: () => void;
+    let current!: () => boolean;
+    const f = reconciliationFixture({ resumeZeroPayment: async (_key: string, _phone: string, guard: () => boolean) => {
+      current = guard;
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { status: 'restart', message: 'must not announce stale result' };
+    } });
+    const stop = f.start(['friendship']); await flushReconciliation();
+    f.fire('focus'); assert.equal(f.profiles(), 1);
+    if (mode === 'timeout') f.timeout();
+    if (mode === 'session') f.setToken('replacement-session');
+    if (mode === 'hidden') f.setHidden(true);
+    if (mode === 'open') f.setOpen(true);
+    if (mode === 'unmount') stop?.();
+    assert.equal(current(), false, mode);
+    finish(); await flushReconciliation();
+    assert.equal(f.notices.length, 0, mode);
+    if (mode !== 'unmount') assert.deepEqual(f.state(), []);
+    stop?.();
+  }
+});
+
+test('page reconciliation rejects profile session drift and makes errors retryable without deleting custody', async () => {
+  const f = reconciliationFixture({ resolveCheckoutPhone: async () => { f.setToken('replacement-session'); return fixturePhone; } });
+  const stop = f.start(); await flushReconciliation();
+  assert.equal(f.resumes.length, 0); assert.deepEqual(f.state(), []); stop?.();
+  let calls = 0;
+  const failure = reconciliationFixture({ resumeZeroPayment: async () => { calls++; throw new Error('unavailable'); } });
+  const stopFailure = failure.start(['friendship']); await flushReconciliation();
+  assert.deepEqual(failure.state(), []); assert.equal(failure.notices.length, 0);
+  failure.advance(); failure.fire('focus'); await flushReconciliation(); assert.equal(calls, 2);
+  stopFailure?.();
+});
+
+test('two pending offers start together so a slow first check cannot starve the second', async () => {
+  const started: string[] = [];
+  let finishFirst!: () => void;
+  const f = reconciliationFixture({ resumeZeroPayment: async (key: string) => {
+    started.push(key);
+    if (key === 'friendship') await new Promise<void>(resolve => { finishFirst = resolve; });
+    return { status: 'restart', message: key };
+  } });
+  const stop = f.start(); await flushReconciliation();
+  assert.deepEqual(started, ['friendship', 'friendship-two-hours']);
+  assert.deepEqual(f.notices, ['friendship-two-hours']);
+  finishFirst(); await flushReconciliation();
+  assert.deepEqual(f.state(), []); assert.equal(f.notices.length, 2); stop?.();
+});
+
+test('page-load reconciliation releases an actual verified closed attempt without a second purchase', async () => {
+  const payment = zeroFixture();
+  await payment.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  const marker = 'padlhub_zero_checkout_attempt_v1:friendship';
+  const { paymentRef } = JSON.parse(payment.stored.get(marker)!);
+  const transactionId = '00000000-0000-4000-8000-000000000002';
+  payment.setConfirmation({ data: { paymentRef, transactionId, counterKey: 'friendship', status: 'FAILED', failed: true, paid: false, paymentUrl: null,
+    checkoutReset: { version: 1, state: 'PROVIDER_EXPIRED_UNPAID', paymentRef, transactionId,
+      operationId: '00000000-0000-4000-8000-000000000003', closureKind: 'PROVIDER_CARD_EXPIRED_UNPAID',
+      terminalCardStatus: 'REJECTED', declineOutcome: 'EXPIRED', paymentIdSha256: 'a'.repeat(64), paymentUrlSha256: 'b'.repeat(64),
+      expireAcknowledged: false, verifiedAt: '2026-11-01T00:00:00Z' } } });
+  const page = reconciliationFixture({ ...payment.adapter });
+  const stop = page.start(['friendship']); await flushReconciliation();
+  assert.equal(payment.stored.has(marker), false);
+  assert.equal(payment.writes.length, 1);
+  assert.deepEqual(page.state(), []); assert.equal(page.notices.length, 1); stop?.();
+});
+
+test('StrictMode cleanup invalidates the first profile response before a remounted check', async () => {
+  const finish: (() => void)[] = [];
+  const page = reconciliationFixture({ resolveCheckoutPhone: async () => {
+    await new Promise<void>(resolve => finish.push(resolve)); return fixturePhone;
+  } });
+  const firstStop = page.start(['friendship']); firstStop?.();
+  const secondStop = page.start(['friendship']);
+  finish[0](); finish[1](); await flushReconciliation();
+  assert.deepEqual(page.resumes, ['friendship']); secondStop?.();
+});

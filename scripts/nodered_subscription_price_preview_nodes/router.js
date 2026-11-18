@@ -1,10 +1,61 @@
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
-    if (typeof global === "undefined" || typeof global.get !== "function") return;
-    const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "preview_router", { sourceHash: "d421c9c431db409c6c4b39f5ce445f31f2e6eecdd6f6d919b9ba2f9c03e93536", ...fields });
+    const observer = typeof global !== "undefined" && typeof global.get === "function"
+      ? global.get("lkDiagnostics") : null;
+    if (typeof observer?.observe === "function") {
+      observer.observe(msg, "preview_router", { sourceHash: "d421c9c431db409c6c4b39f5ce445f31f2e6eecdd6f6d919b9ba2f9c03e93536", ...fields });
+      return;
+    }
   } catch { /* Observability cannot alter business execution. */ }
+  // Installed flows may predate the shared observer. Use a separate info event,
+  // so this does not duplicate the final node's legacy refusal warning/count.
+  try {
+    if (fields.code === 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE') {
+      if (!['activeBookings', 'historyBookings'].includes(fields.operationStage)
+        || !['upstream_status', 'list_incomplete_or_unrecognized', 'row_not_object',
+          'row_id_missing', 'row_owner_mismatch'].includes(fields.firstFailure)
+        || typeof node === 'undefined' || typeof node.log !== 'function') return;
+      const event = { event: 'subscription_price_preview_bookings_refused', code: fields.code,
+        stage: 'preview_router', operationStage: fields.operationStage, firstFailure: fields.firstFailure };
+      if (Number.isInteger(fields.upstreamStatus) && fields.upstreamStatus >= 100 && fields.upstreamStatus <= 599) {
+        event.upstreamStatus = fields.upstreamStatus;
+      }
+      node.log(JSON.stringify(event));
+      return;
+    }
+    const reasons = ['target_upstream_error', 'target_missing', 'target_identity', 'target_category',
+      'target_studio', 'target_room', 'target_duration', 'target_start_invalid', 'target_cancelled',
+      'target_lifecycle', 'PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID'];
+    if (fields.code !== 'PRICE_PREVIEW_GAME_UNRESOLVED' || !reasons.includes(fields.reason)
+      || typeof node === 'undefined' || typeof node.log !== 'function') return;
+    const event = { event: 'subscription_price_preview_exercise_refused', code: fields.code,
+      step: 'exercise', reason: fields.reason };
+    if (Number.isInteger(fields.upstreamStatus) && fields.upstreamStatus >= 100 && fields.upstreamStatus <= 599) {
+      event.upstreamStatus = fields.upstreamStatus;
+    }
+    if (['object', 'array', 'text', 'number', 'boolean', 'null', 'missing', 'UNKNOWN'].includes(fields.responseKind)) {
+      event.responseKind = fields.responseKind;
+    }
+    if (['json', 'text', 'html', 'other', 'missing'].includes(fields.contentTypeClass)) {
+      event.contentTypeClass = fields.contentTypeClass;
+    }
+    if (fields.reason === 'target_duration') {
+      const enums = {
+        previewCanonicalDuration: ['NULL', 'DIFFERENT', 'UNKNOWN'],
+        previewExplicitDuration: ['ABSENT', 'VALID', 'INVALID', 'UNKNOWN'],
+        previewEndpointDuration: ['NULL', 'MATCH_TARGET', 'DIFFERENT', 'UNKNOWN'],
+      };
+      for (const [key, values] of Object.entries(enums)) {
+        if (values.includes(fields[key])) event[key] = fields[key];
+      }
+      for (const key of ['previewExplicitMatchesEndpoints', 'previewEndpointOffsetPairValid',
+        'previewEndpointStartMatch', 'previewDurationFactsFailed']) {
+        if (typeof fields[key] === 'boolean') event[key] = fields[key];
+      }
+    }
+    node.log(JSON.stringify(event));
+  } catch { /* The optional fallback cannot change a business verdict either. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
 // Dedicated advisory graph. `canonical` consists only of source-bound helpers.
@@ -144,6 +195,62 @@ if (ctx.step === 'groupExercise') {
   if (canonical.resolveCategory(exercise) !== eventRoute?.category) return targetUnresolved('target_category');
   if (!Number.isFinite(start)) return targetUnresolved('target_start_invalid');
   if (start <= Date.now()) {
+    // A dedicated info event also works with older, code-filtered observers.
+    // No payload, target identity, date, clock value or error text may leave here.
+    try {
+      const event = { event: 'subscription_price_preview_target_not_future', schemaVersion: 1,
+        code: 'TARGET_NOT_FUTURE', step: 'groupExercise', reason: 'target_not_future',
+        startRelation: 'UNKNOWN', startAlias: 'UNKNOWN', startFormat: 'UNKNOWN',
+        elapsedBucket: 'UNKNOWN', factsFailed: true };
+      try {
+        const own = (object, key) => {
+          const prototype = Object.getPrototypeOf(object);
+          // Plain Node-RED messages can originate outside this function's VM.
+          if (prototype !== null && Object.getPrototypeOf(prototype) !== null) throw 0;
+          const descriptor = Object.getOwnPropertyDescriptor(object, key);
+          if (!descriptor) return undefined;
+          if (!Object.hasOwn(descriptor, 'value')) throw 0;
+          const value = descriptor.value;
+          if (value != null && !['string', 'number', 'boolean'].includes(typeof value)) throw 0;
+          if (typeof value === 'string' && value.length > 128) throw 0;
+          return value;
+        };
+        const aliases = [['timeFrom', 'TIME_FROM'], ['startsAt', 'STARTS_AT'],
+          ['startAt', 'START_AT'], ['fromTime', 'FROM_TIME']];
+        const parsed = aliases.map(([key, alias]) => {
+          const raw = String(own(exercise, key) || '');
+          return { raw, alias, instant: new Date(raw).getTime() };
+        }).filter(value => Number.isFinite(value.instant));
+        const selected = parsed[0];
+        // The observer must agree with the owning parser; never invent an alias.
+        if (!selected || selected.instant !== start) throw 0;
+        const now = Date.now();
+        const entered = own(ctx, 'startedAt');
+        const age = now - entered;
+        const clockKnown = Number.isFinite(now) && Number.isFinite(entered) && age >= 0;
+        const raw = selected.raw;
+        const iso = raw.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):?(\d{2}))$/i);
+        let explicitOffsetValid = false;
+        if (iso && Number(iso[5] || 0) <= 23 && Number(iso[6] || 0) <= 59) {
+          const offset = iso[3].toUpperCase() === 'Z' ? 0
+            : (iso[4] === '-' ? -1 : 1) * (Number(iso[5]) * 60 + Number(iso[6]));
+          explicitOffsetValid = new Date(start + offset * 60000).toISOString().slice(0, 23)
+            === `${iso[1]}.${(iso[2] || '').padEnd(3, '0')}`;
+        }
+        Object.assign(event, {
+          startRelation: !clockKnown ? 'UNKNOWN' : start < entered ? 'PAST_AT_ENTRY'
+            : start === entered ? 'NOW_AT_ENTRY' : start <= now ? 'CROSSED_DURING_REQUEST' : 'UNKNOWN',
+          startAlias: selected.alias,
+          startFormat: /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? 'ISO_OFFSET'
+            : /^\d{4}-\d{2}-\d{2}T/.test(raw) ? 'ISO_OFFSETLESS'
+              : /^\d{4}-\d{2}-\d{2}$/.test(raw) ? 'DATE_ONLY' : 'OTHER',
+          elapsedBucket: !clockKnown ? 'UNKNOWN' : age < 1000 ? 'LT1S' : age < 5000 ? 'LT5S'
+            : age < 15000 ? 'LT15S' : age <= 28000 ? 'LE28S' : 'OVER28S',
+          explicitOffsetValid, aliasConflict: parsed.some(value => value.instant !== start), factsFailed: false,
+        });
+      } catch { /* Unsafe or unrecognized data yields only the fixed UNKNOWN shape. */ }
+      if (typeof node !== 'undefined' && typeof node?.log === 'function') node.log(JSON.stringify(event));
+    } catch { /* Diagnostics cannot change the guard, response or continuation. */ }
     lkDiagnostic({ code: "TARGET_NOT_FUTURE", targetFuture: false, targetTimeValid: Number.isFinite(start), sourceTimeValid: true,
       deltaBucket: start < Date.now() ? "past" : "now", branch: eventRoute ? "schedule" : ctx.existingGame ? "game" : "UNKNOWN", targetType: eventRoute ? "schedule" : ctx.existingGame ? "game" : "UNKNOWN" });
     return targetUnresolved('target_not_future');
@@ -202,14 +309,99 @@ if (ctx.step === 'game') {
 }
 if (ctx.step === 'exercise') {
   const exercise = canonical.unwrapRecord(msg.payload);
-  if (!ok() || !exercise || String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId
-    || canonical.resolveCategory(exercise) !== 'open_game'
-    || String(exercise.studio?.id || exercise.studioId || '') !== ctx.target.stationId || canonical.exerciseRoomId(exercise) !== ctx.target.roomId
-    || canonical.eventDurationMinutes(exercise) !== ctx.target.durationMinutes
-    || Date.parse(canonical.eventStartsAt(exercise)) !== Date.parse(ctx.target.startsAt)
-    || exercise.isCancelled === true || exercise.isCanceled === true
-    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())
-    || !Array.isArray(exercise.availableClientSubscriptions)) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  const durationFacts = actual => {
+    const facts = { previewCanonicalDuration: actual === null ? 'NULL'
+      : Number.isInteger(actual) && actual > 0 && actual <= 1440 ? 'DIFFERENT' : 'UNKNOWN',
+      previewDurationFactsFailed: true };
+    try {
+      // Fixed own primitive fields only: never invoke getters/custom coercion,
+      // enumerate the provider record or retain raw values in diagnostics.
+      const own = (object, key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(object, key);
+        if (!descriptor) {
+          if (key in object) throw Error('inherited');
+          return undefined;
+        }
+        if (!Object.hasOwn(descriptor, 'value')) throw Error('accessor');
+        const value = descriptor.value;
+        if (value != null && !['string', 'number', 'boolean'].includes(typeof value)) throw Error('non_primitive');
+        if (typeof value === 'string' && value.length > 128) throw Error('oversized');
+        return value;
+      };
+      const endpoints = {};
+      for (const key of ['timeFrom', 'startsAt', 'startAt', 'fromTime', 'timeTo', 'endsAt', 'endAt']) {
+        endpoints[key] = own(exercise, key);
+      }
+      const rawExplicit = own(exercise, 'durationMinutes') ?? own(exercise, 'duration');
+      const explicit = Number(rawExplicit);
+      const explicitValid = Number.isInteger(explicit) && explicit > 0 && explicit <= 1440;
+      const expected = own(ctx.target, 'durationMinutes');
+      if (![60, 90, 120].includes(expected)) return facts;
+      // Use the owning parser without explicit duration, not a second duration parser.
+      const endpointDuration = canonical.eventDurationMinutes(endpoints);
+      const resolved = Number.isInteger(endpointDuration) && endpointDuration > 0 && endpointDuration <= 1440;
+      const details = {
+        previewExplicitDuration: rawExplicit == null ? 'ABSENT' : explicitValid ? 'VALID' : 'INVALID',
+        previewEndpointDuration: endpointDuration === null ? 'NULL' : !resolved ? 'UNKNOWN'
+          : endpointDuration === expected ? 'MATCH_TARGET' : 'DIFFERENT',
+      };
+      if (explicitValid && resolved) details.previewExplicitMatchesEndpoints = explicit === endpointDuration;
+      // A clock-fallback result is not proof of a valid provider interval. Mark
+      // only a strictly round-tripped, forward explicit-offset pair as such.
+      const offsetTimestamp = value => {
+        if (typeof value !== 'string') return null;
+        const match = value.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))$/);
+        if (!match || Number(match[5] || 0) > 23 || Number(match[6] || 0) > 59) return null;
+        const parsed = Date.parse(value);
+        if (!Number.isFinite(parsed)) return null;
+        const offset = match[3] === 'Z' ? 0 : (match[4] === '-' ? -1 : 1) * (Number(match[5]) * 60 + Number(match[6]));
+        const local = new Date(parsed + offset * 60000).toISOString();
+        return local.slice(0, 23) === `${match[1]}.${(match[2] || '').padEnd(3, '0')}` ? parsed : null;
+      };
+      const from = offsetTimestamp(endpoints.timeFrom || endpoints.startsAt || endpoints.startAt);
+      const to = offsetTimestamp(endpoints.timeTo || endpoints.endsAt || endpoints.endAt);
+      details.previewEndpointOffsetPairValid = from !== null && to !== null
+        && to > from && to - from <= 1440 * 60000 && resolved;
+      const start = Date.parse(canonical.eventStartsAt(endpoints));
+      const expectedStart = own(ctx.target, 'startsAt');
+      const targetStart = typeof expectedStart === 'string' ? Date.parse(expectedStart) : NaN;
+      if (Number.isFinite(start) && Number.isFinite(targetStart)) details.previewEndpointStartMatch = start === targetStart;
+      return { ...facts, ...details, previewDurationFactsFailed: false };
+    } catch { return facts; }
+  };
+  const unresolved = (reason, actualDuration) => {
+    // Explain the first failed predicate without changing the HTTP error contract.
+    // Observe only safe enums/status; never copy the provider record or headers.
+    try {
+      const payload = msg.payload;
+      const type = typeof msg.headers?.['content-type'] === 'string'
+        ? msg.headers['content-type'].split(';', 1)[0].trim().toLowerCase() : '';
+      const status = Number(msg.statusCode);
+      lkDiagnostic({ code: 'PRICE_PREVIEW_GAME_UNRESOLVED', reason,
+        ...(reason === 'target_duration' ? durationFacts(actualDuration) : {}),
+        upstreamStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
+        responseKind: payload === null ? 'null' : payload === undefined ? 'missing'
+          : Array.isArray(payload) ? 'array' : typeof payload === 'string' ? 'text'
+            : ['object', 'number', 'boolean'].includes(typeof payload) ? typeof payload : 'UNKNOWN',
+        contentTypeClass: !type ? 'missing' : type === 'application/json' || type.endsWith('+json') ? 'json'
+          : type === 'text/html' ? 'html' : type.startsWith('text/') ? 'text' : 'other',
+        outcome: 'refused' });
+    } catch { /* Diagnostics cannot turn a refusal into an exception. */ }
+    return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  };
+  // Preserve the original predicates, short-circuit order and fail-closed verdict.
+  if (!ok()) return unresolved('target_upstream_error');
+  if (!exercise) return unresolved('target_missing');
+  if (String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId) return unresolved('target_identity');
+  if (canonical.resolveCategory(exercise) !== 'open_game') return unresolved('target_category');
+  if (String(exercise.studio?.id || exercise.studioId || '') !== ctx.target.stationId) return unresolved('target_studio');
+  if (canonical.exerciseRoomId(exercise) !== ctx.target.roomId) return unresolved('target_room');
+  const exerciseDuration = canonical.eventDurationMinutes(exercise);
+  if (exerciseDuration !== ctx.target.durationMinutes) return unresolved('target_duration', exerciseDuration);
+  if (Date.parse(canonical.eventStartsAt(exercise)) !== Date.parse(ctx.target.startsAt)) return unresolved('target_start_invalid');
+  if (exercise.isCancelled === true || exercise.isCanceled === true) return unresolved('target_cancelled');
+  if (['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return unresolved('target_lifecycle');
+  if (!Array.isArray(exercise.availableClientSubscriptions)) return unresolved('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
   ctx.exercise = exercise;
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }
@@ -287,14 +479,86 @@ if (ctx.step === 'catalog') {
   }
   return http('activeBookings', `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
 }
+// Collect pages before the preserved single-page guard; old canonical generations remain fail-closed.
+if ((ctx.step === 'activeBookings' || ctx.step === 'historyBookings')
+  && typeof canonical.collectVivaBookingPage === 'function' && ok()
+  && (!canonical.hasCompleteBookingList(msg.payload) || ctx.bookingPages
+    || ctx.bookingsPagesDeadlineAt !== undefined && (!Number.isSafeInteger(ctx.bookingsPagesDeadlineAt) || Date.now() >= ctx.bookingsPagesDeadlineAt))) {
+    const baseUrl = `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/bookings`
+      + (ctx.step === 'historyBookings' ? '/history?includeCanceled=true&size=1000' : '?size=1000');
+    const now = Date.now();
+    const deadlineAt = ctx.bookingsPagesDeadlineAt ?? Math.min(ctx.startedAt + 28000, now + 25000);
+    const page = canonical.collectVivaBookingPage(msg.payload, ctx.bookingPages, {
+      actorId: ctx.actorClientId, binding: JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.step]),
+      baseUrl, method: msg.method, requestUrl: msg.url, responseUrl: msg.responseUrl, now, deadlineAt,
+    });
+    const restoreTimeout = () => {
+      const previous = ctx.bookingPagesRequestTimeout;
+      if (!previous) return;
+      if (previous.present) msg.requestTimeout = previous.value;
+      else delete msg.requestTimeout;
+      delete ctx.bookingPagesRequestTimeout;
+    };
+    if (page.error) {
+      restoreTimeout();
+      delete ctx.bookingPages; delete ctx.bookingsPagesDeadlineAt;
+      try {
+        const raw = Object.getOwnPropertyDescriptor(msg, 'statusCode')?.value;
+        const status = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : null;
+        lkDiagnostic({ eventKind: 'audit', code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE',
+          operationStage: ctx.step, firstFailure: page.error,
+          upstreamStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
+          httpStatus: 503, outcome: 'refused' });
+      } catch { /* Diagnostics cannot alter a refusal. */ }
+      return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+    }
+    ctx.bookingsPagesDeadlineAt = deadlineAt;
+    if (ctx.step === 'activeBookings') ctx.activeObservedAt = page.state.observedAt;
+    if (!page.complete) {
+      ctx.bookingPages = page.state;
+      ctx.bookingPagesRequestTimeout ??= { present: Object.prototype.hasOwnProperty.call(msg, "requestTimeout"), value: msg.requestTimeout };
+      const next = http(ctx.step, baseUrl.slice('https://api.vivacrm.ru'.length) + `&page=${page.state.nextPage}`);
+      msg.requestTimeout = Math.min(10000, Math.max(1, deadlineAt - Date.now()));
+      return next;
+    }
+    restoreTimeout();
+    msg.payload = page.rows;
+    delete ctx.bookingPages;
+  }
 if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
-  if (!ok() || !canonical.hasCompleteBookingList(msg.payload) || rows().some(row => !canonical.isObj(row)
-    || !canonical.bookingId(row) || (canonical.bookingClientId(row) && canonical.normalizeId(canonical.bookingClientId(row)) !== canonical.normalizeId(ctx.actorClientId)))) return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+  const refuseBookings = firstFailure => {
+    try {
+      // Read only a primitive status; diagnostics must not invoke a getter or
+      // provider-controlled coercion, inspect the DTO again, or expose its values.
+      const raw = Object.getOwnPropertyDescriptor(msg, 'statusCode')?.value;
+      const status = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : null;
+      lkDiagnostic({ eventKind: 'audit', code: 'PRICE_PREVIEW_BOOKINGS_INCOMPLETE',
+        operationStage: ctx.step, firstFailure,
+        upstreamStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
+        httpStatus: 503, outcome: 'refused' });
+    } catch { /* Diagnostics cannot change the refusal. */ }
+    return stop('PRICE_PREVIEW_BOOKINGS_INCOMPLETE');
+  };
+  // Keep the original predicates, helper calls and short-circuit order. In
+  // particular, a missing row owner is still accepted by the existing contract.
+  if (!ok()) return refuseBookings('upstream_status');
+  if (!canonical.hasCompleteBookingList(msg.payload)) return refuseBookings('list_incomplete_or_unrecognized');
+  let firstFailure;
+  if (rows().some(row => {
+    if (!canonical.isObj(row)) { firstFailure = 'row_not_object'; return true; }
+    if (!canonical.bookingId(row)) { firstFailure = 'row_id_missing'; return true; }
+    if (canonical.bookingClientId(row)
+      && canonical.normalizeId(canonical.bookingClientId(row)) !== canonical.normalizeId(ctx.actorClientId)) {
+      firstFailure = 'row_owner_mismatch'; return true;
+    }
+    return false;
+  })) return refuseBookings(firstFailure);
   if (ctx.step === 'activeBookings') {
     ctx.activePayload = msg.payload;
-    ctx.activeObservedAt = new Date().toISOString();
+    ctx.activeObservedAt ||= new Date().toISOString();
     return http('historyBookings', `/end-user/api/v2/${ctx.tenantKey}/bookings/history?includeCanceled=true&size=1000`);
   }
+  delete ctx.bookingsPagesDeadlineAt;
   ctx.cancellationSnapshot = { observedAt: ctx.activeObservedAt,
     active: canonical.extractItems(ctx.activePayload), history: canonical.extractItems(msg.payload) };
   ctx.bookings = canonical.mergeBookings(ctx.activePayload, msg.payload);
@@ -381,8 +645,40 @@ if (ctx.step === 'subservices') {
     .map(row => String(row?.id || row?.uuid || row?.subServiceId || row?.serviceId || row?.productId || '')));
   if (!ok() || ctx.target.subServiceIds.some(id => !ids.has(id))) return stop('SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH');
   const localEnd = new Date(Date.parse(ctx.target.startsAt) + (ctx.target.durationMinutes + 180) * 60000).toISOString();
-  // Current CREATE binds a single local date to both ends. Do not invent a cross-day tariff here.
-  if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10)) return stop('PRICE_PREVIEW_CROSS_DAY_UNRESOLVED');
+  // Clubs close at 00:00. /price keeps the start-day tariff and its 00:00 end clock;
+  // CREATE represents that closing boundary as next-day midnight in its ISO endpoint.
+  // Any overrun beyond closing remains unsupported and fails before the price request.
+  const nextDay = new Date(Date.parse(ctx.target.startsAt.slice(0, 10) + 'T00:00:00Z') + 86400000)
+    .toISOString().slice(0, 10);
+  const endsAtClosing = localEnd.slice(0, 10) === nextDay && localEnd.slice(11) === '00:00:00.000Z';
+  if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10) && !endsAtClosing) {
+    // Derive bounded shape only. Never attach target, dates, clock times, IDs or provider rows.
+    // Keep derivation inside the no-throw boundary as well as the optional observer call.
+    try {
+      const targetKind = ctx.target.targetKind;
+      const elapsed = typeof ctx.startedAt === 'number' ? Date.now() - ctx.startedAt : NaN;
+      const dayDelta = Date.parse(localEnd.slice(0, 10) + 'T00:00:00Z')
+        - Date.parse(ctx.target.startsAt.slice(0, 10) + 'T00:00:00Z');
+      lkDiagnostic({ code: 'PRICE_PREVIEW_CROSS_DAY_UNRESOLVED', httpStatus: 503, outcome: 'refused',
+        previewTargetKind: ['NEW_GAME', 'EXISTING_GAME'].includes(targetKind) ? targetKind : 'UNKNOWN',
+        previewTargetSource: targetKind === 'NEW_GAME' && ctx.existingGame === false ? 'CLIENT_INPUT'
+          : targetKind === 'EXISTING_GAME' && ctx.existingGame === true ? 'SERVER_CONFIRMED' : 'UNKNOWN',
+        previewDuration: [60, 90, 120].includes(ctx.target.durationMinutes)
+          ? 'MINUTES_' + ctx.target.durationMinutes : 'UNKNOWN',
+        previewDayRelation: dayDelta === 86400000 ? 'NEXT_DAY' : Number.isFinite(dayDelta) ? 'OTHER' : 'UNKNOWN',
+        previewOffsetValid: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?\+03:00$/.test(ctx.target.startsAt)
+          && new Date(Date.parse(ctx.target.startsAt) + 180 * 60000).toISOString().slice(0, 19) === ctx.target.startsAt.slice(0, 19),
+        previewEndAtMidnight: localEnd.slice(11) === '00:00:00.000Z',
+        previewSelectedSubserviceCount: Math.min(ctx.target.subServiceIds.length, 20),
+        previewSubserviceSetSize: Math.min(ids.size, 21), // 21 means 21 or more, not an exact catalogue size.
+        previewSubservicesMatched: true, previewSubservices2xx: true,
+        previewElapsedBucket: !Number.isFinite(elapsed) || elapsed < 0 ? 'UNKNOWN'
+          : elapsed < 1000 ? 'LT1S' : elapsed < 5000 ? 'LT5S' : elapsed < 15000 ? 'LT15S'
+            : elapsed <= 28000 ? 'LE28S' : 'OVER28S',
+      });
+    } catch { /* Diagnostic derivation cannot change the refusal. */ }
+    return stop('PRICE_PREVIEW_CROSS_DAY_UNRESOLVED');
+  }
   // Function nodes do not expose Node.js URLSearchParams in their sandbox.
   const query = Object.entries({ studioId: ctx.target.stationId, roomId: ctx.target.roomId,
     subServiceIds: ctx.target.subServiceIds.join(','), fromTime: ctx.target.startsAt.slice(11, 19),
@@ -446,6 +742,23 @@ if (ctx.step === 'groupTariff') {
     const reason = rows.length === 0 ? 'empty_tariff_list'
       : rows.length > 1 ? 'multiple_tariffs' : 'invalid_tariff_record';
     ctx.errorDetails = tariffDetails(reason, 'tariff_shape');
+    if (reason === 'empty_tariff_list') {
+      const binding = {};
+      try {
+        // Comparisons only, with no new reads or changes to the decision. The
+        // shared observer inspects the already-read tariff reply before stop.
+        if (canonical.isObj(ctx.exercise)) {
+          const identity = ctx.exercise.id || ctx.exercise.exerciseId;
+          if (typeof identity === 'string' && identity) binding.tariffEventIdentityMatch = identity === ctx.exerciseId;
+          binding.tariffEventCategoryMatch = canonical.resolveCategory(ctx.exercise) === eventRoute?.category;
+          const eventStart = Date.parse(canonical.eventStartsAt(ctx.exercise));
+          const targetStart = Date.parse(ctx.target?.startsAt);
+          if (Number.isFinite(eventStart) && Number.isFinite(targetStart)) binding.tariffEventStartMatch = eventStart === targetStart;
+        }
+      } catch { /* Missing comparison evidence stays unknown. */ }
+      lkDiagnostic({ eventKind: 'audit', code: 'PREVIEW_EMPTY_TARIFF_OBSERVED', reason, tariffCount: rows.length,
+        httpStatus: 503, outcome: 'refused', ...binding });
+    }
     return stop("LK1_EVENT_TARIFF_AMBIGUOUS");
   }
   const product = rows[0];
@@ -630,6 +943,12 @@ while (ctx.step === 'next') {
     timeFrom: ctx.target.startsAt, timeTo: new Date(Date.parse(ctx.target.startsAt) + ctx.target.durationMinutes * 60000).toISOString(),
     directionId: 4588, typeId: 1613, availableClientSubscriptions: [live] };
   if (!eventRoute && ['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field]))) return stop('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
+  // A proven date mismatch is different from unconfirmed subscription terms.
+  const validityEnd = !eventRoute && live.status === 'ACTIVE' && typeof canonical.lk1LifecycleInstant === 'function'
+    ? canonical.lk1LifecycleInstant(live.expirationDate, true) : null;
+  if (!eventRoute && live.status === 'ACTIVE' && validityEnd !== null && validityEnd < Date.parse(ctx.target.startsAt)) {
+    quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_DATE_NOT_COVERED'); continue;
+  }
   if (!eventRoute && (canonical.preflightAvailability.resolveSplitSubscriptionLifecycle(live, ctx.target.startsAt.slice(0, 10)) === 'UNAVAILABLE'
     || live.holdUntil || live.frozenUntil || live.isFrozen === true || live.visitsLeft === 0)) {
     quote(id, live.visitsLeft === 0 ? 'LIMIT_USED' : 'UNAVAILABLE', null, 0, 0, live.visitsLeft === 0 ? 'SUBSCRIPTION_VISITS_EXHAUSTED' : 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;

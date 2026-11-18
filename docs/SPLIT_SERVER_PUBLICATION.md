@@ -69,7 +69,12 @@ A successful booking response can contain `serverPublication`:
 ```
 
 `candidateGameId` is a locator, **not proof of publication**. `gameId` is populated only
-for a durable PUBLISHED receipt. The browser observes the candidate with bounded GET
+for a durable PUBLISHED receipt. The browser journals the operation reference before CREATE. If the entire first
+response is lost, the existing authenticated `/lk/games/split/create-result` reader
+returns the publication descriptor from the stored operation. Reload resumes that
+GET-only path with the original operation reference. BLOCKED or malformed publication
+metadata remains pending and never downgrades to browser publication.
+The browser observes the candidate with bounded GET
 polling and checks the owner, exact booking/exercise, paid state and publication marker;
 it never falls back to another game POST or
 booking/payment confirmation. A pending read moves to details with a pending message,
@@ -87,14 +92,41 @@ not another create action. Old servers without the descriptor retain compatibili
 - Route Viva split payment: retain the descriptor in serialized responses.
 
 `buildSplitPublicationCandidate(flow, reviewedFunctionHashes)` requires exact target
-IDs/types/names and separately reviewed SHA256 preimages, modifies only these `func`
-fields, rejects ambiguous/missing anchors and refuses repeat composition. It does not
+IDs/types/names and separately reviewed SHA256 preimages, modifies these four `func`
+fields, refreshes the existing authenticated result reader, and adds a legacy write
+guard. It requires separately reviewed whole-node hashes for the result handler, its
+Mongo reader and the canonical game builder, plus the exact six-route snapshot hash.
+It rejects ambiguous/missing anchors and repeat composition. It does not
 pull, write, import, restart or deploy anything. Before an eventual apply, use a fresh
 private external verified live workspace and the existing exact graph contract/release
 gates; do not run the broad quarantined rebuild or overwrite live bodies from stale
 generic sources. Current live and main generations differ.
 Disabling new opt-ins keeps the normalized incoming intent available for read-only
 resume of an already stored publication; it does not retrofit an old no-intent row.
+
+## Late legacy browser writes
+
+All six POST routes (`/lk/games`, `/lk/games/records`, `/lk/games/payment/confirm`,
+`/lk/games/confirm`, `/lk/games/drafts`, `/lk/games/draft`) enter the new guard before
+canonical upsert or autojoin. The guard uses the configured platform tenant, never
+body tenant, and ORs all supplied exercise/booking/operation/payment references.
+Any version-1 publication intent fences the old writer regardless of operation or
+publication state and regardless of the opt-in flag. Reserved `gsp_` IDs and incoming
+publication markers are refused even without provider references.
+
+The refusal is HTTP 409 `SERVER_PUBLICATION_OWNED`, without private card data or IDs.
+An old tab may show an error; it cannot create a duplicate or overwrite a newer roster.
+The new client uses the authenticated result reader. The guard does not turn a public
+write route into an unauthenticated read route. Only a successful empty Mongo lookup
+continues legacy execution; storage errors return 503 with no upsert/autojoin outputs.
+The original request body is restored only on that verified empty result.
+
+The race boundary is the durable intent preceding provider creation: by the time an
+old tab can submit the returned provider booking/exercise, that intent already exists.
+Tests cover worker-first, legacy-first and overlapping execution against local Mongo,
+including changed roster/settings after publication. No existing legacy document is
+adopted or overwritten by the worker. Historical no-intent operations retain legacy
+behavior; they are not automatically migrated.
 
 ## Worker and activation prerequisites
 
@@ -110,6 +142,10 @@ No flag is enabled and no service is started by this PR. Future activation requi
 4. Install the worker closure (worker, lib, contract, canonical `fn_create.js`) from the
    reviewed commit. Start and inspect dry-run before enabling writes and the Node-RED
    opt-in flag. Frontend and server must ship from the reviewed compatible closure.
+5. The guard must use that same platform tenant and operation Mongo database. Check
+   bounded ownership query plans/latency with representative data before activation;
+   missing configuration or read failures intentionally stop legacy writes. The
+   guard and updated result reader must be installed before enabling new intents.
 
 The CLI defaults to dry-run. `--once` performs one batch; `--apply` is required for any
 write. The loop is bounded to 20 operations per batch, one second between batches and
@@ -122,7 +158,7 @@ node scripts/split_game_publication_worker.mjs --apply
 
 Stop signal: publication conflicts, growing pending counts, wrong tenant/source or
 missing transaction/index prerequisites. Stop method: disable new opt-ins, stop the
-worker and retain pending intents/receipts for read-only reconciliation. Stopping does
+worker while preserving the legacy guard and result reader, and retain pending intents/receipts for read-only reconciliation. Stopping does
 not undo existing bookings, games, subscription usage or other past external effects.
 
 ## Validation and limitations
@@ -130,7 +166,7 @@ not undo existing bookings, games, subscription usage or other past external eff
 Run the unit/Node-RED contract tests and the existing API regressions:
 
 ```text
-node --experimental-strip-types --test scripts/tests/splitGamePublication.test.mjs scripts/tests/splitPayment.apiClient.test.ts
+node --experimental-strip-types --test scripts/tests/splitGamePublication.test.mjs scripts/tests/splitPublicationLegacyGuard.test.mjs scripts/tests/splitPayment.apiClient.test.ts scripts/tests/splitCreateRecovery.test.ts scripts/tests/splitCreateResult.test.mjs
 bash scripts/run_split_publication_replica_tests.sh
 ```
 

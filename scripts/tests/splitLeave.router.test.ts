@@ -371,11 +371,11 @@ test("subscription cancellation stops before DELETE when the exact pre-return sn
   assert.match(blocked[1].payload.message, /активную запись/);
 });
 
-test("legacy subscription leave resolves one exact booking among three active subscriptions", () => {
+test("legacy leave with explicit visit evidence resolves one exact booking among three active subscriptions", () => {
   const game = selfGame();
   game.booking = { ...game.booking, durationMinutes: 60, timeFrom: "21:30", timeTo: "22:30" };
   delete game.metadata.splitPayment.payments[0].clientSubscriptionId;
-  delete game.metadata.splitPayment.payments[0].subscriptionVisitCount;
+  game.metadata.splitPayment.payments[0].subscriptionVisitCount = 1;
   game.metadata.splitPayment.payments[0].subscriptionProductId = "catalog-product-must-not-be-used";
   let msg = authorizeSelf(game);
   assert.equal(msg._splitLeaveCtx.clientSubscriptionId, null);
@@ -409,7 +409,7 @@ test("legacy subscription leave stays fail-closed when two subscriptions contain
   const game = selfGame();
   game.booking = { ...game.booking, durationMinutes: 60 };
   delete game.metadata.splitPayment.payments[0].clientSubscriptionId;
-  delete game.metadata.splitPayment.payments[0].subscriptionVisitCount;
+  game.metadata.splitPayment.payments[0].subscriptionVisitCount = 1;
   let msg = authorizeSelf(game);
   msg = run("fn_split_leave_router.js", msg).result[0];
   msg.statusCode = 200;

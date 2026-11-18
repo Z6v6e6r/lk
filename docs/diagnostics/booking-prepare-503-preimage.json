@@ -1,0 +1,13 @@
+{
+  "function_match_count": 1,
+  "source_preimage_sha256": "1f0643770dd8c612f843229e6c81819fa907da7b644715593f587a5a66a116e1",
+  "business_executed": false,
+  "server_write": false,
+  "source_edit_validated": true,
+  "candidate_sha256": "a7afc73d2cfc87f504512034359616403071fcdada4be6f9a5e6a30436490d09",
+  "original_recovered": true,
+  "receipt_kind": "READ_ONLY_PERSISTED_SOURCE_STRING_TRANSFORMATION",
+  "does_not_prove_runtime_activation": true,
+  "overlay_module_sha256": "2baed658d26cda0e34340ea512bbc1e0cd84105ff54fa0ef97f0b24a40c78ec7",
+  "receipt_recorded_utc": "2026-11-12T10:12:51.960608+00:00"
+}

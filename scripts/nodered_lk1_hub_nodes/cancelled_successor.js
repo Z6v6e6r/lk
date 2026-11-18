@@ -43,7 +43,8 @@ const lk1HttpReleaseAllowsRejoin = operation => {
   const identity = lk1HttpRejoinIdentity(operation.operationId);
   const previous = lk1HttpRejoinPrevious(operation.operationId);
   return identity && identity.generation < 1000
-    && typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(operation)
+    && typeof lk1FreeReturnedOperation === "function" && (lk1FreeReturnedOperation(operation)
+      || (typeof lk1SeatReleasedOperation === "function" && lk1SeatReleasedOperation(operation)))
     && (!previous || (operation.rejoinPredecessor?.rootOperationId === identity.base
       && operation.rejoinPredecessor?.operationId === previous));
 };
@@ -57,7 +58,7 @@ if (ctx.step === "lk1_http_rejoin_predecessor_find") {
   }
   const previous = msg.payload[0];
   ctx.lk1Rejoin = { operationId: previousId, rootOperationId: lk1HttpRejoinIdentity(ctx.operationId).base,
-    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey,
+    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey || previous.lk1.seatRelease?.jobKey,
     releasedAt: previous.releasedAt };
   delete ctx.lk1IngressReplay;
   ctx.step = "lk1_profile_continue";
