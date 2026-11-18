@@ -66,7 +66,7 @@ function response(body, status = 200) {
 function harness() {
   const state = { paid: false, failed: false, subscription: null, createCalls: 0, activationCalls: 0, cupCalls: 0 };
   const fetchImpl = async (url) => {
-    if (url.endsWith("/profile")) return response({ id: CLIENT, phone: "+79000000000" });
+    if (url.endsWith("/profile")) return response({ id: CLIENT, phone: "+15550000000" });
     if (url.includes("/products/subscriptions/")) return response({ id: RESIDENCY_PRODUCT_ID, title: "Резидентство ПадлхАБ",
       cost: 79000, discountPrice: 79000, validityDays: 30, visits: 30, activationDays: 0, type: "GROUP", variant: "BY_VISITS",
       appliesTo: "BOOKING", hasStudioLimitation: false, hasDirectionLimitation: false, hasTypeLimitation: true,

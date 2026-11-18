@@ -39,7 +39,7 @@ function product(overrides = {}) {
 }
 
 function profile(overrides = {}) {
-  return { id: CLIENT, phone: "+79000000000", ...overrides };
+  return { id: CLIENT, phone: "+15550000000", ...overrides };
 }
 
 function txn(overrides = {}) {
@@ -113,7 +113,7 @@ test("create sends one exact subscription line and returns a payable link", asyn
   assert.equal(result.amountMinor, 79000);
   const body = JSON.parse(calls.find((call) => call.url.endsWith("/transactions")).options.body);
   assert.deepEqual(body.products, [{ id: RESIDENCY_PRODUCT_ID, type: "SUBSCRIPTION", count: 1 }]);
-  assert.equal(body.clientPhone, "+79000000000");
+  assert.equal(body.clientPhone, "+15550000000");
   assert.equal(body.paymentMethod, "WIDGET");
 });
 
