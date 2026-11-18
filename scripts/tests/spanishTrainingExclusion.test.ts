@@ -38,7 +38,7 @@ test("client/server match only the requested category across Viva and summary la
 
 test("screen keeps one-time tariffs and hides all subscriptions, cached quotes and the free link", () => {
   const checkout = { oneTimes: [{ id: "one-time", cost: 900000 }], subscriptions: [{ id: "new-plan" }], clientSubscriptions: [{ id: "owned-plan" }] };
-  const deps = { checkout, spanishTrainingSelected: true, proTrainingSelected: false, topokratyExcluded: false,
+  const deps = { checkout, spanishTrainingSelected: true, kidsAcademyTrainingSelected: false, proTrainingSelected: false, topokratyExcluded: false,
     discountResolvedFor: "same", discountContextKey: "same", discountQuotes: [{ amountMinor: 450000 }],
     discountPending: false, currentDiscountQuotes: [], selectedTraining: { directionId: 1 }, subscriptionOffer: { owner: "actor", show: true }, phone: "actor",
     getGroupScheduleOwnedSubscriptions: () => { throw new Error("must not offer owned plans or Energy"); },
@@ -79,7 +79,7 @@ test("preview returns no quotes before reading subscriptions, tariffs or allowan
   const canonical = { unwrapRecord: (x: unknown) => x, eventStartsAt: () => exercise.timeFrom,
     eventDurationMinutes: () => 60, resolveCategory: () => "group_training", exerciseRoomId: () => "room",
     managedExternalEventTypeId: () => 605, isSpanishTrainingExercise: serverRule };
-  const result = new Function("ctx", "msg", "canonical", "ok", "eventRoute", "out", branch)(ctx, { payload: exercise }, canonical, () => true, { category: "group_training" }, (index: number) => index);
+  const result = new Function("ctx", "msg", "canonical", "ok", "eventRoute", "out", "previewDirectionId", branch)(ctx, { payload: exercise }, canonical, () => true, { category: "group_training" }, (index: number) => index, () => null);
   assert.equal(result, 4);
   assert.deepEqual(ctx.quotes, []);
 });

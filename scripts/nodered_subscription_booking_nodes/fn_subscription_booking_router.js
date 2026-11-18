@@ -1073,6 +1073,15 @@ const collectExactProductIds = (value) => {
   return ids;
 };
 
+const kidsTrainingExcludesSubscription = (exercise, owned) => {
+  const direction = exercise?.direction ?? exercise?.exerciseDirection;
+  const directionId = Number((isObj(direction) ? (direction.id ?? direction.directionId) : direction)
+    ?? exercise?.directionId ?? exercise?.exerciseDirectionId);
+  if (![2468, 2975, 3163].includes(directionId)) return false;
+  const productIds = owned.length === 1 ? collectExactProductIds(owned[0]) : [];
+  return productIds.length === 0 || productIds.some(id => id !== "4d43f97e-c71e-450b-8b99-02db47b4a64f");
+};
+
 const collectSubscriptionPurchaseDateEvidence = (value) => {
   const records = Array.isArray(value) ? value.filter(isObj) : isObj(value) ? [value] : [];
   const normalizedDates = records.flatMap((record) => {
@@ -2639,6 +2648,11 @@ if (ctx.step === "exercise") {
       code: "SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE",
     });
   }
+  if (kidsTrainingExcludesSubscription(exercise, ownedSubscriptions)) {
+    return finishError(ctx, 409, "На детские тренировки действуют разовая оплата и абонемент «Падел.Дети».", {
+      code: "KIDS_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+    });
+  }
   ctx.serviceDate = eventDate(exercise);
   ctx.category = resolveCategory(exercise);
   ctx.studioId = toStr(exercise.studio?.id || exercise.studioId);
@@ -2827,6 +2841,9 @@ if (ctx.step === "exercise_recheck") {
   }
   const actualExerciseId = toStr(exercise?.id || exercise?.exerciseId || exercise?.uuid);
   const ownedSubscriptions = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
+  if (kidsTrainingExcludesSubscription(exercise, ownedSubscriptions)) {
+    return prepareFailedUpdate(ctx, 409, "На детские тренировки действуют разовая оплата и абонемент «Падел.Дети».", "KIDS_TRAINING_SUBSCRIPTION_UNAVAILABLE");
+  }
   if (!exercise || ownedSubscriptions.length === 0) {
     return prepareFailedUpdate(
       ctx,

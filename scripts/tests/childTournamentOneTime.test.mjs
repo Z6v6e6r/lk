@@ -62,7 +62,7 @@ test('fresh, managed recheck and legacy recheck refuse subscription writes for t
   const resolver = between(gateway, 'const exerciseDirectionId =', '\n};') + '\n};';
   const quote = between(gateway, 'const lk1Quote =', '  // The station');
   const fresh = between(hooks, 'if (exerciseDirectionId(exercise) === 7108) {', '// Resolve the instance first.');
-  const recheck = between(booking, '  const direction = exercise?.direction ?? exercise?.exerciseDirection;',
+  const recheck = between(booking.slice(booking.indexOf('if (ctx.step === "exercise_recheck")')), '  const direction = exercise?.direction ?? exercise?.exerciseDirection;',
     '  const actualExerciseId = toStr(exercise?.id || exercise?.exerciseId || exercise?.uuid);');
   const isObj = value => value !== null && typeof value === 'object';
   const runQuote = new Function('isObj', 'isSpanishTrainingExercise',
@@ -79,4 +79,42 @@ test('fresh, managed recheck and legacy recheck refuse subscription writes for t
   assert.equal(runQuote({}, sibling, []), undefined);
   assert.equal(runFresh(isObj, refused, {}, sibling), undefined);
   assert.equal(runRecheck(isObj, refused, {}, sibling), undefined);
+});
+
+test('kids academy permits only a proven visit pack while the monetary preview returns no quote', () => {
+  const collect = between(booking, 'const collectExactProductIds =', 'const collectSubscriptionPurchaseDateEvidence =');
+  const isObj = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const normalize = value => typeof value === 'string' ? value.trim().toLowerCase() : null;
+  const excludes = new Function('isObj', 'normalizeId', collect + '\nreturn kidsTrainingExcludesSubscription;')(isObj, normalize);
+  const pack = '4d43f97e-c71e-450b-8b99-02db47b4a64f';
+  const expected = 'KIDS_TRAINING_SUBSCRIPTION_UNAVAILABLE';
+  const fresh = between(hooks, 'if (kidsTrainingExcludesSubscription(exercise, selectedOwned)) {', 'const proTrainingEnergyAllowed');
+  const recheck = between(booking, '  if (kidsTrainingExcludesSubscription(exercise, ownedSubscriptions)) {\n    return prepareFailedUpdate',
+    '  if (!exercise || ownedSubscriptions.length === 0)');
+  const compile = (code, fn, read) => new Function('kidsTrainingExcludesSubscription', fn, 'ctx', 'exercise', read, code);
+  const status = (_ctx, value, _message, code) => [value, code?.code ?? code];
+  const previewStep = between(preview, "if (ctx.step === 'groupExercise') {", "if (ctx.step === 'game') {");
+  const previewDirection = between(preview, 'const previewDirectionId =', '\n};') + '\n};';
+  const runPreview = new Function('ctx', 'msg', 'canonical', 'ok', 'eventRoute', 'out', 'http', previewDirection + '\n' + previewStep);
+  const canonical = {
+    isObj, unwrapRecord: value => value, eventStartsAt: value => value.timeFrom, eventDurationMinutes: () => 60,
+    resolveCategory: () => 'group_training', exerciseRoomId: () => 'fixture-room', managedExternalEventTypeId: () => 'fixture-type',
+    isSpanishTrainingExercise: () => false, isProTrainingExercise: () => false,
+  };
+  for (const id of [2468, 2975, 3163, 6234]) {
+    const exercise = { id: 'fixture', exerciseDirectionId: String(id), studioId: 'fixture-studio', timeFrom: '2099-11-25T17:00:00+03:00' };
+    const ctx = { step: 'groupExercise', exerciseId: exercise.id, target: {}, quotes: [{ amountMinor: 0 }] };
+    const child = id !== 6234;
+    assert.equal(runPreview(ctx, { payload: exercise, statusCode: 200 }, canonical, () => true,
+      { category: 'group_training' }, index => index, step => step), child ? 4 : 'subscriptions');
+    if (child) assert.deepEqual(ctx.quotes, []);
+    for (const [fragment, fn, rows] of [[fresh, 'finishError', 'selectedOwned'], [recheck, 'prepareFailedUpdate', 'ownedSubscriptions']]) {
+      const run = compile(fragment, fn, rows);
+      for (const deny of [[], [{ productId: 'adult' }], [{ productId: pack, product: { id: 'conflict' } }],
+        [{ productId: pack }, { productId: pack }]]) {
+        assert.deepEqual(run(excludes, status, {}, exercise, deny), child ? [409, expected] : undefined);
+      }
+      assert.equal(run(excludes, status, {}, exercise, [{ product: { id: pack } }]), undefined);
+    }
+  }
 });

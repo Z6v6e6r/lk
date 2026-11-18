@@ -1,3 +1,4 @@
+import { isKidsAcademyTraining, isPadelKidsProduct, needsPadelKidsIdentity, PADEL_KIDS_PRODUCT_ID, resolvePadelKidsVisits } from "../../src/utils/kidsTrainingSubscriptions.ts";
 import { isChildTournamentExercise } from "../../src/utils/tournamentSubscriptionDiscount.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -53,7 +54,7 @@ const checkout = (overrides = {}) => ({
 });
 const getErrorMessage = (error, fallback) => error?.message || fallback;
 
-function checkoutReader(name, failed, extraExercise = {}) {
+function checkoutReader(name, failed, extraExercise = {}, sellable = [product()]) {
   const calls = [];
   const exercise = { id: training.id, availableClientSubscriptions: [product("client-subscription", "owned-pack")],
     availableClientOneTimes: [product("client-one-time", "owned-visit")], ...extraExercise };
@@ -66,13 +67,14 @@ function checkoutReader(name, failed, extraExercise = {}) {
         return { data: null, error: { status: 503, message: "fixture failure" }, status: 503 };
       }
       const data = url.endsWith("/profile") ? profile : url.includes("/exercises/") ? exercise
-        : failed.includes("empty") ? [] : [product()];
+        : failed.includes("empty") ? [] : url.includes("/products/subscriptions?") ? sellable : [product()];
       return { data, error: null, status: 200 };
     },
     isRecord: value => Boolean(value && typeof value === "object"),
     pickNestedRecord: () => null,
     pickString: () => null,
-    resolveTournamentCustomPricing: () => null, isChildTournamentExercise,
+    resolveTournamentCustomPricing: () => null, isChildTournamentExercise, isKidsAcademyTraining, isPadelKidsProduct,
+    needsPadelKidsIdentity, resolvePadelKidsVisits,
     pickFirstArray: (value, keys) => value[keys[0]] || [],
     normalizeVivaProducts: (items, source) => items.map(item => ({ ...item, source })),
     filterClientSubscriptionsForExercise: items => items,
@@ -285,7 +287,7 @@ test("actual trial transaction preserves the promo and owned visit source throug
   for (const source of ["one-time", "client-one-time"]) {
     const calls = [];
     const create = evaluate(node.getText(api).replace(/^export /, ""), {
-      isSpanishTrainingExercise: () => false, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+      isSpanishTrainingExercise: () => false, isKidsAcademyTraining, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: true,
       createVivaPaymentWatcher: async () => ({ close() {} }),
       buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
       buildTournamentVivaTransactionPayload: () => ({}),
@@ -335,7 +337,8 @@ function subscriptionCheckoutReader(availableClientSubscriptions, exerciseOverri
       const data = url.endsWith("/profile") ? profile : url.includes("/exercises/") ? exercise : [];
       return { data, error: null, status: 200 };
     },
-    resolveTournamentCustomPricing: () => null, isChildTournamentExercise,
+    resolveTournamentCustomPricing: () => null, isChildTournamentExercise, isKidsAcademyTraining, isPadelKidsProduct,
+    needsPadelKidsIdentity, resolvePadelKidsVisits,
     resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
     resolveClientSubscriptionProductNames: async items => items.map(item => ({
       ...item, name: item.raw.product?.name || item.name,
@@ -471,4 +474,70 @@ test("retained RA renders an owned booking button and passes the same instance t
   assert.deepEqual(getGroupScheduleOwnedSubscriptions(clientSubscriptions, [{
     subscriptionId: "fixture-owned-ra", discountPercent: 50,
   }]), []);
+});
+
+test("kids training keeps the one-time price and only the exact Padel Kids plan", async () => {
+  const family = { id: PADEL_KIDS_PRODUCT_ID, name: "Падел.Дети", cost: 1980000 };
+  const adult = { id: "adult-product", name: "Падел.Дети", cost: 500000 };
+  for (const directionId of [2468, 2975, 3163]) {
+    assert.equal(isKidsAcademyTraining({ exerciseDirection: { directionId: String(directionId) } }), true);
+    const { read } = checkoutReader("apiFetchTournamentVivaPublicCheckout", [], { directionId }, [family, adult]);
+    const result = await read(training.id);
+    assert.deepEqual(result.data.subscriptions.map(row => row.id), [family.id]);
+    assert.equal(result.data.oneTimes[0].cost, 150000);
+  }
+  const partial = checkoutReader("apiFetchTournamentVivaPublicCheckout", [], {}, [family, adult]);
+  const withSummary = await partial.read(training.id, { tournament: { directionId: 2975 } });
+  assert.deepEqual(withSummary.data.subscriptions.map(row => row.id), [family.id]);
+  assert.equal(isKidsAcademyTraining({ directionId: 7108 }), false);
+  assert.equal(isKidsAcademyTraining({ directionId: 2975.5 }), false);
+  assert.equal(isKidsAcademyTraining({ title: "Детская тренировка" }), false);
+  const visit = { id: "kids-instance", source: "client-subscription", raw: { visitsLeft: 5 } };
+  const evidence = { subscriptionId: visit.id, product: { id: family.id } };
+  const adultVisit = { ...visit, id: "adult-instance", raw: { productId: adult.id } };
+  assert.equal(needsPadelKidsIdentity([visit]), true);
+  assert.equal(needsPadelKidsIdentity([adultVisit]), false);
+  const recovered = resolvePadelKidsVisits([visit, adultVisit], [evidence]);
+  assert.deepEqual(recovered.map(row => row.id), [visit.id]);
+  assert.equal(recovered[0].raw.visitsLeft, 5);
+  assert.equal(isPadelKidsProduct(recovered[0]), true);
+  assert.deepEqual(resolvePadelKidsVisits([visit], [evidence, evidence]), []);
+  assert.deepEqual(resolvePadelKidsVisits([adultVisit], [{ ...evidence, subscriptionId: adultVisit.id }]), []);
+});
+
+test("kids training transaction rejects stale adult discounts and keeps the original promo and kids visit", async () => {
+  const node = find(api, item => ts.isFunctionDeclaration(item) && item.name?.text === "apiCreateTournamentVivaTransaction");
+  const writes = [];
+  const create = evaluate(node.getText(api).replace(/^export /, ""), {
+    isKidsAcademyTraining, isPadelKidsProduct, isChildTournamentExercise,
+    isSpanishTrainingExercise: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: false,
+    API_BASE: "https://fixture.invalid", TENANT_KEY: "fixture",
+    createVivaPaymentWatcher: async () => ({ close() {} }),
+    buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
+    buildTournamentVivaTransactionPayload: params => ({
+      exerciseId: params.exerciseId, productId: params.product.id, source: params.product.source, promoCode: params.promoCode,
+    }),
+    readVivaFailureCode: () => null, pickString: () => null,
+    request: async (_url, options) => {
+      writes.push(JSON.parse(options.body));
+      return { data: null, error: { message: "fixture refusal" }, status: 409 };
+    },
+    apiCreateTournamentVivaBookingFromSubscription: async params => {
+      writes.push({ visit: params.product.id });
+      return { data: { bookingId: "not-written" }, error: null, status: 200 };
+    },
+  });
+  const params = { exerciseId: training.id, exercise: { directionId: 2975 }, promoCode: "FIXTURE-PROMO" };
+  const adult = product("client-subscription", "fixture-adult");
+  for (const rejected of [adult, { ...adult, source: "subscription" },
+    ...[100, 50].map(discountPercent => ({ ...adult, groupDiscountQuote: { discountPercent } }))]) {
+    assert.equal((await create({ ...params, product: rejected })).status, 409);
+  }
+  assert.deepEqual(writes, []);
+  await create({ ...params, product: { ...product(), cost: 300000 } });
+  await create({ ...params, promoCode: null, product: { ...adult, id: "fixture-kids-visit", raw: { productId: PADEL_KIDS_PRODUCT_ID } } });
+  assert.deepEqual(writes, [
+    { exerciseId: training.id, productId: product().id, source: "one-time", promoCode: "FIXTURE-PROMO" },
+    { visit: "fixture-kids-visit" },
+  ]);
 });
