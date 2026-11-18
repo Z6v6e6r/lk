@@ -82,6 +82,20 @@ function providerError(code, statusCode = 503) {
   return error;
 }
 
+// Only an explicit provider refusal of the request itself proves that no transaction was
+// created. Transport errors, timeouts, 5xx and ambiguous statuses never do.
+const CREATE_REJECTION_STATUS = [400, 401, 403, 404, 405, 415, 422];
+
+function withOutcome(error, outcome) {
+  const resolved = error instanceof Error ? error : providerError(String(error?.code || "RESIDENCY_UPSTREAM_UNAVAILABLE"));
+  resolved.outcome = outcome;
+  return resolved;
+}
+
+function createFailureOutcome(error) {
+  return CREATE_REJECTION_STATUS.includes(Number(error?.upstreamStatus)) ? "REJECTED" : "UNKNOWN";
+}
+
 async function requestJson(fetchImpl, url, options, config) {
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), config.timeoutMs) : null;
@@ -164,51 +178,74 @@ export function createVivaCupResidencyPorts({
     return { ...product, benefits: [], renewalEligible: false, checkedAt: now().toISOString() };
   }
 
-  async function createPayment({ amountMinor }) {
-    const holder = await profile();
+  async function createPayment({ amountMinor, successUrl, failUrl }) {
+    const returnSuccess = httpsUrl(successUrl || c.successUrl);
+    const returnFail = httpsUrl(failUrl || c.failUrl);
+    if (!returnSuccess || !returnFail) throw providerError("RESIDENCY_RETURN_TARGET_INVALID", 400);
+    let holder;
+    try {
+      holder = await profile();
+    } catch (error) {
+      // The profile read happens before the transaction POST: nothing was created.
+      throw withOutcome(error, "REJECTED");
+    }
     const body = {
       clientPhone: holder.phone,
-      failUrl: c.failUrl,
-      failRedirectUrl: c.failUrl,
-      failureRedirectUrl: c.failUrl,
+      failUrl: returnFail,
+      failRedirectUrl: returnFail,
+      failureRedirectUrl: returnFail,
       paymentMethod: "WIDGET",
       products: [{ id: c.productId, type: "SUBSCRIPTION", count: 1 }],
       count: 1,
       id: c.productId,
       type: "SUBSCRIPTION",
-      baseRedirectUrl: c.successUrl,
-      redirectUrl: c.successUrl,
-      returnUrl: c.successUrl,
-      successRedirectUrl: c.successUrl,
-      successUrl: c.successUrl,
+      baseRedirectUrl: returnSuccess,
+      redirectUrl: returnSuccess,
+      returnUrl: returnSuccess,
+      successRedirectUrl: returnSuccess,
+      successUrl: returnSuccess,
     };
-    const response = unwrap(await requestJson(fetchImpl,
-      c.vivaBaseUrl + "/end-user/api/v1/" + encodeURIComponent(c.tenantKey) + "/transactions",
-      { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: "Bearer " + actorToken }, body: JSON.stringify(body) }, c));
-    if (!response) throw providerError("RESIDENCY_PAYMENT_INVALID");
-    const ids = [response.transactionId, response.id].filter((id) => text(id, 128));
-    if (new Set(ids).size > 1) throw providerError("RESIDENCY_PAYMENT_INVALID");
-    const transactionId = ids[0] || null;
-    const toPay = Number.isSafeInteger(response.toPay) ? response.toPay : null;
-    const paid = response.paid === true;
-    if (paid) {
-      if (toPay !== null && toPay !== 0 && toPay !== amountMinor) throw providerError("RESIDENCY_PAYMENT_INVALID");
-      if (toPay === 0 || toPay === null) {
-        return { status: "PAID", providerTransactionId: transactionId, paymentUrl: null, amountMinor,
-          paidAt: iso(response.paymentDate) ? isoMillis(response.paymentDate) : now().toISOString() };
-      }
-      // A paid response with the full amount is not trusted on its own: read the
-      // Admin transaction and require the same terminal evidence as a callback.
-      if (!transactionId) throw providerError("RESIDENCY_PAYMENT_INVALID");
-      const verified = await readPayment({ amountMinor, providerTransactionId: transactionId });
-      if (verified?.status !== "PAID") throw providerError("RESIDENCY_PAYMENT_INVALID");
-      return verified;
+    let response;
+    try {
+      response = unwrap(await requestJson(fetchImpl,
+        c.vivaBaseUrl + "/end-user/api/v1/" + encodeURIComponent(c.tenantKey) + "/transactions",
+        { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: "Bearer " + actorToken }, body: JSON.stringify(body) }, c));
+    } catch (error) {
+      throw withOutcome(error, createFailureOutcome(error));
     }
-    const paymentUrl = httpsUrl(response.paymentUrl);
-    if (!paymentUrl || toPay !== amountMinor) throw providerError("RESIDENCY_PAYMENT_INVALID");
-    const due = iso(response.paymentDueDate) ? isoMillis(response.paymentDueDate) : null;
-    return { status: "PENDING", providerTransactionId: transactionId, paymentUrl, amountMinor,
-      expiresAt: due || new Date(now().getTime() + c.paymentTtlMs).toISOString() };
+    // From here the provider may already own a financial operation. Any doubt is
+    // reported as UNCONFIRMED with the transaction id we managed to observe, so the
+    // owner can persist it and recover the late result instead of losing it.
+    let transactionId = null;
+    try {
+      if (!response) throw providerError("RESIDENCY_PAYMENT_INVALID");
+      const ids = [response.transactionId, response.id].filter((id) => text(id, 128));
+      if (new Set(ids).size > 1) throw providerError("RESIDENCY_PAYMENT_INVALID");
+      transactionId = ids[0] || null;
+      const toPay = Number.isSafeInteger(response.toPay) ? response.toPay : null;
+      const paid = response.paid === true;
+      if (paid) {
+        if (toPay !== null && toPay !== 0 && toPay !== amountMinor) throw providerError("RESIDENCY_PAYMENT_INVALID");
+        if (toPay === 0 || toPay === null) {
+          return { status: "PAID", providerTransactionId: transactionId, paymentUrl: null, amountMinor,
+            paidAt: iso(response.paymentDate) ? isoMillis(response.paymentDate) : now().toISOString() };
+        }
+        // A paid response with the full amount is not trusted on its own: read the
+        // Admin transaction and require the same terminal evidence as a callback.
+        if (!transactionId) throw providerError("RESIDENCY_PAYMENT_INVALID");
+        const verified = await readPayment({ amountMinor, providerTransactionId: transactionId });
+        if (verified?.status !== "PAID") throw providerError("RESIDENCY_PAYMENT_INVALID");
+        return verified;
+      }
+      const paymentUrl = httpsUrl(response.paymentUrl);
+      if (!paymentUrl || toPay !== amountMinor) throw providerError("RESIDENCY_PAYMENT_INVALID");
+      const due = iso(response.paymentDueDate) ? isoMillis(response.paymentDueDate) : null;
+      return { status: "PENDING", providerTransactionId: transactionId, paymentUrl, amountMinor,
+        expiresAt: due || new Date(now().getTime() + c.paymentTtlMs).toISOString() };
+    } catch (error) {
+      return { status: "UNCONFIRMED", providerTransactionId: transactionId, amountMinor, paymentUrl: null,
+        reason: text(error?.code, 64) ? error.code : "RESIDENCY_PAYMENT_INVALID" };
+    }
   }
 
   async function readPayment({ amountMinor, providerTransactionId }) {

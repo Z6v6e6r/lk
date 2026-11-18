@@ -128,14 +128,55 @@ test("an already paid create is PAID without inventing a URL", async () => {
   const changed = build({ routes: { "/transactions": (url) => url.endsWith("/transactions")
     ? response({ paid: true, toPay: 1, id: TXN })
     : response(txn()) } });
-  await assert.rejects(changed.ports.payments.create({ amountMinor: 79000 }), /RESIDENCY_PAYMENT_INVALID/);
+  const unconfirmed = await changed.ports.payments.create({ amountMinor: 79000 });
+  // A contradictory paid response is never trusted and never discarded: the transaction
+  // id is returned so the owner can persist it and recover the real result later.
+  assert.equal(unconfirmed.status, "UNCONFIRMED");
+  assert.equal(unconfirmed.providerTransactionId, TXN);
 });
 
-test("create rejects a changed amount or a non-https payment URL", async () => {
+test("an unverifiable create is UNCONFIRMED with its transaction id, not an exception", async () => {
   const mismatch = build({ routes: { "/transactions": () => response({ paymentUrl: "https://bank.example/pay/1", toPay: 1, id: TXN }) } });
-  await assert.rejects(mismatch.ports.payments.create({ amountMinor: 79000 }), /RESIDENCY_PAYMENT_INVALID/);
+  const unconfirmed = await mismatch.ports.payments.create({ amountMinor: 79000 });
+  assert.equal(unconfirmed.status, "UNCONFIRMED");
+  assert.equal(unconfirmed.providerTransactionId, TXN);
   const insecure = build({ routes: { "/transactions": () => response({ paymentUrl: "http://bank.example/pay/1", toPay: 79000, id: TXN }) } });
-  await assert.rejects(insecure.ports.payments.create({ amountMinor: 79000 }), /RESIDENCY_PAYMENT_INVALID/);
+  const insecureResult = await insecure.ports.payments.create({ amountMinor: 79000 });
+  assert.equal(insecureResult.status, "UNCONFIRMED");
+  assert.equal(insecureResult.providerTransactionId, TXN);
+});
+
+test("paid create whose Admin verification fails keeps the transaction id", async () => {
+  const { ports } = build({ routes: {
+    "/transactions": (url) => url.endsWith("/transactions")
+      ? response({ paid: true, toPay: 79000, id: TXN })
+      : response({ code: "RESIDENCY_UPSTREAM_UNAVAILABLE" }, 503),
+  } });
+  const result = await ports.payments.create({ amountMinor: 79000 });
+  assert.equal(result.status, "UNCONFIRMED");
+  assert.equal(result.providerTransactionId, TXN);
+  assert.equal(result.paymentUrl, null);
+  assert.equal(result.reason, "RESIDENCY_UPSTREAM_UNAVAILABLE");
+});
+
+test("only an explicit provider refusal proves that no transaction was created", async () => {
+  const rejected = build({ routes: { "/transactions": () => response({ code: "VALIDATION" }, 422) } });
+  await assert.rejects(rejected.ports.payments.create({ amountMinor: 79000 }), (error) => {
+    assert.equal(error.outcome, "REJECTED");
+    return true;
+  });
+  const ambiguous = build({ routes: { "/transactions": () => response({ code: "INTERNAL" }, 500) } });
+  await assert.rejects(ambiguous.ports.payments.create({ amountMinor: 79000 }), (error) => {
+    assert.equal(error.outcome, "UNKNOWN");
+    return true;
+  });
+});
+
+test("an unusable return target is refused before the provider POST", async () => {
+  const { ports, calls } = build();
+  await assert.rejects(ports.payments.create({ amountMinor: 79000, successUrl: "http://insecure.example" }),
+    /RESIDENCY_RETURN_TARGET_INVALID/);
+  assert.equal(calls.some((call) => call.options?.method === "POST"), false);
 });
 
 test("payment read maps PAID only from an owned exact-product transaction with the confirmed amount", async () => {

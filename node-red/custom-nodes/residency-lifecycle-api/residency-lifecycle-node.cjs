@@ -12,12 +12,53 @@ const DEFAULT_KEYCLOAK = "https://kc.vivacrm.ru/realms/clients/protocol/openid-c
 const DEFAULT_PRODUCT = "4037a3a3-e551-4f9a-a9db-1410e46b8635";
 const COLLECTION = "lk_residency_lifecycle_orders";
 
+// A payment attempt must be journaled before the provider POST is attempted. The same
+// options object is used by the integration test so the write guarantee is verified, not
+// assumed.
+const MONGO_CLIENT_OPTIONS = Object.freeze({
+  readPreference: "primary", retryReads: true, retryWrites: true, serverSelectionTimeoutMS: 10_000,
+  writeConcern: { w: "majority", j: true, wtimeoutMS: 5_000 },
+});
+
 const text = (value, max = 4096) => typeof value === "string" && value.length > 0 && value.length <= max
   && value.trim() === value && !Array.from(value).some((ch) => ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127);
 
 function readEnv(env, name, fallback) {
   const value = env && typeof env.get === "function" ? env.get(name) : env ? env[name] : undefined;
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+const RETURN_TARGET_KEY = /^[a-z][a-z0-9_-]{0,31}$/;
+
+function returnUrl(value) {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) return null;
+    return parsed.toString();
+  } catch { return null; }
+}
+
+/**
+ * Server-side return targets. A caller selects a configured *key*; an arbitrary redirect
+ * from a browser is never accepted.
+ */
+function readReturnTargets(env, successUrl, failUrl) {
+  const raw = readEnv(env, "LK_RESIDENCY_LIFECYCLE_RETURN_TARGETS", "");
+  if (!raw) return { targets: { widget: { successUrl, failUrl } }, error: null };
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return { targets: null, error: "RETURN_TARGETS" }; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { targets: null, error: "RETURN_TARGETS" };
+  const targets = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!RETURN_TARGET_KEY.test(key) || !value || typeof value !== "object") return { targets: null, error: "RETURN_TARGETS" };
+    const resolvedSuccess = returnUrl(value.successUrl);
+    const resolvedFail = returnUrl(value.failUrl);
+    if (!resolvedSuccess || !resolvedFail) return { targets: null, error: "RETURN_TARGETS" };
+    targets[key] = { successUrl: resolvedSuccess, failUrl: resolvedFail };
+  }
+  if (!Object.keys(targets).length) return { targets: null, error: "RETURN_TARGETS" };
+  return { targets, error: null };
 }
 
 function readConfig(env) {
@@ -33,7 +74,11 @@ function readConfig(env) {
   const keycloakUserinfoUrl = readEnv(env, "LK_RESIDENCY_LIFECYCLE_KEYCLOAK_USERINFO_URL", DEFAULT_KEYCLOAK);
   const allowOrigin = readEnv(env, "LK_RESIDENCY_LIFECYCLE_ALLOW_ORIGIN", "*");
   const rateLimit = Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_RATE_LIMIT_PER_MINUTE", "20"));
+  const returnTargets = readReturnTargets(env, successUrl, failUrl);
   return {
+    returnTargets: returnTargets.targets,
+    returnTargetsError: returnTargets.error,
+    defaultReturnTarget: readEnv(env, "LK_RESIDENCY_LIFECYCLE_DEFAULT_RETURN_TARGET", "widget"),
     enabled,
     mongoUri: readEnv(env, "LK_RESIDENCY_LIFECYCLE_MONGO_URI", ""),
     databaseName: readEnv(env, "LK_RESIDENCY_LIFECYCLE_MONGO_DB", ""),
@@ -51,11 +96,14 @@ function readConfig(env) {
     ensureIndexes: readEnv(env, "LK_RESIDENCY_LIFECYCLE_ENSURE_INDEXES", "false") === "true",
     timeoutMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_TIMEOUT_MS", "8000")),
     paymentTtlMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_PAYMENT_TTL_MS", "1200000")),
+    dispatchLeaseMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_DISPATCH_LEASE_MS", "120000")),
   };
 }
 
 function runtimeConfigError(config) {
   if (!config || !config.mongoUri || !config.databaseName) return "STORAGE";
+  if (config.returnTargetsError) return "RETURN_TARGETS";
+  if (!config.returnTargets || !config.returnTargets[config.defaultReturnTarget]) return "RETURN_TARGETS";
   if (!/^https:\/\//.test(config.vivaBaseUrl) || !/^https:\/\//.test(config.successUrl) || !/^https:\/\//.test(config.failUrl)) return "VIVA_URL";
   if (!/^https:\/\//.test(config.keycloakUserinfoUrl)) return "KEYCLOAK_URL";
   if (!config.cupBaseUrl || !/^https:\/\//.test(config.cupBaseUrl) || config.cupIntegrationToken.length < 32) return "CUP";
@@ -153,9 +201,7 @@ module.exports = function registerResidencyLifecycleApi(RED) {
           import("./lib/residency-lifecycle-provider.mjs"),
           import("./lib/residency-lifecycle-store.mjs"),
         ]).then(async ([{ MongoClient }, core, http, provider, storeModule]) => {
-          const client = new MongoClient(config.mongoUri, {
-            readPreference: "primary", retryReads: true, retryWrites: true, serverSelectionTimeoutMS: 10_000,
-          });
+          const client = new MongoClient(config.mongoUri, MONGO_CLIENT_OPTIONS);
           try {
             await client.connect();
             const collection = client.db(config.databaseName).collection(COLLECTION);
@@ -165,15 +211,28 @@ module.exports = function registerResidencyLifecycleApi(RED) {
               if (error?.code !== 26 && error?.codeName !== "NamespaceNotFound") throw error;
             }
             for (const spec of storeModule.RESIDENCY_LIFECYCLE_INDEXES) {
-              if (!indexes.some((index) => index.name === spec.options.name)) {
-                if (!config.ensureIndexes) {
-                  const error = new Error("Residency lifecycle indexes are missing");
-                  error.code = "RESIDENCY_LIFECYCLE_INDEXES_MISSING";
-                  error.statusCode = 503;
-                  throw error;
-                }
-                await collection.createIndex(spec.keys, spec.options);
+              const installed = indexes.find((index) => index.name === spec.options.name);
+              if (installed && storeModule.indexSpecMatches(installed, spec)) continue;
+              if (installed && !config.ensureIndexes) {
+                // A same-named index with a different key/predicate is not the reviewed guard.
+                const error = new Error("Residency lifecycle index does not match the reviewed contract");
+                error.code = "RESIDENCY_LIFECYCLE_INDEXES_MISMATCH";
+                error.statusCode = 503;
+                throw error;
               }
+              if (!installed && !config.ensureIndexes) {
+                const error = new Error("Residency lifecycle indexes are missing");
+                error.code = "RESIDENCY_LIFECYCLE_INDEXES_MISSING";
+                error.statusCode = 503;
+                throw error;
+              }
+              if (installed) {
+                const error = new Error("Residency lifecycle index does not match the reviewed contract");
+                error.code = "RESIDENCY_LIFECYCLE_INDEXES_MISMATCH";
+                error.statusCode = 503;
+                throw error;
+              }
+              await collection.createIndex(spec.keys, spec.options);
             }
             const store = storeModule.createMongoResidencyLifecycleStore({ collection });
             const globalContext = () => node.context().global;
@@ -206,6 +265,11 @@ module.exports = function registerResidencyLifecycleApi(RED) {
                 });
                 return core.createResidencyLifecycle({
                   clock: { now: () => Date.now() },
+                  config: {
+                    returnTargets: config.returnTargets,
+                    defaultReturnTarget: config.defaultReturnTarget,
+                    dispatchLeaseMs: config.dispatchLeaseMs,
+                  },
                   ids: {
                     orderId: (tenantId, keyHash) => {
                       const hex = crypto.createHash("sha256").update(tenantId + "\0" + keyHash).digest("hex");
@@ -330,6 +394,7 @@ module.exports = function registerResidencyLifecycleApi(RED) {
 };
 
 module.exports.readConfig = readConfig;
+module.exports.MONGO_CLIENT_OPTIONS = MONGO_CLIENT_OPTIONS;
 module.exports.runtimeConfigError = runtimeConfigError;
 module.exports.bearer = bearer;
 module.exports.validateClaims = validateClaims;

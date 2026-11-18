@@ -118,6 +118,23 @@
     ]
   },
   {
+    "id": "lk_residency_lifecycle_in_orders_20261118",
+    "type": "http in",
+    "z": "lk_residency_lifecycle_tab_20261118",
+    "name": "GET /lk/residency/orders",
+    "url": "/lk/residency/orders",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 220,
+    "y": 380,
+    "wires": [
+      [
+        "lk_residency_lifecycle_http_20261118"
+      ]
+    ]
+  },
+  {
     "id": "lk_residency_lifecycle_in_order_20261118",
     "type": "http in",
     "z": "lk_residency_lifecycle_tab_20261118",

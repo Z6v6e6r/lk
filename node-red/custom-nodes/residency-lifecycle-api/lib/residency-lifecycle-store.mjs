@@ -19,9 +19,8 @@ function clone(value) {
 
 function withoutMongoId(document) {
   if (!document || typeof document !== "object") return document;
-  const copy = structuredClone(document);
-  delete copy._id;
-  return copy;
+  const { _id, ...rest } = document;
+  return structuredClone(rest);
 }
 
 /**
@@ -45,8 +44,10 @@ export function createMongoResidencyLifecycleStore({ collection }) {
   async function insertOrder(order) {
     const document = { ...clone(order), _id: order.orderId };
     try {
+      // A durable attempt is only durable when the write was acknowledged by the server;
+      // an unacknowledged insert never becomes a "successful" order.
       const result = await collection.insertOne(document);
-      return { ok: result?.acknowledged === true || result?.insertedId != null };
+      return { ok: result?.acknowledged === true && (result.insertedId != null || result.insertedCount === 1) };
     } catch (error) {
       if (error && (error.code === 11000 || error.codeName === "DuplicateKey")) return { ok: false };
       throw error;
@@ -62,12 +63,19 @@ export function createMongoResidencyLifecycleStore({ collection }) {
       { tenantId, orderId, revision: expectedRevision },
       { $set: fields, $inc: { revision: 1 } },
     );
-    return { ok: result?.matchedCount === 1 };
+    return { ok: result?.acknowledged === true && result.matchedCount === 1 };
   }
 
   async function findUnresolvedOrder(tenantId, userId) {
     const row = await collection.findOne({ tenantId, userId, state: { $in: UNRESOLVED_STATES } });
     return clone(withoutMongoId(row));
+  }
+
+  async function listUnresolvedOrders(tenantId, userId, limit = 20) {
+    const cursor = collection.find({ tenantId, userId, state: { $in: UNRESOLVED_STATES } })
+      .sort({ createdAt: -1 }).limit(Math.max(1, Math.min(50, limit)));
+    const rows = await cursor.toArray();
+    return rows.map((row) => clone(withoutMongoId(row)));
   }
 
   async function listExpiredPending(tenantId, nowIso) {
@@ -80,7 +88,30 @@ export function createMongoResidencyLifecycleStore({ collection }) {
     return rows.map((row) => clone(withoutMongoId(row)));
   }
 
-  return { findOrderByKey, getOrder, insertOrder, updateOrder, findUnresolvedOrder, listExpiredPending };
+  return { findOrderByKey, getOrder, insertOrder, updateOrder, findUnresolvedOrder, listUnresolvedOrders, listExpiredPending };
+}
+
+/**
+ * Verifies an installed index really is the reviewed one: same keys, same uniqueness and
+ * the same partial predicate. An index name alone proves nothing.
+ */
+export function indexSpecMatches(installed, spec) {
+  if (!installed || typeof installed !== "object") return false;
+  const keys = installed.key && typeof installed.key === "object" ? installed.key : {};
+  const expectedKeys = Object.entries(spec.keys);
+  if (Object.keys(keys).length !== expectedKeys.length) return false;
+  for (const [field, direction] of expectedKeys) {
+    if (keys[field] !== direction) return false;
+  }
+  const unique = installed.unique === true;
+  if (unique !== (spec.options.unique === true)) return false;
+  const expectedPartial = spec.options.partialFilterExpression;
+  if (!expectedPartial) return installed.partialFilterExpression === undefined;
+  const partial = installed.partialFilterExpression;
+  if (!partial || typeof partial !== "object") return false;
+  const expectedEntries = Object.entries(expectedPartial);
+  if (Object.keys(partial).length !== expectedEntries.length) return false;
+  return expectedEntries.every(([field, value]) => partial[field] === value);
 }
 
 /**

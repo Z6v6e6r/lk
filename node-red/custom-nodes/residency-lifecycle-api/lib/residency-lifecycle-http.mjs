@@ -14,6 +14,7 @@ const ROUTES = Object.freeze([
   { method: "GET", pattern: /^\/lk\/residency\/catalog$/, name: "catalog" },
   { method: "GET", pattern: /^\/lk\/residency\/status$/, name: "status" },
   { method: "POST", pattern: /^\/lk\/residency\/orders$/, name: "create", idempotent: true },
+  { method: "GET", pattern: /^\/lk\/residency\/orders$/, name: "orders" },
   { method: "GET", pattern: /^\/lk\/residency\/orders\/([0-9a-f-]{36})$/, name: "order", params: ["orderId"] },
   { method: "GET", pattern: /^\/lk\/residency\/orders\/([0-9a-f-]{36})\/payment$/, name: "payment", params: ["orderId"] },
   { method: "POST", pattern: /^\/lk\/residency\/orders\/([0-9a-f-]{36})\/reconcile$/, name: "reconcile", idempotent: true, params: ["orderId"] },
@@ -26,7 +27,7 @@ const baseHeaders = (origin) => ({
   "Referrer-Policy": "no-referrer",
   "X-Robots-Tag": "noindex, nofollow",
   "Access-Control-Allow-Origin": origin,
-  "Access-Control-Allow-Headers": "Authorization, Content-Type, Idempotency-Key, X-Correlation-ID",
+  "Access-Control-Allow-Headers": "Authorization, Content-Type, Idempotency-Key, X-Correlation-ID, X-Residency-Return-Target",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   Vary: "Origin",
 });
@@ -98,7 +99,9 @@ export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*"
 
   function errorResponse(error, correlation, origin) {
     if (error instanceof ResidencyLifecycleError) {
-      return respond(error.statusCode, { code: error.code, message: error.message }, correlation, origin);
+      const body = { code: error.code, message: error.message };
+      if (error.details && typeof error.details === "object") body.details = error.details;
+      return respond(error.statusCode, body, correlation, origin);
     }
     const status = Number(error?.statusCode);
     if (Number.isInteger(status) && status >= 400 && status <= 599 && typeof error?.code === "string") {
@@ -110,7 +113,9 @@ export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*"
 
   async function handle(request) {
     const method = String(request?.method || "").toUpperCase();
-    const path = String(request?.path || "").split("?")[0];
+    const rawPath = String(request?.path || "");
+    const path = rawPath.split("?")[0];
+    const query = new URLSearchParams(rawPath.includes("?") ? rawPath.slice(rawPath.indexOf("?") + 1) : "");
     const headers = normalizedHeaders(request?.headers);
     const origin = allowOrigin;
     const correlation = correlationId(headers);
@@ -135,19 +140,37 @@ export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*"
       for (let index = 0; route.params && index < route.params.length; index += 1) params[route.params[index]] = match[index + 1];
       if (route.idempotent) readIdempotencyKey(headers);
 
-      if (route.name === "catalog") return respond(200, await lifecycle.catalog(), correlation, origin);
+      if (route.name === "catalog") return respond(200, await lifecycle.catalog({ tenantId: actor.tenantId, userId: actor.userId }), correlation, origin);
       if (route.name === "status") return respond(200, await lifecycle.status({ tenantId: actor.tenantId, userId: actor.userId }), correlation, origin);
       if (route.name === "create") {
         const body = parseBody(request.body, headers);
-        if (Object.keys(body).some((key) => key !== "mode")) {
+        if (Object.keys(body).some((key) => !["mode", "expectedTotalMinor", "expectedProductId"].includes(key))) {
           throw new ResidencyLifecycleError(400, "RESIDENCY_REQUEST_INVALID", "Unknown request fields");
         }
         const result = await lifecycle.createOrder({
           tenantId: actor.tenantId, userId: actor.userId,
           idempotencyKey: readIdempotencyKey(headers),
           mode: body.mode || "NEW",
+          expectedTotalMinor: body.expectedTotalMinor,
+          expectedProductId: body.expectedProductId,
+          returnTarget: headers["x-residency-return-target"] || undefined,
         });
-        return respond(200, { schemaVersion: 1, order: result.order, idempotentReplay: result.idempotentReplay === true, recoveryRequired: result.recoveryRequired === true }, correlation, origin);
+        return respond(200, { schemaVersion: 1, order: result.order, idempotentReplay: result.idempotentReplay === true,
+          recoveryRequired: result.order.recovery.required === true, recovery: result.order.recovery }, correlation, origin);
+      }
+      if (route.name === "orders") {
+        const state = query.get("state");
+        const limit = query.get("limit");
+        for (const key of query.keys()) {
+          if (!["state", "limit"].includes(key)) {
+            throw new ResidencyLifecycleError(400, "RESIDENCY_REQUEST_INVALID", "Unknown query parameters");
+          }
+        }
+        if (limit !== null && limit !== "20") {
+          throw new ResidencyLifecycleError(400, "RESIDENCY_REQUEST_INVALID", "limit must be 20");
+        }
+        const result = await lifecycle.listOrders({ tenantId: actor.tenantId, userId: actor.userId, state });
+        return respond(200, result, correlation, origin);
       }
       if (route.name === "order") {
         const result = await lifecycle.getOrder({ tenantId: actor.tenantId, userId: actor.userId, orderId: params.orderId });
@@ -168,7 +191,9 @@ export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*"
           eventId: typeof body.eventId === "string" ? body.eventId : undefined,
         });
         return respond(200, { schemaVersion: 1, order: result.order, idempotentReplay: result.idempotentReplay === true,
-          reviewRequired: result.reviewRequired === true, retryable: result.retryable === true }, correlation, origin);
+          reviewRequired: result.order.recovery.state === "REVIEW_REQUIRED",
+          retryable: result.retryable === true || result.order.recovery.retryable === true,
+          recovery: result.order.recovery }, correlation, origin);
       }
       if (route.name === "cancel") {
         parseBody(request.body, headers);
@@ -176,7 +201,8 @@ export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*"
           tenantId: actor.tenantId, userId: actor.userId, orderId: params.orderId,
           idempotencyKey: readIdempotencyKey(headers),
         });
-        return respond(200, { schemaVersion: 1, order: result.order, idempotentReplay: result.idempotentReplay === true }, correlation, origin);
+        return respond(200, { schemaVersion: 1, order: result.order, idempotentReplay: result.idempotentReplay === true,
+          recovery: result.order.recovery }, correlation, origin);
       }
       return respond(404, { code: "RESIDENCY_ROUTE_NOT_FOUND", message: "Route not found" }, correlation, origin);
     } catch (error) {

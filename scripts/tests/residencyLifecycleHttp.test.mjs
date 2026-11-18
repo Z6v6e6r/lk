@@ -64,8 +64,9 @@ function response(body, status = 200) {
   return { status, headers: { get: () => "application/json" }, async text() { return JSON.stringify(body); } };
 }
 
-function harness() {
-  const state = { paid: false, failed: false, subscription: null, createCalls: 0, activationCalls: 0, cupCalls: 0 };
+function harness(engineConfig) {
+  const state = { paid: false, failed: false, subscription: null, createCalls: 0, activationCalls: 0, cupCalls: 0,
+    now: NOW.getTime(), lastCreateBody: null };
   const fetchImpl = async (url) => {
     if (url.endsWith("/profile")) return response({ id: CLIENT, phone: "+15550000000" });
     if (url.includes("/products/subscriptions/")) return response({ id: RESIDENCY_PRODUCT_ID, title: "Резидентство ПадлхАБ",
@@ -74,6 +75,7 @@ function harness() {
       availableTypes: [{ id: 2572 }], hasDayLimitation: false, hasTimeRangeLimitation: false, hasDayTimeLimitation: false });
     if (url.endsWith("/transactions") && !url.includes("/api/v1/transactions/")) {
       state.createCalls += 1;
+      state.lastCreateBody = JSON.parse(arguments[1]?.body || "null");
       return response({ id: TXN, paymentUrl: "https://bank.example/pay/1", toPay: 79000, paymentDueDate: "2026-11-18T09:20:00.000Z" });
     }
     if (url.includes("/api/v1/transactions/")) {
@@ -95,10 +97,11 @@ function harness() {
   };
   const store = memoryStore();
   const createLifecycle = (actor) => {
-    const ports = createVivaCupResidencyPorts({ fetch: fetchImpl, config: CONFIG, clock: { now: () => NOW.getTime() },
-      actorToken: actor.actorToken, getAdminToken: () => "s".repeat(32), now: () => NOW });
+    const ports = createVivaCupResidencyPorts({ fetch: fetchImpl, config: CONFIG, clock: { now: () => state.now },
+      actorToken: actor.actorToken, getAdminToken: () => "s".repeat(32), now: () => new Date(state.now) });
     return createResidencyLifecycle({
-      clock: { now: () => NOW.getTime() },
+      clock: { now: () => state.now },
+      config: engineConfig,
       ids: { orderId: (tenantId, keyHash) => "00000000-0000-4000-8000-" + crypto.createHash("sha256").update(tenantId + keyHash).digest("hex").slice(0, 12), eventId: () => "event" },
       sha256: (value) => crypto.createHash("sha256").update(value).digest("hex"),
       store,
@@ -141,13 +144,13 @@ test("full user journey: catalog -> checkout -> payment -> CUP activation -> sta
   const none = await api.handle(req("GET", "/lk/residency/status"));
   assert.equal(none.body.state, RESIDENCY_STATES.NONE);
 
-  const created = await api.handle(req("POST", "/lk/residency/orders", { mode: "NEW" }, { "Idempotency-Key": KEY, "X-Correlation-ID": "corr-12345678" }));
+  const created = await api.handle(req("POST", "/lk/residency/orders", { mode: "NEW", expectedTotalMinor: 79000 }, { "Idempotency-Key": KEY, "X-Correlation-ID": "corr-12345678" }));
   assert.equal(created.statusCode, 200);
   assert.equal(created.body.order.state, ORDER_STATES.PENDING_PAYMENT);
   assert.equal(created.body.order.payment.paymentUrl, "https://bank.example/pay/1");
   assert.equal(created.headers["X-Correlation-ID"], "corr-12345678");
 
-  const replay = await api.handle(req("POST", "/lk/residency/orders", { mode: "NEW" }, { "Idempotency-Key": KEY }));
+  const replay = await api.handle(req("POST", "/lk/residency/orders", { mode: "NEW", expectedTotalMinor: 79000 }, { "Idempotency-Key": KEY }));
   assert.equal(replay.body.idempotentReplay, true);
   assert.equal(state.createCalls, 1);
 
@@ -173,10 +176,24 @@ test("full user journey: catalog -> checkout -> payment -> CUP activation -> sta
   assert.equal(status.body.state, RESIDENCY_STATES.ACTIVE);
   assert.equal(status.body.validUntil, "2026-12-18T09:05:00.000Z");
 
-  const renewed = await api.handle(req("POST", "/lk/residency/orders", { mode: "RENEWAL" }, { "Idempotency-Key": KEY2 + "r" }));
+  // CUP restarts the window at the new paymentDate, so an early renewal is refused
+  // before any provider POST and the catalog explains when it becomes available.
+  const tooEarly = await api.handle(req("POST", "/lk/residency/orders", { mode: "RENEWAL", expectedTotalMinor: 79000 }, { "Idempotency-Key": KEY2 + "e" }));
+  assert.equal(tooEarly.statusCode, 409);
+  assert.equal(tooEarly.body.code, "RESIDENCY_RENEWAL_TOO_EARLY");
+  assert.equal(tooEarly.body.details.eligibleAt, "2026-12-18T09:05:00.000Z");
+  assert.equal(state.createCalls, 1);
+  const catalogBeforePayment = await api.handle(req("GET", "/lk/residency/catalog"));
+  assert.equal(catalogBeforePayment.body.renewal.eligible, false);
+  assert.equal(catalogBeforePayment.body.renewal.reason, "REMAINING_DAYS_NOT_TRANSFERABLE");
+  assert.equal(catalogBeforePayment.body.renewal.eligibleAt, "2026-12-18T09:05:00.000Z");
+
+  state.now = Date.parse("2026-12-18T09:05:00.000Z");
+  const renewed = await api.handle(req("POST", "/lk/residency/orders", { mode: "RENEWAL", expectedTotalMinor: 79000 }, { "Idempotency-Key": KEY2 + "r" }));
   assert.equal(renewed.statusCode, 200);
   assert.equal(renewed.body.order.mode, "RENEWAL");
   assert.equal(renewed.body.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(renewed.body.order.renewal.baseValidUntil, "2026-12-18T09:05:00.000Z");
 });
 
 test("provider errors keep their stable status and code without leaking a body", async () => {
@@ -194,7 +211,7 @@ test("provider errors keep their stable status and code without leaking a body",
 
 test("a failed provider payment is terminal and visible through the order endpoint", async () => {
   const { api, state } = harness();
-  const created = await api.handle(req("POST", "/lk/residency/orders", {}, { "Idempotency-Key": KEY }));
+  const created = await api.handle(req("POST", "/lk/residency/orders", { expectedTotalMinor: 79000 }, { "Idempotency-Key": KEY }));
   state.failed = true;
   const result = await api.handle(req("POST", "/lk/residency/orders/" + created.body.order.orderId + "/reconcile", { eventId: "evt-failed" }, { "Idempotency-Key": KEY2 }));
   assert.equal(result.statusCode, 200);

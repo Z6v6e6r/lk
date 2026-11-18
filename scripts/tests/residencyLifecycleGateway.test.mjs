@@ -65,7 +65,7 @@ test("userinfo reads only a bounded 200 JSON response", async () => {
 test("the import exposes the exact routes and no reverse-proxy or token material", () => {
   const routes = importJson.filter((node) => node.type === "http in").map((node) => node.method.toUpperCase() + " " + node.url).sort();
   assert.deepEqual(routes, [
-    "GET /lk/residency/catalog", "GET /lk/residency/orders/:orderId", "GET /lk/residency/orders/:orderId/payment",
+    "GET /lk/residency/catalog", "GET /lk/residency/orders", "GET /lk/residency/orders/:orderId", "GET /lk/residency/orders/:orderId/payment",
     "GET /lk/residency/status", "OPTIONS /lk/residency/catalog", "OPTIONS /lk/residency/orders",
     "OPTIONS /lk/residency/orders/:orderId", "OPTIONS /lk/residency/orders/:orderId/cancel",
     "OPTIONS /lk/residency/orders/:orderId/payment", "OPTIONS /lk/residency/orders/:orderId/reconcile",
