@@ -25,7 +25,7 @@ export function splitPublicationLegacyGuard(msg, env) {
   const payment = object(body.payment), booking = object(body.booking), split = object(meta.splitPayment);
   const header = object(msg.req?.headers);
   const sources = [body, query, meta, payment, booking, split];
-  if (sources.some(s => ['id', 'gameId', 'recordId'].some(k => typeof s[k] === 'string' && s[k].trim().startsWith('gsp_'))
+  if (sources.some(s => ['id', 'gameId', 'recordId'].some(k => String(s[k] ?? '').trim().startsWith('gsp_'))
     || Object.hasOwn(s, 'serverPublication'))) return fail(409, 'SERVER_PUBLICATION_OWNED');
   const refs = new Set(), exercises = new Set(), bookings = new Set();
   const add = (set, value) => {

@@ -36,7 +36,7 @@ test('all aliases are ORed; mismatched body tenant and conflicting first IDs can
 
 test('reserved canonical IDs and markers are rejected even without provider references', () => {
   for (const body of [{ id: 'gsp_fixture', expectedRevision: 2 }, { gameId: ' gsp_fixture' },
-    { recordId: 'gsp_fixture' }, { metadata: { serverPublication: null } }, { serverPublication: {} }]) {
+    { recordId: 'gsp_fixture' }, { id: ['gsp_fixture'] }, { gameId: [['gsp_fixture']] }, { metadata: { serverPublication: null } }, { serverPublication: {} }]) {
     const r = guard(request(body), env);
     assert.equal(r[0], null); assert.equal(r[1], null); assert.equal(r[2].statusCode, 409);
   }
