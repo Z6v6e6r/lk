@@ -42,7 +42,7 @@ export function patchTournamentAdmissionSource(source) {
   source = once(source, 'const finishConfirmed = (ctx, bookingId, statusCode = 200) => {',
     'const finishConfirmed = (ctx, bookingId, statusCode = 200) => {\n'
     + '  if (!ctx.lk1) { const completion = tournamentAdmissionComplete(ctx, bookingId); if (completion) return completion; }');
-  if (source.includes('const lk1Finish = (ctx) => {')) source = once(source, 'const lk1Finish = (ctx) => {',
-    'const lk1Finish = (ctx) => {\n  const completion = tournamentAdmissionComplete(ctx, ctx.confirmedBookingId); if (completion) return completion;');
+  if (source.includes('const lk1Finish = (ctx) => {')) source = once(source, '  finishConfirmed(ctx, ctx.confirmedBookingId);',
+    '  const completion = tournamentAdmissionComplete(ctx, ctx.confirmedBookingId); if (completion) return completion;\n  finishConfirmed(ctx, ctx.confirmedBookingId);');
   return source;
 }

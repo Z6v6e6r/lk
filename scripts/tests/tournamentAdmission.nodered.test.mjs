@@ -91,3 +91,27 @@ test('candidate validates exact graph preimage and preserves every unrelated nod
   assert.throws(() => composeTournamentAdmissionCandidate(raw, '0'.repeat(64)), /preimage mismatch/);
   assert.match(candidate[1].func, /tournamentAdmissionGate/);
 });
+
+
+test('LK1 completion preserves the existing payment safety check before telling CUP booking is complete', () => {
+  const gateway = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
+  const finish = gateway.slice(gateway.indexOf('const lk1Finish ='), gateway.indexOf('// EVENT_PAYMENT_ROUTES'));
+  const composed = base.replace('const ctx = isObj(msg._subscriptionBooking)', finish + '\nconst ctx = isObj(msg._subscriptionBooking)')
+    .replace('if (ctx.managedCreateBinding !== undefined) {', 'if (ctx.step === "fixture_finish") return lk1Finish(ctx);\nif (ctx.managedCreateBinding !== undefined) {');
+  const execute = new Function('msg', 'env', 'global', 'node', 'lk1Stop', patchTournamentAdmissionSource(composed));
+  for (const price of [0, 100]) {
+    const ctx = context({ step: 'fixture_finish', confirmedBookingId: 'confirmed-booking',
+      lk1: { decision: { benefit: { finalPriceMinor: price } } } });
+    const msg = { _subscriptionBooking: ctx };
+    const result = execute(msg, { get: key => key === 'TOURNAMENT_OWNER_INTEGRATION_TOKEN' ? 'synthetic-integration' : env.get(key) },
+      { get: () => undefined }, { warn() {}, error() {} }, (_ctx, code) => ({ refused: code }));
+    if (price) {
+      assert.equal(result.refused, 'LK1_PAYMENT_RECONCILIATION_REQUIRED');
+      assert.equal(msg.method, undefined);
+    } else {
+      assert.equal(msg.method, 'POST');
+      assert.match(msg.url, /subscription-admission\/complete$/);
+      assert.equal(msg.payload.bookingId, 'confirmed-booking');
+    }
+  }
+});
