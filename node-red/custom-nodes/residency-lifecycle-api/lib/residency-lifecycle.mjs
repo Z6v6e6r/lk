@@ -205,7 +205,10 @@ export function createResidencyLifecycle(deps) {
   }
 
   async function getResidencyStatus(query) {
-    const result = await status.read({ tenantId: query.tenantId, userId: query.userId });
+    let result;
+    try { result = await status.read({ tenantId: query.tenantId, userId: query.userId }); }
+    catch { return { schemaVersion: RESIDENCY_LIFECYCLE_VERSION, state: RESIDENCY_STATES.UNAVAILABLE,
+      validFrom: null, validUntil: null, source: null, observedAt: null, reason: "SOURCE_UNAVAILABLE" }; }
     if (!result || !Object.values(RESIDENCY_STATES).includes(result.state)) {
       return { schemaVersion: RESIDENCY_LIFECYCLE_VERSION, state: RESIDENCY_STATES.UNAVAILABLE, validFrom: null, validUntil: null, source: null, observedAt: null, reason: "SOURCE_INVALID" };
     }
@@ -244,16 +247,17 @@ export function createResidencyLifecycle(deps) {
     }
 
     const current = await getResidencyStatus({ tenantId, userId });
+    // A trustworthy UNKNOWN must not be treated as absence. Buying while the source is
+    // unavailable could double-charge an existing resident, so fail closed before any
+    // eligibility decision.
+    if (current.state === RESIDENCY_STATES.UNAVAILABLE) {
+      fail(503, "RESIDENCY_STATUS_UNAVAILABLE", "Residency status is unavailable");
+    }
     if (mode === "RENEWAL" && current.state !== RESIDENCY_STATES.ACTIVE) {
       fail(409, "RESIDENCY_RENEWAL_NOT_ELIGIBLE", "Renewal requires an active residency");
     }
     if (mode === "NEW" && current.state === RESIDENCY_STATES.ACTIVE) {
       fail(409, "RESIDENCY_RENEWAL_REQUIRED", "An active residency can only be renewed");
-    }
-    // A trustworthy UNKNOWN must not be treated as absence. Buying while the source is
-    // unavailable could double-charge an existing resident, so fail closed.
-    if (current.state === RESIDENCY_STATES.UNAVAILABLE) {
-      fail(503, "RESIDENCY_STATUS_UNAVAILABLE", "Residency status is unavailable");
     }
 
     const pending = await store.findUnresolvedOrder(tenantId, userId);

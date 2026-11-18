@@ -421,6 +421,7 @@ test("residency status UNAVAILABLE fails closed instead of offering a purchase",
   assert.equal(status.state, RESIDENCY_STATES.UNAVAILABLE);
   assert.equal(status.reason, "SOURCE_TIMEOUT");
   await expectCode(lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" }), 503, "RESIDENCY_STATUS_UNAVAILABLE");
+  await expectCode(lifecycle.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "RENEWAL" }), 503, "RESIDENCY_STATUS_UNAVAILABLE");
   assert.equal(calls.create, 0);
 });
 
