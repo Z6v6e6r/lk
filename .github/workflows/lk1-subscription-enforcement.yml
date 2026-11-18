@@ -396,6 +396,10 @@ jobs:
         id: check_leave_generations
         run: npm run test:leave-generation-regressions
 
+      - name: Tournament owner admission and checkout integration
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        run: node --test scripts/tests/tournamentAdmission.nodered.test.mjs scripts/tests/groupScheduleCheckout.test.mjs
+
       - name: Rehearse daily guard repair on isolated Mongo replica set
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         run: bash scripts/run_lk1_guard_repair_replica_tests.sh

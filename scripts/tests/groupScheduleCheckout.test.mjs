@@ -268,6 +268,7 @@ test("actual trial transaction preserves the promo and owned visit source throug
     const calls = [];
     const create = evaluate(node.getText(api).replace(/^export /, ""), {
       isSpanishTrainingExercise: () => false, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+      resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
       createVivaPaymentWatcher: async () => ({ close() {} }),
       buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
       buildTournamentVivaTransactionPayload: () => ({}),
@@ -290,5 +291,35 @@ test("actual trial transaction preserves the promo and owned visit source throug
     assert.deepEqual(JSON.parse(calls[0].options.body), {
       exerciseId: training.id, productId: params.product.id, source, promoCode: params.promoCode,
     });
+  }
+});
+
+
+test("tournament checkout uses only the durable CUP route, carries promo, and never falls back after unknown", async () => {
+  const node = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
+  for (const source of ["one-time", "client-one-time", "subscription"]) {
+    const calls = [];
+    const create = evaluate(node.getText(api).replace(/^export /, ""), {
+      isSpanishTrainingExercise: () => false, isTrialGroupTraining: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+      resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "tournament",
+      createVivaPaymentWatcher: () => { throw Error("unbound payment watcher forbidden"); },
+      buildTournamentPaymentReturnUrls: () => ({ successUrl: "https://padlhub.ru/ok", failUrl: "https://padlhub.ru/fail" }),
+      buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
+      pickString: (row, keys) => keys.map(key => row?.[key]).find(Boolean),
+      request: async (url, options) => {
+        calls.push({ url, options });
+        return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+      },
+    });
+    const params = { exerciseId: "tournament", clientId: "actor", exercise: {}, product: product(source), promoCode: "PROMO" };
+    await create(params); await create(params);
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.equal(call.url, "https://cup.example/api/tournaments/tournament/checkout");
+      assert.equal(call.options.retries, 0);
+      assert.equal(call.options.headers["Idempotency-Key"], "tournament:tournament:actor");
+      assert.deepEqual(JSON.parse(call.options.body), { productId: params.product.id, source, promoCode: "PROMO",
+        successUrl: "https://padlhub.ru/ok", failUrl: "https://padlhub.ru/fail" });
+    }
   }
 });
