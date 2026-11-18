@@ -46,6 +46,10 @@ on:
       - scripts/lib/managedSelfLeaveOwnerSource.mjs
       - scripts/patch_nodered_managed_self_leave_owner.mjs
       - scripts/tests/managedSelfLeaveOwner*
+      - scripts/tests/tournamentCheckout.nodered.test.mjs
+      - scripts/nodered_tournament_checkout_nodes/**
+      - scripts/lib/tournamentCheckoutSources.mjs
+      - scripts/prepare_lk1_tournament_checkout_candidate.mjs
       - scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs
       - scripts/tests/fixtures/managed-self-leave-v1-contract.json
       - deploy/rating-worker/**
@@ -89,6 +93,10 @@ on:
       - scripts/lib/managedSelfLeaveOwnerSource.mjs
       - scripts/patch_nodered_managed_self_leave_owner.mjs
       - scripts/tests/managedSelfLeaveOwner*
+      - scripts/tests/tournamentCheckout.nodered.test.mjs
+      - scripts/nodered_tournament_checkout_nodes/**
+      - scripts/lib/tournamentCheckoutSources.mjs
+      - scripts/prepare_lk1_tournament_checkout_candidate.mjs
       - scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs
       - scripts/tests/fixtures/managed-self-leave-v1-contract.json
       - scripts/lib/stationMessage*.mjs
@@ -182,6 +190,8 @@ jobs:
         run: node --test scripts/tests/managedSelfLeaveOwner.test.mjs
           scripts/tests/managedSelfLeaveOwnerPatch.test.mjs
           scripts/tests/managedSelfLeaveOwner.mongo.test.mjs
+      - name: Test shared tournament enrollment with real Mongo write conflicts
+        run: node --test scripts/tests/tournamentCheckout.nodered.test.mjs
       - name: Test station membership lifecycle, receiver and physical Mongo races
         run: >
           node --test scripts/tests/stationMembershipLifetime.test.mjs

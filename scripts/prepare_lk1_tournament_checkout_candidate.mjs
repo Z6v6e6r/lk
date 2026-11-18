@@ -13,7 +13,7 @@ export const CHECKOUT_ROUTE = "/lk/tournament-checkouts";
 const DEPLOYMENT_ID = "lk1-tournament-checkout-v1";
 const sha = value => createHash("sha256").update(value).digest("hex");
 
-function checkoutNodes(z, clientNode) {
+function checkoutNodes(z, clientNode, collection) {
   const id = name => DEPLOYMENT_ID + ":" + name;
   const link = name => [id(name)];
   const node = (name, type, fields, wires = []) => ({
@@ -22,7 +22,7 @@ function checkoutNodes(z, clientNode) {
   const fn = (name, func, wires) => node(name, "function",
     { func, outputs: wires.length, noerr: 0, initialize: "", finalize: "", libs: [] }, wires);
   const mongo = (name, operation) => node(name, "mongodb4", {
-    collection: "lk_tournament_checkout_operations_v1", operation, clientNode,
+    collection, operation, clientNode,
     mode: "collection", output: "toArray", maxTimeMS: "5000", handleDocId: false,
   }, [link("router")]);
   return [
@@ -53,11 +53,20 @@ export function composeTournamentCheckoutCandidate(raw, expectedSourceSha, expec
     || !flow.some(node => node.id === find.clientNode && node.type === "mongodb4-client")) {
     throw new Error("Tournament checkout subscription or Mongo topology drift");
   }
+  const mongoOperations = ["find", "insertOne", "updateOne"];
+  const collection = find.collection;
+  if (typeof collection !== "string" || !collection || mongoOperations.some((operation, i) => {
+    const wire = router.wires[i + 1];
+    const node = flow.find(item => item.id === wire?.[0]);
+    return wire?.length !== 1 || node?.type !== "mongodb4" || node.operation !== operation
+      || node.collection !== collection || node.clientNode !== find.clientNode || node.z !== router.z
+      || node.disabled === true || node.d === true || !node.wires?.some(outputs => outputs.includes(router.id));
+  })) throw new Error("Tournament enrollment must use the same Mongo collection on both paths");
   if (flow.some(node => node.id.startsWith(DEPLOYMENT_ID + ":") || (node.type === "http in" && node.url === CHECKOUT_ROUTE))) {
     throw new Error("Tournament checkout route already installed");
   }
   router.func = patchTournamentSubscriptionGateway(router.func);
-  const added = checkoutNodes(router.z, find.clientNode);
+  const added = checkoutNodes(router.z, find.clientNode, collection);
   flow.push(...added);
   assertFlowArray(flow, "Tournament checkout candidate");
   for (const fn of [router, ...added.filter(node => node.type === "function")]) {

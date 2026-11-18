@@ -34,7 +34,7 @@ function tcPending() {
   return tcResponse(202, { state: "PENDING_CONFIRMATION", code: "TOURNAMENT_CHECKOUT_OUTCOME_UNRESOLVED",
     message: "Результат записи уточняется. Повторная оплата заблокирована." });
 }
-function tcHttp(ctx, step, path, method = "GET", payload) {
+function tcHttp(ctx, step, path, method = "GET", payload, authorization = ctx.auth) {
   ctx.step = step;
   ctx.url = path;
   ctx.method = method;
@@ -44,7 +44,7 @@ function tcHttp(ctx, step, path, method = "GET", payload) {
   msg.followRedirects = false;
   msg.maxRedirects = 0;
   msg.requestTimeout = 10000;
-  msg.headers = { Authorization: ctx.auth, Accept: "application/json",
+  msg.headers = { Authorization: authorization, Accept: "application/json",
     ...(method === "POST" ? { "Content-Type": "application/json" } : {}) };
   msg.payload = payload;
   delete msg.responseUrl;
@@ -65,8 +65,34 @@ function tcMongo(ctx, step, output, payload) {
   delete msg.error;
   return tcEmit(output);
 }
-function tcFind(ctx) {
-  return tcMongo(ctx, "find", 1, [{ _id: ctx.key }, { limit: 2, readPreference: "primary", readConcern: { level: "majority" } }]);
+function tcEnrollmentEffect(ctx, effect) {
+  if (effect.kind === "http") {
+    const token = global.get("vivacrm_access_token");
+    if (typeof token !== "string" || !token.trim()) return tcEnrollmentEffect(ctx, teStep(ctx.enrollment, { error: true }));
+    return tcHttp(ctx, "enrollment", effect.url, "GET", undefined, "Bearer " + token);
+  }
+  if (effect.kind !== "result") {
+    const outputs = { find: 1, insert: 2, update: 3 };
+    return tcMongo(ctx, "enrollment", outputs[effect.kind], effect.payload);
+  }
+  delete ctx.enrollment;
+  switch (effect.outcome) {
+    case "open": return tcHttp(ctx, "exercise", tcExercise(ctx));
+    case "acquired":
+      ctx.claim = effect.row;
+      return tcPost(ctx);
+    case "replay": return tcResponse(200, { transactionId: effect.transactionId });
+    case "closed": return tcReject(409, "TOURNAMENT_PREVIOUS_ATTEMPT_CLOSED",
+      "Предыдущая попытка закрыта. Выберите тариф и запишитесь снова.");
+    case "locked": return tcReject(409, "TOURNAMENT_ENROLLMENT_HELD", "На турнир уже есть запись или незавершённая попытка.");
+    default: return tcPending();
+  }
+}
+function tcBeginEnrollment(ctx, mode) {
+  const result = teBegin(ctx.tenant, ctx.actor, ctx.exerciseId, mode,
+    { mode: "checkout", selection: ctx.selection, productType: ctx.product?.type ?? null, admission: ctx.admission ?? null });
+  ctx.enrollment = result.state;
+  return tcEnrollmentEffect(ctx, result.effect);
 }
 function tcExercise(ctx) {
   return ctx.v1 + "/exercises/" + encodeURIComponent(ctx.exerciseId);
@@ -115,13 +141,12 @@ function tcProduct(ctx, rows) {
 }
 
 const tcCtx = msg._lkTournamentCheckout;
-const tcWriteConcern = { writeConcern: { w: "majority", j: true } };
 if (!tcCtx) {
   const body = msg.payload;
   const auth = msg.req?.headers?.authorization;
   const tenant = env.get("VIVA_TENANT_KEY");
   if (typeof auth !== "string" || !/^Bearer\s+\S+$/i.test(auth)) return tcReject(401, "AUTH_REQUIRED", "Войдите для записи.");
-  if (!tcId(tenant) || !/^[A-Za-z0-9_-]+$/.test(tenant)) {
+  if (tenant !== teTenant) {
     return tcReject(503, "TOURNAMENT_CHECKOUT_NOT_CONFIGURED", "Запись временно недоступна.");
   }
   if (!tcObject(body) || !tcId(body.exerciseId) || !tcId(body.productId)
@@ -152,26 +177,11 @@ if (ctx.step === "profile") {
   ctx.phone = phone;
   if (phone.length === 10) ctx.phone = "7" + phone;
   if (phone.length === 11 && phone[0] === "8") ctx.phone = "7" + phone.slice(1);
-  ctx.key = "tournament-checkout:" + JSON.stringify([ctx.tenant, ctx.actor, ctx.exerciseId]);
   ctx.selection = [ctx.source, ctx.productId, ctx.promoCode];
-  return tcFind(ctx);
+  return tcBeginEnrollment(ctx, "inspect");
 }
-if (ctx.step === "find") {
-  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) return tcPending();
-  const record = msg.payload[0];
-  if (record) {
-    if (record._id !== ctx.key || record.actor !== ctx.actor || record.exerciseId !== ctx.exerciseId
-      || record.tenant !== ctx.tenant || record.version !== 1) return tcPending();
-    if (JSON.stringify(record.selection) !== JSON.stringify(ctx.selection)) {
-      return tcReject(409, "TOURNAMENT_CHECKOUT_SELECTION_CONFLICT", "Для турнира уже есть попытка записи. Проверьте её результат.");
-    }
-    if (record.state !== "CREATED" || !tcId(record.transactionId)) return tcPending();
-    // The recorded ID came from this actor's acknowledged POST, so the widget can use
-    // its standard authenticated polling without requiring an actor echo in Viva status.
-    return tcResponse(200, { transactionId: record.transactionId });
-  }
-  if (ctx.insertUncertain) return tcPending();
-  return tcHttp(ctx, "exercise", tcExercise(ctx));
+if (ctx.step === "enrollment") {
+  return tcEnrollmentEffect(ctx, teStep(ctx.enrollment, msg));
 }
 if (ctx.step === "exercise") {
   const exercise = msg.payload;
@@ -205,15 +215,11 @@ if (ctx.step === "catalog") {
 if (ctx.step === "admission") {
   const decision = readCupTournamentDecision(msg, ctx.actor, ctx.exerciseId);
   if (!decision.admission) return tcReject(decision.status, decision.code, decision.message);
-  return tcMongo(ctx, "insert", 2, [{ _id: ctx.key, version: 1, tenant: ctx.tenant, actor: ctx.actor,
-    exerciseId: ctx.exerciseId, selection: ctx.selection, state: "ATTEMPTING", admission: decision.admission,
-    createdAt: new Date().toISOString() }, tcWriteConcern]);
+  ctx.admission = decision.admission;
+  return tcBeginEnrollment(ctx, "acquire");
 }
-if (ctx.step === "insert") {
-  if (msg.error || msg.payload?.acknowledged !== true || msg.payload.insertedId !== ctx.key) {
-    ctx.insertUncertain = true;
-    return tcFind(ctx);
-  }
+
+function tcPost(ctx) {
   const { successUrl, failUrl } = ctx;
   return tcHttp(ctx, "post", tcTransaction(ctx), "POST", {
     products: [ctx.product], clientPhone: ctx.phone, paymentMethod: "WIDGET",
@@ -230,12 +236,11 @@ if (ctx.step === "post") {
   if (!tcVerified(ctx) || !tcId(transactionId)) return tcPending();
   ctx.transactionId = transactionId;
   ctx.providerResponse = msg.payload;
-  return tcMongo(ctx, "save", 3, [{ _id: ctx.key, version: 1, actor: ctx.actor, state: "ATTEMPTING" },
-    { $set: { state: "CREATED", transactionId, updatedAt: new Date().toISOString() } }, tcWriteConcern]);
+  return tcMongo(ctx, "save", 3, [teFilter(ctx.claim),
+    { $set: { transactionId, updatedAt: new Date().toISOString() } }, teWrite]);
 }
 if (ctx.step === "save") {
-  if (msg.error || msg.payload?.acknowledged !== true || msg.payload.matchedCount !== 1
-    || msg.payload.modifiedCount !== 1) return tcPending();
+  if (msg.error || !teMatch(msg.payload)) return tcPending();
   return tcResponse(200, { ...ctx.providerResponse, transactionId: ctx.transactionId });
 }
 return tcPending();

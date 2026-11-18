@@ -1539,10 +1539,18 @@ export default function TournamentSignupPage({
       });
       if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
       if (result.error || !result.data) {
-        if (result.status === 409 && isSubscriptionBookingReleased(result.error?.raw)) {
-          setError(result.error?.message || "Предыдущая запись отменена. Выберите вариант записи снова.");
+        const raw = result.error?.raw;
+        const previousAttemptClosed = pickString(raw, ["code"]) === "TOURNAMENT_PREVIOUS_ATTEMPT_CLOSED"
+          || (isRecord(raw) && pickString(raw.details, ["code"]) === "TOURNAMENT_PREVIOUS_ATTEMPT_CLOSED");
+        if (result.status === 409 && (previousAttemptClosed || isSubscriptionBookingReleased(raw))) {
+          setError(result.error?.message || "Предыдущая попытка закрыта. Выберите вариант записи снова.");
           setCheckout(null);
           setDiscountQuotes([]);
+          if (previousAttemptClosed) {
+            clearStoredPendingPayment(selectedExerciseId);
+            setRegistration(null);
+            await loadDetail(selectedId);
+          }
           return;
         }
         if (isTournamentCapacityError(result.error)) {
