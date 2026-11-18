@@ -29,8 +29,8 @@ COMMANDS AND RESULTS
     exit 0
 
   vite build (production config; the browser harness used a separate VITE_SERV2 override)
-    351 modules transformed, dist/bundle.js 2,974.22 kB (gzip 1,318.10 kB)
-    sha256 2b4d03b44c1f9f99e88b06d07ce50fc3afacc2d7759e2ace86fb81826c46a9ec
+    351 modules transformed, dist/bundle.js 2,973.98 kB (gzip 1,317.91 kB)
+    sha256 8429636fa66270b874ad545d57d57c3a7d59a17f7c82734183a0acec0075604e
 
 NOT RUN
   No Node-RED import, custom-node install, Mongo index apply, env change,

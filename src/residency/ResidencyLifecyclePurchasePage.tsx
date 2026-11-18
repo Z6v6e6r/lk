@@ -258,9 +258,7 @@ export function ResidencyLifecyclePurchasePage() {
   const modeLabel = decision?.kind === "READY" && decision.mode === "RENEWAL" ? "Продлить резидентство" : "Стать резидентом";
   const paymentUrl = safePaymentUrl(order?.payment.paymentUrl ?? null);
 
-  let rawOldMarker = "ssr";
-  try { if (typeof window !== "undefined") rawOldMarker = String(window.localStorage.getItem("padlhub_zero_checkout_attempt_v1:residency")); } catch { rawOldMarker = "error"; }
-  return <main className="ph-residency-purchase ph-residency-pilot" data-pilot-old-marker={rawOldMarker} data-pilot-old-checkout={String(oldCheckoutPending)}
+  return <main className="ph-residency-purchase ph-residency-pilot" data-pilot-old-checkout={String(oldCheckoutPending)}
     aria-busy={phase === "loading" || phase === "creating"}>
     <article className="ph-residency-card" aria-labelledby="ph-residency-pilot-title">
       <p className="ph-residency-pilot-badge">Персональный пилот · ЛК1</p>
