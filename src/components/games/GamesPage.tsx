@@ -42,6 +42,7 @@ import {
   apiFetchMasterServiceGameModes,
   apiCreatePadelGameRecord,
   apiCreatePadelSplitGamePayment,
+  apiWaitForPublishedSplitGame,
   hasPendingPadelSplitCreate,
   completePadelSplitCreate,
   apiCreatePadelSplitParticipantPayment,
@@ -10970,6 +10971,20 @@ export default function GamesPage({
       && !creationController.signal.aborted && readAuthToken() === creationSession;
     try {
     const paymentResult = await apiCreatePadelSplitGamePayment({
+      // The first server publication cohort is one organizer, without community
+      // fan-out or prefilled rosters. Other creates retain their existing path.
+      publicationIntent: resolvedPaymentMode === "subscription"
+        && !!studioMasterServiceId && resolvedSelectedSubServiceIds.length > 0
+        && participants.length <= 1 && participants.every(player => player.source === "ORGANIZER") && waitlistPlayers.length === 0
+        && !(getCurrentCommunityAutopublishSelectionState().selectedCommunityIds.length > 0)
+        && Object.keys(publicCreatePreciseRatingMetadata).length === 0
+        ? { version: 1, settings: { isPrivate, ratingGame: effectiveRatingGame,
+            minRating: effectiveRatingGame ? (RATING_LABELS[minRating] ?? null) : null,
+            maxRating: effectiveRatingGame ? (RATING_LABELS[maxRating] ?? null) : null },
+            gameTitle: normalizedGameTitle || null, participantComment: normalizedGameParticipantComment || null,
+            joinPrice: normalizedGameJoinPrice || null, studioName: studioName ?? null,
+            roomName: selectedCourtName ?? null, gameFormat: resolvedGameFormat === "singles" ? "singles" : "doubles" }
+        : null,
       date: fromDate,
       fromTime,
       toTime,
@@ -11226,7 +11241,9 @@ export default function GamesPage({
     };
 
     if (!paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0) {
-      const directCreateResult = await apiCreatePadelGameRecord({
+      const directCreateResult = paymentResult.data.serverPublication
+        ? await apiWaitForPublishedSplitGame(paymentResult.data, { actorClientId: clientId })
+        : await apiCreatePadelGameRecord({
         ...payload,
         status: "PAID",
         payment: {
@@ -11238,6 +11255,14 @@ export default function GamesPage({
       if (!isCurrentCreation()) { setLoadingPay(false); return; }
 
       if (!directCreateResult.data?.id) {
+        if (paymentResult.data.serverPublication) {
+          setGameRecordId(paymentResult.data.serverPublication.candidateGameId);
+          setGameRecordStatus("PUBLICATION_PENDING");
+          setGameRecordError(directCreateResult.error?.message ?? "Игра ещё публикуется");
+          setGamePaymentUrl(null);
+          setGamePaid(true);
+          setStep("details");
+        }
         setPayError(directCreateResult.error?.message || "Не удалось создать split-игру");
         setLoadingPay(false);
         return;
@@ -11320,6 +11345,9 @@ export default function GamesPage({
     gameTitleDraft,
     gameParticipantCommentDraft,
     gameJoinPriceDraft,
+    normalizedGameTitle,
+    normalizedGameParticipantComment,
+    normalizedGameJoinPrice,
     effectiveRatingGame,
     minRating,
     maxRating,
@@ -11335,6 +11363,7 @@ export default function GamesPage({
     resolvedGameFormat,
     publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
+    getCurrentCommunityAutopublishSelectionState,
     validateGamePublicationFields,
     prepareGamePayment,
     runPaidGameCommunityMembershipAndPublication,

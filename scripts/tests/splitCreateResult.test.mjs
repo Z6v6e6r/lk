@@ -5,36 +5,7 @@ import { createSplitCreateResultProtocol } from '../lib/splitCreateResult.mjs';
 import { composeSplitCreateResultFlow, splitCreateResultNode, SPLIT_CREATE_RESULT_IDS } from '../lib/splitCreateResultFlow.mjs';
 import { splitCreateTiming, SPLIT_CREATE_TIMING_TARGETS, SPLIT_CREATE_RECEIPT_ANCHOR, SPLIT_CREATE_RECEIPT_FIELD } from '../lib/splitCreateTiming.mjs';
 
-const id = n => `11111111-1111-4111-8111-${String(n).padStart(12, '0')}`;
-const now = Date.parse('2035-01-01T09:00:00Z');
-function fixture(amount = 0) {
-  const binding = { operationId: 'lk-split-create-synthetic', paymentRef: 'synthetic-ref',
-    clientSubscriptionId: id(2), studioId: id(3), roomId: id(4),
-    fromTime: '2035-01-02T07:00:00+03:00', toTime: '2035-01-02T08:00:00+03:00' };
-  const target = { eventId: id(5), category: 'GAME', stationId: id(3), roomId: id(4),
-    startsAt: binding.fromTime, durationMinutes: 60, basePriceMinor: 75000 };
-  const createPayload = { directionId: 4588, typeId: 1613, timeFrom: binding.fromTime,
-    timeTo: binding.toTime, roomId: id(4), maxClientsCount: 4, trainers: [], requirements: '' };
-  const quote = { rule: { planKey: 'synthetic-plan' }, purchaseDate: '2035-01-01', target, createPayload,
-    decision: { eligible: true, subscriptionVisitCount: amount ? 0 : 1, benefit: { finalPriceMinor: amount } } };
-  quote.fingerprint = JSON.stringify({ tenantKey: 'iSkq6G', actorClientId: id(1), clientSubscriptionId: id(2),
-    action: 'CREATE_GAME', rule: quote.rule, purchaseDate: quote.purchaseDate, createPayload,
-    target: { ...target, eventId: `preflight:${binding.operationId}` } });
-  if (amount) Object.assign(quote, { transactionId: id(7), transactionAttemptedAt: new Date(now).toISOString(),
-    transactionIntent: { bookingId: id(6), actorClientId: id(1), studioId: id(3), chargeMinor: amount },
-    checkout: { transactionId: id(7), toPayMinor: amount, paymentUrl: 'https://payments.example.test/synthetic' } });
-  const op = { _id: `lk1-product:${JSON.stringify(['iSkq6G', id(1), binding.operationId])}`,
-    tenantKey: 'iSkq6G', actorClientId: id(1), operationId: binding.operationId, clientSubscriptionId: id(2),
-    category: 'open_game', state: 'CONFIRMED', exerciseId: id(5), bookingId: id(6),
-    createReceipt: { schemaVersion: 1, paymentRef: binding.paymentRef, deadlineAt: new Date(now + 25 * 60000).toISOString(),
-      assembleDeadlineAt: new Date(Date.parse(binding.fromTime) - 24 * 60 * 60000).toISOString() },
-    confirmedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), lk1: quote };
-  const exercise = { id: id(5), studio: { id: id(3) }, room: { id: id(4) },
-    timeFrom: binding.fromTime, timeTo: binding.toTime, canceled: false };
-  const booking = { id: id(6), client: { id: id(1), phone: 'PRIVATE_PHONE' }, isCancelled: false,
-    paymentType: amount ? 'ON_PLACE' : 'SUBSCRIPTION', ...(amount ? {} : { clientSubscriptionId: id(2) }), spot: 1 };
-  return { binding, op, exercise, booking };
-}
+import { id, now, fixture } from './fixtures/splitCreateResultFixture.mjs';
 function run(f, mutate = () => {}) {
   const p = createSplitCreateResultProtocol(), effects = [];
   let next = p.begin({ operationId: f.binding.operationId }, now);
@@ -51,6 +22,25 @@ function run(f, mutate = () => {}) {
   }
   assert.fail('unbounded protocol');
 }
+test('lost first response: authenticated operation-only GET retains publication ownership', () => {
+  for (const state of ['PENDING', 'PUBLISHED']) {
+    const f = fixture(), candidateGameId = 'gsp_' + Buffer.from(JSON.stringify(['iSkq6G', f.op.exerciseId])).toString('base64url');
+    f.op.lk1.publication = { version: 1, state, operationId: f.op.operationId,
+      tenantKey: f.op.tenantKey, actorClientId: f.op.actorClientId,
+      createPayloadJson: JSON.stringify(f.op.lk1.createPayload), gameId: state === 'PUBLISHED' ? candidateGameId : null };
+    const r = run(f);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.serverPublication, { version: 1, state, operationId: f.op.operationId,
+      candidateGameId, gameId: state === 'PUBLISHED' ? candidateGameId : null });
+    assert.doesNotMatch(JSON.stringify(r.body), /actorClientId|createPayloadJson/);
+    for (const mutate of [p => p.state = 'BLOCKED', p => p.actorClientId = id(9),
+      p => p.operationId = 'foreign', p => p.tenantKey = 'foreign', p => p.version = 2,
+      p => p.createPayloadJson = '{}', p => { p.state = 'PUBLISHED'; p.gameId = 'foreign'; }]) {
+      const bad = structuredClone(f); mutate(bad.op.lk1.publication);
+      assert.equal(run(bad).status, 202); // Never omit the marker and fall back to legacy creation.
+    }
+  }
+});
 test('late confirmed free create: only profile/exercise/bookings GETs and majority reads, whitelisted result', () => {
   const r = run(fixture());
   assert.equal(r.status, 200);

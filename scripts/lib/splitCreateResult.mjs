@@ -93,9 +93,27 @@ export function createSplitCreateResultProtocol() {
         || JSON.stringify(op.createReceipt) !== JSON.stringify(s.op.createReceipt)) return pending(s, 'SPLIT_CREATE_RESULT_CHANGED');
       const amount = op.lk1.decision.benefit.finalPriceMinor;
       const checkout = op.lk1.checkout;
+      // Publication ownership must survive a completely lost CREATE response.
+      // A malformed/blocked receipt must never downgrade to browser publication.
+      let serverPublication = null;
+      const publication = op.lk1.publication;
+      if (publication != null) {
+        const candidateGameId = 'gsp_' + Buffer.from(JSON.stringify([tenant, op.exerciseId]), 'utf8').toString('base64url');
+        if (!record(publication) || publication.version !== 1
+          || !['PENDING', 'PUBLISHED'].includes(publication.state)
+          || publication.actorClientId !== op.actorClientId || publication.tenantKey !== tenant
+          || publication.operationId !== op.operationId || amount !== 0
+          || op.lk1.decision.subscriptionVisitCount !== 1
+          || publication.createPayloadJson !== JSON.stringify(op.lk1.createPayload)
+          || (publication.state === 'PUBLISHED' && publication.gameId !== candidateGameId))
+          return pending(s, 'SPLIT_CREATE_PUBLICATION_UNAVAILABLE');
+        serverPublication = { version: 1, state: publication.state, operationId: op.operationId,
+          candidateGameId, gameId: publication.state === 'PUBLISHED' ? candidateGameId : null };
+      }
       // Whitelist only. No actor data, quote, credentials, raw provider row or headers.
       return { state: null, effect: { kind: 'reply', status: 200, body: {
         schemaVersion: 1, recovery: 'SPLIT_CREATE_RESULT_V1', state: 'CONFIRMED', mode: 'create',
+        serverPublication,
         operationId: s.binding.operationId, paymentRef: op.createReceipt?.paymentRef || null,
         referenceSource: op.createReceipt ? 'STORED_RECEIPT' : 'LEGACY_OPERATION',
         clientSubscriptionId: s.binding.clientSubscriptionId, studioId: s.binding.studioId, roomId: s.binding.roomId,

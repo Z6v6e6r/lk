@@ -400,6 +400,10 @@ jobs:
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         run: bash scripts/run_lk1_guard_repair_replica_tests.sh
 
+      - name: Rehearse split publication and legacy races on isolated Mongo
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        run: bash scripts/run_split_publication_replica_tests.sh
+
       - name: Run critical subscription regression matrix
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:
@@ -485,6 +489,8 @@ jobs:
           scripts/tests/splitOrdinaryPriceHook.test.mjs
           scripts/tests/splitJoinOrdinaryPriceSource.test.mjs
           scripts/tests/splitPayment.apiClient.test.ts
+          scripts/tests/splitGamePublication.test.mjs
+          scripts/tests/splitPublicationLegacyGuard.test.mjs
           scripts/tests/splitCreateRecovery.test.ts
           scripts/tests/splitCreateResult.test.mjs
           scripts/tests/gameCreateButtonPreparation.test.mjs

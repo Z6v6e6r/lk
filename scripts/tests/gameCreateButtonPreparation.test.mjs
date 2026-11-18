@@ -70,6 +70,8 @@ function harness(stage) {
     buildGameAllRelatedPhones: () => [], moscowBookingEndIso: () => '2030-01-01T21:00:00+03:00',
     effectiveRatingGame: false, isPrivate: false, gameTitleDraft: 'Synthetic game', gameParticipantCommentDraft: 'Synthetic comment',
     gameJoinPriceDraft: '', publicCreatePreciseRatingMetadata: {}, buildCommunityAutopublishMetadata: () => ({}),
+    normalizedGameTitle: 'Synthetic game', normalizedGameParticipantComment: 'Synthetic comment', normalizedGameJoinPrice: '',
+    getCurrentCommunityAutopublishSelectionState: () => ({ selectedCommunityIds: [] }),
     buildCommunityAutopublishMetadataFields: () => ({}), buildGameOptionalMetadataFields: value => value,
     completePadelSplitCreate: id => state.completed.push(id),
     apiCreatePadelGameRecord: async payload => { state.cardPayloads.push(payload); return { data: { id: 'pay_original', status: 'PAID' } }; },
@@ -219,6 +221,28 @@ test('late confirmed result completes one LK card with original paymentRef and d
   assert.deepEqual(h.state.completed, ['original-operation']);
   assert.equal(h.state.step, 'details');
   assert.equal(h.state.error, null);
+});
+
+for (const ready of [false, true]) test(`recovered server publication ${ready ? 'ready' : 'pending'} never invokes legacy save`, async () => {
+  const h = harness('slot'); let polls = 0;
+  h.context.apiCreatePadelSplitGamePayment = async (params, options) => {
+    h.state.writes++; options.onRecovery();
+    assert.equal(params.publicationIntent.settings.isPrivate, false);
+    assert.equal(params.publicationIntent.gameTitle, 'Synthetic game');
+    return { data: { paymentRef: 'original-ref', operationId: 'original-operation', exerciseId: 'exercise', bookingId: 'booking',
+      toPay: 0, raw: { recovery: 'SPLIT_CREATE_RESULT_V1' }, serverPublication: { candidateGameId: 'gsp_fixture' } } };
+  };
+  h.context.apiWaitForPublishedSplitGame = async () => {
+    polls++;
+    return ready ? { data: { id: 'gsp_fixture', status: 'PAID' } }
+      : { data: null, status: 202, error: { message: 'Игра ещё публикуется' } };
+  };
+  const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await pending;
+  assert.equal(h.state.writes, 1);
+  assert.equal(polls, 1);
+  assert.equal(h.state.cardPayloads.length, 0);
+  assert.deepEqual(h.state.completed, ready ? ['original-operation'] : []);
+  assert.equal(h.state.step, 'details');
 });
 
 test('auth change during LK card persistence prevents publication, completion and navigation', async () => {

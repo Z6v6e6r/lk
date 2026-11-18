@@ -7,6 +7,10 @@ import { SplitCreateAttempts, confirmedSplitCreateResult, recoverSplitCreateResu
   isAmbiguousSplitCreate, pendingSplitCreateResult, waitForSplitCreateResult } from '../../src/utils/splitCreateRecovery.ts';
 import { moscowBookingEndIso } from '../../src/utils/bookingEndTime.ts';
 import { hasDeterministicSubscriptionDecision } from '../../src/utils/subscriptionDecisionContract.ts';
+import { createSplitCreateResultProtocol } from '../lib/splitCreateResult.mjs';
+import { fixture as resultFixture, now as fixtureNow } from './fixtures/splitCreateResultFixture.mjs';
+import { makePublicationFixture } from './fixtures/splitGamePublicationFixture.mjs';
+import { publicationPlan, renderPublication } from '../lib/splitGamePublication.mjs';
 
 const id = (n: number) => `11111111-1111-4111-8111-${String(n).padStart(12, '0')}`;
 const binding = { operationId: 'lk-split-create-synthetic', paymentRef: 'original-ref',
@@ -105,6 +109,56 @@ test('actual CREATE adapter: one original POST, GET-only late recovery, same pay
     assert.deepEqual([...url.searchParams.keys()], ['operationId']);
     assert.equal(url.searchParams.get('operationId'), binding.operationId);
   }
+});
+
+test('lost entire CREATE response and reload recover server-owned card via actual GET protocol only', async () => {
+  const h = harness(), storageData = new Map<string, string>();
+  const storage = { getItem: (key: string) => storageData.get(key) ?? null,
+    setItem: (key: string, value: string) => { storageData.set(key, value); } };
+  h.context.splitCreateAttempts = new SplitCreateAttempts(storage);
+  h.context.request = async (path, options) => { h.calls.push({ path, method: options.method }); return pending(); };
+  assert.equal((await h.run()).status, 202);
+  assert.equal(h.calls.filter(c => c.method === 'POST').length, 1);
+  // Destroy the in-memory journal. The response/descriptor was never received.
+  h.context.splitCreateAttempts = new SplitCreateAttempts(storage);
+  const f = resultFixture();
+  f.op.upstreamBookingId = f.op.bookingId;
+  f.op.lk1.publication = { ...makePublicationFixture().lk1.publication,
+    actorClientId: f.op.actorClientId, tenantKey: f.op.tenantKey, operationId: f.op.operationId,
+    createPayloadJson: JSON.stringify(f.op.lk1.createPayload) };
+  const rawGame = renderPublication(publicationPlan(f.op));
+  h.context.request = async (path, options) => {
+    h.calls.push({ path, method: options.method });
+    const protocol = createSplitCreateResultProtocol();
+    const url = new URL(path, 'https://example.test');
+    let next = protocol.begin(Object.fromEntries(url.searchParams), fixtureNow);
+    for (let i = 0; i < 12; i++) {
+      if (next.effect.kind === 'reply') return { status: next.effect.status, data: next.effect.body, error: null };
+      const stage = next.state.stage;
+      const body = stage === 'profile' ? { id: f.op.actorClientId }
+        : stage.startsWith('operation') ? [structuredClone(f.op)] : stage === 'exercise' ? f.exercise
+          : { content: [f.booking], number: 0, totalElements: 1, last: true };
+      next = protocol.step(next.state, { status: 200, body }, fixtureNow + i);
+    }
+    throw Error('unbounded reader');
+  };
+  const recovered = await h.run({}, { ...h.params, paymentRef: 'new-tab-ref' });
+  assert.equal(recovered.status, 200);
+  assert.equal(h.calls.filter(c => c.method === 'POST').length, 1);
+  const data = recovered.data as Record<string, any>;
+  assert.equal(data.serverPublication.candidateGameId, rawGame.id);
+  assert.equal(data.serverPublication.state, 'PENDING');
+  // Execute the real publication poll against the canonical rendered record.
+  Object.assign(h.context, { apiFetchPadelGameRecord: async () => ({ data: rawGame, status: 200, error: null }) });
+  const poll = ast.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'apiWaitForPublishedSplitGame')!;
+  vm.runInContext(ts.transpileModule(poll.getText(ast).replace(/^export /, ''),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, h.context);
+  const ready = await (h.context as any).apiWaitForPublishedSplitGame(data, { actorClientId: f.op.actorClientId, attempts: 1 });
+  assert.equal(ready.data.id, rawGame.id);
+  assert.equal(ready.data.settings.isPrivate, true);
+  // The UI must choose GET polling before its legacy save branch.
+  const ui = fs.readFileSync('src/components/games/GamesPage.tsx', 'utf8');
+  assert.match(ui, /paymentResult\.data\.serverPublication\s*\? await apiWaitForPublishedSplitGame[\s\S]*?: await apiCreatePadelGameRecord/);
 });
 
 test('reload preserves original opaque refs; quota failure cannot replace memory with stale stored refs', () => {
