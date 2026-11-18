@@ -1,3 +1,4 @@
+import { isChildTournamentExercise } from "../../src/utils/tournamentSubscriptionDiscount.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -52,10 +53,10 @@ const checkout = (overrides = {}) => ({
 });
 const getErrorMessage = (error, fallback) => error?.message || fallback;
 
-function checkoutReader(name, failed) {
+function checkoutReader(name, failed, extraExercise = {}) {
   const calls = [];
   const exercise = { id: training.id, availableClientSubscriptions: [product("client-subscription", "owned-pack")],
-    availableClientOneTimes: [product("client-one-time", "owned-visit")] };
+    availableClientOneTimes: [product("client-one-time", "owned-visit")], ...extraExercise };
   const dependencies = {
     TENANT_KEY: "fixture",
     LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED: false,
@@ -71,7 +72,7 @@ function checkoutReader(name, failed) {
     isRecord: value => Boolean(value && typeof value === "object"),
     pickNestedRecord: () => null,
     pickString: () => null,
-    resolveTournamentCustomPricing: () => null,
+    resolveTournamentCustomPricing: () => null, isChildTournamentExercise,
     pickFirstArray: (value, keys) => value[keys[0]] || [],
     normalizeVivaProducts: (items, source) => items.map(item => ({ ...item, source })),
     filterClientSubscriptionsForExercise: items => items,
@@ -100,6 +101,20 @@ test("partial and total tariff failures remain visible without dropping owned vi
       }
       assert.ok(calls.every(call => call.options.method === "GET"));
     }
+  }
+});
+
+test("child tournament checkout preserves the paid tariff and omits subscription offers", async () => {
+  for (const name of ["apiFetchTournamentVivaCheckout", "apiFetchTournamentVivaPublicCheckout"]) {
+    const { read, calls } = checkoutReader(name, ["subscriptions"], { direction: { id: 7108 } });
+    const result = await read(training.id);
+    assert.equal(result.error, null);
+    assert.equal(result.data.oneTimes.length, 1);
+    assert.equal(result.data.oneTimes[0].cost, 150000);
+    assert.deepEqual(result.data.clientSubscriptions, []);
+    assert.deepEqual(result.data.subscriptions, []);
+    assert.deepEqual(result.data.tariffErrors, []);
+    assert.equal(calls.some(call => call.url.includes("/products/subscriptions?")), false);
   }
 });
 
@@ -320,7 +335,7 @@ function subscriptionCheckoutReader(availableClientSubscriptions, exerciseOverri
       const data = url.endsWith("/profile") ? profile : url.includes("/exercises/") ? exercise : [];
       return { data, error: null, status: 200 };
     },
-    resolveTournamentCustomPricing: () => null,
+    resolveTournamentCustomPricing: () => null, isChildTournamentExercise,
     resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
     resolveClientSubscriptionProductNames: async items => items.map(item => ({
       ...item, name: item.raw.product?.name || item.name,

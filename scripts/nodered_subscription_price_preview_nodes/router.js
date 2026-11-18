@@ -263,7 +263,7 @@ if (ctx.step === 'groupExercise') {
   if (['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) {
     return targetUnresolved('target_lifecycle');
   }
-  if (canonical.isSpanishTrainingExercise(exercise)) {
+  if (canonical.isSpanishTrainingExercise(exercise) || previewDirectionId(canonical, exercise) === 7108) {
     ctx.quotes = [];
     ctx.done = true;
     return out(4);
