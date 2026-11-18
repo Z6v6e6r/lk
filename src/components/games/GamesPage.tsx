@@ -8589,6 +8589,9 @@ export default function GamesPage({
     && !isDetailsSplitPaymentGame
     && (detailsHasFreeSlots || isDetailsWaitlistEnabled),
   );
+  // An unresolved one-time join attempt for this game: its exact paymentRef is held
+  // until the game record proves it paid or server-terminal. No timer releases it.
+  const heldSplitJoinPaymentRef = getHeldSplitJoinPaymentRef(gameRecordId);
   const canCurrentUserCheckSplitSubscriptionsInDetails = Boolean(
     gameRecordId
     && !isReadOnlySyntheticGame
@@ -8600,9 +8603,6 @@ export default function GamesPage({
     && !hasCurrentUserActiveSplitPayment
     && detailsHasFreeSlots
   );
-  // An unresolved one-time join attempt for this game: its exact paymentRef is held
-  // until the game record proves it paid or server-terminal. No timer releases it.
-  const heldSplitJoinPaymentRef = getHeldSplitJoinPaymentRef(gameRecordId);
   const canCurrentUserJoinSplitGameInDetails = canCurrentUserCheckSplitSubscriptionsInDetails
     && !leavePendingMessage
     && !updatingGameRoster

@@ -25,7 +25,7 @@ const formatSplitSubscriptionValidityLabel = () => 'synthetic expiry';
 const SPLIT_OPEN_GAME_EXERCISE_TYPE_ID = 1613, SPLIT_OPEN_GAME_DIRECTION_ID = 4588;
 const detailsSplitShareAmount = null;
 export function useFixture(props) {
- const {activeGameRecord,profileId,profilePhone,updatingGameMeta,updatingGameRoster,joiningSplitPayment,leavePendingMessage=null} = props;
+ const {activeGameRecord,profileId,profilePhone,updatingGameMeta,updatingGameRoster,joiningSplitPayment,leavePendingMessage=null,heldSplitJoinPaymentRef=null} = props;
  const gameRecordId=activeGameRecord.id, detailsDateKey=activeGameRecord.booking.date;
  const detailsDurationMinutes=activeGameRecord.booking.durationMinutes, detailsSplitPaymentMetadata=activeGameRecord.metadata.splitPayment;
  const isReadOnlySyntheticGame=false,isDetailsSplitPaymentGame=true,isCurrentUserOrganizerByDetails=false;
@@ -162,4 +162,14 @@ test('pending retry stays bound to the game it was raised for',()=>{
  const gateStart=source.lastIndexOf('{detailsSplitJoinPending',renderStart);
  assert.ok(gateStart>0&&gateStart<renderStart);
  assert.match(source.slice(gateStart,renderStart),/detailsSplitJoinPending\.gameId === gameRecordId/);
+});
+
+test("an unresolved one-time join attempt disables joining without hiding or refetching subscriptions", async () => {
+ const h=harness();await h.resolve();const before=h.subscriptions.length;
+ assert.equal(h.result.canJoin,true);
+ h.props={...h.props,heldSplitJoinPaymentRef:'held-ref'};h.render();await h.flush();
+ assert.equal(h.result.canJoin,false);
+ assert.equal(h.result.options.length,2);
+ assert.equal(h.subscriptions.length,before);
+ h.unmount();
 });
