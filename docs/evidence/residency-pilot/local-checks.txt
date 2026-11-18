@@ -35,4 +35,3 @@ COMMANDS AND RESULTS
 NOT RUN
   No Node-RED import, custom-node install, Mongo index apply, env change,
   frontend publication, real Viva transaction/payment/refund or CUP activation.
-

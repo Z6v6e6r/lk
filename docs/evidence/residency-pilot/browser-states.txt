@@ -18,4 +18,3 @@ Rendered states (visible text excerpts)
   disabled        "Создание новых заказов приостановлено. Уже начатые заказы можно проверить."
   unknown create  "Заказ: результат оплаты неизвестен" + recovery buttons
   double click    one POST /lk/residency/orders (createPosts=1)
-

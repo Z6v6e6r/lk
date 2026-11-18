@@ -417,4 +417,3 @@ export function createResidencyLifecycleClient(transport: LifecycleTransport) {
     },
   };
 }
-

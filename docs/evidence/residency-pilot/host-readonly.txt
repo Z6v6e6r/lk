@@ -20,4 +20,3 @@ Published frontend
   bundle.js bytes 2,946,687
   old bundle paths include /lk/residency/passes and summer-subscription routes;
   no residency/orders path and no new refusal codes
-
