@@ -25,6 +25,15 @@ export function patchTournamentAdmissionSource(source) {
   for (const [name, continuation] of [['preparePreaccept', 'preaccept'], ['prepareBookingCreate', 'booking'], ['prepareManagedEntitlementReserve', 'reserve']]) {
     source = once(source, `const ${name} = (ctx) => {`, `const ${name} = (ctx) => {\n  const admission = tournamentAdmissionGate(ctx, "${continuation}");\n  if (admission) return admission;`);
   }
+  source = once(source, '      state: isCreatePreflight ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",',
+    '      state: isCreatePreflight ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",\n'
+    + '      ...(ctx.category === "tournament" && ctx.tournamentAdmission ? { tournamentAdmission: ctx.tournamentAdmission, tournamentProviderPhase: "PRE_DISPATCH" } : {}),');
+  source = once(source, 'const prepareFailedUpdate = (ctx, statusCode, message, rawCode) => {',
+    'const prepareFailedUpdate = (ctx, statusCode, message, rawCode) => {\n'
+    + '  const abort = tournamentAdmissionAbortFailure(ctx, statusCode, message, rawCode); if (abort) return abort;');
+  source = once(source, '  const adminVersion = ctx.caller === "split" ? "v1" : "v2";',
+    '  const dispatch = tournamentAdmissionDispatch(ctx); if (dispatch) return dispatch;\n'
+    + '  const adminVersion = ctx.caller === "split" ? "v1" : "v2";');
   if (source.includes('const lk1DailyVisitAcquire = (ctx) => {')) {
     source = once(source, 'const lk1DailyVisitAcquire = (ctx) => {',
       'const lk1DailyVisitAcquire = (ctx) => {\n  const admission = tournamentAdmissionGate(ctx, "preaccept");\n  if (admission) return admission;');

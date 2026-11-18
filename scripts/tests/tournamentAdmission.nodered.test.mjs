@@ -115,3 +115,43 @@ test('LK1 completion preserves the existing payment safety check before telling 
     }
   }
 });
+
+function admitted() {
+  const ctx = context(); step(ctx, { acknowledged: true, insertedId: 'op-key' });
+  const grant = { schemaVersion: 1, state: 'ADMITTED', operationId: 'owner-op', requestOperationId: ctx.operationId,
+    actorClientId: ctx.actorClientId, exerciseId: ctx.exerciseId, clientSubscriptionId: ctx.clientSubscriptionId };
+  const { msg } = response(ctx, 200, grant);
+  return { ctx, grant, persisted: { _id: ctx.operationKey, ...context(), ...msg.payload[1].$set } };
+}
+test('ADMITTED preaccept persists explicit predispatch phase; recheck refusal is fenced without mistaking upstreamAttemptedAt for POST', () => {
+  const { ctx, grant, persisted } = admitted();
+  assert.equal(persisted.tournamentProviderPhase, 'PRE_DISPATCH'); assert.ok(persisted.upstreamAttemptedAt);
+  assert.deepEqual(persisted.tournamentAdmission, grant);
+  ctx.step = 'exercise_recheck';
+  const { msg } = step(ctx, { id: 'exercise' }, { statusCode: 200 });
+  const [filter, update, options] = msg.payload;
+  assert.equal(ctx.step, 'tournament_abort_saved');
+  assert.equal(filter.tournamentProviderPhase, 'PRE_DISPATCH'); assert.equal(filter.upstreamAttemptedAt, undefined);
+  assert.equal(filter.operationId, 'op-id'); assert.deepEqual(filter.tournamentAdmission, grant);
+  assert.deepEqual(filter.managedEntitlementOperationId, { $exists: false });
+  assert.equal(update.$set.tournamentAbort.proof, 'PRE_DISPATCH_REJECTED_V1');
+  assert.equal(options.writeConcern.w, 'majority');
+  step(ctx, null, { error: Error('ACK lost') }); assert.equal(ctx.step, 'tournament_abort_read');
+});
+test('CUP abort timeout never acknowledges compensation or releases guard', () => {
+  const { ctx, grant } = admitted(); ctx.step = 'tournament_abort'; ctx.tournamentAdmission = grant;
+  const { msg } = step(ctx, null, { error: Error('timeout') });
+  assert.equal(msg.statusCode, 202); assert.equal(ctx.step, 'tournament_abort');
+});
+test('lost dispatch ACK cannot issue the booking POST', () => {
+  const { ctx } = admitted(); ctx.step = 'tournament_dispatch_saved';
+  const { msg } = step(ctx, { acknowledged: true, matchedCount: 1 }, { error: Error('ACK lost') });
+  assert.equal(msg.statusCode, 202); assert.notEqual(ctx.step, 'booking_create');
+  assert.equal(ctx.tournamentDispatchGranted, undefined);
+});
+test('acknowledged dispatch emits one provider POST through the actual booking builder', () => {
+  const { ctx } = admitted(); ctx.step = 'tournament_dispatch_saved';
+  const msg = { _subscriptionBooking: ctx, payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null } };
+  run(msg, env, { get: key => key === 'vivacrm_access_token' ? 'synthetic-token' : undefined }, { warn() {}, error() {} });
+  assert.equal(ctx.step, 'booking_create'); assert.equal(msg.method, 'POST'); assert.match(msg.url, /\/exercises\/exercise\/bookings$/);
+});

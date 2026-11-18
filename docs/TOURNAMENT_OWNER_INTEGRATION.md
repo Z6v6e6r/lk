@@ -73,3 +73,34 @@ admission. Grant binding: tenant/exercise/actor/full rule/operation/capacity hol
 lookup by original key. No evidence of such a Viva restriction is available from these repositories.
 Use a separately authorized provider fixture to prove denied direct writes and one allowed single,
 composite/promo booking after timeout/restart. Keep P0 open until that evidence exists.
+
+## Definitive refusal after admission (2026-11-18)
+
+The exact `exercise_recheck` refusal `SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE`
+now records a majority-acknowledged `FAILED` operation with `tournamentAbort.proof =
+PRE_DISPATCH_REJECTED_V1`. Preaccept persists the complete CUP grant and the new
+`tournamentProviderPhase: PRE_DISPATCH`. The historical `upstreamAttemptedAt` remains
+compatible and is **not** evidence that a provider POST happened. Immediately before the
+actual booking POST, an exact CAS changes this phase to `DISPATCHING`; a lost CAS ACK
+permits neither a POST nor an abort. Abort and dispatch cannot both win.
+
+The durable refusal resumes through the existing operation lookup after restart/retry,
+sends authenticated `POST /tournaments/:exercise/subscription-admission/abort`, and binds
+ownerOperationId, original request operation, subscription, actor, exercise and tenant.
+CUP releases only that original hold. A lost HTTP or Mongo ACK repeats the same abort.
+The response is verified before recording `acknowledged`; the original daily guard is
+then released by exact owner CAS. `cleanupComplete` is recorded only after guard readback.
+A new request cannot reclaim the old operation between ACK and guard cleanup. Recovery
+uses the persisted service date even if the exercise has moved. This is request-driven
+recovery, not a new background scheduler. Legacy rows without this proof are not aborted.
+
+This compensation is intentionally scoped to the confirmed exercise-recheck refusal.
+Other HUB quote/policy refusals and unknown provider outcomes retain their existing recovery
+path; no broad timeout cleanup is added. A `COMPLETED` abort response never triggers LK1
+cleanup. CUP atomically retains the participant when completion won; an aborted operation
+cannot later acknowledge completion.
+
+Compatibility: add the CUP abort endpoint before enabling this LK1 candidate. Do not
+roll back to a router that can reclaim FAILED rows while new abort/cleanup records remain
+unfinished. No flow import or active-runtime validation was performed. Local Mongo tests
+use only random disposable namespaces and synthetic provider responses.
