@@ -14567,6 +14567,24 @@ export default function GamesPage({
 
       setDetailsSplitJoinPending(null);
 
+      if (paymentResult.data.checkoutStored) {
+        const checkout = paymentResult.data;
+        if (!checkout.paymentUrl || !checkout.paymentRef || !checkout.bookingId) {
+          setGameRosterError("Не удалось открыть сохранённую оплату. Обновите карточку игры.");
+          return;
+        }
+        enqueuePendingPaymentSync(checkout.paymentRef, [checkout.bookingId], "details_split_join_pay_click");
+        if (!navigateToExternalUrl(checkout.paymentUrl)) {
+          const refreshed = await apiFetchPadelGameRecord(gameRecordId, { cache: "no-store" });
+          if (refreshed.data) {
+            setActiveGameRecordStore(refreshed.data);
+            upsertGameRecordInStores(refreshed.data, { communityMode: "if_exists" });
+          }
+          setGameRosterError("Не удалось открыть страницу оплаты. Ссылка доступна в карточке игры.");
+        }
+        return;
+      }
+
       const subscriptionDecisionNotice = preferredPaymentMode === "subscription"
         ? formatSubscriptionDecisionPresentation(resolveSubscriptionDecisionPresentation({
             action: "JOIN_GAME",
