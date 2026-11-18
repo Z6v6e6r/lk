@@ -206,7 +206,7 @@ export const parseBookedOperationV3ReadOutcome = (value) => {
     !digest.test(value.requestSha256) ||
     !['PENDING', 'UNKNOWN', 'CONFIRMED', 'CANCELLED'].includes(value.status) ||
     (value.asOf !== null && !instant(value.asOf)) ||
-    !exact(value.payment, 'state,toPayMinor,paidMinor,checkoutUrl') ||
+    !exact(value.payment, 'state,toPayMinor,paidMinor,checkoutUrl,expiresAt') ||
     !exactOptional(value.booking, 'state', 'bookingRef') ||
     !exactOptional(value.visit, 'state', 'usageRef') ||
     (value.reason !== null && !id.test(value.reason)) ||
@@ -214,6 +214,7 @@ export const parseBookedOperationV3ReadOutcome = (value) => {
     !integer(value.payment.toPayMinor, 0, Number.MAX_SAFE_INTEGER) ||
     !integer(value.payment.paidMinor, 0, Number.MAX_SAFE_INTEGER) ||
     (value.payment.checkoutUrl !== null && !https(value.payment.checkoutUrl)) ||
+    (value.payment.expiresAt !== null && !instant(value.payment.expiresAt)) ||
     !['NONE', 'PENDING', 'CONFIRMED', 'CANCELLED', 'UNKNOWN'].includes(value.booking.state) ||
     (value.booking.bookingRef !== undefined && !id.test(value.booking.bookingRef)) ||
     !['NOT_CONSUMED', 'CONSUMED', 'RETURNED', 'NOT_APPLICABLE', 'UNKNOWN'].includes(
