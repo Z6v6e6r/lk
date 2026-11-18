@@ -783,6 +783,7 @@ function runExerciseHook(options = {}) {
     isTopokratyExercise,
     isTopokratyClubPack,
     resolveCategory: () => options.category ?? 'open_game',
+    exerciseDirectionId: value => Number(value.direction?.id),
     findOwnedSubscriptions: () => options.selectedOwned ?? [],
     lk1Config: () => options.rule ?? { matched: false },
     lk1ReadPlanRules: () => options.planRules ?? null,

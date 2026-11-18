@@ -196,7 +196,7 @@ test('a refused event tariff names the sub-condition and the observed shape', ()
 
 test('the response carries the refusal detail only when the router recorded one', () => {
   const runFinal = (ctx) => {
-    const sandbox = { msg: { _subscriptionPricePreview: ctx }, JSON, Date, Number, String, Boolean, Object };
+    const sandbox = { msg: { _subscriptionPricePreview: ctx }, JSON, Date: { now: () => 123 }, Number, String, Boolean, Object };
     return vm.runInNewContext(`(function(){${finalSource}\n})()`, sandbox);
   };
   const withDetail = runFinal({ done: true, error: 'LK1_EVENT_TARIFF_UNVERIFIED', statusCode: 503,
@@ -206,7 +206,7 @@ test('the response carries the refusal detail only when the router recorded one'
   const plain = runFinal({ done: true, error: 'PRICE_PREVIEW_DECISION_UNRESOLVED', statusCode: 503 });
   assert.equal(JSON.stringify(plain.payload), JSON.stringify({ error: { code: 'PRICE_PREVIEW_DECISION_UNRESOLVED' } }));
   const quotes = runFinal({ done: true, statusCode: 200, quotes: [{ subscriptionId: SUB }] });
-  assert.equal(JSON.stringify(quotes.payload), JSON.stringify({ quotes: [{ subscriptionId: SUB }] }));
+  assert.equal(JSON.stringify(quotes.payload), JSON.stringify({ quotes: [{ subscriptionId: SUB }], serverTimeMs: 123 }));
 });
 
 test('every prepared event request drops the previous response provenance', () => {

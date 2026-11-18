@@ -68,7 +68,7 @@ import {
 import { pollSubscriptionBookingConfirmation } from "./subscriptionBookingConfirmation";
 
 import { isGroupSubscriptionDiscountQuote, type GroupSubscriptionQuote } from "./groupSubscriptionDiscount";
-import { isTournamentSubscriptionDiscountQuote, type TournamentSubscriptionDiscountQuote } from "./tournamentSubscriptionDiscount";
+import { isChildTournamentExercise, isTournamentSubscriptionDiscountQuote, type TournamentSubscriptionDiscountQuote } from "./tournamentSubscriptionDiscount";
 
 // B-owned rollout interlock, not a runtime capability signal. Keep DEV/PROD
 // closed until compatible deployed HUB behavior is proven and frontend
@@ -2512,7 +2512,10 @@ export async function apiFetchTournamentVivaCheckout(
 
   const exercise = exerciseResult.data;
   const studio = pickNestedRecord(exercise, ["studio"]);
-  const customPricing = resolveTournamentCustomPricing([exercise, options.tournament], options.skinPriceLabel);
+  const childTournament = isChildTournamentExercise(exercise);
+  const customPricing = childTournament
+    ? null
+    : resolveTournamentCustomPricing([exercise, options.tournament], options.skinPriceLabel);
 
   if (customPricing) {
     return {
@@ -2537,14 +2540,14 @@ export async function apiFetchTournamentVivaCheckout(
       auth: true,
       retries: 1,
     }),
-    request<unknown>(`/end-user/api/v2/${TENANT_KEY}/products/subscriptions?exerciseId=${encodeURIComponent(exerciseId)}`, {
+    childTournament ? null : request<unknown>(`/end-user/api/v2/${TENANT_KEY}/products/subscriptions?exerciseId=${encodeURIComponent(exerciseId)}`, {
       method: "GET",
       auth: true,
       retries: 1,
     }),
   ]);
 
-  const clientSubscriptions = filterClientSubscriptionsForExercise(
+  const clientSubscriptions = childTournament ? [] : filterClientSubscriptionsForExercise(
     normalizeVivaProducts(pickFirstArray(exercise, ["availableClientSubscriptions"]), "client-subscription"),
     exerciseId,
     exercise,
@@ -2554,9 +2557,10 @@ export async function apiFetchTournamentVivaCheckout(
     "client-one-time",
   );
   const oneTimes = oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time");
-  const subscriptions = subscriptionsResult.error ? [] : normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription");
+  const subscriptions = subscriptionsResult && !subscriptionsResult.error
+    ? normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription") : [];
   const category = resolveSubscriptionCategoryDailyLimitCategoryFromEvent(exercise);
-  if (LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED && (category === "group_training" || category === "tournament")) {
+  if (!childTournament && LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED && (category === "group_training" || category === "tournament")) {
     // A display candidate only: the gateway re-reads the same actor-owned
     // source and active rule before any discount or payment. Do not mutate the
     // provider's availableClientSubscriptions or offer a subscription visit.
@@ -2587,7 +2591,7 @@ export async function apiFetchTournamentVivaCheckout(
       subscriptions,
       tariffErrors: [
         ...(oneTimesResult.error ? ["Не удалось загрузить тарифы разовых посещений."] : []),
-        ...(subscriptionsResult.error ? ["Не удалось загрузить тарифы абонементов."] : []),
+        ...(subscriptionsResult?.error ? ["Не удалось загрузить тарифы абонементов."] : []),
       ],
     },
     error: null,
@@ -2676,7 +2680,10 @@ export async function apiFetchTournamentVivaPublicCheckout(
       ? options.tournament
       : {};
   const studio = pickNestedRecord(exercise, ["studio"]);
-  const customPricing = resolveTournamentCustomPricing([exercise, options.tournament], options.skinPriceLabel);
+  const childTournament = isChildTournamentExercise(exercise);
+  const customPricing = childTournament
+    ? null
+    : resolveTournamentCustomPricing([exercise, options.tournament], options.skinPriceLabel);
 
   if (customPricing) {
     return {
@@ -2700,14 +2707,15 @@ export async function apiFetchTournamentVivaPublicCheckout(
       method: "GET",
       retries: 1,
     }),
-    request<unknown>(`/end-user/api/v2/${TENANT_KEY}/products/subscriptions?exerciseId=${encodeURIComponent(exerciseId)}`, {
+    childTournament ? null : request<unknown>(`/end-user/api/v2/${TENANT_KEY}/products/subscriptions?exerciseId=${encodeURIComponent(exerciseId)}`, {
       method: "GET",
       retries: 1,
     }),
   ]);
 
   const oneTimes = oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time");
-  const subscriptions = subscriptionsResult.error ? [] : normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription");
+  const subscriptions = subscriptionsResult && !subscriptionsResult.error
+    ? normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription") : [];
 
   if (exerciseResult.error && oneTimes.length === 0 && subscriptions.length === 0) {
     return {
@@ -2729,11 +2737,11 @@ export async function apiFetchTournamentVivaPublicCheckout(
       subscriptions,
       tariffErrors: [
         ...(oneTimesResult.error ? ["Не удалось загрузить тарифы разовых посещений."] : []),
-        ...(subscriptionsResult.error ? ["Не удалось загрузить тарифы абонементов."] : []),
+        ...(subscriptionsResult?.error ? ["Не удалось загрузить тарифы абонементов."] : []),
       ],
     },
     error: null,
-    status: exerciseResult.status || oneTimesResult.status || subscriptionsResult.status,
+    status: exerciseResult.status || oneTimesResult.status || subscriptionsResult?.status || null,
   };
 }
 
@@ -3278,6 +3286,11 @@ export async function apiCreateTournamentVivaTransaction(
       },
       status: 503,
     };
+  }
+  if ((params.product.source === "subscription" || params.product.isCustomTournamentEnergy === true)
+    && isChildTournamentExercise(params.exercise)) {
+    return { data: null, error: { status: 409,
+      message: "На детский турнир можно записаться только с разовой оплатой." }, status: 409 };
   }
   if (params.product.isCustomTournamentEnergy) {
     return apiCreateTournamentCustomEnergyTransaction(params);

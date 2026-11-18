@@ -308,6 +308,11 @@ if (isSpanishTrainingExercise(exercise)) {
     code: "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
   });
 }
+if (exerciseDirectionId(exercise) === 7108) {
+  return finishError(ctx, 409, "На детский турнир можно записаться только с разовой оплатой.", {
+    code: "CHILD_TOURNAMENT_SUBSCRIPTION_UNAVAILABLE",
+  });
+}
 // Resolve the instance first. PRO monetary eligibility is checked only after fresh
 // actor-bound ownership below, since Viva may omit it from visit eligibility.
 const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
