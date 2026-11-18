@@ -734,7 +734,7 @@ export function createResidencyLifecycle(deps) {
   }
 
   async function getPayment(query) {
-    const result = await getOrder(query);
+    await getOrder(query);
     let order = await store.getOrder(query.tenantId, query.userId, query.orderId);
     assertOrderShape(order);
     order = await refreshFromProvider(order);

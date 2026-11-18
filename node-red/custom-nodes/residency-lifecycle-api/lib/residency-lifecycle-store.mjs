@@ -19,8 +19,9 @@ function clone(value) {
 
 function withoutMongoId(document) {
   if (!document || typeof document !== "object") return document;
-  const { _id, ...rest } = document;
-  return structuredClone(rest);
+  const copy = { ...document };
+  delete copy._id;
+  return structuredClone(copy);
 }
 
 /**
