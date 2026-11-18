@@ -57,9 +57,10 @@ const row = (rest = {}) => ({
 const ack = { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
 const page = (...content) => ({ content, totalElements: content.length, last: true });
 
-function harness(ctx = admitted(), enabled = true) {
+function harness(ctx = admitted(), enabled = true, cohort = target) {
   const store = new Map();
-  const env = { get: (name) => name === 'LK_PAID_SPLIT_JOIN_RECOVERY_ENABLED' && enabled ? '1' : '' };
+  const values = { LK_PAID_SPLIT_JOIN_RECOVERY_ENABLED: enabled ? '1' : '', LK_PAID_SPLIT_JOIN_RECOVERY_GAME_IDS: cohort };
+  const env = { get: name => values[name] || '' };
   const global = { get: key => store.get(key), set: (key, value) => store.set(key, value) };
   return (body, statusCode = 200, error) => runRouter({
     _splitCtx: ctx, payload: body, statusCode, ...(error ? { error } : {}),
@@ -276,4 +277,10 @@ test('changing game visibility cannot bypass an existing stored attempt', () => 
   upstream(call(providerTransaction()), 'GET', '/bookings/booking-fixture');
   db(call(providerBooking()), 'find', 'games');
   stop(call([game({ settings: { isPrivate: true } })]));
+});
+
+test('a configured pilot cannot change ordinary joins for games outside the immutable ID cohort', () => {
+  for (const cohort of ['', 'other-fixture', '*,game-fixture']) {
+    upstream(harness(admitted(), true, cohort)({ access_token: 'service-fixture' }), 'GET', '/rooms/room-fixture');
+  }
 });

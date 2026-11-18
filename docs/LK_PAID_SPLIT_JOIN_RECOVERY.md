@@ -49,17 +49,17 @@ The router reuses the active game's Mongo client configuration. Inputs must matc
 reviewed node hashes. A fresh review is required when those nodes drift. The candidate
 does not alter public game reads, PAY confirmation, split leave or timeout cleanup.
 
-This candidate stays inactive unless `LK_PAID_SPLIT_JOIN_RECOVERY_ENABLED=1`.
-It targets the primary legacy public paid join. When enabled, the primary paid
-route still checks the journal if the game becomes private. Private or unsupported
-games fail closed during admission; the current candidate must not be activated
-on a mixed public/private cohort without a compatible routing decision. A coordinated
-release must verify the
+This candidate stays inactive unless `LK_PAID_SPLIT_JOIN_RECOVERY_ENABLED=1`
+and `LK_PAID_SPLIT_JOIN_RECOVERY_GAME_IDS` lists the exact game IDs, separated by
+commas. There is no wildcard. Select legacy public split games for the pilot.
+Unselected games keep their existing path. A selected game is still checked against
+the journal if it becomes private; it fails closed until its configuration is resolved.
+A coordinated release must verify the
 legacy roster owner configuration, paired frontend, existing cleanup behavior,
 Mongo replica-set write concern and provider response shapes with an isolated
 rehearsal. Public and private games, subscription/create requests, and alternate
-tenant flows must not share unreviewed authority. Do not turn the flag off on a
-live cohort while attempts remain: older paths do not consult the journal. Establish a
+tenant flows must not share unreviewed authority. Do not disable the flag or remove a game from
+the pilot list while attempts remain: older paths do not consult the journal. Establish a
 drain/reconciliation plan before any rollback. Journal inspection is internal;
 checkout URLs must not be included in diagnostics or release evidence.
 

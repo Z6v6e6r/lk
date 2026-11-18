@@ -25,6 +25,11 @@ const paidJoinMajority = { writeConcern: { w: "majority", j: true } };
 const paidJoinWriteOk = (value) => value?.acknowledged === true && value.matchedCount === 1;
 const paidJoinBodyId = (value) => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value)
   ? value : null;
+const paidJoinEnabledForGame = (gameId) => {
+  if (readEnv("LK_PAID_SPLIT_JOIN_RECOVERY_ENABLED") !== "1" || !paidJoinBodyId(gameId)) return false;
+  const games = String(readEnv("LK_PAID_SPLIT_JOIN_RECOVERY_GAME_IDS") || "").split(",").map(id => id.trim());
+  return games.every(paidJoinBodyId) && games.includes(gameId);
+};
 const paidJoinKey = (ctx) => JSON.stringify([ctx.paidJoinTenant, ctx.gameId, ctx.exerciseId, ctx.clientId]);
 const paidJoinExact = (ctx, doc) => doc?._id === paidJoinKey(ctx)
   && doc.gameId === ctx.gameId && doc.exerciseId === ctx.exerciseId && doc.clientId === ctx.clientId && doc.tenant === ctx.paidJoinTenant;

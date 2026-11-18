@@ -31,7 +31,7 @@ export function composePaidJoinRouter(body, dbOutput) {
   body = splice(body, 'const continueSplitAfterToken = (ctx) => {', `const continueSplitAfterToken = (ctx) => {
   if (ctx.action === "join" && resolvePaymentMode(ctx.paymentMode) === "one_time"
     && !ctx.paidJoinAuthComplete
-    && readEnv("LK_PAID_SPLIT_JOIN_RECOVERY_ENABLED") === "1") return paidJoinBegin(ctx);`);
+    && paidJoinEnabledForGame(ctx.gameId)) return paidJoinBegin(ctx);`);
   body = splice(body, '\n  ctx.step = "create_booking";\n  return adminRequest(', `
   if (ctx.paidJoin) {
     if (bookingPaymentType !== "ON_PLACE" || !(ctx.shareAmount > 0)) return paidJoinPending();
