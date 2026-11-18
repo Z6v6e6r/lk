@@ -94,6 +94,13 @@ A new request cannot reclaim the old operation between ACK and guard cleanup. Re
 uses the persisted service date even if the exercise has moved. This is request-driven
 recovery, not a new background scheduler. Legacy rows without this proof are not aborted.
 
+Shared-day/category-day ledger keys may be reused by another event or category. An unfinished
+abort blocks that new request before generic reclaim, and the reclaim CAS independently requires
+either no abort marker or acknowledged compensation plus completed guard cleanup. Recovery of the
+original request remains available; a new event never substitutes its fields into the old CUP grant.
+Physical Mongo tests cover crashes before the CUP ACK and before cleanup, a stale reclaim snapshot,
+and successful cross-event reclaim only after both acknowledgements.
+
 This compensation is intentionally scoped to the confirmed exercise-recheck refusal.
 Other HUB quote/policy refusals and unknown provider outcomes retain their existing recovery
 path; no broad timeout cleanup is added. A `COMPLETED` abort response never triggers LK1

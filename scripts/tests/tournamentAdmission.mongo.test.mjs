@@ -112,6 +112,37 @@ try {
   msg.payload = await collection.find(msg.payload).toArray(); execute(msg);
   msg.payload = await collection.find(msg.payload).toArray(); execute(msg); assert.equal(msg.statusCode, 409);
   assert.equal((await collection.findOne({ _id: guardKey })).ownerOperationId, 'operation-2');
+  for (const limitMode of ['shared_day', 'category_day']) {
+    for (const acknowledged of [false, true]) {
+      const key = `shared-abort-${limitMode}-${acknowledged}`;
+      const row = { ...refusal, _id: key, operationKey: key, limitMode,
+        tournamentAbort: { proof: 'PRE_DISPATCH_REJECTED_V1', acknowledged } };
+      await collection.insertOne(row);
+      const nextCtx = () => ({ ...ctxFor('other-event-request'), operationKey: key,
+        exerciseId: 'other-exercise', limitMode, lk1: undefined, step: 'operation_find' });
+      const blocked = { _subscriptionBooking: nextCtx(), payload: [await collection.findOne({ _id: key })] };
+      execute(blocked); assert.equal(blocked.statusCode, 202);
+      assert.notEqual(blocked._subscriptionBooking.step, 'operation_reclaim');
+      assert.deepEqual(await collection.findOne({ _id: key }), row);
+
+      // Even a stale read without the abort marker cannot overwrite the durable
+      // proof. Exercise the actual reclaim CAS against the newer Mongo row.
+      const stale = { ...row }; delete stale.tournamentAbort;
+      const reclaim = { _subscriptionBooking: nextCtx(), payload: [stale] };
+      execute(reclaim); assert.equal(reclaim._subscriptionBooking.step, 'operation_reclaim');
+      assert.equal((await collection.updateOne(...reclaim.payload)).matchedCount, 0);
+      assert.deepEqual(await collection.findOne({ _id: key }), row);
+
+      // Once both old compensation and guard cleanup are acknowledged, the
+      // ordinary cross-event reclaim works again with its original CAS binding.
+      await collection.updateOne({ _id: key }, { $set: {
+        'tournamentAbort.acknowledged': true, 'tournamentAbort.cleanupComplete': true } });
+      const complete = { _subscriptionBooking: nextCtx(), payload: [await collection.findOne({ _id: key })] };
+      execute(complete); assert.equal(complete._subscriptionBooking.step, 'operation_reclaim');
+      assert.equal((await collection.updateOne(...complete.payload)).modifiedCount, 1);
+      assert.equal((await collection.findOne({ _id: key })).exerciseId, 'other-exercise');
+    }
+  }
   for (const order of ['abort-first', 'dispatch-first', 'concurrent']) {
     const { ctx } = await prepare(order);
     const refusalMsg = failure(ctx);
@@ -133,5 +164,5 @@ try {
       assert.notEqual(replay._subscriptionBooking.step, 'booking_create');
     } else assert.equal(stored.state, 'FAILED');
   }
-  console.log('PASS physical Mongo Node-RED admission/preaccept/recheck abort, lost ACK/restart, dispatch/abort CAS races, own-day takeover and stale cleanup');
+  console.log('PASS physical Mongo Node-RED admission/preaccept/recheck abort, lost ACK/restart, dispatch/abort CAS races, own-day takeover, cross-event reclaim fencing and stale cleanup');
 } finally { await client.db(database).dropDatabase(); await client.close(); }

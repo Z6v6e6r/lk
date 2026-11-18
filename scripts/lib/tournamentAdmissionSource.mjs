@@ -31,6 +31,8 @@ export function patchTournamentAdmissionSource(source) {
   source = once(source, 'const prepareFailedUpdate = (ctx, statusCode, message, rawCode) => {',
     'const prepareFailedUpdate = (ctx, statusCode, message, rawCode) => {\n'
     + '  const abort = tournamentAdmissionAbortFailure(ctx, statusCode, message, rawCode); if (abort) return abort;');
+  source = once(source, 'const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMongoUpdate(ctx, "operation_reclaim", {\n  _id: ctx.operationKey,\n  operationId: operation.operationId ?? null,\n  state: operation.state,',
+    'const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMongoUpdate(ctx, "operation_reclaim", {\n  _id: ctx.operationKey,\n  operationId: operation.operationId ?? null,\n  state: operation.state,\n  ...tournamentAdmissionReclaimFence,');
   source = once(source, '  const adminVersion = ctx.caller === "split" ? "v1" : "v2";',
     '  const dispatch = tournamentAdmissionDispatch(ctx); if (dispatch) return dispatch;\n'
     + '  const adminVersion = ctx.caller === "split" ? "v1" : "v2";');

@@ -113,6 +113,16 @@ const tournamentAdmissionAbortSend = (ctx) => {
       code: ctx.finalFailure.rawCode },
     { Authorization: ctx.authHeader, "x-cup-integration-token": token, "Content-Type": "application/json", Accept: "application/json" });
 };
+// A shared/day ledger can be reused by another event or category. Its old CUP hold
+// must remain recoverable until both compensation and exact guard cleanup finish.
+const tournamentAdmissionReclaimFence = { $or: [
+  { tournamentAbort: { $exists: false } },
+  { "tournamentAbort.proof": "PRE_DISPATCH_REJECTED_V1", "tournamentAbort.acknowledged": true,
+    "tournamentAbort.cleanupComplete": true },
+] };
+const tournamentAdmissionAbortUnfinished = (row) => row.tournamentAbort !== undefined
+  && !(row.tournamentAbort?.proof === "PRE_DISPATCH_REJECTED_V1"
+    && row.tournamentAbort.acknowledged === true && row.tournamentAbort.cleanupComplete === true);
 const tournamentAdmissionRoute = (ctx) => {
   if (ctx.step === "tournament_dispatch_saved") {
     // A lost database ACK cannot authorize a POST, even if a later read finds DISPATCHING.
@@ -136,6 +146,13 @@ const tournamentAdmissionRoute = (ctx) => {
     return row.tournamentAbort.acknowledged === true
       ? tournamentAdmissionFind(ctx, "tournament_admission_guard_read", tournamentAdmissionGuardKey(ctx))
       : tournamentAdmissionAbortSend(ctx);
+  }
+  if (["operation_find", "lk1_operation_find", "lk1_ingress_operation_find"].includes(ctx.step)
+    && !msg.error && Array.isArray(msg.payload) && msg.payload.length === 1
+    && msg.payload[0]?._id === ctx.operationKey && tournamentAdmissionAbortUnfinished(msg.payload[0])) {
+    // Do not reinterpret an old grant using the new event's context. The original
+    // request can still recover its exact abort through the branch above.
+    return tournamentAdmissionPending(ctx);
   }
   if (["tournament_abort_saved", "tournament_abort_ack_saved", "tournament_abort_cleanup_saved"].includes(ctx.step)) {
     return tournamentAdmissionFind(ctx, "tournament_abort_read", ctx.operationKey);

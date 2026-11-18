@@ -155,3 +155,25 @@ test('acknowledged dispatch emits one provider POST through the actual booking b
   run(msg, env, { get: key => key === 'vivacrm_access_token' ? 'synthetic-token' : undefined }, { warn() {}, error() {} });
   assert.equal(ctx.step, 'booking_create'); assert.equal(msg.method, 'POST'); assert.match(msg.url, /\/exercises\/exercise\/bookings$/);
 });
+
+test('a different event cannot reclaim a shared-day ledger before tournament abort cleanup', () => {
+  for (const limitMode of ['shared_day', 'category_day']) {
+    for (const category of ['tournament', 'group_training']) {
+      for (const acknowledged of [false, true]) {
+        const original = context({ _id: 'op-key', operationId: 'original', limitMode,
+          state: 'FAILED', tournamentProviderPhase: 'PRE_DISPATCH',
+          tournamentAbort: { proof: 'PRE_DISPATCH_REJECTED_V1', acknowledged },
+          failure: { rawCode: 'SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE' },
+          tournamentAdmission: { operationId: 'cup-original', requestOperationId: 'original',
+            actorClientId: 'actor', exerciseId: 'exercise', clientSubscriptionId: 'subscription' } });
+        const next = context({ step: 'operation_find', operationId: 'next',
+          exerciseId: 'other-exercise', category, limitMode });
+        const { msg } = step(next, [original]);
+        assert.equal(msg.statusCode, 202, `${limitMode}/${category}/ack=${acknowledged}`);
+        assert.notEqual(next.step, 'operation_reclaim');
+        assert.equal(next.operationId, 'next');
+        assert.equal(next.exerciseId, 'other-exercise');
+      }
+    }
+  }
+});
