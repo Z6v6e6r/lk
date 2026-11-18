@@ -29,6 +29,11 @@ export function splitPublicationLegacyGuard(msg, env) {
     || Object.hasOwn(s, 'serverPublication'))) return fail(409, 'SERVER_PUBLICATION_OWNED');
   const refs = new Set(), exercises = new Set(), bookings = new Set();
   const add = (set, value) => {
+    // Match the canonical builder's whole-string coercion as well as list aliases.
+    if (typeof value === 'string' || Array.isArray(value)) {
+      const exact = String(value).trim();
+      if (exact && exact.length <= 200) set.add(exact);
+    }
     if (typeof value === 'string') for (const item of value.split(/[\s,;]+/)) {
       if (item && item.length <= 200) set.add(item);
     }

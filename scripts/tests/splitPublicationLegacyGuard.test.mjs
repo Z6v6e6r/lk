@@ -30,7 +30,7 @@ test('all aliases are ORed; mismatched body tenant and conflicting first IDs can
   const q = guard(msg, env)[1].payload[0];
   const ids = key => q.$or.find(c => c[key])?.[key].$in;
   assert.deepEqual(ids('exerciseId'), ['wrong', 'e3', 'right']);
-  assert.deepEqual(new Set(ids('bookingId')), new Set(['b1', 'b2', 'b3', 'b4', 'b5']));
+  assert.deepEqual(new Set(ids('bookingId')), new Set(['b1,b2', 'b1', 'b2', 'b3', 'b4,b5', 'b4', 'b5']));
   assert.deepEqual(new Set(ids('operationId')), new Set(['r1', 'r2', 'op', 'op2']));
 });
 
@@ -53,4 +53,12 @@ test('only a successful empty lookup allows legacy publication; errors cannot re
   const failed = request(body); guard(failed, env); failed.payload = []; failed.error = { message: 'timeout' };
   assert.equal(guard(failed, env)[2].statusCode, 503);
   assert.equal(guard(request(body), { get() {} })[2].statusCode, 503);
+});
+
+test('whole-string coercion and parsed aliases both reach the ownership lookup', () => {
+  const msg = request({ paymentRef: ['legacy,ref'], booking: { bookingIds: [['booking']] } });
+  const clauses = guard(msg, env)[1].payload[0].$or;
+  assert.deepEqual(clauses.find(c => c['createReceipt.paymentRef'])['createReceipt.paymentRef'].$in,
+    ['legacy,ref', 'legacy', 'ref']);
+  assert.deepEqual(clauses.find(c => c.bookingId).bookingId.$in, ['booking']);
 });
