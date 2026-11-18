@@ -2819,6 +2819,12 @@ if (ctx.step === "exercise_recheck") {
     );
   }
   const exercise = unwrapRecord(msg.payload);
+  const direction = exercise?.direction ?? exercise?.exerciseDirection;
+  const directionId = Number((isObj(direction) ? (direction.id ?? direction.directionId) : direction)
+    ?? exercise?.directionId ?? exercise?.exerciseDirectionId);
+  if (directionId === 7108) {
+    return prepareFailedUpdate(ctx, 409, "На детский турнир можно записаться только с разовой оплатой.", "CHILD_TOURNAMENT_SUBSCRIPTION_UNAVAILABLE");
+  }
   const actualExerciseId = toStr(exercise?.id || exercise?.exerciseId || exercise?.uuid);
   const ownedSubscriptions = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
   if (!exercise || ownedSubscriptions.length === 0) {

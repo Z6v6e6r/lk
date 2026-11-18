@@ -81,6 +81,7 @@ function runExerciseHook(options = {}) {
     isTopokratyExercise,
     isTopokratyClubPack,
     resolveCategory: () => options.category ?? "group_training",
+    exerciseDirectionId: value => Number(value.direction?.id),
     findOwnedSubscriptions: () => { calls.findOwnedSubscriptions += 1; return options.selectedOwned ?? []; },
     lk1Config: () => options.rule ?? { matched: false },
     lk1ReadPlanRules: () => options.planRules ?? null,
