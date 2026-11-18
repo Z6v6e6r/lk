@@ -303,9 +303,10 @@ mutation response and a different device:
   returning the winner's row: the transaction id and link are persisted, `ACTIVE`/`PAID`
   stay monotonic, a contradicting transaction id is never overwritten (the order becomes
   `PAID_REQUIRES_REVIEW` with `TRANSACTION_MISMATCH`, or keeps `ACTIVE` and records the
-  mismatch when the residency is already confirmed), and a terminal row is never revived
-  (the evidence is kept as a durable `LATE_CREATE_AFTER_TERMINAL` event). There is still
-  exactly one provider POST.
+  mismatch when the residency is already confirmed), a terminal row is never revived and an
+  order held for review is never moved back to a payable state (the evidence is kept as
+  durable `LATE_CREATE_EVIDENCE` / `LATE_CREATE_TRANSACTION_CONFLICT` events). There is
+  still exactly one provider POST.
 - **A missing CUP instance does not prove payment.** For an order whose dispatch outcome
   is unknown, only a confirmed PAID read or an authoritative CUP instance for this very
   order may move it into a paid phase. A lookup error, an absent instance, an

@@ -818,51 +818,54 @@ export function createResidencyLifecycle(deps) {
     const evidence = patch.payment && typeof patch.payment === "object" ? patch.payment : {};
     const late = text(evidence.providerTransactionId, 128) ? evidence.providerTransactionId : null;
     const known = text(current.payment.providerTransactionId, 128) ? current.payment.providerTransactionId : null;
-    const marker = { type: "LATE_CREATE_EVIDENCE", at: nowIso() };
-    const withMarker = (events) => events.concat(marker).slice(-50);
-    if (late && known && late !== known) {
-      // Two provider operations for one order is never resolved silently. ACTIVE stays
-      // ACTIVE (the residency itself is confirmed) but the durable row records the
-      // contradiction; an unconfirmed paid phase is escalated to review.
+    const conflict = Boolean(late && known && late !== known);
+    const marker = (type, extra) => ({ type, at: nowIso(), ...(extra || {}) });
+    const withMarker = (entry) => current.events.concat(entry).slice(-50);
+    // ACTIVE is settled, and a terminal or review row is already outside the payable path.
+    // None of them may change state or move the active slot because a create answered late.
+    const settled = RESOLVED_STATES.includes(current.state) || current.state === ORDER_STATES.PAID_REQUIRES_REVIEW;
+
+    if (settled) {
+      if (!late) return null;
+      const entry = marker(conflict ? "LATE_CREATE_TRANSACTION_CONFLICT" : "LATE_CREATE_EVIDENCE",
+        { providerTransactionId: late });
+      if (conflict && current.state === ORDER_STATES.ACTIVE) {
+        // The residency stays confirmed; the second provider reference is recorded, not bound.
+        return { state: current.state,
+          patch: { payment: { ...current.payment, lastErrorCode: "TRANSACTION_MISMATCH" }, events: withMarker(entry) } };
+      }
+      if (!conflict && !known) {
+        // A missing reference is durable evidence even for a settled row. A terminal row's
+        // client-visible reason comes from lastErrorCode, which this does not touch.
+        return { state: current.state,
+          patch: { payment: { ...current.payment, providerTransactionId: late }, events: withMarker(entry) } };
+      }
+      return { state: current.state, patch: { events: withMarker(entry) } };
+    }
+
+    if (conflict) {
+      // Two provider operations for one unresolved order is never resolved silently.
       return {
-        state: current.state === ORDER_STATES.ACTIVE ? ORDER_STATES.ACTIVE : ORDER_STATES.PAID_REQUIRES_REVIEW,
+        state: ORDER_STATES.PAID_REQUIRES_REVIEW,
         patch: {
           payment: { ...current.payment, lastErrorCode: "TRANSACTION_MISMATCH" },
-          ...(current.state === ORDER_STATES.ACTIVE ? {} : {
-            activation: { ...current.activation, state: "REQUIRES_REVIEW", lastErrorCode: "TRANSACTION_MISMATCH" },
-          }),
-          events: withMarker(current.events),
+          activation: { ...current.activation, state: "REQUIRES_REVIEW", lastErrorCode: "TRANSACTION_MISMATCH" },
+          events: withMarker(marker("LATE_CREATE_TRANSACTION_CONFLICT", { providerTransactionId: late })),
         },
       };
     }
-    if (current.state === ORDER_STATES.ACTIVE) {
-      // The residency is already confirmed. Only the missing provider reference is added.
-      if (!late || known) return null;
-      return {
-        state: ORDER_STATES.ACTIVE,
-        patch: { payment: { ...current.payment, providerTransactionId: late }, events: withMarker(current.events) },
-      };
-    }
+
     const confirmed = current.payment.status === "PAID" || PAID_PHASES.includes(current.state);
     if (confirmed) {
       // PAID is final: a late PENDING/UNKNOWN link never downgrades it.
       if (!late || known) return null;
       return {
         state: current.state,
-        patch: { payment: { ...current.payment, providerTransactionId: late }, events: withMarker(current.events) },
+        patch: { payment: { ...current.payment, providerTransactionId: late },
+          events: withMarker(marker("LATE_CREATE_EVIDENCE")) },
       };
     }
-    if (RESOLVED_STATES.includes(current.state)) {
-      // A terminal order is never revived by a late create answer. The evidence is kept
-      // in the durable event log for the operator without changing the client-visible
-      // terminal reason or moving the active slot.
-      return {
-        state: current.state,
-        patch: {
-          events: withMarker(current.events.concat({ type: "LATE_CREATE_AFTER_TERMINAL", at: marker.at, providerTransactionId: late })),
-        },
-      };
-    }
+
     if (state === ORDER_STATES.PAYMENT_FAILED) {
       // Only an explicit provider refusal reaches this branch. A concurrently recorded
       // provider reference contradicts it, so the refusal is not applied.
@@ -874,10 +877,11 @@ export function createResidencyLifecycle(deps) {
             lastErrorCode: text(evidence.lastErrorCode, 64) ? evidence.lastErrorCode : "PAYMENT_FAILED" },
           activation: { ...current.activation, state: "NOT_STARTED",
             lastErrorCode: text(evidence.lastErrorCode, 64) ? evidence.lastErrorCode : "PAYMENT_FAILED" },
-          events: withMarker(current.events),
+          events: withMarker(marker("LATE_CREATE_EVIDENCE")),
         },
       };
     }
+
     const payment = { ...current.payment, lastCheckedAt: nowIso() };
     if (late) payment.providerTransactionId = late;
     if (evidence.status === "PAID") {
@@ -902,7 +906,7 @@ export function createResidencyLifecycle(deps) {
       : null;
     return {
       state: payment.status === "PAID" ? ORDER_STATES.PAID : ORDER_STATES.PENDING_PAYMENT,
-      patch: { payment, ...(activation ? { activation } : {}), events: withMarker(current.events) },
+      patch: { payment, ...(activation ? { activation } : {}), events: withMarker(marker("LATE_CREATE_EVIDENCE")) },
     };
   }
 
@@ -913,7 +917,10 @@ export function createResidencyLifecycle(deps) {
    */
   async function applyCreateOutcome(order, state, patch) {
     let attempt = await attemptTransition(order, state, patch);
-    for (let round = 0; round < 3 && !attempt.applied; round += 1) {
+    // Each round re-reads the row and re-merges, so a merge is a fixed point once the
+    // evidence is durable (mergeCreateOutcome then returns null). The bound only stops a
+    // pathological writer that keeps winning the CAS; it never repeats the provider POST.
+    for (let round = 0; round < 8 && !attempt.applied; round += 1) {
       const current = attempt.current;
       if (!current) fail(409, "RESIDENCY_ORDER_CONFLICT", "The order changed concurrently");
       const merged = mergeCreateOutcome(current, state, patch);

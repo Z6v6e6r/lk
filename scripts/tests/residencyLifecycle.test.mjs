@@ -1012,7 +1012,7 @@ test("a contradicting transaction id is never silently overwritten", async () =>
   assert.equal(row.payment.providerTransactionId, "txn-existing");
   assert.equal(row.payment.lastErrorCode, "TRANSACTION_MISMATCH");
   assert.equal(row.activation.lastErrorCode, "TRANSACTION_MISMATCH");
-  assert.ok(row.events.some((event) => event.type === "LATE_CREATE_EVIDENCE"));
+  assert.ok(row.events.some((event) => event.type === "LATE_CREATE_TRANSACTION_CONFLICT"));
   assert.equal(held.count(), 1);
 
   // An already ACTIVE residency is not reopened by the contradiction, but it is recorded.
@@ -1038,6 +1038,65 @@ test("a contradicting transaction id is never silently overwritten", async () =>
   assert.equal(activeDurable.payment.lastErrorCode, "TRANSACTION_MISMATCH");
   assert.equal(activeHeld.count(), 1);
 });
+
+test("a late create never revives a terminal or review order", async () => {
+  for (const seeded of [
+    { state: ORDER_STATES.CANCELLED, activation: "NOT_STARTED", payment: "PENDING", activeSlot: null },
+    { state: ORDER_STATES.PAYMENT_FAILED, activation: "NOT_STARTED", payment: "FAILED", activeSlot: null },
+    { state: ORDER_STATES.EXPIRED, activation: "NOT_STARTED", payment: "PENDING", activeSlot: null },
+    { state: ORDER_STATES.PAID_REQUIRES_REVIEW, activation: "REQUIRES_REVIEW", payment: "PENDING", activeSlot: 1 },
+  ]) {
+    const store = memoryStore();
+    const held = heldCreate(LATE_PENDING);
+    const creator = build({ store, payments: held.payments });
+    const pendingCreate = creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+      userId: USER, idempotencyKey: KEY, mode: "NEW" });
+    await held.reached;
+    const orderId = [...store.orders.keys()][0];
+    const current = durable(store, orderId);
+    store.orders.set(orderId, { ...current, state: seeded.state, activeSlot: seeded.activeSlot,
+      revision: current.revision + 1,
+      payment: { ...current.payment, status: seeded.payment, paymentUrl: null,
+        providerTransactionId: "txn-existing" },
+      activation: { ...current.activation, state: seeded.activation } });
+
+    held.release();
+    const created = await pendingCreate;
+    assert.equal(created.order.state, seeded.state, seeded.state);
+    assert.equal(created.order.payment.paymentUrl, null, seeded.state);
+    const row = durable(store, orderId);
+    assert.equal(row.state, seeded.state, seeded.state);
+    assert.equal(row.activeSlot, seeded.activeSlot, seeded.state);
+    assert.equal(row.payment.providerTransactionId, "txn-existing", seeded.state);
+    assert.ok(row.events.some((event) => event.type === "LATE_CREATE_TRANSACTION_CONFLICT"), seeded.state);
+    assert.equal(held.count(), 1, seeded.state);
+  }
+});
+
+test("a create merge is a fixed point once the transaction id is durable", async () => {
+  const store = memoryStore();
+  const held = heldCreate(LATE_PENDING);
+  const creator = build({ store, payments: held.payments });
+  const pendingCreate = creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  await held.reached;
+  const orderId = [...store.orders.keys()][0];
+  const current = durable(store, orderId);
+  store.orders.set(orderId, { ...current, revision: current.revision + 1,
+    payment: { ...current.payment, status: "PAID", paymentUrl: null,
+      providerTransactionId: "txn-late", paidAt: PAID_AT },
+    activation: { ...current.activation, state: "PENDING" } });
+  const settledRevision = durable(store, orderId).revision;
+
+  held.release();
+  const created = await pendingCreate;
+  assert.equal(created.order.payment.status, "PAID");
+  // The same id is already durable: the merge is a no-op instead of another write.
+  assert.equal(durable(store, orderId).revision, settledRevision);
+  assert.equal(durable(store, orderId).payment.providerTransactionId, "txn-late");
+  assert.equal(held.count(), 1);
+});
+
 
 test("an unknown payment is never reported as received when CUP finds no instance", async () => {
   const creator = build({ payments: {
