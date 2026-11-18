@@ -45,7 +45,8 @@ export function transformPreviewNavigation(source: string, filename: string) {
 
 const rules: Record<string, Array<{ className: string; replacement: string }>> = {
   'GamesPage.tsx': [
-    { className: 'details-action-row details-join-action-row', replacement: '<MatrixPaymentOptions service="game" eventKey={activeGameRecord?.id || "demo-game"} durationMinutes={activeGameRecord?.booking?.durationMinutes ?? 90} gamePaymentScope="quarter" courtAmount={activeGameRecord?.payment?.amount ?? null} eventDetails={{ date: detailsDateLabel, time: [detailsTimeFrom, detailsTimeTo].filter(Boolean).join("–"), station: detailsStudioName, court: detailsRoomName, location: [detailsStudioName, detailsRoomName].filter(Boolean).join(" · ") }} />' },
+    // The game-join row is no longer replaced: it renders the wired
+    // StorefrontJoinCheckout from src/ behind VITE_LK1_STOREFRONT_CHECKOUT.
     { className: 'game-payment-stack', replacement: '<MatrixPaymentOptions key={paymentMode} service="game" eventKey="demo-game-create" gamePaymentScope={paymentMode === "split" ? "quarter" : "court"} courtAmount={basePaymentAmount} durationMinutes={duration} eventDetails={{ date: dateLabel, time: publicCreateSummaryTimeLabel, station: studio?.name, court: selectedCourt?.name, location: [studio?.name, studio?.address, selectedCourt?.name].filter(Boolean).join(" · ") }} disabled={!canProceedToPayment} />' },
     { className: 'team-card game-create-payment-card', replacement: '<GamePayerChoice value={paymentMode} onChange={(next) => { setPaymentMode(next); if (next === "self") setIsPrivate(false); }} courtAmount={basePaymentAmount} durationMinutes={duration} />' },
     { className: 'team-card game-create-payment-method-card', replacement: '<></>' },

@@ -1,0 +1,25 @@
+/* Storefront (#339) checkout design for wired, server-driven states. */
+.sf-checkout { margin: 16px 0; padding: 20px; background: #fff; color: var(--text, #1a1a1a); border: 1px solid var(--border, #e5e7eb); border-radius: 18px; font: 14px/1.45 var(--ui-font, system-ui, sans-serif); min-width: 0; box-sizing: border-box; }
+.sf-checkout * { box-sizing: border-box; }
+.sf-checkout button, .sf-checkout input { font: inherit; }
+.sf-checkout h2 { font-family: "RF Dewi UltraBold", var(--ui-font, system-ui, sans-serif); font-size: 18px; font-weight: 700; margin: 0 0 14px; letter-spacing: -.3px; }
+.sf-checkout-options { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.sf-checkout-option { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px; border: 1px solid #e6e3ed; border-radius: 12px; background: #fff; color: #282336; cursor: pointer; }
+.sf-checkout-option.is-selected { border-color: #7442eb; background: #f6f2ff; }
+.sf-checkout-option.is-unavailable { cursor: default; opacity: .72; }
+.sf-checkout-option input { width: 16px; height: 16px; flex: 0 0 16px; margin: 0; accent-color: #7442eb; }
+.sf-checkout-option-copy { display: grid; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.sf-checkout-option-copy > span { color: #787287; font-size: 12px; }
+.sf-checkout-option-value { text-align: right; flex: 0 1 40%; font-size: 12px; overflow-wrap: anywhere; }
+.sf-checkout-option-value strong { font-size: 14px; white-space: nowrap; }
+.sf-checkout-option:has(input:focus-visible), .sf-checkout-confirm:focus-visible, .sf-checkout-secondary:focus-visible, .sf-checkout-link:focus-visible { outline: 3px solid #ab88f5; outline-offset: 3px; }
+.sf-checkout-confirm { display: block; width: 100%; min-height: 54px; border: 0; border-radius: var(--radius, 16px); background: var(--purple, #7353d9); color: #fff; font-size: 15px; font-weight: 650; padding: 14px 12px; margin-top: 18px; cursor: pointer; }
+.sf-checkout-confirm:disabled { background: #dad6e2; color: #8d8499; cursor: default; }
+.sf-checkout-secondary { display: block; width: 100%; min-height: 48px; margin-top: 10px; border: 1px solid #d9d2ea; border-radius: var(--radius, 16px); background: #fff; color: #4b3a7a; cursor: pointer; }
+.sf-checkout-secondary:disabled { color: #a49db3; cursor: default; }
+.sf-checkout-link { display: block; margin: 10px auto 0; border: 0; padding: 8px; background: none; color: #7650bf; cursor: pointer; }
+.sf-checkout-link:disabled { color: #a49db3; cursor: default; }
+.sf-checkout-status { margin: 0 0 8px; color: #4b3a7a; font-weight: 600; }
+.sf-checkout-hint { margin: 8px 0 0; color: #787287; font-size: 12px; }
+.sf-checkout-error { margin: 10px 0 0; padding: 12px; border-radius: 10px; background: #fff1f0; color: #9b2c22; font-size: 13px; }
+.sf-checkout-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

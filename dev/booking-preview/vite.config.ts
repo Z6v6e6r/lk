@@ -85,6 +85,7 @@ export default defineConfig({
   }],
   define: {
     'import.meta.env.VITE_PUBLIC_INVITE_ORIGIN': JSON.stringify(''),
+    'import.meta.env.VITE_LK1_STOREFRONT_CHECKOUT': JSON.stringify('1'),
     'import.meta.env.VITE_CABINET_URL': JSON.stringify(`${hosting.base}dev/booking-preview/frame.html?screen=game-list`),
   },
   server: { host: '127.0.0.1', port: 5173, strictPort: true },

@@ -32,16 +32,69 @@ const demoPlayers: PadelGamePlayer[] = ['Михаил Игровой', 'Анна
   source: index === 0 ? 'ORGANIZER' : 'INVITE_LINK', status: 'CONFIRMED',
 }));
 const viewer: PadelGamePlayer = { id: profile.id, name: `${profile.firstName} ${profile.lastName}`, phone: profile.phone, rating: 'C', status: 'CONFIRMED' };
+const gamePayMode: 'split' | 'self' = routeParams.get('gamePayMode') === 'self' ? 'self' : 'split';
+// Synthetic server for the wired game-join checkout. Its state survives a page
+// reload (as a real server would) until the stand's reset counter changes.
+// joinOutcome: pending (default) | lost (created, response lost) | lost-unreadable
+// (created, response lost, the next game read fails) | refused.
+let failNextRecordRead = false;
+// settle: paid | cancelled — applies a provider decision to a pending payment on load.
+const serverKey = `server-game:${routeParams.get('reset') || '0'}`;
+function readServerGame(): PadelGameRecord | null {
+  try { const raw = sessionStorage.getItem(serverKey); return raw ? JSON.parse(raw) as PadelGameRecord : null; } catch { return null; }
+}
+function writeServerGame(next: PadelGameRecord) {
+  try { sessionStorage.setItem(serverKey, JSON.stringify(next)); } catch { /* the stand still works without persistence */ }
+}
+function splitPayments(record: PadelGameRecord): Array<Record<string, unknown>> {
+  const split = (record.metadata as Record<string, unknown> | undefined)?.splitPayment as Record<string, unknown> | undefined;
+  return Array.isArray(split?.payments) ? split.payments as Array<Record<string, unknown>> : [];
+}
+function withSplitPayments(record: PadelGameRecord, payments: Array<Record<string, unknown>>): PadelGameRecord {
+  const metadata = (record.metadata || {}) as Record<string, unknown>;
+  return { ...record, revision: (record.revision || 1) + 1, metadata: { ...metadata, splitPayment: { ...(metadata.splitPayment as Record<string, unknown>), payments } } };
+}
+function restoreServerGame(initial: PadelGameRecord): PadelGameRecord {
+  let record = readServerGame() || initial;
+  const settle = routeParams.get('settle');
+  const pending = splitPayments(record).find(item => item.clientId === viewer.id && item.status === 'PAYMENT_PENDING');
+  if (pending && (settle === 'paid' || settle === 'cancelled')) {
+    const payments = splitPayments(record).map(item => item === pending ? { ...item, status: settle === 'paid' ? 'PAID' : 'CANCELLED' } : item);
+    record = withSplitPayments(record, payments);
+    if (settle === 'paid') record = { ...record, participants: [...(record.participants || []).filter(player => player.id !== viewer.id), viewer] };
+  }
+  writeServerGame(record);
+  return record;
+}
+function createSplitParticipantPayment(): unknown {
+  const outcome = routeParams.get('joinOutcome') || 'pending';
+  if (outcome === 'refused') return { __previewError: { status: 409, message: 'Последнее место уже занято. Оплата не создана.' } };
+  const existing = splitPayments(game).find(item => item.clientId === viewer.id && item.status === 'PAYMENT_PENDING');
+  const sequence = splitPayments(game).length + 1;
+  const now = Date.now();
+  const payment = existing || {
+    clientId: viewer.id, phone: viewer.phone, status: 'PAYMENT_PENDING', paymentRef: `demo-ref-${sequence}`,
+    bookingId: `demo-booking-${sequence}`, paymentUrl: '/game_join?joinGame=demo-game&bankReturn=1',
+    createdAt: new Date(now).toISOString(), deadlineAt: new Date(now + 15 * 60_000).toISOString(),
+  };
+  if (!existing) { game = withSplitPayments(game, [...splitPayments(game), payment]); writeServerGame(game); }
+  if (outcome === 'lost-unreadable') failNextRecordRead = true;
+  if (outcome === 'lost' || outcome === 'lost-unreadable') throw new Error('Synthetic transport: response lost after the payment was created');
+  return { checkoutStored: true, paymentUrl: payment.paymentUrl, paymentRef: payment.paymentRef, bookingId: payment.bookingId, toPay: game.metadata?.joinPrice };
+}
 let game: PadelGameRecord = {
   id: 'demo-game', status: 'PAID', inviteUrl: '/game_join?joinGame=demo-game', revision: 1,
   organizer: { ...demoPlayers[0], photo: null, rating: 'C' },
-  settings: { ratingGame: false, minRating: 'D', maxRating: 'B', isPrivate: false, payMode: 'self' },
+  // Split games charge each participant a share; organizer-paid ("self") games join for free.
+  settings: { ratingGame: false, minRating: 'D', maxRating: 'B', isPrivate: false, payMode: gamePayMode },
   participants: scenario === 'full' ? [...demoPlayers] : scenario === 'registered' ? [...demoPlayers.slice(0, 2), viewer] : demoPlayers.slice(0, 2),
   waitlist: [], invite: { maxPlayers: 4, waitlistEnabled: true },
   booking: { studioId: studios[0].id, studioName: studios[0].name, roomId: 'demo-court-1', roomName: 'Корт 1', date: eventDate, timeFrom: '19:00', timeTo: '20:30', durationMinutes: 90 },
   payment: { amount: PREVIEW_COURT_HOURLY_PRICE * 1.5, paymentUrl: null, paid: true },
-  metadata: { joinPrice: PREVIEW_COURT_HOURLY_PRICE * 1.5 / 4, teamSlots: scenario === 'full' ? [...demoPlayers] : scenario === 'registered' ? [...demoPlayers.slice(0, 2), viewer, null] : [...demoPlayers.slice(0, 2), null, null] },
+  metadata: { joinPrice: PREVIEW_COURT_HOURLY_PRICE * 1.5 / 4, teamSlots: scenario === 'full' ? [...demoPlayers] : scenario === 'registered' ? [...demoPlayers.slice(0, 2), viewer, null] : [...demoPlayers.slice(0, 2), null, null],
+    ...(gamePayMode === 'split' ? { splitPayment: { enabled: true, mode: 'split', shareCount: 4, exerciseId: 'demo-exercise', shareAmount: PREVIEW_COURT_HOURLY_PRICE * 1.5 / 4, payments: [] } } : {}) },
 };
+game = restoreServerGame(game);
 const registrations = new Map<string, boolean>();
 function roster(count: number): PadelGamePlayer[] {
   return Array.from({ length: count }, (_, index) => ({ ...demoPlayers[index % demoPlayers.length], id: `demo-roster-${index}`, phone: `7000000${String(index + 1000).padStart(4, '0')}`, name: index < 4 ? demoPlayers[index].name : `Участник ${String.fromCharCode(1040 + index)} Тестовый` }));
@@ -117,15 +170,38 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
   apiFetchOnboardingStations: () => studios,
   apiFetchPadelAvailableGames: (params) => { game = { ...game, booking: game.booking ? { ...game.booking, date: String(input(params).date || eventDate) } : null }; return { games: [game], total: 1, hasMore: false }; },
   apiFetchPadelGamesByPhone: () => [],
-  apiFetchPadelGameRecord: () => game,
-  apiUpdatePadelGameRecord: (_id, patch) => { game = { ...game, ...input(patch) }; return game; },
+  apiFetchPadelGameRecord: () => {
+    if (failNextRecordRead) { failNextRecordRead = false; return { __previewError: { status: 503, message: 'Synthetic transport: game read unavailable' } }; }
+    return game;
+  },
+  apiUpdatePadelGameRecord: (_id, patch) => {
+    // Like the real store, keep one roster entry per player (by phone, then id)
+    // when a client roster sync sends players it derived from team slots.
+    const next = { ...game, ...input(patch) } as PadelGameRecord;
+    const seen = new Set<string>();
+    const unique = (players: PadelGamePlayer[] | undefined) => (players || []).filter(player => {
+      const key = String(player?.phone || player?.id || '').replace(/\D/g, '') || String(player?.id);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    game = { ...next, participants: unique(next.participants) };
+    writeServerGame(game);
+    return game;
+  },
   apiCreatePadelGameRecord: payload => { game = { ...game, ...input(payload), id: 'demo-created-game' }; return game; },
   apiCommandPadelGameRoster: (id, command) => {
     if (command === 'JOIN_WAITLIST') game = { ...game, waitlist: [viewer] };
     else game = { ...game, participants: [...(game.participants || []).filter(player => player.id !== viewer.id), viewer] };
     return { commandId: 'demo-command', replayed: false, relation: command === 'JOIN_WAITLIST' ? 'WAITLISTED' : 'PARTICIPANT', legacyGameId: id, canonicalGameId: id, aggregateRevision: 2, reservationId: null };
   },
-  apiLeavePadelGameAsCurrentUser: () => { game = { ...game, participants: (game.participants || []).filter(player => player.id !== viewer.id), waitlist: [] }; return { game, status: 'LEFT' }; },
+  apiLeavePadelGameAsCurrentUser: () => {
+    game = { ...game, participants: (game.participants || []).filter(player => player.id !== viewer.id), waitlist: [] };
+    game = withSplitPayments(game, splitPayments(game).map(item => item.clientId === viewer.id && item.status === 'PAYMENT_PENDING' ? { ...item, status: 'CANCELLED' } : item));
+    writeServerGame(game);
+    return { game, status: 'LEFT' };
+  },
+  apiCreatePadelSplitParticipantPayment: () => createSplitParticipantPayment(),
   apiPayMasterService: () => ({ paymentUrl: null, toPay: 0, bookingIds: ['demo-booking'], exerciseId: 'demo-exercise', paid: true }),
   apiFetchBookings: () => [], apiFetchSubscriptions: () => [], apiFetchSubscriptionDailyLimitBookings: () => [],
   apiFetchPadelChatsByPhone: () => ({ chats: [] }), apiFetchPadelGameResultState: () => ({ game }), apiFetchPadelLiveRatings: () => [], apiSearchPadelPlayers: () => demoPlayers,
@@ -142,6 +218,11 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
   apiFetchTournamentMyRegistration: id => registration(String(id)), apiFetchTournamentVivaMyRegistration: id => registration(String(id)),
   apiFetchTournamentVivaCheckout: id => checkout(String(id)), apiFetchTournamentVivaPublicCheckout: id => checkout(String(id)),
   apiFetchTournamentParticipants: id => {
+    // The split game's Viva exercise has exactly the game's paid roster.
+    if (String(id) === 'demo-exercise') {
+      const players = (game.participants || []) as PadelGamePlayer[];
+      return { participants: players, participantsCount: players.length, waitlistCount: 0 };
+    }
     const count = String(id).includes('training') ? (scenario === 'full' ? (String(id) === 'demo-training-2' ? 3 : 4) : 2) : (scenario === 'full' ? 16 : 10);
     const players: PadelGamePlayer[] = roster(count).map(player => ({ ...player, rating: String(id) === 'demo-tournament-3' ? 'B' : String(id) === 'demo-tournament-2' ? 'D+' : 'C', level: String(id) === 'demo-tournament-3' ? 'B' : String(id) === 'demo-tournament-2' ? 'D+' : 'C' }));
     if (registration(String(id)).status === 'REGISTERED') players.push(viewer);
@@ -168,9 +249,16 @@ export async function call(name: string, args: unknown[]) {
     return { data, error: null, status: 200 };
   }
   const handler = handlers[name];
+  // Stand-only evidence: how many commands of each kind reached the synthetic server.
+  const counts = ((window as unknown as { __previewCalls?: Record<string, number> }).__previewCalls ??= {});
+  counts[name] = (counts[name] || 0) + 1;
   if (!handler) {
     console.warn(`[booking-preview] No fixture for ${name}`);
     return { data: null, status: 501, error: { status: 501, message: 'Этот шаг пока не настроен в локальном стенде.' } };
   }
-  return { data: structuredClone(handler(...args)), error: null, status: 200 };
+  const result: unknown = handler(...args);
+  const refusal = result && typeof result === 'object' && '__previewError' in result
+    ? (result as { __previewError: { status: number; message: string } }).__previewError : null;
+  if (refusal) return { data: null, status: refusal.status, error: refusal };
+  return { data: structuredClone(result), error: null, status: 200 };
 }

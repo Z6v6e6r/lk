@@ -9,6 +9,8 @@ import { GameBookingCancellation } from "./GameBookingCancellation";
 import { AvatarImage } from "../UI/AvatarImage";
 import { findActiveSplitPaymentForLeave, hasActiveGameLeaveMembership, hasOtherActiveGameMembers } from "./gameLeaveMembership";
 import { JoinSubscriptionOptions } from "./JoinSubscriptionOptions";
+import { StorefrontJoinCheckout } from "../storefront-checkout/StorefrontJoinCheckout";
+import { STOREFRONT_CHECKOUT_ENABLED } from "../storefront-checkout/storefrontCheckoutFlag";
 import { SubscriptionOptionPrice } from "./SubscriptionOptionPrice";
 import { createSubscriptionPriceTarget, createJoinSubscriptionPriceTarget, subscriptionSurchargeMinor } from "./subscriptionPricePreview";
 import { useSubscriptionPricePreview } from "./useSubscriptionPricePreview";
@@ -4996,6 +4998,9 @@ export default function GamesPage({
   const [updatingGameRoster, setUpdatingGameRoster] = useState(false);
   const [updatingGameMeta, setUpdatingGameMeta] = useState(false);
   const [joiningSplitPayment, setJoiningSplitPayment] = useState(false);
+  // True after a split join request failed without a readable game state: the
+  // payment may exist, so a new checkout stays blocked until a successful read.
+  const [splitJoinOutcomeUnknown, setSplitJoinOutcomeUnknown] = useState(false);
   const [splitPendingNowTs, setSplitPendingNowTs] = useState(() => Date.now());
   const [, setRestoringPaidGame] = useState(false);
   const [participants, setParticipants] = useState<PadelGamePlayer[]>([]);
@@ -8591,6 +8596,7 @@ export default function GamesPage({
     && detailsHasFreeSlots
   );
   const canCurrentUserJoinSplitGameInDetails = canCurrentUserCheckSplitSubscriptionsInDetails
+    && !splitJoinOutcomeUnknown
     && !leavePendingMessage
     && !updatingGameRoster
     && !updatingGameMeta
@@ -14359,6 +14365,19 @@ export default function GamesPage({
     upsertGameRecordInStores,
   ]);
 
+  const recheckSplitJoinOutcome = useCallback(async () => {
+    if (!gameRecordId) return;
+    const reread = await apiFetchPadelGameRecord(gameRecordId, { cache: "no-store", retries: 0 }).catch(() => null);
+    if (!reread?.data) {
+      setGameRosterError("Не удалось проверить статус игры. Повторите проверку позже.");
+      return;
+    }
+    setActiveGameRecordStore(reread.data);
+    upsertGameRecordInStores(reread.data, { communityMode: "if_exists" });
+    setSplitJoinOutcomeUnknown(false);
+    setGameRosterError(null);
+  }, [gameRecordId, setActiveGameRecordStore, upsertGameRecordInStores]);
+  useEffect(() => { setSplitJoinOutcomeUnknown(false); }, [gameRecordId]);
   const handleSplitJoinCurrentUserFromDetails = useCallback(async (
     preferredPaymentMode: "subscription" | "one_time",
     preferredClientSubscriptionId?: string | null,
@@ -14967,7 +14986,21 @@ export default function GamesPage({
         });
       }
     } catch {
-      setGameRosterError("Не удалось создать оплату участия");
+      // A thrown request may have created the payment before its response was
+      // lost (H090). Never present it as a definitive failure: re-read the game
+      // so an existing pending payment blocks a second checkout, and keep the
+      // join blocked while the outcome cannot be read.
+      const reread = await apiFetchPadelGameRecord(gameRecordId, { cache: "no-store", retries: 0 })
+        .catch(() => null);
+      if (reread?.data) {
+        setActiveGameRecordStore(reread.data);
+        upsertGameRecordInStores(reread.data, { communityMode: "if_exists" });
+        setSplitJoinOutcomeUnknown(false);
+        setGameRosterError("Ответ на создание оплаты не получен. Состояние игры обновлено — проверьте его перед повторной попыткой.");
+      } else {
+        setSplitJoinOutcomeUnknown(true);
+        setGameRosterError("Ответ на создание оплаты не получен, оплата могла быть создана. Проверьте статус игры перед повторной попыткой.");
+      }
     } finally {
       setJoiningSplitPayment(false);
       if (preferredPaymentMode === "subscription") {
@@ -17355,6 +17388,44 @@ export default function GamesPage({
                     ? "Проверяем ограничения..."
                     : "Проверить присоединение без записи"}
                 </button>
+              ) : isDetailsSplitPaymentGame && STOREFRONT_CHECKOUT_ENABLED ? (
+                <StorefrontJoinCheckout
+                  shareLabel={`1/${detailsSplitShareCount}`}
+                  oneTimeAmount={detailsSplitShareAmount ?? null}
+                  subscriptionsLoading={detailsSplitSubscriptionsLoading}
+                  subscriptionsError={detailsSplitSubscriptionsError}
+                  subscriptions={detailsSplitSubscriptionOptions.map(option => ({
+                    ...option,
+                    priceState: detailsJoinPricePreview.bySubscriptionId[option.subscriptionId]?.state ?? null,
+                  }))}
+                  pricePreviewById={detailsJoinPricePreview.bySubscriptionId}
+                  pending={detailsCurrentUserPendingSplitPayment ? {
+                    paymentUrl: detailsCurrentUserPendingSplitPaymentPaymentUrl,
+                    countdownLabel: detailsCurrentUserPendingSplitPaymentCountdownLabel,
+                    expired: detailsCurrentUserPendingSplitPaymentIsExpired,
+                  } : null}
+                  hasLeaveOnlyPayment={Boolean(detailsCurrentUserLeavePayment)}
+                  canJoin={canCurrentUserJoinSplitGameInDetails}
+                  canLeave={canCurrentUserLeaveGameInDetails && !leavePendingMessage}
+                  busy={joiningSplitPayment}
+                  leaving={Boolean(leavePendingMessage)}
+                  error={gameRosterError}
+                  onRefreshPrices={detailsJoinPricePreview.refresh}
+                  onRetrySubscriptions={() => { void loadDetailsSplitSubscriptions(); }}
+                  onJoin={method => {
+                    void handleSplitJoinCurrentUserFromDetails(
+                      method.kind,
+                      method.kind === "subscription" ? method.subscriptionId : undefined,
+                    );
+                  }}
+                  onPay={() => {
+                    if (!detailsCurrentUserPendingSplitPaymentPaymentUrl) return;
+                    navigateToExternalUrl(detailsCurrentUserPendingSplitPaymentPaymentUrl);
+                  }}
+                  onLeave={() => { void handleLeaveCurrentUserFromDetails(); }}
+                  outcomeUnknown={splitJoinOutcomeUnknown}
+                  onRecheck={() => { void recheckSplitJoinOutcome(); }}
+                />
               ) : isDetailsSplitPaymentGame ? (
                 detailsCurrentUserPendingSplitPayment && !detailsCurrentUserPendingSplitPaymentIsExpired ? (
                   <div className="game-join-split-pay-actions">

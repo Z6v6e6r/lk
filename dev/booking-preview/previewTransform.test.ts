@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { transformPreviewFriendlyLabel, transformPreviewPayments } from './previewTransform.ts';
 
-for (const [path, count] of [['games/GamesPage.tsx', 2], ['group-schedule/GroupSchedulePage.tsx', 1], ['tournament-signup/TournamentSignupPage.tsx', 1]] as const) {
+for (const [path, count] of [['games/GamesPage.tsx', 1], ['group-schedule/GroupSchedulePage.tsx', 1], ['tournament-signup/TournamentSignupPage.tsx', 1]] as const) {
   test(`preview replaces only the checkout regions in ${path}`, () => {
     const original = readFileSync(new URL(`../../src/components/${path}`, import.meta.url), 'utf8');
     const transformed = transformPreviewPayments(original, path.split('/').pop()!);
@@ -18,9 +18,9 @@ for (const [path, count] of [['games/GamesPage.tsx', 2], ['group-schedule/GroupS
       assert.ok(transformed?.includes('[studio?.name, studio?.address, selectedCourt?.name]'));
       assert.ok(transformed?.includes('station: studio?.name'));
       assert.ok(transformed?.includes('court: selectedCourt?.name'));
-      assert.ok(transformed?.includes('court: detailsRoomName'));
-      assert.ok(transformed?.includes('station: detailsStudioName'));
-      assert.ok(transformed?.includes('date: detailsDateLabel, time: [detailsTimeFrom, detailsTimeTo]'));
+      // The join row stays the wired StorefrontJoinCheckout from src/, not a local mock.
+      assert.ok(transformed?.includes('className="details-action-row details-join-action-row"'));
+      assert.ok(transformed?.includes('<StorefrontJoinCheckout'));
     } else if (path === 'group-schedule/GroupSchedulePage.tsx') {
       assert.ok(transformed?.includes('date: selectedTraining.date, time: selectedTraining.timeLabel'));
       assert.ok(transformed?.includes('selectedTraining.roomName'));
