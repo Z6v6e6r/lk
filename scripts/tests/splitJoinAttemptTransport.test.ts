@@ -232,3 +232,17 @@ test("a contract-valid success keeps the attempt held while the exact item is pe
   assert.equal(client.getHeldSplitJoinPaymentRef("game-4"), null);
   assert.deepEqual(server.posts.map(post => post.paymentRef), ["ref-A"]);
 });
+
+test("two windows clicking at the same moment send exactly one create (per-game Web Lock)", async () => {
+  const { server } = setup();
+  const firstWindow = await loadClient();
+  const secondWindow = await loadClient();
+  const [first, second] = await Promise.all([
+    firstWindow.apiCreatePadelSplitParticipantPayment("game-5", joinParams("ref-X") as never),
+    secondWindow.apiCreatePadelSplitParticipantPayment("game-5", joinParams("ref-Y") as never),
+  ]);
+  assert.equal(server.posts.length, 1, JSON.stringify(server.posts));
+  const codes = [code(first), code(second)];
+  assert.ok(codes.includes("SPLIT_JOIN_ATTEMPT_UNRESOLVED") || codes.includes("SPLIT_JOIN_ATTEMPT_PENDING"), codes.join(","));
+  assert.equal(firstWindow.getHeldSplitJoinPaymentRef("game-5"), server.posts[0].paymentRef);
+});

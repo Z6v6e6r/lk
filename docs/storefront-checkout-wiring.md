@@ -47,7 +47,7 @@
 
 | Проверка | Результат |
 |---|---|
-| `node --test`: стенд (143), `storefrontJoinView` (11), `splitJoinAttemptEvidence` (5), `splitJoinAttemptTransport` (8, **настоящий `apiClient`** + управляемый `fetch`), `splitCreateRecovery` (11) | 178/178 |
+| `node --test`: стенд (143), `storefrontJoinView` (11), `splitJoinAttemptEvidence` (5), `splitJoinAttemptTransport` (9, включая одновременные клики из двух окон под Web Lock; **настоящий `apiClient`** + управляемый `fetch`), `splitCreateRecovery` (11) | 179/179 |
 | Смежные: `splitPaymentOccupancy`, `splitPayment.apiClient`, `splitPaymentAmbiguityGuard`, `subscriptionRejoin*` и др. | проходят; `games.dailyLimitSource` (2) и `subscriptionUsageShadowIntegration` (1) падают так же на `main` |
 | `tsc -p tsconfig.app.json`, `tsc -p dev/booking-preview`, `tsc -b` | без ошибок |
 | `eslint` изменённых файлов | 0 ошибок; 10 предупреждений в `GamesPage.tsx` — столько же на `main` |

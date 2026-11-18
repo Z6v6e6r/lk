@@ -9244,6 +9244,11 @@ function getSplitJoinAttempts(): SplitCreateAttempts {
   return browserSplitJoinAttempts;
 }
 const splitJoinAttemptKey = (gameId: string) => `game:${gameId.trim()}`;
+async function withSplitJoinAttemptLock<T>(attemptKey: string, run: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== "undefined" ? (navigator as Navigator & { locks?: LockManager }).locks : undefined;
+  if (!locks?.request) return run();
+  return locks.request(`lk-split-join-attempt:${attemptKey}`, { mode: "exclusive" }, run) as Promise<T>;
+}
 
 export interface SplitJoinAttemptState {
   /** Held exact paymentRef, or null when no unresolved one-time attempt exists. */
@@ -9437,7 +9442,7 @@ export async function apiCreatePadelSplitGamePayment(
 export async function apiCreatePadelSplitParticipantPayment(
   gameId: string,
   params: PadelSplitPaymentParams,
-) {
+): Promise<ApiResult<PadelSplitPaymentResult>> {
   const normalizedGameId = gameId.trim();
   const baseUrl = getServ2Origin() || "";
   const exerciseId = params.exerciseId?.trim() || null;
@@ -9458,57 +9463,69 @@ export async function apiCreatePadelSplitParticipantPayment(
 
   const oneTime = params.paymentMode !== "subscription";
   const attemptKey = splitJoinAttemptKey(normalizedGameId);
-  if (oneTime) {
-    let held: SplitJoinAttemptState;
-    try {
-      held = await resolveSplitJoinAttempt(normalizedGameId);
-    } catch {
-      held = { paymentRef: getHeldSplitJoinPaymentRef(normalizedGameId), evidence: "unreadable", record: null };
+  // Check, journal and dispatch run under one per-game lock so two windows
+  // cannot both pass the "nothing held" check and send two creates.
+  const dispatch = async (): Promise<
+    { early: ApiResult<PadelSplitPaymentResult> }
+    | { response: ApiResult<unknown>; splitRequest: ReturnType<typeof buildPadelSplitRequest> }
+  > => {
+    if (oneTime) {
+      let held: SplitJoinAttemptState;
+      try {
+        held = await resolveSplitJoinAttempt(normalizedGameId);
+      } catch {
+        held = { paymentRef: getHeldSplitJoinPaymentRef(normalizedGameId), evidence: "unreadable", record: null };
+      }
+      if (held.paymentRef) {
+        // Never send a new create with a new key over an unresolved attempt.
+        const pending = held.evidence === "pending";
+        return { early: {
+          data: null as PadelSplitPaymentResult | null,
+          error: {
+            status: 409,
+            message: pending
+              ? "Оплата предыдущей попытки ещё ожидается. Откройте её в карточке игры."
+              : "Результат предыдущей попытки оплаты ещё не подтверждён. Проверьте статус оплаты — новая оплата пока недоступна.",
+            raw: { code: pending ? "SPLIT_JOIN_ATTEMPT_PENDING" : "SPLIT_JOIN_ATTEMPT_UNRESOLVED" },
+          },
+          status: 409 as ApiStatus,
+        } };
+      }
+      if (held.evidence === "paid") {
+        return { early: {
+          data: null as PadelSplitPaymentResult | null,
+          error: { status: 409, message: "Участие уже оплачено. Обновите карточку игры.", raw: { code: "SPLIT_JOIN_ATTEMPT_PAID" } },
+          status: 409 as ApiStatus,
+        } };
+      }
+      try {
+        getSplitJoinAttempts().begin(attemptKey, paymentRef);
+      } catch {
+        return { early: {
+          data: null as PadelSplitPaymentResult | null,
+          error: { status: 409, message: "Не удалось сохранить попытку оплаты. Обновите страницу.", raw: { code: "SPLIT_JOIN_ATTEMPT_JOURNAL" } },
+          status: 409 as ApiStatus,
+        } };
+      }
     }
-    if (held.paymentRef) {
-      // Never send a new create with a new key over an unresolved attempt.
-      const pending = held.evidence === "pending";
-      return {
-        data: null as PadelSplitPaymentResult | null,
-        error: {
-          status: 409,
-          message: pending
-            ? "Оплата предыдущей попытки ещё ожидается. Откройте её в карточке игры."
-            : "Результат предыдущей попытки оплаты ещё не подтверждён. Проверьте статус оплаты — новая оплата пока недоступна.",
-          raw: { code: pending ? "SPLIT_JOIN_ATTEMPT_PENDING" : "SPLIT_JOIN_ATTEMPT_UNRESOLVED" },
-        },
-        status: 409 as ApiStatus,
-      };
-    }
-    if (held.evidence === "paid") {
-      return {
-        data: null as PadelSplitPaymentResult | null,
-        error: { status: 409, message: "Участие уже оплачено. Обновите карточку игры.", raw: { code: "SPLIT_JOIN_ATTEMPT_PAID" } },
-        status: 409 as ApiStatus,
-      };
-    }
-    try {
-      getSplitJoinAttempts().begin(attemptKey, paymentRef);
-    } catch {
-      return {
-        data: null as PadelSplitPaymentResult | null,
-        error: { status: 409, message: "Не удалось сохранить попытку оплаты. Обновите страницу.", raw: { code: "SPLIT_JOIN_ATTEMPT_JOURNAL" } },
-        status: 409 as ApiStatus,
-      };
-    }
-  }
 
-  const splitRequest = buildPadelSplitRequest(
-    `/lk/games/${encodeURIComponent(normalizedGameId)}/split/join`,
-    "join",
-    params,
-    normalizedGameId,
-  );
-  const response = await requestPadelSplitJoinWithPendingPoll(splitRequest, baseUrl, params);
-  if (oneTime && response.error && isDefinitiveSplitJoinRefusal(response.status)) {
-    // The server refused this exact request: no payment was created for it.
-    getSplitJoinAttempts().complete(attemptKey);
-  }
+    const splitRequest = buildPadelSplitRequest(
+      `/lk/games/${encodeURIComponent(normalizedGameId)}/split/join`,
+      "join",
+      params,
+      normalizedGameId,
+    );
+    const response = await requestPadelSplitJoinWithPendingPoll(splitRequest, baseUrl, params);
+    if (oneTime && response.error && isDefinitiveSplitJoinRefusal(response.status)) {
+      // The server refused this exact request: no payment was created for it.
+      getSplitJoinAttempts().complete(attemptKey);
+    }
+
+    return { response, splitRequest };
+  };
+  const outcome = oneTime ? await withSplitJoinAttemptLock(attemptKey, dispatch) : await dispatch();
+  if ("early" in outcome) return outcome.early;
+  const { response, splitRequest } = outcome;
 
   if (response.error) {
     if (params.paymentMode === "subscription") {
