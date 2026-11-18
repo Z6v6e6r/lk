@@ -1659,7 +1659,7 @@ export default function TournamentSignupPage({
       ...result.data.clientSubscriptions,
     ];
     if (availableProducts.length === 0) {
-      if (mode === "public" || (!result.data.customPricing && result.data.purchasedProducts.length === 0
+      if (mode === "public" || (result.data.profile?.id && !result.data.customPricing && result.data.purchasedProducts.length === 0
         && !result.data.tariffErrors?.length)) {
         setCheckout(result.data);
         setCheckoutResolvedFor(checkoutContextKey);
