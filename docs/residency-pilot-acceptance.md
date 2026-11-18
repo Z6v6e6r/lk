@@ -123,7 +123,7 @@ Evidence: [local checks](evidence/residency-pilot/local-checks.txt),
 | Pilot HTTP gate | included above | new cases: default deny, 403 ordinary, allowed pilot, 503 stopped create, reads/reconcile/activation after stop, missing policy closed |
 | Config allowlist | `node --test scripts/tests/residencyLifecycleGateway.test.mjs` | valid list, wrong tenant, malformed/empty/duplicate, invalid audience; runtime storage check unaffected |
 | Frontend route/attempt/decision/client | `npm run test:residency-pilot` | 8 pass |
-| Route/id isolation + old bundle surface | `npm run test:residency-lk1-compat` | 4 pass against the live 316-route fixture and published bundle hash |
+| Route/id isolation + old bundle surface | `npm run test:residency-lk1-compat` | 7 pass: 4 against the live 316-route fixture/published bundle, 3 additive-install guards |
 | TypeScript | `tsc -b` | pass |
 | Lint (changed files) | `eslint ...` | pass |
 | Main bundle | `vite build` | pass (2.97 MB, 351 modules) |
