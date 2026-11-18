@@ -74,6 +74,7 @@ function runExerciseHook(options = {}) {
     msg: {},
     isProTrainingExercise,
     isSpanishTrainingExercise,
+    kidsTrainingExcludesSubscription: () => false,
     isProTrainingEnergyPack,
     isProTrainingDiscountRule,
     // The Topokraty exclusion (2026-09-25) sits in the same reviewed step; these trainings are

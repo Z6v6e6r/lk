@@ -779,6 +779,7 @@ function runExerciseHook(options = {}) {
     msg: {},
     isProTrainingExercise: () => false,
     isSpanishTrainingExercise,
+    kidsTrainingExcludesSubscription: () => false,
     isProTrainingEnergyPack: () => false,
     isTopokratyExercise,
     isTopokratyClubPack,

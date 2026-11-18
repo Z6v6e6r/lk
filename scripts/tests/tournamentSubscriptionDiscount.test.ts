@@ -1,3 +1,4 @@
+import { isKidsAcademyTraining } from "../../src/utils/kidsTrainingSubscriptions.ts";
 import { isSpanishTrainingExercise } from "../../src/utils/spanishTrainingExclusion.ts";
 import { SubscriptionRejoinTracker } from "../../src/utils/subscriptionRejoin.ts";
 import assert from "node:assert/strict";
@@ -41,7 +42,7 @@ const params = {
 };
 
 function loadFunction(name: string, dependencies: Record<string, unknown> = {}) {
-  dependencies = { isSpanishTrainingExercise, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: false, ...dependencies };
+  dependencies = { isKidsAcademyTraining, isSpanishTrainingExercise, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: false, ...dependencies };
   const source = ts.createSourceFile("api.ts", fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const declaration = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
   assert.ok(declaration, name);
@@ -149,7 +150,7 @@ test("group schedule accepts a valid zero-benefit preview without a validation e
       isAuthenticated: true, isRestoringSession: false, subscriptionUsageShadowEnabled: false,
       selectedId: quote.exerciseId, checkout: { profile: { id: quote.actorClientId },
         exercise: { timeFrom: quote.startsAt }, oneTimes: [product] },
-      registrationLoading: false, topokratyExcluded: false, spanishTrainingSelected: false, patriotsTournamentSelected: true,
+      registrationLoading: false, topokratyExcluded: false, spanishTrainingSelected: false, kidsAcademyTrainingSelected: false, patriotsTournamentSelected: true,
       AbortController, isGroupScheduleSubscriptionQuote,
       apiFetchTournamentSubscriptionDiscounts: async () => ({ data: { quotes: [zero] }, error: null }),
       apiFetchGroupSubscriptionDiscounts: async () => { throw new Error("wrong preview route"); },

@@ -1,3 +1,4 @@
+import { isKidsAcademyTraining } from "../../src/utils/kidsTrainingSubscriptions.ts";
 import { isSpanishTrainingExercise } from "../../src/utils/spanishTrainingExclusion.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -92,7 +93,7 @@ test("schedule one-time button keeps Ariadna full price and renders and dispatch
   const product = { id: "one-time", name: "Разовая🎾", cost: 550000, source: "one-time", visitsTotal: null };
   for (const [directionId, discountPercent] of [[6538, 50], [1001, 50], [6306, 50], [6306, 0]]) {
     const calls: unknown[][] = [];
-    const dependencies = { React, matchGroupScheduleSubscriptionDiscount, buildGroupScheduleSubscriptionDiscountProduct, isPartialSubscriptionEventDiscountQuote,
+    const dependencies = { isKidsAcademyTraining, React, matchGroupScheduleSubscriptionDiscount, buildGroupScheduleSubscriptionDiscountProduct, isPartialSubscriptionEventDiscountQuote,
       currentDiscountQuotes: [{ ...quote, subscriptionName: "РА",
         discountPercent, amountMinor: discountPercent === 0 ? quote.basePriceMinor : quote.amountMinor,
         kind: directionId === 6306 ? "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1" : quote.kind }],
@@ -128,7 +129,7 @@ test("Ariadna does not advertise a subscription purchase for a discarded benefit
   visit(source);
   assert.ok(expression, "exercise the actual subscription-purchase visibility condition");
   for (const directionId of [6538, 1001]) {
-    const dependencies = { checkout: { clientSubscriptions: [] }, proTrainingSelected: false, topokratyExcluded: false, spanishTrainingSelected: false,
+    const dependencies = { checkout: { clientSubscriptions: [] }, proTrainingSelected: false, topokratyExcluded: false, spanishTrainingSelected: false, kidsAcademyTrainingSelected: false,
       selectedTraining: { directionId }, subscriptionOffer: { owner: "synthetic-actor", show: true }, phone: "synthetic-actor",
       discountPending: false, currentDiscountQuotes: [], hasGroupTrainingSubscriptionEvidence: () => false };
     const visible = new Function(...Object.keys(dependencies), `return ${expression.getText(source)};`)(...Object.values(dependencies));
@@ -147,7 +148,7 @@ test("discount requires exact actor, event, tariff, supported percentage and fre
     { id: "one-time", cost: 550000, source: "subscription" }]) assert.equal(matchGroupSubscriptionDiscount([quote], product), null);
 });
 function checkout(dependencies: Record<string, unknown>) {
-  dependencies = { isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: false, ...dependencies };
+  dependencies = { isKidsAcademyTraining, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: false, ...dependencies };
   const source = ts.createSourceFile("api.ts", fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const node = source.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === "apiCreateTournamentVivaTransaction")!;
   const code = ts.transpileModule(node.getText(source).replace(/^export /, ""), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;

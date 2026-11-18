@@ -1,3 +1,4 @@
+import { restoreSourceBeforeKidsTrainingGuard } from "../prepare_kids_training_subscription_release.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -38,6 +39,7 @@ function frozenBusinessHash(file) {
     text = applyReconciledEdits(text, timeoutPreservationEdits().reverse().map(([before, after]) => [after, before]));
   }
   if (file.endsWith('fn_subscription_booking_router.js')) {
+    text = restoreSourceBeforeKidsTrainingGuard(text, file.slice('scripts/'.length));
     assert.equal(sha256(text), 'e1306a794fd815adab8f21ddca6c64a23dcf30ebfe820c665e015cfc8296bcdc', file);
     text = restoreSourceBeforeChildTournamentGuard(text, file.slice('scripts/'.length));
     // Explicit pagination successor: prove its exact bytes and recover the frozen

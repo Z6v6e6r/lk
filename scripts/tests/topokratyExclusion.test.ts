@@ -103,11 +103,11 @@ test("the widget offers no subscription for an excluded Topokraty event", () => 
   assert.match(groupSchedulePageSource,
     /const topokratyTrainingSelected = useMemo\(\s*\(\) => Boolean\(selectedDetail && isTopokratyExercise\(selectedDetail\)\),/);
   assert.match(groupSchedulePageSource, /const topokratyExcluded = topokratyTrainingSelected && !topokratyClubOwned;/);
-  assert.match(groupSchedulePageSource, /if \(spanishTrainingSelected \|\| topokratyExcluded\) \{/);
+  assert.match(groupSchedulePageSource, /if \(spanishTrainingSelected \|\| kidsAcademyTrainingSelected \|\| topokratyExcluded\) \{/);
   assert.match(groupSchedulePageSource,
     /: spanishTrainingSelected \|\| proTrainingSelected \|\| topokratyExcluded \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
   assert.match(groupSchedulePageSource, /: topokratyExcluded \? \[\]/);
-  assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !spanishTrainingSelected && !proTrainingSelected && !topokratyExcluded/);
+  assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !spanishTrainingSelected && !kidsAcademyTrainingSelected && !proTrainingSelected && !topokratyExcluded/);
 });
 
 test("the server mirror keeps the same ids, the same token and the same club product", () => {

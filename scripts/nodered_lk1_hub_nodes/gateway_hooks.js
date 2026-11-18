@@ -316,6 +316,11 @@ if (exerciseDirectionId(exercise) === 7108) {
 // Resolve the instance first. PRO monetary eligibility is checked only after fresh
 // actor-bound ownership below, since Viva may omit it from visit eligibility.
 const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
+if (kidsTrainingExcludesSubscription(exercise, selectedOwned)) {
+  return finishError(ctx, 409, "На детские тренировки действуют разовая оплата и абонемент «Падел.Дети».", {
+    code: "KIDS_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+  });
+}
 const proTrainingEnergyAllowed = selectedOwned.length === 1
   && isProTrainingEnergyPack(selectedOwned[0]);
 // A Topokraty event is outside every non-club subscription. Viva scopes a sold plan to its

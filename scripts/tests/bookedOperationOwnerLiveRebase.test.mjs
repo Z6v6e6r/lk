@@ -1,3 +1,4 @@
+import { restoreSourceBeforeKidsTrainingGuard } from "../prepare_kids_training_subscription_release.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -57,6 +58,7 @@ test('frozen canonical sources recover exactly from the reviewed payment and pag
     if (file === 'fn_subscription_booking_router.js') {
       // The historical broad rebase keeps refusing this new source until separately
       // reviewed. Selective pagination release never advances its canonical pins.
+      source = restoreSourceBeforeKidsTrainingGuard(source, 'nodered_subscription_booking_nodes/' + file);
       assert.equal(hash(source), 'e1306a794fd815adab8f21ddca6c64a23dcf30ebfe820c665e015cfc8296bcdc', file);
       source = restoreSourceBeforeChildTournamentGuard(source, 'nodered_subscription_booking_nodes/' + file);
       assert.equal(hash(source), '0b06938e198a63cb798dfc65a050fa20f866ceaf55ab2a95a34aa74b753fdcc6', file);

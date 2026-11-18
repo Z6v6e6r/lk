@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { restoreSourceBeforeKidsTrainingGuard } from './prepare_kids_training_subscription_release.mjs';
 import { verifyWorkspace } from './verify_nodered_source_origin.mjs';
 import { assertPrivatePaginationOutput } from './prepare_subscription_booking_pagination.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
@@ -45,6 +46,7 @@ const gatewayPatches = {
 };
 
 export function restoreSourceBeforeChildTournamentGuard(source, relative) {
+  source = restoreSourceBeforeKidsTrainingGuard(source, relative);
   const patch = Object.hasOwn(gatewayPatches, relative) ? gatewayPatches[relative] : null;
   return patch && source.split(patch[1]).length === 2
     ? uniqueReplace(source, patch[1], patch[0])
