@@ -1164,5 +1164,3 @@ test("a durable paid phase without a confirmed payment still reads as unknown", 
   assert.ok(!payment.instruction.includes("Оплата получена"));
   assert.equal(creator.store.orders.get(created.order.orderId).activeSlot, 1);
 });
-
-
