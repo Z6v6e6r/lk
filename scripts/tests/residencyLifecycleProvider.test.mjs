@@ -117,6 +117,16 @@ test("create sends one exact subscription line and returns a payable link", asyn
   assert.equal(body.paymentMethod, "WIDGET");
 });
 
+test("an already paid create is PAID without inventing a URL", async () => {
+  const { ports } = build({ routes: { "/transactions": () => response({ paid: true, toPay: 79000, id: TXN, paymentDate: "2026-11-18T09:05:00.000Z" }) } });
+  const result = await ports.payments.create({ amountMinor: 79000 });
+  assert.equal(result.status, "PAID");
+  assert.equal(result.paymentUrl, null);
+  assert.equal(result.paidAt, "2026-11-18T09:05:00.000Z");
+  const changed = build({ routes: { "/transactions": () => response({ paid: true, toPay: 1, id: TXN }) } });
+  await assert.rejects(changed.ports.payments.create({ amountMinor: 79000 }), /RESIDENCY_PAYMENT_INVALID/);
+});
+
 test("create rejects a changed amount or a non-https payment URL", async () => {
   const mismatch = build({ routes: { "/transactions": () => response({ paymentUrl: "https://bank.example/pay/1", toPay: 1, id: TXN }) } });
   await assert.rejects(mismatch.ports.payments.create({ amountMinor: 79000 }), /RESIDENCY_PAYMENT_INVALID/);

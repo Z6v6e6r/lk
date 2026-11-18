@@ -191,7 +191,8 @@ export function createVivaCupResidencyPorts({
     const transactionId = ids[0] || null;
     const toPay = Number.isSafeInteger(response.toPay) ? response.toPay : null;
     const paid = response.paid === true;
-    if (paid && (toPay === null || toPay === 0)) {
+    if (paid) {
+      if (toPay !== null && toPay !== 0 && toPay !== amountMinor) throw providerError("RESIDENCY_PAYMENT_INVALID");
       return { status: "PAID", providerTransactionId: transactionId, paymentUrl: null, amountMinor,
         paidAt: iso(response.paymentDate) ? isoMillis(response.paymentDate) : now().toISOString() };
     }
