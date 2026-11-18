@@ -28,9 +28,9 @@ COMMANDS AND RESULTS
   eslint src/residency src/MyApp.tsx scripts/prepare_lk_residency_lifecycle_install.mjs
     exit 0
 
-  vite build
-    351 modules transformed, dist/bundle.js 2,974.14 kB (gzip 1,318.03 kB)
-    sha256 59cb54987cf42235caf73fa793aabd18c0d8af6126b62f201f8c4be342176140
+  vite build (production config; the browser harness used a separate VITE_SERV2 override)
+    351 modules transformed, dist/bundle.js 2,974.22 kB (gzip 1,318.10 kB)
+    sha256 2b4d03b44c1f9f99e88b06d07ce50fc3afacc2d7759e2ace86fb81826c46a9ec
 
 NOT RUN
   No Node-RED import, custom-node install, Mongo index apply, env change,
