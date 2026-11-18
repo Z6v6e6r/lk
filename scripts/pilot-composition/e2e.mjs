@@ -45,7 +45,7 @@ async function gatewayReady() {
     try {
       const response = await fetch(NEW + "/lk/residency/catalog", { method: "OPTIONS" });
       if (response.status === 204) return true;
-    } catch {}
+    } catch { /* the gateway is still starting */ }
     await sleep(500);
   }
   throw new Error("gateway not ready");
@@ -61,7 +61,9 @@ const browser = await chromium.launch({ headless: true });
 const contexts = [];
 async function newDevice(role = "pilot") {
   const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 430, height: 950 } });
-  await context.addInitScript((value) => { try { window.localStorage.setItem("padlhub_auth_token_v1", value); } catch {} }, storage(role));
+  await context.addInitScript((value) => {
+    try { globalThis.localStorage.setItem("padlhub_auth_token_v1", value); } catch { /* storage unavailable */ }
+  }, storage(role));
   contexts.push(context);
   const page = await context.newPage();
   const requests = [];

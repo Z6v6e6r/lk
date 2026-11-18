@@ -174,8 +174,23 @@ charge; one agreed transaction is enough.
   not create a new order; reopen the return page / the order, use reconcile, and if still
   unknown treat it as `UNKNOWN_OUTCOME` and contact support. The order keeps its slot.
 - **Not authorized by this packet:** additional purchases, debits, cancellations or refunds.
-  Discount verification is prepared through the existing price preview/booking read, not by
-  an extra charge.
+
+### Discount verification without a charge
+
+The residency discount is checked through the existing advisory price preview, not by
+booking or paying:
+
+1. Authenticate as the same pilot account.
+2. Call `POST /lk/subscriptions/game-price-preview` with the existing `{target,
+   subscriptionIds}` payload (the game card uses the same call; it never creates or
+   reserves a game and never charges).
+3. Record `quotes[]`: the discount lines and amounts for one game and for one group
+   training/tournament target.
+4. Expected contract: 30% for game creation/participation and 50% for game+coach, group
+   trainings, the friendship league and PadlHub tournaments. If the owner returns a
+   different line or amount, stop and do not book.
+5. Do not confirm a booking or a payment in this step. The discount on an actually
+   confirmed booking remains a separate approved action after the first purchase.
 
 ## Mechanics in the new screen and their status
 

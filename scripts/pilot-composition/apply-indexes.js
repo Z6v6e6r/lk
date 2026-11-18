@@ -1,3 +1,4 @@
+/* global db, printjson */
 // One-off index application for the isolated composition.
 // Production applies the same five specs as a reviewed operator step; ENSURE_INDEXES stays false.
 db.lk_residency_lifecycle_orders.createIndex({ tenantId: 1, orderId: 1 }, { unique: true, name: "residency_order_identity" });
