@@ -11,6 +11,9 @@ import {
   normalizeGroupSchedulePromoCode,
 } from "../../src/utils/groupSchedulePromo.ts";
 import { isTrialGroupTraining, trialGroupCheckoutOperationId } from "../../src/utils/trialGroupTraining.ts";
+import { getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
+import { hasGroupTrainingSubscriptionEvidence } from "../../src/utils/groupScheduleSubscriptionOffer.ts";
+import { resolveSubscriptionUsageDisplay } from "../../src/utils/subscriptionValidity.ts";
 
 const require = createRequire(import.meta.url);
 const parse = path => ts.createSourceFile(path, fs.readFileSync(path, "utf8"),
@@ -291,4 +294,166 @@ test("actual trial transaction preserves the promo and owned visit source throug
       exerciseId: training.id, productId: params.product.id, source, promoCode: params.promoCode,
     });
   }
+});
+
+// Use the actual checkout normalizer/filter, rather than the identity stub above.
+// The provider remains responsible for populating availableClientSubscriptions.
+function subscriptionCheckoutReader(availableClientSubscriptions, exerciseOverrides = {}) {
+  const calls = [];
+  const exercise = {
+    id: "fixture-new-exercise", type: { id: 847 }, direction: { id: 2680 },
+    availableClientSubscriptions, ...exerciseOverrides,
+  };
+  const declarations = [
+    "isRecord", "pickString", "pickNumber", "pickNestedRecord", "pickFirstArray", "extractItems",
+    "normalizeCost", "normalizeVivaProduct", "normalizeVivaProducts", "collectComparableIds",
+    "collectExerciseTypeIds", "isClientSubscriptionActive", "filterClientSubscriptionsForExercise",
+    "apiFetchTournamentVivaCheckout",
+  ].map(name => find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === name)
+    .getText(api).replace(/^export /, "")).join("\n");
+  const read = evaluate(`(() => { ${declarations}; return apiFetchTournamentVivaCheckout; })()`, {
+    TENANT_KEY: "fixture", LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED: false,
+    // Freeze eligibility at the incident date so expiry tests never depend on today's clock.
+    Date: class extends Date { static now() { return Date.parse("2026-11-17T12:25:00Z"); } },
+    request: async (url, options) => {
+      calls.push({ url, options });
+      const data = url.endsWith("/profile") ? profile : url.includes("/exercises/") ? exercise : [];
+      return { data, error: null, status: 200 };
+    },
+    resolveTournamentCustomPricing: () => null,
+    resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
+    resolveClientSubscriptionProductNames: async items => items.map(item => ({
+      ...item, name: item.raw.product?.name || item.name,
+    })),
+  });
+  return { read: () => read(exercise.id), calls, exercise };
+}
+
+// De-identified provider shape: active RA, 19/30 visits and booking history.
+// All instance, booking and exercise identifiers are synthetic.
+function ownedRa(overrides = {}) {
+  return {
+    subscriptionId: "fixture-owned-ra",
+    product: { id: "b91e14d1-fe6e-4d0b-be39-3e45ad86b759", name: "РА" },
+    status: "ACTIVE", visitsTotal: 30, visitsLeft: 19,
+    purchaseDate: "2026-11-13T08:15:00", activationDate: "2026-11-13T08:17:00",
+    expirationDate: "2026-12-13", availableDays: [],
+    hasTypeLimitation: true, availableTypes: [{ id: 847, name: "Игра+Тренер" }],
+    hasDirectionLimitation: true, availableDirections: [{ id: 2680, name: "Игра+Тренер уровень D+" }],
+    activationBooking: { id: "fixture-activation-booking", exerciseId: "fixture-past-exercise" },
+    bookings: [{ id: "fixture-past-booking", exerciseId: "fixture-past-exercise" },
+      { id: "fixture-reserved-booking", exerciseId: "fixture-another-exercise" }],
+    ...overrides,
+  };
+}
+
+async function checkoutSubscriptions(rows, exerciseOverrides = {}) {
+  const harness = subscriptionCheckoutReader(rows, exerciseOverrides);
+  const result = await harness.read();
+  assert.equal(result.error, null);
+  assert.ok(harness.calls.every(call => call.options.method === "GET"), "reading options must not write or charge");
+  assert.deepEqual(result.data.purchasedProducts, result.data.clientSubscriptions);
+  return result.data.clientSubscriptions;
+}
+
+test("active RA with activation and booking history remains selectable for a new exercise", async () => {
+  const raw = ownedRa();
+  const before = structuredClone(raw);
+  const subscriptions = await checkoutSubscriptions([raw]);
+  assert.deepEqual(subscriptions.map(item => item.id), [raw.subscriptionId]);
+  assert.equal(subscriptions[0].source, "client-subscription");
+  assert.equal(subscriptions[0].name, "РА");
+  assert.equal(subscriptions[0].raw.visitsLeft, 19);
+  assert.deepEqual(raw, before, "history and subscription identity must not be changed");
+});
+
+test("booking provenance does not become a type or direction restriction, including nested history", async () => {
+  const raw = ownedRa({
+    activationBooking: { typeId: 605 }, bookings: [{ directionId: 3685 }],
+    subscription: { bookings: [{ exerciseId: "fixture-other-exercise" }] },
+  });
+  assert.equal((await checkoutSubscriptions([raw])).length, 1);
+});
+
+test("explicit exercise restrictions still apply and history cannot satisfy or override them", async () => {
+  for (const key of ["exerciseId", "vivaExerciseId", "availableExerciseIds", "exerciseIds", "sourceExerciseId"]) {
+    const ids = value => key.endsWith("Ids") ? [value] : value;
+    for (const nested of [false, true]) {
+      const restriction = value => nested ? { subscription: { [key]: ids(value) } } : { [key]: ids(value) };
+      assert.equal((await checkoutSubscriptions([ownedRa(restriction("fixture-new-exercise"))])).length, 1, key);
+      assert.equal((await checkoutSubscriptions([ownedRa({
+        ...restriction("fixture-excluded-exercise"),
+        activationBooking: { exerciseId: "fixture-new-exercise" },
+        bookings: [{ exerciseId: "fixture-new-exercise" }],
+      })])).length, 0, key);
+    }
+  }
+});
+
+test("type and direction restrictions cannot be widened by matching historical bookings", async () => {
+  for (const key of ["exerciseTypeId", "exerciseTypeIds", "typeId", "typeIds", "vivaExerciseTypeId",
+    "directionId", "directionIds", "vivaDirectionId"]) {
+    const matching = key.toLowerCase().includes("direction") ? 2680 : 847;
+    const restriction = value => ({ [key]: key.endsWith("Ids") ? [value] : value });
+    assert.equal((await checkoutSubscriptions([ownedRa({ ...restriction(matching) })])).length, 1, key);
+    assert.equal((await checkoutSubscriptions([ownedRa({
+      ...restriction(9999), activationBooking: restriction(matching), bookings: [restriction(matching)],
+    })])).length, 0, key);
+  }
+  assert.equal((await checkoutSubscriptions([ownedRa({ typeId: 9999 })], {
+    bookings: [{ typeId: 9999 }], activationBooking: { typeId: 9999 },
+  })).length, 0, "event booking history must not widen the event's own type either");
+});
+
+test("expired, cancelled, blocked, archived and exhausted subscriptions remain excluded", async () => {
+  for (const overrides of [
+    ...["EXPIRED", "CANCELLED", "BLOCKED", "ARCHIVED"].map(status => ({ status })),
+    { expirationDate: "2026-11-13" }, { visitsLeft: 0 },
+  ]) {
+    assert.equal((await checkoutSubscriptions([ownedRa(overrides)])).length, 0, JSON.stringify(overrides));
+  }
+  assert.equal((await checkoutSubscriptions([ownedRa({ activationBooking: null, bookings: [] })])).length, 1);
+});
+
+test("empty provider availability never manufactures an owned subscription from event history", async () => {
+  assert.deepEqual(await checkoutSubscriptions([], { bookings: [{ subscription: ownedRa() }] }), []);
+});
+
+test("unrelated primitive arrays do not become exercise ids or override explicit eligibility", async () => {
+  const unrelated = { availableDays: ["MONDAY", "TUESDAY"], tags: ["fixture-new-exercise", 847] };
+  assert.equal((await checkoutSubscriptions([ownedRa(unrelated)])).length, 1);
+  assert.equal((await checkoutSubscriptions([ownedRa({ ...unrelated,
+    availableExerciseIds: ["fixture-excluded-exercise"],
+  })])).length, 0);
+  assert.equal((await checkoutSubscriptions([ownedRa({ typeId: 9999 })], {
+    availableClientOneTimes: [{ typeId: 9999 }],
+  })).length, 0);
+});
+
+test("retained RA renders an owned booking button and passes the same instance to registration", async () => {
+  const clientSubscriptions = await checkoutSubscriptions([ownedRa()]);
+  const current = checkout({ clientSubscriptions, purchasedProducts: clientSubscriptions });
+  const ownedSubscriptions = getGroupScheduleOwnedSubscriptions(clientSubscriptions, []);
+  const calls = [];
+  const tree = paymentOptions({
+    checkout: current, ownedSubscriptions, proTrainingSelected: false,
+    resolveSubscriptionUsageDisplay,
+    shouldShowSubscriptionPurchaseLink: !hasGroupTrainingSubscriptionEvidence(clientSubscriptions, []),
+    completeRegistration: (...args) => calls.push(args),
+  });
+  const html = renderToStaticMarkup(tree);
+  assert.match(html, /Ваши абонементы/);
+  assert.doesNotMatch(html, /Приобрести подписку РА/);
+  const button = elements(tree, "button").find(item => renderToStaticMarkup(item).includes("РА"));
+  assert.ok(button);
+  assert.equal(button.props.disabled, false);
+  button.props.onClick();
+  assert.deepEqual(calls[0], [training, current, clientSubscriptions[0]]);
+  assert.equal(calls[0][2].id, "fixture-owned-ra");
+  assert.equal(calls[0][2].source, "client-subscription");
+  // Managed prices must still use their existing path; pending checks must not expose a free visit.
+  assert.deepEqual(getGroupScheduleOwnedSubscriptions(clientSubscriptions, null), []);
+  assert.deepEqual(getGroupScheduleOwnedSubscriptions(clientSubscriptions, [{
+    subscriptionId: "fixture-owned-ra", discountPercent: 50,
+  }]), []);
 });
