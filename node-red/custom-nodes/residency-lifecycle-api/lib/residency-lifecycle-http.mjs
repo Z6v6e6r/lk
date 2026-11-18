@@ -100,6 +100,11 @@ export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*"
     if (error instanceof ResidencyLifecycleError) {
       return respond(error.statusCode, { code: error.code, message: error.message }, correlation, origin);
     }
+    const status = Number(error?.statusCode);
+    if (Number.isInteger(status) && status >= 400 && status <= 599 && typeof error?.code === "string") {
+      const message = status < 500 ? String(error.message || "Request failed") : "Upstream request could not be completed";
+      return respond(status, { code: error.code, message }, correlation, origin);
+    }
     return respond(500, { code: "RESIDENCY_INTERNAL", message: "Internal error" }, correlation, origin);
   }
 

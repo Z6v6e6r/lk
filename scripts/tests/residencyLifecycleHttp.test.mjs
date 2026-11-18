@@ -178,6 +178,19 @@ test("full user journey: catalog -> checkout -> payment -> CUP activation -> sta
   assert.equal(renewed.body.order.state, ORDER_STATES.PENDING_PAYMENT);
 });
 
+test("provider errors keep their stable status and code without leaking a body", async () => {
+  const api = createResidencyLifecycleApi({ createLifecycle: () => ({ async catalog() {
+    const error = new Error("upstream text with private data");
+    error.code = "RESIDENCY_UPSTREAM_TIMEOUT";
+    error.statusCode = 504;
+    throw error;
+  } }) });
+  const result = await api.handle(req("GET", "/lk/residency/catalog"));
+  assert.equal(result.statusCode, 504);
+  assert.equal(result.body.code, "RESIDENCY_UPSTREAM_TIMEOUT");
+  assert.ok(!JSON.stringify(result.body).includes("private data"));
+});
+
 test("a failed provider payment is terminal and visible through the order endpoint", async () => {
   const { api, state } = harness();
   const created = await api.handle(req("POST", "/lk/residency/orders", {}, { "Idempotency-Key": KEY }));
