@@ -5,10 +5,15 @@ import ts from 'typescript';
 import { webcrypto } from 'node:crypto';
 
 const source = fs.readFileSync(new URL('../../src/utils/tournamentPendingPayment.ts', import.meta.url), 'utf8');
-const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+const cancellation = ts.transpileModule(fs.readFileSync(new URL('../../src/utils/bookingPaymentCancellation.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+const cancellationUrl = `data:text/javascript;base64,${Buffer.from(cancellation).toString('base64')}`;
+const lifecycle = ts.transpileModule(fs.readFileSync(new URL('../../src/utils/paymentAttemptLifecycle.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace('"./bookingPaymentCancellation.ts"', JSON.stringify(cancellationUrl));
+const lifecycleUrl = `data:text/javascript;base64,${Buffer.from(lifecycle).toString('base64')}`;
+const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace('"./paymentAttemptLifecycle.ts"', JSON.stringify(lifecycleUrl)).replace('"./bookingPaymentCancellation.ts"', JSON.stringify(cancellationUrl));
 const { mergeTournamentPendingPayment: merge, storeTournamentPendingPayment: store,
   clearTournamentPendingPayments: clear, canPayTournamentPending: canPay } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
-const pending = extra => ({ status: 'PAYMENT_PENDING', bookingId: 'booking-A', canRegister: false, canCancel: true,
+const pending = extra => ({ status: 'PAYMENT_PENDING', bookingId: 'booking-A', transactionId: 'transaction-A', canRegister: false, canCancel: true,
+  paymentAttemptCancelSupported: true,
   placeNumber: null, waitlistNumber: null, message: null, paymentUrl: 'https://checkout.example.test/A',
   paymentExpiresAt: '2099-01-01T00:00:00Z', ...extra });
 
@@ -29,6 +34,9 @@ test('F5/F6 binding, expiry, logout and unchanged valid recovery', async () => {
     await store('fixture-session-A', 'event', pending());
     const missing = pending({ paymentUrl: null, paymentExpiresAt: null });
     assert.equal((await merge('fixture-session-A', 'event', missing)).paymentUrl, pending().paymentUrl);
+    assert.equal((await merge('fixture-session-A', 'event', { ...missing, transactionId: null })).transactionId, pending().transactionId);
+    assert.equal((await merge('fixture-session-A', 'event', { ...missing, paymentAttemptCancelSupported: undefined })).paymentAttemptCancelSupported, true);
+    assert.equal((await merge('fixture-session-A', 'event', { ...missing, paymentAttemptCancelSupported: false })).paymentAttemptCancelSupported, false);
     for (const [token, event, reg] of [
       ['fixture-session-B', 'event', missing], ['fixture-session-A', 'other-event', missing],
       ['fixture-session-A', 'event', unbound], ['fixture-session-A', 'event', { ...missing, bookingId: null }],

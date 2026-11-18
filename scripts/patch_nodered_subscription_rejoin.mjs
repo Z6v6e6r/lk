@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { isNodeRedHttpsCheckout } from './patch_nodered_subscription_paid_join.mjs';
+import { bookingPaymentAttemptSource } from './lib/eventPaymentSources.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 
 export const REJOIN_GATEWAY_ID = 'lk_subscription_booking_router_20260804';
@@ -31,7 +32,7 @@ export function patchSubscriptionRejoinGateway(source) {
   const snippet = fs.readFileSync(new URL('./nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
   const helpers = section(snippet, '// REJOIN_HELPERS_START', '// REJOIN_HELPERS_END');
   const freshBranch = section(snippet, '    const previousId = lk1RejoinPreviousId(ctx.operationId);', '    delete ctx.lk1IngressReplay;');
-  const releasedBranch = section(snippet, '    if (operation.state === "RELEASED" && ctx.caller', '    if (operation.state !== "CONFIRMED"');
+  const releasedBranch = section(snippet, '    if (operation.state === "RELEASED" && ((ctx.caller', '    if (operation.state !== "CONFIRMED"');
   const predecessorStep = section(snippet, 'if (ctx.step === "lk1_rejoin_predecessor_find")', end);
   let out = replaceOnce(source, '  if (!operation && msg.payload.length === 0) {',
     '  if (!operation && msg.payload.length === 0) {\n' + freshBranch.trimEnd());
@@ -59,6 +60,7 @@ export function patchSubscriptionRejoinGateway(source) {
       '      const safeUrl = isNodeRedHttpsCheckout(checkout?.paymentUrl);');
     out = isNodeRedHttpsCheckout.toString() + '\n' + out;
   }
+  out = bookingPaymentAttemptSource() + out;
   new Function('msg', 'node', 'global', 'env', out);
   return out;
 }

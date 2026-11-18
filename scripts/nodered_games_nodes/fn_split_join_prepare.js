@@ -2,7 +2,7 @@
 const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "join_prepare", { sourceHash: "515dca2fdb427ff5e56dda7b47372a45056ece3fcdbdba00a70074c7a3b36010", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "join_prepare", { sourceHash: "155ecc14f23818c4a5f5a34c48c2451b6ee2ae8c1e6c9cee26e95d6ca8537abe", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -18,7 +18,7 @@ const TOKEN_REFRESH_LOCK_MS = 10 * 1000;
 const DEFAULT_OPEN_GAME_DIRECTION_ID = 4588;
 const DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_SPLIT_SHARE_COUNT = 4;
-const DEFAULT_PAYMENT_DEADLINE_MINUTES = 10;
+const DEFAULT_PAYMENT_DEADLINE_MINUTES = 15;
 const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
 const TOKEN_REQUEST_TIMEOUT_MS = 10000;
 
@@ -602,10 +602,8 @@ const vivaExerciseTypeId = resolvePositiveInt(
   ?? metadata.vivaExerciseTypeId,
   DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID,
 );
-const paymentDeadlineMinutes = Math.max(
-  1,
-  Math.min(180, Math.floor(toNumber(body.paymentDeadlineMinutes) ?? DEFAULT_PAYMENT_DEADLINE_MINUTES)),
-);
+// The server owns the payment window; a retry cannot extend it through request fields.
+const paymentDeadlineMinutes = DEFAULT_PAYMENT_DEADLINE_MINUTES;
 const fallbackDeadlineAt = new Date(Date.now() + paymentDeadlineMinutes * 60 * 1000).toISOString();
 const startAtIso = toStr(booking.timeFromIso)
   || (booking.date && booking.timeFrom ? `${booking.date}T${booking.timeFrom}:00+03:00` : null);
@@ -661,11 +659,10 @@ msg._splitCtx = {
   transactionPaymentMethod,
   successUrl: toStr(body.successUrl) || toStr(body.baseRedirectUrl),
   failUrl: toStr(body.failUrl) || toStr(body.baseRedirectUrl),
-  deadlineAt:
-    toStr(body.deadlineAt)
-    || toStr(splitPayment.participantDeadlineAt)
-    || toStr(splitPayment.participantPaymentDeadlineAt)
-    || fallbackDeadlineAt,
+  deadlineAt: fallbackDeadlineAt,
+  // Server-loaded payment rows are only locators. The router authenticates the actor
+  // and reads the exact provider booking/transaction before replaying a checkout.
+  existingSplitPayments: splitPayments,
   assembleDeadlineAt: toStr(splitPayment.assembleDeadlineAt) || assembleDeadlineAt,
 };
 

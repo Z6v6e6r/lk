@@ -60,8 +60,14 @@ export function hubGatewaySource() {
     .test(source)) {
     throw new Error('Gateway must not redeclare the embedded Topokraty exclusion symbols');
   }
-  return freeCancellationProtocolSource() + planRulesSource() + proTrainingExclusionSource() + topokratyExclusionSource() + spanishTrainingExclusionSource()
+  return bookingPaymentAttemptSource() + freeCancellationProtocolSource() + planRulesSource() + proTrainingExclusionSource() + topokratyExclusionSource() + spanishTrainingExclusionSource()
     + source.replace(marker, () => eventPaymentRoutesSource());
+}
+
+export function bookingPaymentAttemptSource() {
+  const source = fs.readFileSync(new URL('./bookingPaymentAttempt.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+  return 'const bookingPaymentLifecycle = (() => {\n' + freeCancellationProtocolSource() + source
+    + '\nreturn { paymentAttemptInstant, paymentAttemptCheckout, paymentAttemptDeadline, paymentAttemptReleased, paymentAttemptTransaction, paymentAttemptCancelKey, paymentAttemptCancelRequested,\n nativeReleased: op => paymentAttemptReleased(op) || lk1FreeReturnedOperation(op) || lk1SeatReleasedOperation(op) };\n})();\n';
 }
 
 export const bookingReadbackSource = () => fs.readFileSync(new URL("../nodered_lk1_hub_nodes/booking_readback.js", import.meta.url), "utf8");

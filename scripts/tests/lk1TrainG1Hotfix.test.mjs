@@ -7,7 +7,7 @@
 // private snapshot is absent).
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 import {
   LK1_TRAIN_G1_POSTIMAGE_NODE_SHA256,
   LK1_TRAIN_G1_POSTIMAGE_SHA256,
@@ -44,6 +44,28 @@ const snapshotSkip = fs.existsSync(UPSTREAM_FLOW)
     + "npm run nodered:modular:pull-147, or set LK1_TRAIN_147_UPSTREAM_FLOW)";
 
 const occurrences = (haystack, needle) => haystack.split(needle).length - 1;
+const readFileSync = fs.readFileSync.bind(fs);
+const paymentLifecycleGateway = JSON.parse(readFileSync(
+  new URL('../lib/bookingPaymentAttemptSourceEdits.json', import.meta.url), 'utf8')).functions
+  .find(item => item.file === 'scripts/nodered_lk1_hub_nodes/gateway.js');
+function restorePrePaymentLifecycle(source) {
+  assert.equal(sha256(source), paymentLifecycleGateway.afterSha256);
+  for (const { before, after } of [...paymentLifecycleGateway.edits].reverse()) {
+    assert.equal(occurrences(source, after), 1, 'inverse payment lifecycle gateway anchor');
+    source = source.replace(after, () => before);
+  }
+  assert.equal(sha256(source), paymentLifecycleGateway.beforeSha256);
+  return source;
+}
+// The historical patcher reads its reviewed fragment from disk. Supply its exact
+// pre-lifecycle fixture in memory; its original pins and production guard stay intact.
+beforeEach(t => {
+  t.mock.method(fs, 'readFileSync', (file, ...options) => {
+    const source = readFileSync(file, ...options);
+    return String(file).endsWith('/nodered_lk1_hub_nodes/gateway.js')
+      ? restorePrePaymentLifecycle(source) : source;
+  });
+});
 
 const LIVE_CLUB_GATE = `  // A Topokraty event is outside every non-club subscription. Viva scopes a sold plan to its
   // own directions and exercise types, so carrying «РА», «Академия» or «Дружба» to direction
@@ -462,6 +484,10 @@ test("G1 retains original source pins while undoing only exact later Spanish/Fri
   ];
   for (const [relative, pin, delta] of rows) {
     const current = fs.readFileSync(new URL("../" + relative, import.meta.url), "utf8");
+    if (relative.endsWith('/gateway.js')) {
+      const withLifecycle = readFileSync(new URL('../' + relative, import.meta.url), 'utf8');
+      assert.throws(() => g1ReviewedSource(withLifecycle, relative, pin, relative), /Reviewed .* drift/);
+    }
     let historical = restorePreCancelledAllowanceSource(current, relative).replace(delta, "");
     if (relative.endsWith("/gateway.js")) historical = historical
       .replace("  // «Время на друзей» session, including «Время на друзей (особый)» (2026-11-11).\n  // Other tournament directions keep their configured discount.\n",

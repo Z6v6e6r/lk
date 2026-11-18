@@ -211,7 +211,7 @@ const resolveShareCount = (game, splitPayment) => {
 };
 
 const resolvePaymentDeadlineTs = (paymentItem, splitPayment, fallbackTimeoutMs) => {
-  const createdAtTs = parseTs(paymentItem?.createdAt || paymentItem?.updatedAt);
+  const createdAtTs = parseStrictIsoTs(paymentItem?.paymentAttemptCreatedAt || paymentItem?.createdAt);
   const fallbackDeadlineTs = createdAtTs === null ? null : createdAtTs + fallbackTimeoutMs;
   const explicitDeadlineTs = parseTs(
     paymentItem?.deadlineAt
@@ -275,21 +275,42 @@ const dryRun = request.dryRun === true;
 const force = request.force === true;
 const requestGameId = toStr(request.gameId);
 const requestIntent = toStr(request.intent)?.toLowerCase() || null;
-const allowForceGameCancel = request.allowForceGameCancel === true || requestIntent === "cancel_game";
+const paymentCancellation = requestIntent === "cancel_payment" && isObj(request.paymentCancellation)
+  ? request.paymentCancellation : null;
+const explicitPaymentCancel = requestIntent === "cancel_payment";
+const nativePaymentCancelOnly = explicitPaymentCancel && paymentCancellation?.nativeRelease === true;
+const cancelDescriptorValid = paymentCancellation?.authorized === true
+  && paymentCancellation.actorClientId === toStr(request.actorClientId)
+  && [paymentCancellation.operationId, paymentCancellation.bookingId, paymentCancellation.transactionId,
+    paymentCancellation.actorClientId, requestGameId, request.tenantKey]
+    .every(value => typeof value === "string" && value.length > 0)
+  && (nativePaymentCancelOnly ? paymentCancellation.nativeOperationKey === "lk1-product:"
+    + JSON.stringify([request.tenantKey, paymentCancellation.actorClientId, paymentCancellation.operationId])
+    : typeof paymentCancellation.headKey === "string" && paymentCancellation.headKey.length > 0)
+  && Number.isFinite(Date.parse(paymentCancellation.requestedAt));
+const allowForceGameCancel = !explicitPaymentCancel
+  && (request.allowForceGameCancel === true || requestIntent === "cancel_game");
 const preferredRefundMethod = normalizeRefundMethod(request.preferredRefundMethod);
 const cancellationActionId = normalizeCancellationActionId(request.cancellationActionId);
 const actorBookingId = toStr(request.actorBookingId);
 const limit = Math.max(1, Math.min(500, Math.floor(toNumber(request.limit) || 200)));
 const internalScheduler = request.internalScheduler === true;
 const activationCutoffTs = internalScheduler ? parseStrictIsoTs(request.activationCutoffIso) : null;
-const PARTICIPANT_PAYMENT_TIMEOUT_MS = 10 * 60 * 1000;
+const PARTICIPANT_PAYMENT_TIMEOUT_MS = 15 * 60 * 1000;
 
 const tasks = [];
-let authorizationFailure = null;
+let authorizationFailure = explicitPaymentCancel && (!cancelDescriptorValid || force || internalScheduler || rows.length !== 1)
+  ? { code: "SPLIT_PAYMENT_CANCEL_BINDING_INVALID", error: "Запрос отмены оплаты не подтверждён" } : null;
 let excludedBeforeActivationCount = 0;
 
 rows.forEach((game) => {
   if (!isObj(game)) return;
+  if (explicitPaymentCancel && (authorizationFailure || game.id !== requestGameId
+    || game.tenantKey !== request.tenantKey)) {
+    authorizationFailure = authorizationFailure || {
+      code: "SPLIT_PAYMENT_CANCEL_BINDING_INVALID", error: "Игра отменяемой оплаты не подтверждена" };
+    return;
+  }
   if (internalScheduler) {
     const gameCreatedAtTs = parseStrictIsoTs(game.createdAt);
     if (
@@ -330,10 +351,30 @@ rows.forEach((game) => {
   const waitlist = asArray(game.waitlist).filter((item) => isObj(item));
   const payments = asArray(splitPayment?.payments).filter((item) => isObj(item));
 
+  if (explicitPaymentCancel) {
+    const candidates = payments.filter(payment => payment.bookingId === paymentCancellation.bookingId
+      || payment.transactionId === paymentCancellation.transactionId);
+    const target = candidates[0];
+    if (candidates.length !== 1 || target.clientId !== paymentCancellation.actorClientId
+      || target.bookingId !== paymentCancellation.bookingId || target.transactionId !== paymentCancellation.transactionId
+      || (!nativePaymentCancelOnly && (target.paymentAttemptHeadKey !== paymentCancellation.headKey
+        || (target.operationId || target.paymentRef) !== paymentCancellation.operationId))
+      || (nativePaymentCancelOnly && target.operationId && target.operationId !== paymentCancellation.operationId)
+      || !["PAYMENT_PENDING", "LEFT", "CANCELLED", "CANCELED", "EXPIRED"].includes(target.status)
+      || asArray(target.bookingIds).some(id => id !== paymentCancellation.bookingId)) {
+      authorizationFailure = { code: "SPLIT_PAYMENT_CANCEL_BINDING_INVALID", error: "Попытка оплаты не подтверждена" };
+      return;
+    }
+  }
   const timedOutPaymentItems = [];
   payments.forEach((paymentItem, index) => {
+    if (explicitPaymentCancel && (paymentItem.bookingId !== paymentCancellation.bookingId
+      || paymentItem.transactionId !== paymentCancellation.transactionId)) return;
     const paymentStatus = String(paymentItem.status || "").trim().toUpperCase();
-    if (paymentStatus !== "PAYMENT_PENDING") return;
+    const retiredWithHead = ["LEFT", "CANCELLED", "CANCELED", "EXPIRED"].includes(paymentStatus)
+      && (toStr(paymentItem.paymentAttemptHeadKey) || nativePaymentCancelOnly)
+      && !paymentItem.paymentAttemptClosure && !paymentItem.nativePaymentAttemptClosure;
+    if (paymentStatus !== "PAYMENT_PENDING" && !retiredWithHead) return;
     const paymentAmountMinor = toNumber(paymentItem.amountMinor);
     const paymentAmount = toNumber(paymentItem.amount);
     // Subscription/zero-cost joins can be instantly paid without redirect; do not timeout-remove them.
@@ -344,7 +385,7 @@ rows.forEach((game) => {
       return;
     }
     const deadlineTs = resolvePaymentDeadlineTs(paymentItem, splitPayment, PARTICIPANT_PAYMENT_TIMEOUT_MS);
-    if (deadlineTs === null || nowTs < deadlineTs) return;
+    if (deadlineTs === null || !explicitPaymentCancel && nowTs < deadlineTs) return;
     const identity = resolvePaymentIdentity(paymentItem);
     const matchedParticipant = participants.find((player) => playerMatchesIdentity(player, identity)) || null;
     const matchedWaitlist = waitlist.find((player) => playerMatchesIdentity(player, identity)) || null;
@@ -372,6 +413,14 @@ rows.forEach((game) => {
   if (timedOutPaymentItems.length > 0 && !explicitForceTarget) {
     const timedOutKeys = new Set(timedOutPaymentItems.map((item) => item.key));
     const timedOutIdentities = timedOutPaymentItems.map((item) => item.identity);
+    // A released attempt may finish its roster cleanup after an explicit new
+    // generation has already booked. Retire the old bill without removing the
+    // player now owned by another live/paid payment row.
+    const protectedIdentities = payments.filter((paymentItem, index) => !timedOutKeys.has(buildPaymentKey(paymentItem, index))
+      && ["PAID", "PAYMENT_PENDING"].includes(String(paymentItem.status || "").trim().toUpperCase()))
+      .map(resolvePaymentIdentity);
+    const protectedIdentity = identity => protectedIdentities.some(other => playerMatchesIdentity(
+      { id: other.clientId, phone: other.phone }, identity));
     const timedOutBookingIds = uniq(timedOutPaymentItems.flatMap((item) => item.bookingIds));
     const timedOutBookingTargets = uniqBookingTargets(
       timedOutPaymentItems.flatMap((item) => (
@@ -383,29 +432,33 @@ rows.forEach((game) => {
     );
     const nextParticipants = participants.filter((player) => (
       !timedOutIdentities.some((identity) => playerMatchesIdentity(player, identity))
+      || protectedIdentities.some((identity) => playerMatchesIdentity(player, identity))
     ));
     const nextWaitlist = waitlist.filter((player) => (
       !timedOutIdentities.some((identity) => playerMatchesIdentity(player, identity))
+      || protectedIdentities.some((identity) => playerMatchesIdentity(player, identity))
     ));
     const nextSplitPayments = payments.map((paymentItem, index) => {
       const key = buildPaymentKey(paymentItem, index);
       if (!timedOutKeys.has(key)) return paymentItem;
+      if (["LEFT", "CANCELLED", "CANCELED", "EXPIRED"].includes(String(paymentItem.status || "").toUpperCase())) return paymentItem;
       return {
         ...paymentItem,
         status: "EXPIRED",
-        cancelReason: "PAYMENT_TIMEOUT",
+        cancelReason: explicitPaymentCancel ? "USER_PAYMENT_CANCELLED" : "PAYMENT_TIMEOUT",
         cancelledAt: nowIso,
         leftAt: nowIso,
       };
     });
     const baseLeaveEvents = normalizeLeaveEvents(metadata);
-    const timeoutLeaveEvents = timedOutPaymentItems.map((item) => ({
+    const timeoutLeaveEvents = timedOutPaymentItems.filter(item => item.paymentItem.status === "PAYMENT_PENDING"
+      && item.playerBucket && !protectedIdentity(item.identity)).map((item) => ({
       playerId: item.identity.clientId || null,
       playerPhone: item.identity.phone || null,
       playerName: item.identity.name,
       leftAt: nowIso,
-      reason: "AUTO_PAYMENT_TIMEOUT",
-      byId: "split_cleanup",
+      reason: explicitPaymentCancel ? "USER_PAYMENT_CANCELLED" : "AUTO_PAYMENT_TIMEOUT",
+      byId: explicitPaymentCancel ? paymentCancellation.actorClientId : "split_cleanup",
       byPhone: null,
       byName: "Split cleanup",
     }));
@@ -413,10 +466,12 @@ rows.forEach((game) => {
 
     tasks.push({
       mode: "PARTICIPANT_TIMEOUT",
+      ...(nativePaymentCancelOnly ? { nativePaymentCancelOnly: true,
+        nativePaymentOperationKey: paymentCancellation.nativeOperationKey } : {}),
       gameId,
       tenantKey: game?.tenantKey,
       revision: game?.revision,
-      reason: "PAYMENT_TIMEOUT",
+      reason: explicitPaymentCancel ? "USER_PAYMENT_CANCELLED" : "PAYMENT_TIMEOUT",
       statusBefore: status || null,
       expectedRevision: game?.revision !== null && game?.revision !== undefined
         && Number.isSafeInteger(Number(game.revision))
@@ -446,6 +501,7 @@ rows.forEach((game) => {
         role: toStr(item.paymentItem.role),
         paymentRef: toStr(item.paymentItem.paymentRef),
         transactionId: item.transactionId || null,
+        paymentAttemptHeadKey: toStr(item.paymentItem.paymentAttemptHeadKey),
         clientId: item.identity.clientId || null,
         phone: item.identity.phone || null,
         name: item.identity.name,
@@ -463,6 +519,8 @@ rows.forEach((game) => {
     });
     return;
   }
+
+  if (explicitPaymentCancel) return;
 
   const shareCount = resolveShareCount(game, splitPayment);
   const participantsCount = participants.length;

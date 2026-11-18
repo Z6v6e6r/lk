@@ -1,3 +1,5 @@
+import { canOpenPaymentAttempt } from "./paymentAttemptLifecycle.ts";
+import { paymentCancellationBlocksAttempt } from "./bookingPaymentCancellation.ts";
 import type { TournamentRegistrationState } from "./tournamentSignupApi";
 
 const PREFIX = "padlhub:tournament-payment:";
@@ -43,13 +45,8 @@ export function clearTournamentPendingPayments(exerciseId?: string): void {
 }
 
 export function canPayTournamentPending(registration: TournamentRegistrationState | null, now = Date.now()): boolean {
-  if (registration?.status !== "PAYMENT_PENDING" || !registration.bookingId || typeof registration.paymentUrl !== "string"
-    || typeof registration.paymentExpiresAt !== "string" || !registration.paymentExpiresAt || Date.parse(registration.paymentExpiresAt) <= now
-    || !Number.isFinite(Date.parse(registration.paymentExpiresAt))) return false;
-  try {
-    const url = new URL(registration.paymentUrl);
-    return url.protocol === "https:" && !url.username && !url.password;
-  } catch { return false; }
+  return registration?.status === "PAYMENT_PENDING" && Boolean(registration.bookingId)
+    && canOpenPaymentAttempt(registration, now);
 }
 
 export async function storeTournamentPendingPayment(token: string | null, exerciseId: string, registration: TournamentRegistrationState) {
@@ -57,6 +54,8 @@ export async function storeTournamentPendingPayment(token: string | null, exerci
   try {
     const name = await key(token, exerciseId, registration.bookingId);
     if (name) storage()?.setItem(name, JSON.stringify({ bookingId: registration.bookingId,
+      transactionId: registration.transactionId,
+      paymentAttemptCancelSupported: registration.paymentAttemptCancelSupported,
       paymentUrl: registration.paymentUrl, paymentExpiresAt: registration.paymentExpiresAt }));
   } catch { /* Never replace a fresh response with unbound cache state. */ }
 }
@@ -71,13 +70,20 @@ export async function mergeTournamentPendingPayment(token: string | null, exerci
     const name = await key(token, exerciseId, registration.bookingId);
     const raw = name ? storage()?.getItem(name) : null;
     const saved = raw ? JSON.parse(raw) : null;
-    if (saved?.bookingId === registration.bookingId && canPayTournamentPending({ ...registration, ...saved })
+    if (saved?.bookingId === registration.bookingId && typeof saved.transactionId === "string"
+      && (!registration.transactionId || registration.transactionId === saved.transactionId)) {
+      result.transactionId = saved.transactionId;
+      if (registration.paymentAttemptCancelSupported == null && typeof saved.paymentAttemptCancelSupported === "boolean") {
+        result.paymentAttemptCancelSupported = saved.paymentAttemptCancelSupported;
+      }
+    }
+    if (saved?.bookingId === registration.bookingId && canPayTournamentPending({ ...registration, ...saved, paymentAttemptState: registration.paymentAttemptState })
       && (!registration.paymentUrl || registration.paymentUrl === saved.paymentUrl)) {
-      result = { ...registration, paymentUrl: registration.paymentUrl || saved.paymentUrl,
+      result = { ...result, paymentUrl: registration.paymentUrl || saved.paymentUrl,
         paymentExpiresAt: registration.paymentExpiresAt || saved.paymentExpiresAt };
     }
     if (!canPayTournamentPending(result)) {
-      if (name) storage()?.removeItem(name);
+      if (name && !paymentCancellationBlocksAttempt(result)) storage()?.removeItem(name);
       result = { ...result, paymentUrl: null };
     }
   } catch { result = { ...registration, paymentUrl: canPayTournamentPending(registration) ? registration.paymentUrl : null }; }
