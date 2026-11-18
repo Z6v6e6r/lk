@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
 import { isTrialGroupExercise } from '../lib/trialGroupEligibility.mjs';
+import { resolveSubscriptionCategoryDailyLimitCategoryFromEvent } from '../../src/utils/subscriptionCategoryDailyLimit.ts';
 
 const read = relative => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
 const module = ts.transpileModule(read('../../src/utils/trialGroupTraining.ts'), {
@@ -17,7 +18,7 @@ const compiled = ts.transpileModule(entry.getText(source).replace(/^export /, ''
 }).outputText;
 async function invoke(params, response = { error: { status: 503, message: 'Fixture unavailable' }, status: 503 }, enabled = true) {
   const calls = []; let closed = false;
-  const dependencies = { ...helpers, isSpanishTrainingExercise,
+  const dependencies = { ...helpers, isSpanishTrainingExercise, resolveSubscriptionCategoryDailyLimitCategoryFromEvent,
     TRIAL_GROUP_CHECKOUT_ENABLED: enabled,
     API_BASE: 'https://viva.example.test', TENANT_KEY: 'fixture',
     getServ2Origin: () => 'https://lk.example.test',
