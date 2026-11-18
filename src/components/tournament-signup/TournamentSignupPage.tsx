@@ -1527,6 +1527,7 @@ export default function TournamentSignupPage({
     try {
       const result = await apiCreateTournamentVivaTransaction({
         exerciseId: selectedExerciseId,
+        checkoutContext: "tournament",
         studioId: nextCheckout.studioId,
         clientId: profile.id,
         profile,

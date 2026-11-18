@@ -268,6 +268,7 @@ test("actual trial transaction preserves the promo and owned visit source throug
     const calls = [];
     const create = evaluate(node.getText(api).replace(/^export /, ""), {
       isSpanishTrainingExercise: () => false, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+      resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
       createVivaPaymentWatcher: async () => ({ close() {} }),
       buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
       buildTournamentVivaTransactionPayload: () => ({}),
@@ -289,6 +290,33 @@ test("actual trial transaction preserves the promo and owned visit source throug
     assert.equal(calls[0].options.retries, 0);
     assert.deepEqual(JSON.parse(calls[0].options.body), {
       exerciseId: training.id, productId: params.product.id, source, promoCode: params.promoCode,
+    });
+  }
+});
+
+test("the tournament widget routes one-time and composite checkout through LK1 without a Viva fallback", async () => {
+  const node = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
+  for (const source of ["one-time", "client-one-time", "subscription"]) {
+    const calls = [];
+    const create = evaluate(node.getText(api).replace(/^export /, ""), {
+      isSpanishTrainingExercise: () => false, isTrialGroupTraining: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+      getServ2Origin: () => "https://fixture.invalid",
+      buildTournamentPaymentReturnUrls: () => ({ successUrl: "https://padlhub.ru/padel_torneos", failUrl: null }),
+      pickString: (value, keys) => keys.map(key => value?.[key]).find(Boolean),
+      request: async (url, options) => {
+        calls.push({ url, options });
+        return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+      },
+    });
+    const result = await create({ checkoutContext: "tournament", exerciseId: "event-fixture", clientId: profile.id,
+      clientPhone: "not-a-server-input", studioId: "not-a-server-input", product: product(source), promoCode: "FIXTURE-PROMO" });
+    assert.equal(result.status, 202);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "/lk/tournament-checkouts");
+    assert.equal(calls[0].options.retries, 0);
+    assert.deepEqual(JSON.parse(calls[0].options.body), {
+      exerciseId: "event-fixture", productId: product(source).id, source, promoCode: "FIXTURE-PROMO",
+      successUrl: "https://padlhub.ru/padel_torneos", failUrl: null,
     });
   }
 });

@@ -520,6 +520,7 @@ jobs:
           scripts/tests/groupEventPayment.test.mjs
           scripts/tests/trialGroupEligibility.test.mjs
           scripts/tests/trialGroupBooking.nodered.test.mjs
+          scripts/tests/tournamentCheckout.nodered.test.mjs
           scripts/tests/trialGroupCandidate.test.mjs
           scripts/tests/trialGroupFrontend.test.mjs
           scripts/tests/lk1UnpaidBookingCancellation.test.mjs
