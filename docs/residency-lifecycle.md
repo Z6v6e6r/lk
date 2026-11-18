@@ -276,6 +276,10 @@ is the only shared component, the guard uses the provider's own transaction list
   without an active residency exists;
 - a failed, partial or unreadable list (including a missing Admin token) is 503
   `RESIDENCY_EXTERNAL_CHECK_UNAVAILABLE`, never "no other purchase";
+- after the provider created this order's transaction, the list is read once more before
+  the payable link is returned. If a second operation appeared in that window, the order
+  keeps its transaction id and slot but is returned with payment `UNKNOWN` and no link
+  (`EXTERNAL_PURCHASE_DETECTED`); a failed second read also withholds the link;
 - `GET /orders?state=unresolved` exposes `externalCheck` (state, open count, paid-after-
   order count, `requiresReview`); `reconcile` moves the original order to
   `PAID_REQUIRES_REVIEW` with `EXTERNAL_PAYMENT_DETECTED` when a paid external operation

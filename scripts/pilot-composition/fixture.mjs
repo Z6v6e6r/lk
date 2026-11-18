@@ -10,7 +10,7 @@ const CLIENT = "00000000-0000-4000-8000-000000000001";
 const PRODUCT = "4037a3a3-e551-4f9a-a9db-1410e46b8635";
 const CUP_TOKEN = "cup-integration-token-0123456789abcdef";
 
-const state = { txs: [], subs: [], calls: [] };
+const state = { txs: [], subs: [], calls: [], raceMode: null };
 const nowIso = () => new Date().toISOString();
 
 const CORS = {
@@ -106,8 +106,13 @@ const handler = async (req, res) => {
   }
 
   // ---- control plane ----
-  if (path === "/_control/state") return json(res, 200, { txs: state.txs, subs: state.subs, calls: state.calls });
-  if (path === "/_control/reset") { state.txs = []; state.subs = []; state.calls = []; return json(res, 200, { ok: true }); }
+  if (path === "/_control/state") return json(res, 200, { txs: state.txs, subs: state.subs, calls: state.calls, raceMode: state.raceMode });
+  if (path === "/_control/reset") { state.txs = []; state.subs = []; state.calls = []; state.raceMode = null; return json(res, 200, { ok: true }); }
+  if (path === "/_control/race") {
+    const body = await readBody(req);
+    state.raceMode = body && body.mode === "after_new_create" ? "after_new_create" : null;
+    return json(res, 200, { ok: true, raceMode: state.raceMode });
+  }
   if (path === "/_control/pay") {
     const body = await readBody(req);
     const tx = state.txs.find((row) => row.id === body.transactionId);
@@ -148,6 +153,12 @@ const handler = async (req, res) => {
       const successUrl = body && (body.baseRedirectUrl || body.successUrl || body.successRedirectUrl);
       const source = String(successUrl || "").includes("phResidencyLifecycleReturn") ? "new" : "old";
       const tx = createTransaction({ source, successUrl });
+      if (source === "new" && state.raceMode === "after_new_create") {
+        // Deterministic simulation of the published old client creating its transaction in
+        // the window between the gateway's pre-create read and its post-create read.
+        state.raceMode = null;
+        createTransaction({ source: "old", successUrl: "https://127.0.0.1:8444/lk_new?phCheckoutReturn=residency" });
+      }
       return json(res, 200, { paymentUrl: tx.paymentUrl, toPay: tx.toPay, id: tx.id, paymentDueDate: tx.paymentDueDate });
     }
     if (rest === "subscriptions") {

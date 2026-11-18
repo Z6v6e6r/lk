@@ -10,9 +10,9 @@ Harness: `scripts/pilot-composition/`.
 | --- | --- |
 | Published old LK1 bundle | `https://padlhub.su/lk/bundle.js`, version `20261118T164240Z`, source `27ea6a8c1665789786b8a6c6fc9c657dc48483ed`, sha256 `fce60c89044f95ef7ec9faf1d53267dfce87fcc996efa00dbacee87ab50485be`, 2 946 728 bytes |
 | New pilot bundle | this branch, production build, sha256 `0a83dbc72dc6c55549bab42ce597aa65089f9eca94f3577d803b04e018cbd59e`, 2 976 424 bytes (harness run used the same source with local `VITE_RESIDENCY_PASS_API_BASE`) |
-| Custom node | sha256 tarball `47967d1e151dc8e3073c75d6bf1c9bb5971a03dcf73a873e57aad83a9dacd694`, per-file hashes in `hashes.txt` |
+| Custom node | sha256 tarball `00452423a223ab5b8e3a6c66fad7df2a3f5fdf38cc35962c8a9b6b646259d519`, per-file hashes in `hashes.txt` |
 | Import | `lk_residency_lifecycle.import.json`, sha256 `22e524fbfae2a307b7610b29c4d68bb67e66997e7c71da54fd426b3c9042caa7`, 19 nodes, 8 API routes + OPTIONS |
-| Node-RED | `nodered/node-red:4.0.9`, Node 20.19.0 in the container (147 runs Node 22.23.2) |
+| Node-RED | `nodered/node-red:4.0.9-22`, Node 22.14.0 in the container (147 runs Node 22.23.2) |
 | MongoDB | `mongo@sha256:7bd28e5e…` (8.0.5), disposable `lk_residency_pilot` |
 | Indexes | five reviewed specs, `indexes.json` / `environment.txt` |
 
@@ -44,6 +44,7 @@ that POST. Static evidence: `docs/evidence/residency-pilot/published-bundle-2026
 | ordinary account | 403 `RESIDENCY_CREATE_NOT_ALLOWED`, Mongo orders 0 |
 | two simultaneous creates | 200 + 409, one order, one Viva transaction |
 | `CREATE_ENABLED=false` | create 503 `RESIDENCY_ORDERS_DISABLED`; GET orders/reconcile still work; after restart the original order completes ACTIVE without a new purchase |
+| race: old transaction created during the new POST | order stays `PENDING_PAYMENT` with payment `UNKNOWN`, no payment URL, `UNKNOWN_OUTCOME`; both Viva transactions exist but the new UI never exposes a second link |
 
 ## Browser scenarios
 
@@ -84,10 +85,18 @@ Residual, not hidden:
   change), or (c) publish a reviewed old-client change that removes the residency CTA.
   None of these is authorized or performed here.
 
+## Preimage tool
+
+`preimage-check.txt` runs the packet's `preimage-check.mjs` against the pinned 316-route
+snapshot (converted to http-in nodes) and against an injected lifecycle route. The full
+`flows.json` still has to be pulled at apply time; this is a tool check and route-separation
+proof, not the fresh preimage.
+
 ## Limits of this evidence
 
 - synthetic bearer tokens; the real Keycloak `sub` of Alexey is still unknown;
 - fixture Viva/CUP shapes are contract-shaped, not the live responses;
 - container Node is 20.19.0, 147 runs 22.23.2; the custom node uses only stable Node APIs;
 - the new bundle in the harness was built with local `VITE_RESIDENCY_PASS_API_BASE`; a
-  published artifact must be built with the normal release environment and re-hashed.
+  published artifact must be built with the normal release environment and re-hashed;
+- the isolated Node is 22.14.0 vs 22.23.2 on 147 (same major, no API difference used here).

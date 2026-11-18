@@ -17,7 +17,7 @@ create() {
     -H "Idempotency-Key: $2" -H 'X-Residency-Return-Target: lk1pilot' \
     -d '{"mode":"NEW","expectedTotalMinor":79000,"expectedProductId":"'$PID'"}'
 }
-summary() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(JSON.stringify(j.code?{code:j.code}:j.id?{transactionId:j.id,toPay:j.toPay,paymentUrl:j.paymentUrl}:{orderId:j.order?.orderId,state:j.order?.state,payment:j.order?.payment?.status,externalCheck:j.externalCheck}))}catch{console.log(s.slice(0,200))}})'; }
+summary() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(JSON.stringify(j.code?{code:j.code}:j.id?{transactionId:j.id,toPay:j.toPay,paymentUrl:j.paymentUrl}:{orderId:j.order?.orderId,state:j.order?.state,payment:j.order?.payment?.status,paymentUrl:j.order?.payment?.paymentUrl,recovery:j.order?.recovery?.state,externalCheck:j.externalCheck}))}catch{console.log(s.slice(0,200))}})'; }
 
 echo "== 1. reset =="
 reset
@@ -57,3 +57,12 @@ reset
 wait
 echo "mongo_orders=$(docker exec $MONGO_CONTAINER mongosh lk_residency_pilot --quiet --eval 'db.lk_residency_lifecycle_orders.countDocuments({})')"
 echo "new_txs=$(curl -sk $FIX/_control/state | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.txs.filter(t=>t.source==="new").length)})')"
+
+echo "== 10. old operation appears during the new POST (deterministic race) =="
+reset
+curl -sk -X POST $FIX/_control/race -H 'Content-Type: application/json' -d '{"mode":"after_new_create"}' >/dev/null
+RACE=$(create "$TOKEN" transcript-key-race1)
+echo "$RACE" | summary
+printf '%s' "$RACE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const o=j.order;const ok=o&&o.payment.status==="UNKNOWN"&&o.payment.paymentUrl===null&&o.recovery.state==="UNKNOWN_OUTCOME";if(!ok){console.error("RACE_GUARD_FAILED");process.exit(1)}console.log("race_guard=pass")})'
+echo "race_txs=$(curl -sk $FIX/_control/state | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(JSON.stringify({total:j.txs.length,old:j.txs.filter(t=>t.source==="old").length,new:j.txs.filter(t=>t.source==="new").length}))})')"
+echo "mongo_orders=$(docker exec $MONGO_CONTAINER mongosh lk_residency_pilot --quiet --eval 'db.lk_residency_lifecycle_orders.countDocuments({})')"

@@ -1,4 +1,4 @@
-FROM nodered/node-red:4.0.9
+FROM nodered/node-red:4.0.9-22
 USER root
 RUN mkdir -p /data/node_modules/padlhub-residency-lifecycle-api
 COPY residency-lifecycle-api/ /data/node_modules/padlhub-residency-lifecycle-api/

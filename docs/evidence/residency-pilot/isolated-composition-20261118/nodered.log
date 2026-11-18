@@ -1,18 +1,18 @@
-18 Nov 19:49:47 - [info]
+18 Nov 20:18:40 - [info]
 
 Welcome to Node-RED
 ===================
 
-18 Nov 19:49:47 - [info] Node-RED version: v4.0.9
-18 Nov 19:49:47 - [info] Node.js  version: v20.19.0
-18 Nov 19:49:47 - [info] Linux 6.12.76-linuxkit arm64 LE
-18 Nov 19:49:47 - [info] Loading palette nodes
-18 Nov 19:49:48 - [info] Settings file  : /data/settings.js
-18 Nov 19:49:48 - [info] Context store  : 'default' [module=memory]
-18 Nov 19:49:48 - [info] User directory : /data
-18 Nov 19:49:48 - [warn] Projects disabled : editorTheme.projects.enabled=false
-18 Nov 19:49:48 - [info] Flows file     : /data/flows.json
-18 Nov 19:49:48 - [warn]
+18 Nov 20:18:40 - [info] Node-RED version: v4.0.9
+18 Nov 20:18:40 - [info] Node.js  version: v22.14.0
+18 Nov 20:18:40 - [info] Linux 6.12.76-linuxkit arm64 LE
+18 Nov 20:18:40 - [info] Loading palette nodes
+18 Nov 20:18:40 - [info] Settings file  : /data/settings.js
+18 Nov 20:18:40 - [info] Context store  : 'default' [module=memory]
+18 Nov 20:18:40 - [info] User directory : /data
+18 Nov 20:18:40 - [warn] Projects disabled : editorTheme.projects.enabled=false
+18 Nov 20:18:40 - [info] Flows file     : /data/flows.json
+18 Nov 20:18:40 - [warn]
 
 ---------------------------------------------------------------------
 Your flow credentials file is encrypted using a system-generated key.
@@ -26,26 +26,17 @@ your settings file. Node-RED will then re-encrypt your credentials
 file using your chosen key the next time you deploy a change.
 ---------------------------------------------------------------------
 
-18 Nov 19:49:48 - [info] Server now running at http://127.0.0.1:1880/
-18 Nov 19:49:48 - [warn] Encrypted credentials not found
-18 Nov 19:49:48 - [info] Starting flows
-18 Nov 19:49:48 - [info] Started flows
+18 Nov 20:18:40 - [info] Server now running at http://127.0.0.1:1880/
+18 Nov 20:18:40 - [warn] Encrypted credentials not found
+18 Nov 20:18:40 - [info] Starting flows
+18 Nov 20:18:40 - [info] Started flows
 (node:7) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
 (Use `node --trace-warnings ...` to show where the warning was created)
-18 Nov 19:49:49 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":179}
-18 Nov 19:49:49 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":5}
-18 Nov 19:49:49 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":27}
-18 Nov 19:49:52 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":9}
-18 Nov 19:49:52 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":13}
-18 Nov 19:49:52 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":9}
-18 Nov 19:49:52 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":9}
-18 Nov 19:49:54 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":403,"correlationId":null,"durationMs":3}
-18 Nov 19:49:57 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":409,"correlationId":null,"durationMs":14}
-18 Nov 19:49:57 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":19}
-18 Nov 19:49:57 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":21}
-18 Nov 19:49:58 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":12}
-18 Nov 19:49:58 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":8}
-18 Nov 19:49:58 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":9}
-18 Nov 19:49:58 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":403,"correlationId":null,"durationMs":2}
-18 Nov 19:49:59 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":409,"correlationId":null,"durationMs":10}
-18 Nov 19:49:59 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":13}
+18 Nov 20:18:41 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":190}
+18 Nov 20:18:41 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":5}
+18 Nov 20:18:41 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":33}
+18 Nov 20:18:45 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":17}
+18 Nov 20:18:45 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":18}
+18 Nov 20:18:45 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":6}
+18 Nov 20:18:45 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":200,"correlationId":null,"durationMs":15}
+18 Nov 20:18:47 - [warn] [padlhub-residency-lifecycle-store:Residency lifecycle store] {"event":"residency_lifecycle_request","code":403,"correlationId":null,"durationMs":7}

@@ -385,7 +385,7 @@ module.exports = function registerResidencyLifecycleApi(RED) {
       }
       if (runtime.config.identityLog) {
         node.warn(JSON.stringify({ event: "residency_lifecycle_identity", tenantId: actor.tenantId,
-          userId: actor.userId, correlationId: correlation }));
+          userId: actor.userId, identity: actor.tenantId + ":" + actor.userId, correlationId: correlation }));
       }
       const minute = Math.floor(Date.now() / 60000);
       const rateKey = "residency-lifecycle:" + crypto.createHash("sha256").update(actor.userId).digest("hex").slice(0, 16) + ":" + minute;

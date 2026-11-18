@@ -1,4 +1,4 @@
-# Residency pilot isolated composition — hashes (2026-11-18T19:50:09Z)
+# Residency pilot isolated composition — hashes (2026-11-18T20:19:05Z)
 
 ## Published old LK1 artifact (executed byte-for-byte)
 url            https://padlhub.su/lk/bundle.js
@@ -9,15 +9,14 @@ release.json   version 20261118T164240Z source 27ea6a8c1665789786b8a6c6fc9c657dc
 ## New pilot bundle (this branch, production env; harness build used local VITE_RESIDENCY_PASS_API_BASE)
 sha256         0a83dbc72dc6c55549bab42ce597aa65089f9eca94f3577d803b04e018cbd59e
 bytes          2976424
-build_result   computing gzip size... dist/bundle.js  2,976.42 kB │ gzip: 1,318.46 kB ✓ built in 2.24s
 
 ## Custom node (sources, no node_modules)
-tarball_sha256 47967d1e151dc8e3073c75d6bf1c9bb5971a03dcf73a873e57aad83a9dacd694
-tarball_bytes  38885
+tarball_sha256 00452423a223ab5b8e3a6c66fad7df2a3f5fdf38cc35962c8a9b6b646259d519
+tarball_bytes  39097
 ffdffd0f64c562d4358dd18ebf34d2e4f67e02a8768171419157f0455833fc47  lib/residency-lifecycle-http.mjs
 c2bf6214c842a60f73c7d455007f843041dca50efd2918e947911188bac59383  lib/residency-lifecycle-provider.mjs
 c16aba335e702b0f48acae89974b75e0b1d18052bd8fcf8c905d7a82097f7a02  lib/residency-lifecycle-store.mjs
-74319c1e816e70c613a31b7d58ea165ef5aa85f97510e902de1c2ddedc48c867  lib/residency-lifecycle.mjs
+75d340a7b796c2458193c6b268cfbae6c9297ebd14f1f95e0007c793f2a995d6  lib/residency-lifecycle.mjs
 0a92457efdf0bfb4ed6e230df0be60f9771c6e78e415f4429d97db5a82a76e2f  package-lock.json
 b603e3b175ff478c544516fd8d9ed7598fb9814506af2aab53ed3f48daedb99f  package.json
 09c352011556f04b42328ddfcf37fc10e28a84a80903c76b7db7b98e340a167c  residency-lifecycle-node.cjs

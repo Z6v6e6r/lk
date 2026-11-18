@@ -1411,3 +1411,67 @@ test("a paid external operation after the expired window still blocks a new orde
     idempotencyKey: KEY, mode: "NEW" }), 409, "RESIDENCY_EXTERNAL_PURCHASE_PENDING");
   assert.equal(calls.create, 0);
 });
+
+
+// The pre-create read and the provider POST are not atomic. The post-create read closes the
+// window by withholding the second payable link and keeping the durable original order.
+
+function raceExternal(onSecond) {
+  let calls = 0;
+  return {
+    get calls() { return calls; },
+    async list() {
+      calls += 1;
+      return calls === 1 ? { transactions: [] } : onSecond();
+    },
+  };
+}
+
+test("an old-client operation created during the new POST withholds the second payment link", async () => {
+  const external = raceExternal(() => ({ transactions: [{ transactionId: "legacy-race-1", state: "OPEN",
+    status: "UNPAID", createdAt: "2026-11-18T09:00:01.000Z" }] }));
+  const { lifecycle, store, calls } = build({ external, config: GUARD });
+  const created = await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  assert.equal(calls.create, 1);
+  assert.equal(external.calls, 2);
+  assert.equal(created.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(created.order.payment.status, "UNKNOWN");
+  assert.equal(created.order.payment.paymentUrl, null);
+  assert.equal(created.order.recovery.state, "UNKNOWN_OUTCOME");
+  assert.equal(created.recoveryRequired, true);
+  const row = [...store.orders.values()][0];
+  assert.equal(row.payment.providerTransactionId, "txn-1");
+  assert.equal(row.payment.lastErrorCode, "EXTERNAL_PURCHASE_DETECTED");
+});
+
+test("a failed post-create read also withholds the link instead of releasing a second command", async () => {
+  const external = raceExternal(() => { throw Object.assign(new Error("list down"), { code: "RESIDENCY_EXTERNAL_ATTEMPTS_PARTIAL" }); });
+  const { lifecycle, calls } = build({ external, config: GUARD });
+  const created = await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  assert.equal(calls.create, 1);
+  assert.equal(created.order.payment.paymentUrl, null);
+  assert.equal(created.order.payment.status, "UNKNOWN");
+  assert.equal(created.order.recovery.state, "UNKNOWN_OUTCOME");
+});
+
+test("the post-create read ignores this service's own transaction", async () => {
+  const external = raceExternal(() => ({ transactions: [{ transactionId: "txn-1", state: "OPEN",
+    status: "UNPAID", createdAt: "2026-11-18T09:00:01.000Z" }] }));
+  const { lifecycle, calls } = build({ external, config: GUARD });
+  const created = await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  assert.equal(calls.create, 1);
+  assert.equal(created.order.payment.status, "PENDING");
+  assert.equal(created.order.payment.paymentUrl, "https://bank.example/pay/1");
+});
+
+test("a settled external operation in the window does not withhold the link", async () => {
+  const external = raceExternal(() => ({ transactions: [{ transactionId: "legacy-settled", state: "SETTLED",
+    status: "CANCELLED", createdAt: "2026-11-18T08:59:00.000Z" }] }));
+  const { lifecycle } = build({ external, config: GUARD });
+  const created = await lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  assert.equal(created.order.payment.paymentUrl, "https://bank.example/pay/1");
+});

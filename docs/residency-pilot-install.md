@@ -13,10 +13,10 @@ artifact and is not rebuilt.
 | Artifact | Value |
 | --- | --- |
 | Custom node | `node-red/custom-nodes/residency-lifecycle-api` |
-| Custom node tarball (without `node_modules`) | sha256 `47967d1e151dc8e3073c75d6bf1c9bb5971a03dcf73a873e57aad83a9dacd694`, 38 885 bytes |
-| Custom node files | `lib/residency-lifecycle.mjs` `74319c1e…`, `lib/residency-lifecycle-provider.mjs` `c2bf6214…`, `lib/residency-lifecycle-http.mjs` `ffdffd0f…`, `lib/residency-lifecycle-store.mjs` `c16aba33…`, `residency-lifecycle-node.cjs` `09c35201…` (full list in `docs/evidence/residency-pilot/isolated-composition-20261118/hashes.txt`) |
+| Custom node tarball (without `node_modules`) | sha256 `00452423a223ab5b8e3a6c66fad7df2a3f5fdf38cc35962c8a9b6b646259d519`, 39 097 bytes |
+| Custom node files | `lib/residency-lifecycle.mjs` `75d340a7…`, `lib/residency-lifecycle-provider.mjs` `c2bf6214…`, `lib/residency-lifecycle-http.mjs` `ffdffd0f…`, `lib/residency-lifecycle-store.mjs` `c16aba33…`, `residency-lifecycle-node.cjs` `09c35201…` (full list in `docs/evidence/residency-pilot/isolated-composition-20261118/hashes.txt`) |
 | Import | `node-red/imports/lk_residency_lifecycle.import.json`, sha256 `22e524fb…`, 19 nodes (1 tab, 1 store, 15 http in including OPTIONS, 1 http, 1 response) |
-| Dependency | `mongodb@7.2.0` (custom node `package-lock.json`), `nodered/node-red:4.0.9` |
+| Dependency | `mongodb@7.2.0` (custom node `package-lock.json`), `nodered/node-red:4.0.9-22` (Node 22.14.0 in the isolated run; 147 runs Node 22.23.2) |
 | New frontend | this branch, production build sha256 `0a83dbc72dc6c55549bab42ce597aa65089f9eca94f3577d803b04e018cbd59e`, 2 976 424 bytes (must be rebuilt and re-hashed by the release mechanism) |
 | Published old frontend | `20261118T164240Z` / `27ea6a8c…` / `fce60c89…`; remains the production entry |
 
@@ -179,7 +179,8 @@ find a UUID or send a token:
 2. Alexey: logs in to LK1 normally and opens
    `https://padlhub.su/lk_new?buyResidency=lifecycle` once.
 3. Operator: reads the Node-RED log line
-   `{"event":"residency_lifecycle_identity","tenantId":"iSkq6G","userId":"…"}`.
+   `{"event":"residency_lifecycle_identity","tenantId":"iSkq6G","userId":"…","identity":"iSkq6G:…"}`
+   and copies the `identity` value.
 4. Operator: sets `PILOT_USERS=["iSkq6G:<userId>"]`, `CREATE_ENABLED=true`,
    `IDENTITY_LOG=false`, restarts, and verifies section 7 (ordinary 403, pilot 400 without
    an idempotency key).

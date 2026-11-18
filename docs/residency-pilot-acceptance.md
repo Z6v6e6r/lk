@@ -131,13 +131,13 @@ provider; the live 147 was not touched.
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Lifecycle module suite (real Mongo) | `LK_TEST_MONGO_URI=… LK_TEST_MONGO_REQUIRED=1 npm run test:residency-lifecycle` | 122 pass, 0 fail, 0 skipped (disposable `mongo:8.0.5`) |
+| Lifecycle module suite (real Mongo) | `LK_TEST_MONGO_URI=… LK_TEST_MONGO_REQUIRED=1 npm run test:residency-lifecycle` | 126 pass, 0 fail, 0 skipped (disposable `mongo:8.0.5`) |
 | Frontend client/route/attempt/decision | `npm run test:residency-pilot` | 11 pass |
 | Route/id isolation + old bundle surface | `npm run test:residency-lk1-compat` | 7 pass (current published artifact and additive-install guards) |
 | TypeScript | `npx tsc -b` | pass |
 | Lint (changed files) | `npx eslint src/residency/*` | pass |
 | Main bundle | `npx vite build` | pass (2.98 MB, 351 modules) |
-| Isolated composition | `node scripts/pilot-composition/e2e.mjs` | 5/5 scenarios pass; see evidence directory |
+| Isolated composition | `node scripts/pilot-composition/e2e.mjs` + `backend-transcript.sh` | 5/5 browser scenarios pass; deterministic old/new race withheld the second link; Node-RED 4.0.9-22 / Node 22.14.0 |
 | Backend HTTP transcript | `scripts/pilot-composition/backend-transcript.sh` | all steps as expected |
 
 ## Manual acceptance scenario (for Alexey)
@@ -206,6 +206,7 @@ booking or paying:
 | Create stopped while servicing continues | LOCAL + isolated pass, including restart |
 | Old checkout first → new create refused | LOCAL + isolated pass |
 | New order first → old checkout paid → review | LOCAL + isolated pass (detection only) |
+| Old and new launched simultaneously | LOCAL + isolated pass: the post-create re-read withholds the second payment link and keeps the original order; no auto-activation |
 | 30% games / 50% group training and tournaments | contract copy only; not verified end-to-end on a real active residency |
 | Resident pass QR | existing separate gateway; not exercised in this pilot |
 

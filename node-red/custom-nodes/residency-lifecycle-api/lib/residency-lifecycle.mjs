@@ -727,6 +727,29 @@ export function createResidencyLifecycle(deps) {
       return { order: publicOrder(unresolved), idempotentReplay: false, recoveryRequired: true };
     }
 
+    // The pre-create list and the provider POST are not atomic. Re-read the list after the
+    // provider created our transaction: if a second (old-client) operation appeared in that
+    // window, keep the durable order but do not hand the user a second payable link.
+    if (payment.status === "PENDING" && text(payment.paymentUrl, 4096)) {
+      const after = await readExternalAttempts({ tenantId, userId });
+      const raceError = after.state !== "OK" && externalGuardRequired ? (after.reason || "EXTERNAL_CHECK_FAILED")
+        : after.state === "OK" ? (blockingExternalAttempts(
+          after.attempts.filter((row) => row.transactionId !== payment.providerTransactionId), current).length
+          ? "EXTERNAL_PURCHASE_DETECTED" : null)
+          : null;
+      if (raceError) {
+        const unresolved = await applyCreateOutcome(order, ORDER_STATES.PENDING_PAYMENT, {
+          payment: {
+            ...order.payment, status: "UNKNOWN",
+            providerTransactionId: text(payment.providerTransactionId, 128) ? payment.providerTransactionId : null,
+            paymentUrl: null, lastCheckedAt: nowIso(), lastErrorCode: raceError,
+          },
+          activation: { ...order.activation, state: "NOT_STARTED", lastErrorCode: raceError },
+        });
+        return { order: publicOrder(unresolved), idempotentReplay: false, recoveryRequired: true };
+      }
+    }
+
     const nextState = payment.status === "PAID" ? ORDER_STATES.PAID : ORDER_STATES.PENDING_PAYMENT;
     const updated = await applyCreateOutcome(order, nextState, {
       payment: {

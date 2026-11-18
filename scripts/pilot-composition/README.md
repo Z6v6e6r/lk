@@ -9,7 +9,7 @@ Keycloak for real.
 
 | Component | Image / source | Notes |
 | --- | --- | --- |
-| Node-RED | `nodered/node-red:4.0.9` + `node-red/custom-nodes/residency-lifecycle-api` | the import `node-red/imports/lk_residency_lifecycle.import.json` becomes `/data/flows.json` |
+| Node-RED | `nodered/node-red:4.0.9-22` (Node 22.14.0) + `node-red/custom-nodes/residency-lifecycle-api` | the import `node-red/imports/lk_residency_lifecycle.import.json` becomes `/data/flows.json` |
 | MongoDB | `mongo:8.0.5` | disposable database `lk_residency_pilot`; the five indexes are applied by `apply-indexes.js` |
 | Provider fixture | `fixture.mjs` | HTTPS, self-signed, synthetic Viva end-user/admin API, CUP context and Keycloak userinfo |
 | Frontend origins | `static.mjs` | 8444 serves the published old bundle byte-for-byte; 8443 serves the branch bundle; `/lk/residency/*` is proxied to Node-RED |
@@ -34,7 +34,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout "$LK_PILOT_WORK/certs/key.pem"
 cp -R node-red/custom-nodes/residency-lifecycle-api "$LK_PILOT_WORK/"
 cp node-red/imports/lk_residency_lifecycle.import.json "$LK_PILOT_WORK/flows.json"
 cp scripts/pilot-composition/{Dockerfile,settings.js,compose.yaml,compose.stopped.yaml} "$LK_PILOT_WORK/"
-(cd "$LK_PILOT_WORK" && DOCKER_BUILDKIT=0 docker build -t lk1-residency-pilot-nodered:4.0.9 .)
+(cd "$LK_PILOT_WORK" && DOCKER_BUILDKIT=0 docker build -t lk1-residency-pilot-nodered:4.0.9 .)  # FROM nodered/node-red:4.0.9-22
 (cd "$LK_PILOT_WORK" && docker compose -f compose.yaml up -d)
 docker exec -i lk1-pilot-mongo mongosh lk_residency_pilot --quiet < scripts/pilot-composition/apply-indexes.js
 
@@ -68,8 +68,21 @@ uses a self-signed certificate. It must never be used on 147.
 | C | two devices create at the same time | one `POST` 200, one 409; one Mongo order; one Viva transaction |
 | D | incomplete order → `CREATE_ENABLED=false` → old frontend → restart → payment | create 503 `RESIDENCY_ORDERS_DISABLED`; read/reconcile/activation continue; one order, one transaction |
 | E | ordinary account | new create 403, zero orders; the old checkout still works |
+| race | old transaction appears during the new POST | deterministic fixture control `/_control/race`; the post-create read returns no payment link, payment `UNKNOWN`, `UNKNOWN_OUTCOME`; both Viva transactions exist but the new UI exposes one |
 
 Scenario B proves detection, not prevention: the published old bundle posts directly to
 `https://api.vivacrm.ru/end-user/api/v1/iSkq6G/transactions` from the browser, so the gateway
 sees that operation only after it exists. See the acceptance document for the boundary and
 the owner options.
+
+## Test/install tools
+
+| Tool | Purpose |
+| --- | --- |
+| `preimage-check.mjs` | full-flow/id/route/no-lifecycle checks + preimage SHA-256; refuses collisions |
+| `readback.sh` | post-install read-only checks (OPTIONS 204, catalog/status/orders 200, create without key 400/403/503) |
+| `discount-preview.mjs` | advisory `POST /lk/subscriptions/game-price-preview`; never books or charges |
+| `package.mjs` | assembles `outputs/residency-pilot-install-*` with `SHA256SUMS`; never deploys |
+
+`backend-transcript.sh` section 10 runs the deterministic race and fails if the second link
+is exposed.
