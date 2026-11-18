@@ -29,9 +29,9 @@ COMMANDS AND RESULTS
     exit 0
 
   vite build (production config; the browser harness used a separate VITE_SERV2 override)
-    351 modules transformed, dist/bundle.js 2,974,045 bytes
-    sha256 f222713312353eeb66563353a9030945da30a494369654b8a739ad24fcf214a5
-    (two consecutive production builds produced the same hash)
+    351 modules transformed, dist/bundle.js 2,974,271 bytes
+    sha256 c9b742e08c7280b37cdb51607cb6ec45768402a73bb77c12ccdf56175083cb43
+    (local production build; the separate harness build uses a VITE_SERV2 override)
 
 NOT RUN
   No Node-RED import, custom-node install, Mongo index apply, env change,

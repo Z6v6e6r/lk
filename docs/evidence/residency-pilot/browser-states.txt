@@ -17,4 +17,6 @@ Rendered states (visible text excerpts)
   denied          "Персональный доступ к новому оформлению не включён для этого аккаунта."
   disabled        "Создание новых заказов приостановлено. Уже начатые заказы можно проверить."
   unknown create  "Заказ: результат оплаты неизвестен" + recovery buttons
+  failed          "Заказ: оплата не прошла" + "Начать новую покупку" (new key only after a
+                  confirmed terminal refusal; no automatic re-create)
   double click    one POST /lk/residency/orders (createPosts=1)

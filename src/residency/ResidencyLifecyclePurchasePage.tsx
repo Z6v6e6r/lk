@@ -160,6 +160,17 @@ export function ResidencyLifecyclePurchasePage() {
     setSafe(setNotice, "Сервер не нашёл незавершённый заказ. Если оплата была, обратитесь в поддержку клуба — не создавайте новую покупку.");
   }, [setSafe]);
 
+  const restartAfterTerminal = useCallback(() => {
+    // Only a confirmed terminal provider refusal releases the slot. A new purchase is a
+    // new user-confirmed operation with a new key; it is never created automatically.
+    clearResidencyLifecycleAttempt();
+    setSafe(setOrder, null);
+    setSafe(setError, null);
+    setSafe(setNotice, null);
+    setSafe(setPhase, "loading");
+    void load();
+  }, [load, setSafe]);
+
   const reconcile = useCallback(async () => {
     if (!order || busy.current) return;
     busy.current = true;
@@ -322,6 +333,8 @@ export function ResidencyLifecyclePurchasePage() {
         {phase !== "active" && paymentUrl && <a className="ph-residency-cta" href={paymentUrl} rel="noopener noreferrer">Открыть ссылку на оплату</a>}
         {phase !== "active" && <button className="ph-residency-pilot-secondary" type="button" onClick={() => { void reconcile(); }}>Проверить оплату</button>}
         {phase === "recovery" && <button className="ph-residency-pilot-secondary" type="button" onClick={() => { void refreshUnresolved(); }}>Найти мой незавершённый заказ</button>}
+        {order && ["PAYMENT_FAILED", "EXPIRED", "CANCELLED"].includes(order.state)
+          && <button className="ph-residency-pilot-secondary" type="button" onClick={restartAfterTerminal}>Начать новую покупку</button>}
         {order.state === "PAID_REQUIRES_REVIEW" || order.state === "ACTIVATION_FAILED" ? <p role="alert">Оплата получена, но резидентство требует проверки. Обратитесь в поддержку клуба.</p> : null}
         {phase === "active" && <p role="status">Резидентство активно. Скидки 30% на игры и 50% на групповые тренировки и турниры действуют в оплаченный период.</p>}
       </>}
