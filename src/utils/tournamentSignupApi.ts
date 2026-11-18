@@ -2739,6 +2739,7 @@ export async function apiFetchTournamentVivaPublicCheckout(
 
 type CreateTournamentVivaTransactionParams = {
   exerciseId: string;
+  checkoutContext?: "tournament";
   studioId: string | null;
   clientPhone: string;
   clientId?: string | null;
@@ -3286,31 +3287,49 @@ export async function apiCreateTournamentVivaTransaction(
     return apiCreateTournamentVivaBookingFromSubscription(params);
   }
 
-  const paymentWatcher = await createVivaPaymentWatcher(params.clientId);
+  const tournamentCheckout = params.checkoutContext === "tournament"
+    || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.exercise) === "tournament"
+    || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.tournament) === "tournament";
   const transactionStartedAtMs = Date.now();
   const returnUrls = buildTournamentPaymentReturnUrls(params.exerciseId);
   const successUrl = params.successUrl?.trim() || returnUrls.successUrl;
   const failUrl = params.failUrl?.trim() || returnUrls.failUrl;
-  const payload = buildTournamentVivaTransactionPayload(params, successUrl, failUrl);
-  const trialOperationId = trialGroupTarget
+  // Tournament recovery uses the server's exact transaction ID. A browser payment event
+  // alone could belong to an earlier or simultaneous checkout.
+  const paymentWatcher = tournamentCheckout ? null : await createVivaPaymentWatcher(params.clientId);
+  const trialOperationId = !tournamentCheckout && trialGroupTarget
     ? trialGroupCheckoutOperationId(params.exerciseId, params.clientId || params.profile?.id || "", params.product.id, params.promoCode ?? null, params.product.source)
     : null;
 
   const result = await request<unknown>(
-    trialOperationId
-      ? `/lk/trial-group-bookings?operationId=${encodeURIComponent(trialOperationId)}`
-      : `${API_BASE}/end-user/api/v2/${TENANT_KEY}/transactions`,
+    tournamentCheckout
+      ? "/lk/tournament-checkouts"
+      : trialOperationId
+        ? `/lk/trial-group-bookings?operationId=${encodeURIComponent(trialOperationId)}`
+        : `${API_BASE}/end-user/api/v2/${TENANT_KEY}/transactions`,
     {
-      ...(trialOperationId ? { baseUrl: getServ2Origin() } : {}),
+      ...(tournamentCheckout || trialOperationId ? { baseUrl: getServ2Origin() } : {}),
       method: "POST",
       auth: true,
       retries: 0,
-      body: JSON.stringify(trialOperationId ? {
+      body: JSON.stringify(tournamentCheckout || trialOperationId ? {
         exerciseId: params.exerciseId, productId: params.product.id,
         source: params.product.source, promoCode: params.promoCode ?? null,
-      } : payload),
+        ...(tournamentCheckout ? { successUrl, failUrl } : {}),
+      } : buildTournamentVivaTransactionPayload(params, successUrl, failUrl)),
     },
   );
+  if (tournamentCheckout) {
+    const code = pickString(result.error?.raw, ["code"]);
+    const pending = result.status === 202 || result.status == null
+      || (result.status >= 500 && !code);
+    if (pending || (!result.error && !extractTransactionId(result.data))) {
+      return { data: null, error: { status: 202,
+        message: "Результат записи уточняется. Проверьте запись повторно с тем же тарифом.",
+        raw: result.error?.raw ?? result.data }, status: 202 };
+    }
+    if (result.error) return { data: null, error: result.error, status: result.status };
+  }
   if (trialOperationId && (result.error || pickString(result.data, ["state"]) === "PENDING_CONFIRMATION")) {
     paymentWatcher?.close();
     return { data: null, error: result.error || { status: 202,
@@ -3399,7 +3418,7 @@ export async function apiCreateTournamentVivaTransaction(
   }) ?? Promise.resolve<TournamentVivaPaymentResolution | null>(null);
   const paymentResolutionPromises: Array<Promise<TournamentVivaPaymentResolution | null>> = [
     watcherResolution,
-    pollTournamentVivaPaymentResolution(params.exerciseId, transactionId),
+    ...(tournamentCheckout ? [] : [pollTournamentVivaPaymentResolution(params.exerciseId, transactionId)]),
   ];
   if (transactionId) {
     // The operation status is Viva's own checkout-link source; the websocket event alone

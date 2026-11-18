@@ -68,6 +68,40 @@ test('capacity refresh updates roster and cards without repeating the booking or
   assert.deepEqual(changes.at(-1), ['setActionLoading', false]);
 });
 
+test('a verified closed checkout clears stale payment without automatically sending another booking', async () => {
+  const checkout = { profile: { id: 'fixture-actor', phone: 'fixture-phone' } };
+  const message = 'Предыдущая попытка закрыта. Запишитесь снова.';
+  for (const raw of [
+    { code: 'TOURNAMENT_PREVIOUS_ATTEMPT_CLOSED' },
+    { details: { code: 'TOURNAMENT_PREVIOUS_ATTEMPT_CLOSED' } },
+  ]) {
+    const changes = [];
+    let bookings = 0;
+    const deps = { selectedId: 'fixture-tournament', selectedExerciseId: 'fixture-event', actionLoading: false,
+      subscriptionUsageShadowEnabled: false, isAuthenticated: true, isRestoringSession: false,
+      checkout, discountPending: false, discountError: null, currentDiscountQuotes: [],
+      checkoutRequestIdRef: { current: 1 }, readAuthToken: () => 'fixture-session',
+      tournamentPaymentSessionIdentity: value => value, normalizePhone: value => value,
+      detail: null, selectedTournament: null, isTournamentCapacityError,
+      apiCreateTournamentVivaTransaction: async () => {
+        bookings++;
+        return { status: 409, data: null, error: { status: 409, message, raw } };
+      },
+      loadPublicRoster: async (id, options) => { changes.push(['roster', id, options]); },
+    };
+    for (const name of ['setActionLoading', 'setError', 'setSubscriptionConfirmationNotice', 'setConfirmingSubscriptionProductKey',
+      'setCheckout', 'setDiscountQuotes', 'clearStoredPendingPayment', 'setRegistration']) {
+      deps[name] = value => changes.push([name, value]);
+    }
+    await hook('completeVivaRegistration', deps)(checkout, { id: 'fixture-offer', source: 'one-time' });
+    assert.equal(bookings, 1);
+    assert.deepEqual(changes.filter(([name]) => name === 'clearStoredPendingPayment'), [['clearStoredPendingPayment', 'fixture-event']]);
+    assert.deepEqual(changes.filter(([name]) => name === 'setRegistration'), [['setRegistration', null]]);
+    assert.equal(changes.filter(([name]) => name === 'setError').at(-1)[1], message);
+    assert.deepEqual(changes.at(-1), ['setActionLoading', false]);
+  }
+});
+
 test('a forced refresh waits out the older request, then coalesces a fresh GET and updates shared card data', async () => {
   const old = deferred(), fresh = deferred();
   const read = createTournamentParticipantReader();
