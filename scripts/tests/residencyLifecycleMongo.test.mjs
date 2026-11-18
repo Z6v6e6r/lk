@@ -25,6 +25,13 @@ const { MongoClient } = require("mongodb");
 const nodeModule = require(path.join(packageRoot, "residency-lifecycle-node.cjs"));
 
 const URI = process.env.LK_TEST_MONGO_URI;
+// The mandatory LK1 CI job sets LK_TEST_MONGO_REQUIRED=1. A missing disposable database
+// must then fail the job instead of turning the real-Mongo scenarios into a silent skip.
+const REQUIRED = process.env.LK_TEST_MONGO_REQUIRED === "1";
+if (REQUIRED && !URI) {
+  throw new Error("LK_TEST_MONGO_REQUIRED=1 but LK_TEST_MONGO_URI is unset: "
+    + "the residency lifecycle scenarios must run on a disposable database");
+}
 const skip = URI ? false : "LK_TEST_MONGO_URI is not set: real Mongo verification is skipped";
 const NOW = Date.parse("2026-11-18T09:00:00.000Z");
 const TENANT = "iSkq6G";
@@ -242,5 +249,122 @@ test("the lifecycle persists an unresolved attempt and restarts from disk", { sk
       { ...row, payment: { ...row.payment, lastErrorCode: null } });
     const crash = await restarted.getOrder({ tenantId: TENANT, userId: USER, orderId: first.order.orderId });
     assert.equal(crash.order.recovery.reason, "DISPATCH_LEASE_EXPIRED");
+  });
+});
+
+test("a held create response that loses the CAS is persisted through the real store", { skip }, async () => {
+  await withDatabase(async ({ collection }) => {
+    const store = createMongoResidencyLifecycleStore({ collection });
+    const now = NOW;
+    const isoNow = new Date(now).toISOString();
+    let createCalls = 0;
+    let openCreate;
+    let createEntered;
+    const gate = new Promise((resolve) => { openCreate = resolve; });
+    const entered = new Promise((resolve) => { createEntered = resolve; });
+    const noInstance = {
+      async findInstance() { return null; },
+      async activate() { throw new Error("must not activate"); },
+    };
+    const build = (payments, activation) => createResidencyLifecycle({
+      clock: { now: () => now },
+      ids: {
+        orderId: (tenantId, keyHash) => "00000000-0000-4000-8000-" + sha256(tenantId + keyHash).slice(0, 12),
+        eventId: () => "event-" + createCalls,
+      },
+      sha256,
+      store,
+      catalog: { async read() {
+        return { productId: RESIDENCY_PRODUCT_ID, title: "Резидентство ПадлхАБ", termDays: 30, priceMinor: 79000,
+          currency: "RUB", benefits: [], checkedAt: isoNow };
+      } },
+      payments,
+      activation,
+      discounts: { async quote({ baseAmountMinor }) { return { discountLines: [], totalMinor: baseAmountMinor }; } },
+      status: { async read() { return { state: "NONE", source: "CUP", observedAt: isoNow }; } },
+    });
+
+    // The create POST is the single provider operation; it is held while a second worker
+    // reconciles the same order without a transaction id.
+    const writer = build({
+      async create() {
+        createCalls += 1;
+        createEntered();
+        await gate;
+        return { status: "PENDING", providerTransactionId: "txn-late",
+          paymentUrl: "https://bank.example/pay/late", amountMinor: 79000,
+          expiresAt: "2026-11-18T09:20:00.000Z" };
+      },
+      async read() { throw new Error("a late create never re-reads the provider"); },
+    }, noInstance);
+    const pending = writer.createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY,
+      expectedTotalMinor: 79000, mode: "NEW" });
+    await entered;
+    const attempt = await collection.findOne({ tenantId: TENANT, userId: USER, state: "PENDING_PAYMENT" });
+    assert.ok(attempt);
+    assert.equal(attempt.payment.status, "DISPATCHING");
+    assert.equal(attempt.revision, 1);
+
+    const reconciler = build({
+      async create() { throw new Error("must not create"); },
+      async read() { throw new Error("a reconcile without a transaction id never reads the provider"); },
+    }, noInstance);
+    const reconciled = await reconciler.reconcile({ tenantId: TENANT, userId: USER, orderId: attempt.orderId,
+      idempotencyKey: KEY + "-reconcile", eventId: "evt-none" });
+    assert.equal(reconciled.order.state, "PENDING_PAYMENT");
+    assert.equal(reconciled.order.payment.status, "UNKNOWN");
+    assert.equal(reconciled.order.recovery.state, "UNKNOWN_OUTCOME");
+    const wonRevision = (await store.getOrder(TENANT, USER, attempt.orderId)).revision;
+    assert.ok(wonRevision > 1);
+
+    openCreate();
+    const created = await pending;
+    assert.equal(created.order.state, "PENDING_PAYMENT");
+    assert.equal(created.order.payment.status, "PENDING");
+    assert.equal(created.order.payment.paymentUrl, "https://bank.example/pay/late");
+    assert.equal(createCalls, 1);
+
+    // The durable row really holds the late provider evidence.
+    const persisted = await store.getOrder(TENANT, USER, attempt.orderId);
+    assert.equal(persisted.payment.providerTransactionId, "txn-late");
+    assert.equal(persisted.payment.paymentUrl, "https://bank.example/pay/late");
+    assert.equal(persisted.payment.status, "PENDING");
+    assert.equal(persisted.activeSlot, 1);
+    assert.ok(persisted.revision > wonRevision);
+
+    // A new process over the same collection reads the id and can confirm the payment.
+    const restartedStore = createMongoResidencyLifecycleStore({ collection });
+    const restarted = createResidencyLifecycle({
+      clock: { now: () => now },
+      ids: { orderId: (tenantId, keyHash) => "00000000-0000-4000-8000-" + sha256(tenantId + keyHash).slice(0, 12),
+        eventId: () => "event-restart" },
+      sha256,
+      store: restartedStore,
+      catalog: { async read() { throw new Error("unused"); } },
+      payments: {
+        async create() { throw new Error("must not create"); },
+        async read() { return { status: "PAID", amountMinor: 79000, paidAt: isoNow,
+          providerTransactionId: "txn-late" }; },
+      },
+      activation: {
+        async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: isoNow }; },
+        async activate() { return { state: "ACTIVE", validFrom: isoNow,
+          validUntil: new Date(now + 30 * 86400000).toISOString(), source: "CUP", observedAt: isoNow }; },
+      },
+      discounts: { async quote() { throw new Error("unused"); } },
+      status: { async read() { throw new Error("unused"); } },
+    });
+    const readBack = await restarted.getOrder({ tenantId: TENANT, userId: USER, orderId: attempt.orderId });
+    assert.equal(readBack.order.payment.status, "PENDING");
+    assert.equal(readBack.order.payment.paymentUrl, "https://bank.example/pay/late");
+    const confirmed = await restarted.reconcile({ tenantId: TENANT, userId: USER, orderId: attempt.orderId,
+      idempotencyKey: KEY + "-paid", eventId: "evt-paid" });
+    assert.equal(confirmed.order.state, "ACTIVE");
+    assert.equal(confirmed.order.recovery.state, "NONE");
+    const finalRow = await store.getOrder(TENANT, USER, attempt.orderId);
+    assert.equal(finalRow.payment.status, "PAID");
+    assert.equal(finalRow.payment.providerTransactionId, "txn-late");
+    assert.equal(finalRow.activeSlot, null);
+    assert.equal(createCalls, 1);
   });
 });

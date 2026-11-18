@@ -52,6 +52,14 @@ function memoryStore() {
       return [...orders.values()].find((o) => o.tenantId === tenantId && o.userId === userId
         && ["PENDING_PAYMENT", "PAID", "PAID_ACTIVATION_PENDING", "ACTIVATION_FAILED", "PAID_REQUIRES_REVIEW"].includes(o.state)) || null;
     },
+    async listUnresolvedOrders(tenantId, userId, limit) {
+      return [...orders.values()]
+        .filter((o) => o.tenantId === tenantId && o.userId === userId
+          && ["PENDING_PAYMENT", "PAID", "PAID_ACTIVATION_PENDING", "ACTIVATION_FAILED", "PAID_REQUIRES_REVIEW"].includes(o.state))
+        .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1))
+        .slice(0, limit)
+        .map((o) => structuredClone(o));
+    },
     async listExpiredPending(tenantId, nowIso) {
       return [...orders.values()].filter((o) => o.tenantId === tenantId && o.state === "PENDING_PAYMENT"
         && o.payment.expiresAt && o.payment.expiresAt <= nowIso).map((o) => structuredClone(o));
@@ -778,3 +786,383 @@ test("an early renewal is refused with zero provider POSTs", async () => {
   assert.equal(renewed.order.renewal.baseValidUntil, baseUntil);
   assert.equal(renewed.order.renewal.minimumValidUntil, "2026-12-23T09:05:00.000Z");
 });
+
+/**
+ * Holds the single provider create POST at a barrier so a concurrent reconcile can win
+ * the revision CAS first. That is the reproduced P1: one POST, a durable attempt, and a
+ * late provider answer whose revision is already stale.
+ */
+function heldCreate(outcome) {
+  let open;
+  let entered;
+  const gate = new Promise((resolve) => { open = resolve; });
+  const reached = new Promise((resolve) => { entered = resolve; });
+  let calls = 0;
+  return {
+    payments: {
+      async create() {
+        calls += 1;
+        entered();
+        await gate;
+        if (outcome instanceof Error) throw outcome;
+        return structuredClone(outcome);
+      },
+      async read() { throw new Error("a late create never re-reads the provider"); },
+    },
+    release() { open(); },
+    reached,
+    count: () => calls,
+  };
+}
+
+const LATE_PENDING = { status: "PENDING", providerTransactionId: "txn-late",
+  paymentUrl: "https://bank.example/pay/late", amountMinor: 79000, expiresAt: "2026-11-18T09:20:00.000Z" };
+
+/** The in-memory row is the durable state; a stale writer must never be the only record. */
+function durable(store, orderId) {
+  return store.orders.get(orderId);
+}
+
+test("a late create response survives a lost CAS and stays durable after restart", async () => {
+  const store = memoryStore();
+  const held = heldCreate(LATE_PENDING);
+  const creator = build({ store, payments: held.payments });
+  const pendingCreate = creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  await held.reached;
+  const orderId = [...store.orders.keys()][0];
+  assert.equal(durable(store, orderId).state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(durable(store, orderId).payment.status, "DISPATCHING");
+
+  // A concurrent reconcile without any transaction id reaches CUP evidence and activates.
+  const concurrent = build({ store });
+  const reconciled = await concurrent.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId,
+    idempotencyKey: KEY2, eventId: "evt-cup" });
+  assert.equal(reconciled.order.state, ORDER_STATES.ACTIVE);
+  const wonRevision = durable(store, orderId).revision;
+  assert.ok(wonRevision > 1);
+
+  held.release();
+  const created = await pendingCreate;
+  // ACTIVE is monotonic: the late link never reopens the payment, but its reference is kept.
+  assert.equal(created.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(created.order.payment.status, "PAID");
+  assert.equal(created.order.payment.paymentUrl, null);
+  assert.equal(created.order.recovery.state, "NONE");
+  const row = durable(store, orderId);
+  assert.equal(row.payment.providerTransactionId, "txn-late");
+  assert.equal(row.payment.paymentUrl, null);
+  assert.ok(row.revision > wonRevision);
+  assert.equal(held.count(), 1);
+
+  // The provider evidence is on disk, so a new process reads the same id and the same state.
+  const restarted = build({ store });
+  const afterRestart = await restarted.lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId });
+  assert.equal(afterRestart.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(afterRestart.order.recovery.state, "NONE");
+  assert.equal(durable(store, orderId).payment.providerTransactionId, "txn-late");
+  assert.equal(held.count(), 1);
+});
+
+test("a late create for an unresolved dispatch keeps the link, the slot and one POST", async () => {
+  const store = memoryStore();
+  const held = heldCreate(LATE_PENDING);
+  const noInstance = {
+    async findInstance() { return null; },
+    async activate() { throw new Error("must not activate"); },
+  };
+  const creator = build({ store, payments: held.payments, activation: noInstance });
+  const pendingCreate = creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  await held.reached;
+  const orderId = [...store.orders.keys()][0];
+
+  // The concurrent reconcile finds no instance: the outcome stays unresolved.
+  const concurrent = build({ store, activation: noInstance });
+  const reconciled = await concurrent.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId,
+    idempotencyKey: KEY2, eventId: "evt-none" });
+  assert.equal(reconciled.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(reconciled.order.payment.status, "UNKNOWN");
+  const wonRevision = durable(store, orderId).revision;
+
+  held.release();
+  const created = await pendingCreate;
+  assert.equal(created.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(created.order.payment.status, "PENDING");
+  assert.equal(created.order.payment.paymentUrl, "https://bank.example/pay/late");
+  assert.equal(created.order.recovery.action, "PAY");
+  const row = durable(store, orderId);
+  assert.equal(row.payment.providerTransactionId, "txn-late");
+  assert.equal(row.payment.paymentUrl, "https://bank.example/pay/late");
+  assert.equal(row.payment.status, "PENDING");
+  assert.equal(row.activeSlot, 1);
+  assert.ok(row.revision > wonRevision);
+  assert.equal(held.count(), 1);
+
+  // The slot stays occupied: a second key is not a way around the durable attempt.
+  await expectCode(creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: "idem-key-0000000003", mode: "NEW" }), 409, "RESIDENCY_ORDER_ALREADY_PENDING");
+  assert.equal(held.count(), 1);
+
+  // The stored id is what makes the late confirmation readable without a second POST.
+  const paid = build({ store, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-late" }; },
+  } });
+  const activated = await paid.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId,
+    idempotencyKey: KEY2, eventId: "evt-paid" });
+  assert.equal(activated.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(held.count(), 1);
+});
+
+test("an UNCONFIRMED late create keeps its known transaction id through a lost CAS", async () => {
+  const store = memoryStore();
+  const held = heldCreate({ status: "UNCONFIRMED", providerTransactionId: "txn-unconfirmed",
+    amountMinor: 79000, paymentUrl: null, reason: "RESIDENCY_UPSTREAM_TIMEOUT" });
+  const noInstance = {
+    async findInstance() { return null; },
+    async activate() { throw new Error("must not activate"); },
+  };
+  const creator = build({ store, payments: held.payments, activation: noInstance });
+  const pendingCreate = creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  await held.reached;
+  const orderId = [...store.orders.keys()][0];
+  const concurrent = build({ store, activation: noInstance });
+  await concurrent.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId,
+    idempotencyKey: KEY2, eventId: "evt-none" });
+
+  held.release();
+  const created = await pendingCreate;
+  assert.equal(created.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(created.order.payment.status, "UNKNOWN");
+  assert.equal(created.order.payment.paymentUrl, null);
+  assert.equal(created.order.recovery.state, "UNKNOWN_OUTCOME");
+  assert.equal(created.recoveryRequired, true);
+  const row = durable(store, orderId);
+  assert.equal(row.payment.providerTransactionId, "txn-unconfirmed");
+  assert.equal(row.payment.status, "UNKNOWN");
+  assert.equal(row.payment.lastErrorCode, "RESIDENCY_UPSTREAM_TIMEOUT");
+  assert.equal(row.activeSlot, 1);
+  assert.equal(held.count(), 1);
+
+  // The known id survives the restart and the next reconcile can confirm it.
+  const restarted = build({ store });
+  const afterRestart = await restarted.lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId });
+  assert.equal(afterRestart.order.recovery.state, "UNKNOWN_OUTCOME");
+  assert.equal(durable(store, orderId).payment.providerTransactionId, "txn-unconfirmed");
+});
+
+test("a late create never downgrades an order that is already confirmed paid or active", async () => {
+  for (const seeded of [
+    { state: ORDER_STATES.PAID, activeSlot: 1 },
+    { state: ORDER_STATES.ACTIVATION_PENDING, activeSlot: 1 },
+    { state: ORDER_STATES.ACTIVE, activeSlot: null },
+  ]) {
+    const store = memoryStore();
+    const held = heldCreate(LATE_PENDING);
+    const creator = build({ store, payments: held.payments });
+    const pendingCreate = creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+      userId: USER, idempotencyKey: KEY, mode: "NEW" });
+    await held.reached;
+    const orderId = [...store.orders.keys()][0];
+    // A concurrent worker confirmed the payment through provider/CUP evidence: paid, but
+    // without a provider reference on this row yet.
+    const current = durable(store, orderId);
+    store.orders.set(orderId, {
+      ...current, state: seeded.state, activeSlot: seeded.activeSlot, revision: current.revision + 1,
+      payment: { ...current.payment, status: "PAID", paymentUrl: null, paidAt: PAID_AT,
+        providerTransactionId: null, lastCheckedAt: PAID_AT },
+      activation: { ...current.activation, state: seeded.state === ORDER_STATES.ACTIVE ? "ACTIVE" : "PENDING" },
+    });
+
+    held.release();
+    const created = await pendingCreate;
+    assert.equal(created.order.state, seeded.state);
+    assert.equal(created.order.payment.status, "PAID");
+    assert.equal(created.order.payment.paymentUrl, null);
+    assert.equal(created.order.recovery.state,
+      seeded.state === ORDER_STATES.ACTIVE ? "NONE" : "ACTIVATION_PENDING");
+    const row = durable(store, orderId);
+    assert.equal(row.state, seeded.state);
+    assert.equal(row.payment.status, "PAID");
+    assert.equal(row.payment.providerTransactionId, "txn-late");
+    assert.equal(held.count(), 1);
+  }
+});
+
+test("a contradicting transaction id is never silently overwritten", async () => {
+  const store = memoryStore();
+  const held = heldCreate(LATE_PENDING);
+  const creator = build({ store, payments: held.payments });
+  const pendingCreate = creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  await held.reached;
+  const orderId = [...store.orders.keys()][0];
+  const current = durable(store, orderId);
+  store.orders.set(orderId, { ...current, revision: current.revision + 1,
+    payment: { ...current.payment, status: "PENDING", providerTransactionId: "txn-existing" } });
+
+  held.release();
+  const created = await pendingCreate;
+  assert.equal(created.order.state, ORDER_STATES.PAID_REQUIRES_REVIEW);
+  assert.equal(created.order.recovery.state, "REVIEW_REQUIRED");
+  assert.equal(created.order.recovery.action, "CONTACT_SUPPORT");
+  const row = durable(store, orderId);
+  assert.equal(row.payment.providerTransactionId, "txn-existing");
+  assert.equal(row.payment.lastErrorCode, "TRANSACTION_MISMATCH");
+  assert.equal(row.activation.lastErrorCode, "TRANSACTION_MISMATCH");
+  assert.ok(row.events.some((event) => event.type === "LATE_CREATE_EVIDENCE"));
+  assert.equal(held.count(), 1);
+
+  // An already ACTIVE residency is not reopened by the contradiction, but it is recorded.
+  const activeStore = memoryStore();
+  const activeHeld = heldCreate(LATE_PENDING);
+  const activeCreator = build({ store: activeStore, payments: activeHeld.payments });
+  const activeCreate = activeCreator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  await activeHeld.reached;
+  const activeOrderId = [...activeStore.orders.keys()][0];
+  const activeRow = durable(activeStore, activeOrderId);
+  activeStore.orders.set(activeOrderId, { ...activeRow, state: ORDER_STATES.ACTIVE, activeSlot: null,
+    revision: activeRow.revision + 1,
+    payment: { ...activeRow.payment, status: "PAID", providerTransactionId: "txn-existing" },
+    residency: { state: RESIDENCY_STATES.ACTIVE, validFrom: VALID_FROM, validUntil: VALID_UNTIL,
+      source: "CUP_RESIDENCY_POLICY", observedAt: PAID_AT } });
+  activeHeld.release();
+  const activeCreated = await activeCreate;
+  assert.equal(activeCreated.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(activeCreated.order.residency.validUntil, VALID_UNTIL);
+  const activeDurable = durable(activeStore, activeOrderId);
+  assert.equal(activeDurable.payment.providerTransactionId, "txn-existing");
+  assert.equal(activeDurable.payment.lastErrorCode, "TRANSACTION_MISMATCH");
+  assert.equal(activeHeld.count(), 1);
+});
+
+test("an unknown payment is never reported as received when CUP finds no instance", async () => {
+  const creator = build({ payments: {
+    async create() { throw new Error("socket hang up"); },
+    async read() { return { status: "UNKNOWN" }; },
+  } });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  assert.equal(created.order.payment.status, "UNKNOWN");
+  let cupWrites = 0;
+  const probe = build({ store: creator.store, activation: {
+    async findInstance() { return null; },
+    async activate() { cupWrites += 1; throw new Error("must not activate"); },
+  } });
+  const reconciled = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER,
+    orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-none" });
+  assert.equal(reconciled.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(reconciled.order.payment.status, "UNKNOWN");
+  assert.equal(reconciled.order.terminal, false);
+  assert.equal(reconciled.order.recovery.state, "UNKNOWN_OUTCOME");
+  assert.equal(reconciled.order.recovery.action, "RETRY_RECONCILE");
+  assert.equal(reconciled.retryable, true);
+  assert.equal(cupWrites, 0);
+  assert.ok(!reconciled.order.payment.instruction.includes("Оплата получена"));
+  assert.match(reconciled.order.payment.instruction, /не подтверждён/);
+
+  // A plain read, the payment endpoint and the unresolved lookup tell the same story.
+  const read = await probe.lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(read.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(read.order.payment.status, "UNKNOWN");
+  assert.equal(read.order.recovery.state, "UNKNOWN_OUTCOME");
+  assert.equal(read.order.payment.instruction, reconciled.order.payment.instruction);
+  const payment = await probe.lifecycle.getPayment({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(payment.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(payment.paymentStatus, "UNKNOWN");
+  assert.equal(payment.paymentUrl, null);
+  assert.equal(payment.terminal, false);
+  assert.equal(payment.recovery.state, "UNKNOWN_OUTCOME");
+  assert.ok(!payment.instruction.includes("Оплата получена"));
+  const listed = await probe.lifecycle.listOrders({ tenantId: TENANT, userId: USER, state: "unresolved" });
+  assert.equal(listed.count, 1);
+  assert.equal(listed.orders[0].state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(listed.orders[0].recovery.state, "UNKNOWN_OUTCOME");
+
+  // The slot is held: no second checkout is offered or accepted.
+  assert.equal(creator.store.orders.get(created.order.orderId).activeSlot, 1);
+  await expectCode(probe.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: "idem-key-0000000003", mode: "NEW" }), 409, "RESIDENCY_ORDER_ALREADY_PENDING");
+
+  // A restarted process projects the same uncertainty from durable fields only.
+  const restarted = build({ store: creator.store });
+  const afterRestart = await restarted.lifecycle.getOrder({ tenantId: TENANT, userId: USER,
+    orderId: created.order.orderId });
+  assert.equal(afterRestart.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(afterRestart.order.payment.status, "UNKNOWN");
+  assert.equal(afterRestart.order.recovery.state, "UNKNOWN_OUTCOME");
+  assert.ok(!afterRestart.order.payment.instruction.includes("Оплата получена"));
+  const durableRow = creator.store.orders.get(created.order.orderId);
+  assert.equal(durableRow.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(durableRow.payment.status, "UNKNOWN");
+  assert.equal(durableRow.activation.state, "PENDING");
+  assert.equal(durableRow.activation.lastErrorCode, "INSTANCE_NOT_FOUND");
+  assert.equal(durableRow.payment.providerTransactionId, null);
+});
+
+test("a failed or non-ACTIVE CUP answer never promotes an unconfirmed dispatch", async () => {
+  const cases = [
+    { name: "lookup outage", activation: {
+      async findInstance() { throw new Error("CUP timeout"); },
+      async activate() { throw new Error("must not activate"); },
+    }, code: "INSTANCE_LOOKUP_UNAVAILABLE" },
+    { name: "closed refusal", activation: {
+      async findInstance() { return { clientSubscriptionId: "sub-1" }; },
+      async activate() { return { state: "REJECTED", reason: "NO_ELIGIBLE_POLICY" }; },
+    }, code: "NO_ELIGIBLE_POLICY" },
+    { name: "inconclusive answer", activation: {
+      async findInstance() { return { clientSubscriptionId: "sub-1" }; },
+      async activate() { return { state: "PENDING" }; },
+    }, code: "ACTIVATION_UNAVAILABLE" },
+  ];
+  for (const item of cases) {
+    const creator = build({ payments: {
+      async create() { throw new Error("socket hang up"); },
+      async read() { return { status: "UNKNOWN" }; },
+    } });
+    const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+      userId: USER, idempotencyKey: KEY, mode: "NEW" });
+    const probe = build({ store: creator.store, activation: item.activation });
+    const reconciled = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER,
+      orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-" + item.name });
+    assert.equal(reconciled.order.state, ORDER_STATES.PENDING_PAYMENT, item.name);
+    assert.equal(reconciled.order.payment.status, "UNKNOWN", item.name);
+    assert.equal(reconciled.order.recovery.state, "UNKNOWN_OUTCOME", item.name);
+    assert.ok(!reconciled.order.payment.instruction.includes("Оплата получена"), item.name);
+    const row = creator.store.orders.get(created.order.orderId);
+    assert.equal(row.state, ORDER_STATES.PENDING_PAYMENT, item.name);
+    assert.equal(row.activation.lastErrorCode, item.code, item.name);
+    assert.equal(row.activeSlot, 1, item.name);
+  }
+});
+
+test("a durable paid phase without a confirmed payment still reads as unknown", async () => {
+  // The reported shape: PAID_ACTIVATION_PENDING with payment.status=UNKNOWN must not be
+  // presented as a received payment, even when the row was written by an older build.
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT,
+    userId: USER, idempotencyKey: KEY, mode: "NEW" });
+  const row = creator.store.orders.get(created.order.orderId);
+  creator.store.orders.set(created.order.orderId, { ...row, state: ORDER_STATES.ACTIVATION_PENDING,
+    revision: row.revision + 1,
+    payment: { ...row.payment, status: "UNKNOWN", paymentUrl: null,
+      lastErrorCode: "DISPATCH_OUTCOME_UNKNOWN", lastCheckedAt: PAID_AT },
+    activation: { ...row.activation, state: "PENDING", lastErrorCode: "INSTANCE_NOT_FOUND" } });
+  const legacy = build({ store: creator.store });
+  const read = await legacy.lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(read.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(read.order.payment.status, "UNKNOWN");
+  assert.equal(read.order.recovery.state, "UNKNOWN_OUTCOME");
+  assert.equal(read.order.recovery.retryable, true);
+  assert.ok(!read.order.payment.instruction.includes("Оплата получена"));
+  const payment = await legacy.lifecycle.getPayment({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(payment.paymentStatus, "UNKNOWN");
+  assert.equal(payment.recovery.state, "UNKNOWN_OUTCOME");
+  assert.ok(!payment.instruction.includes("Оплата получена"));
+  assert.equal(creator.store.orders.get(created.order.orderId).activeSlot, 1);
+});
+
+

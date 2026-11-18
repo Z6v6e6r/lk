@@ -279,7 +279,7 @@ mutation response and a different device:
 | TERMINAL | CANCELLED / PAYMENT_FAILED / EXPIRED | START_NEW_ORDER | false |
 | REVIEW_REQUIRED | PAID_REQUIRES_REVIEW / ACTIVATION_FAILED | CONTACT_SUPPORT | true |
 | ACTIVATION_PENDING | PAID / PAID_ACTIVATION_PENDING | RETRY_RECONCILE | true |
-| UNKNOWN_OUTCOME | PENDING_PAYMENT with payment UNKNOWN/DISPATCHING | RETRY_RECONCILE | true |
+| UNKNOWN_OUTCOME | PENDING_PAYMENT with payment UNKNOWN/DISPATCHING, and any PAID/PAID_ACTIVATION_PENDING row whose payment is still UNKNOWN | RETRY_RECONCILE | true |
 | AWAITING_CONFIRMATION | PENDING_PAYMENT with payment PENDING past `expiresAt` | RETRY_RECONCILE | true |
 | AWAITING_PAYMENT | PENDING_PAYMENT with payment PENDING within the window | PAY | false |
 
@@ -297,6 +297,23 @@ mutation response and a different device:
   recovers the late result. The id is internal and never appears in a DTO.
 - Only an explicit provider 4xx refusal of the request itself (400/401/403/404/405/415/
   422) is a confirmed basis for a terminal `PAYMENT_FAILED`. A 409/429/5xx never is.
+- **A late create response is never dropped.** The durable attempt is written before the
+  POST, so a concurrent reconcile can win the revision CAS while the POST is in flight.
+  The owner re-reads the current row and merges the provider evidence instead of
+  returning the winner's row: the transaction id and link are persisted, `ACTIVE`/`PAID`
+  stay monotonic, a contradicting transaction id is never overwritten (the order becomes
+  `PAID_REQUIRES_REVIEW` with `TRANSACTION_MISMATCH`, or keeps `ACTIVE` and records the
+  mismatch when the residency is already confirmed), and a terminal row is never revived
+  (the evidence is kept as a durable `LATE_CREATE_AFTER_TERMINAL` event). There is still
+  exactly one provider POST.
+- **A missing CUP instance does not prove payment.** For an order whose dispatch outcome
+  is unknown, only a confirmed PAID read or an authoritative CUP instance for this very
+  order may move it into a paid phase. A lookup error, an absent instance, an
+  instance purchased before the order, a CUP refusal or an inconclusive activation
+  answer keep `PENDING_PAYMENT` with `payment.status=UNKNOWN` and recovery
+  `UNKNOWN_OUTCOME`: the slot stays held, no second checkout is offered, and the
+  instruction never says that money was received. Older rows already stored as
+  `PAID_ACTIVATION_PENDING` with an unconfirmed payment project the same way.
 - The dispatch lease (2 minutes) is an **operator/client hint**, not a permission to buy
   again. Its expiry changes nothing: the slot stays held, the order stays unresolved and
   recovery continues through reconcile/CUP evidence.
@@ -370,6 +387,9 @@ CUP's context.instance.activeFrom/activeTo.
   reviewRequired: true for refund/support.
 - Without a provider transaction id, the owner may recover through CUP's verified
   owned instance only when the instance was purchased after the order was created.
+  Otherwise the answer is `PENDING_PAYMENT` + `UNKNOWN` + `UNKNOWN_OUTCOME` with
+  `retryable: true`; it is never `PAID_ACTIVATION_PENDING`, because an unresolved
+  dispatch is not a receipt.
 
 ### My unresolved order (another device)
 
@@ -520,8 +540,14 @@ migration.
 
 A disposable real-Mongo test (`scripts/tests/residencyLifecycleMongo.test.mjs`, run with
 `LK_TEST_MONGO_URI`) verifies the partial index, the one-winner concurrency, the
-acknowledged insert, the revision CAS and the restart recovery. The in-memory suite
-cannot.
+acknowledged insert, the revision CAS, the restart recovery and the held create response
+that loses that CAS. The in-memory suite cannot.
+
+The mandatory LK1 enforcement job runs `npm run test:residency-lifecycle` against a
+disposable `mongo:8.0.5` service container with `LK_TEST_MONGO_REQUIRED=1`. In that job a
+missing database is a failure, not a skip: the Mongo suite throws when the requirement is
+set and the URI is absent, so the nine real-server scenarios can never silently pass by
+being skipped. Locally the same suite skips when neither variable is set.
 
 ## Rollout and E2E
 
