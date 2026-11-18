@@ -9239,14 +9239,15 @@ function getSplitJoinAttempts(): SplitCreateAttempts {
   if (!browserSplitJoinAttempts) {
     let storage: Storage | null = null;
     try { if (typeof window !== "undefined") storage = window.localStorage; } catch { /* active-tab memory fallback */ }
-    browserSplitJoinAttempts = new SplitCreateAttempts(storage, "lk_split_join_attempt_refs_v1:");
+    browserSplitJoinAttempts = new SplitCreateAttempts(storage, "lk_split_join_attempt_refs_v1:", { releaseWhenAbsent: true });
   }
   return browserSplitJoinAttempts;
 }
 const splitJoinAttemptKey = (gameId: string) => `game:${gameId.trim()}`;
-async function withSplitJoinAttemptLock<T>(attemptKey: string, run: () => Promise<T>): Promise<T> {
+/** Returns null when Web Locks are unavailable: the caller must not dispatch (fail closed). */
+async function withSplitJoinAttemptLock<T>(attemptKey: string, run: () => Promise<T>): Promise<T | null> {
   const locks = typeof navigator !== "undefined" ? (navigator as Navigator & { locks?: LockManager }).locks : undefined;
-  if (!locks?.request) return run();
+  if (!locks?.request) return null;
   return locks.request(`lk-split-join-attempt:${attemptKey}`, { mode: "exclusive" }, run) as Promise<T>;
 }
 
@@ -9269,7 +9270,7 @@ export function settleSplitJoinAttemptFromRecord(gameId: string, record: unknown
   const paymentRef = getHeldSplitJoinPaymentRef(gameId);
   if (!paymentRef) return null;
   const evidence = classifySplitJoinAttempt(record, paymentRef);
-  if (evidence === "paid" || evidence === "terminal") getSplitJoinAttempts().complete(splitJoinAttemptKey(gameId));
+  if (evidence === "paid" || evidence === "terminal") getSplitJoinAttempts().completeIf(splitJoinAttemptKey(gameId), paymentRef);
   return evidence;
 }
 
@@ -9499,7 +9500,24 @@ export async function apiCreatePadelSplitParticipantPayment(
         } };
       }
       try {
-        getSplitJoinAttempts().begin(attemptKey, paymentRef);
+        const journal = getSplitJoinAttempts();
+        const started = journal.begin(attemptKey, paymentRef);
+        // Another window started an attempt meanwhile, or the write is not durable:
+        // never dispatch a create that a reload or another window could not see.
+        if (started.recoveryOnly || started.paymentRef !== paymentRef || !journal.isDurable(attemptKey, paymentRef)) {
+          if (!started.recoveryOnly) journal.completeIf(attemptKey, paymentRef);
+          return { early: {
+            data: null as PadelSplitPaymentResult | null,
+            error: {
+              status: 409,
+              message: started.recoveryOnly
+                ? "Результат предыдущей попытки оплаты ещё не подтверждён. Проверьте статус оплаты — новая оплата пока недоступна."
+                : "Не удалось надёжно сохранить попытку оплаты в браузере. Оплата не отправлена.",
+              raw: { code: started.recoveryOnly ? "SPLIT_JOIN_ATTEMPT_UNRESOLVED" : "SPLIT_JOIN_ATTEMPT_JOURNAL" },
+            },
+            status: 409 as ApiStatus,
+          } };
+        }
       } catch {
         return { early: {
           data: null as PadelSplitPaymentResult | null,
@@ -9516,14 +9534,25 @@ export async function apiCreatePadelSplitParticipantPayment(
       normalizedGameId,
     );
     const response = await requestPadelSplitJoinWithPendingPoll(splitRequest, baseUrl, params);
-    if (oneTime && response.error && isDefinitiveSplitJoinRefusal(response.status)) {
-      // The server refused this exact request: no payment was created for it.
-      getSplitJoinAttempts().complete(attemptKey);
+    if (oneTime && response.error && isDefinitiveSplitJoinRefusal(response.status, response.error.raw)) {
+      // Refused before any provider call: this exact request created nothing.
+      getSplitJoinAttempts().completeIf(attemptKey, paymentRef);
     }
 
     return { response, splitRequest };
   };
   const outcome = oneTime ? await withSplitJoinAttemptLock(attemptKey, dispatch) : await dispatch();
+  if (!outcome) {
+    return {
+      data: null,
+      error: {
+        status: 409,
+        message: "Браузер не поддерживает защищённую оплату участия. Обновите браузер или оплатите в приложении.",
+        raw: { code: "SPLIT_JOIN_ATTEMPT_LOCK_UNAVAILABLE" },
+      },
+      status: 409 as ApiStatus,
+    };
+  }
   if ("early" in outcome) return outcome.early;
   const { response, splitRequest } = outcome;
 

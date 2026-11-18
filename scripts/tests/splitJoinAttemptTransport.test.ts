@@ -36,7 +36,7 @@ class MemoryStorage {
   clear() { this.values.clear(); }
 }
 
-type PostMode = "accept-then-lose-response" | "refuse-409" | "accept";
+type PostMode = "accept-then-lose-response" | "refuse-409" | "refuse-422" | "status-500" | "status-408" | "checkout-pending-409" | "accept";
 type ReadMode = "fail" | "ok";
 interface Server {
   posts: Array<{ gameId: string; paymentRef: string; operationIdQuery: string | null }>;
@@ -73,9 +73,18 @@ function installEnvironment(server: Server, storage: MemoryStorage) {
       const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
       const paymentRef = String(body.paymentRef || "");
       server.posts.push({ gameId: decodeURIComponent(join[1]), paymentRef, operationIdQuery: url.searchParams.get("operationId") });
-      if (server.postMode === "refuse-409") {
-        return new Response(JSON.stringify({ message: "Последнее место уже занято" }), { status: 409, headers: { "content-type": "application/json" } });
+      const reply = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+      if (server.postMode === "refuse-409") return reply(409, { message: "Последнее место уже занято" });
+      if (server.postMode === "refuse-422") return reply(422, { message: "Некорректные данные участия", code: "SPLIT_JOIN_VALIDATION" });
+      // These may come after the provider was reached: the payment is created first.
+      server.payments.push({ clientId: "client-1", status: "PAYMENT_PENDING", paymentRef, createdAt: new Date().toISOString() });
+      if (server.postMode === "status-500") { server.payments.pop(); return reply(500, { message: "Internal" }); }
+      if (server.postMode === "status-408") { server.payments.pop(); return reply(408, { message: "Timeout" }); }
+      if (server.postMode === "checkout-pending-409") {
+        server.payments.pop();
+        return reply(409, { message: "Проверяем предыдущую попытку оплаты.", code: "SPLIT_JOIN_CHECKOUT_PENDING" });
       }
+      server.payments.pop();
       // The provider accepted the create; the payment exists from now on.
       server.payments.push({ clientId: "client-1", status: "PAYMENT_PENDING", paymentRef, createdAt: new Date().toISOString() });
       if (server.postMode === "accept-then-lose-response") throw new TypeError("Failed to fetch");
@@ -193,12 +202,12 @@ test("an exact PAID item resolves the attempt without another create", async () 
   assert.equal(client.getHeldSplitJoinPaymentRef("game-1"), null);
 });
 
-test("a definitive server refusal allows a new deliberate attempt with a new key", async () => {
-  const { server } = setup("refuse-409");
+test("a refusal before the provider (422) allows a new deliberate attempt with a new key", async () => {
+  const { server } = setup("refuse-422");
   const client = await loadClient();
   const refused = await client.apiCreatePadelSplitParticipantPayment("game-2", joinParams("ref-1") as never);
-  assert.equal(refused.error?.status, 409);
-  assert.equal(client.getHeldSplitJoinPaymentRef("game-2"), null, "a 409 proves this request created nothing");
+  assert.equal(refused.error?.status, 422);
+  assert.equal(client.getHeldSplitJoinPaymentRef("game-2"), null, "a pre-provider refusal proves this request created nothing");
   server.postMode = "accept";
   await client.apiCreatePadelSplitParticipantPayment("game-2", joinParams("ref-2") as never);
   assert.deepEqual(server.posts.map(post => post.paymentRef), ["ref-1", "ref-2"]);
@@ -206,6 +215,19 @@ test("a definitive server refusal allows a new deliberate attempt with a new key
   // still not a refusal, so the new attempt stays held until the record shows it.
   assert.equal(client.getHeldSplitJoinPaymentRef("game-2"), "ref-2");
 });
+
+for (const mode of ["refuse-409", "checkout-pending-409", "status-500", "status-408"] as const) {
+  test(`a ${mode} answer keeps the attempt held: no new key is sent`, async () => {
+    const { server } = setup(mode);
+    const client = await loadClient();
+    const first = await client.apiCreatePadelSplitParticipantPayment(`game-${mode}`, joinParams("ref-1") as never);
+    assert.ok(first.error, "the answer is reported, never as a success");
+    assert.equal(client.getHeldSplitJoinPaymentRef(`game-${mode}`), "ref-1");
+    const second = await client.apiCreatePadelSplitParticipantPayment(`game-${mode}`, joinParams("ref-2") as never);
+    assert.equal(code(second), "SPLIT_JOIN_ATTEMPT_UNRESOLVED");
+    assert.deepEqual(server.posts.map(post => post.paymentRef), ["ref-1"]);
+  });
+}
 
 test("a server-terminal exact item allows a new deliberate attempt; exactly one more command is sent", async () => {
   const { server } = setup();
@@ -245,4 +267,52 @@ test("two windows clicking at the same moment send exactly one create (per-game 
   const codes = [code(first), code(second)];
   assert.ok(codes.includes("SPLIT_JOIN_ATTEMPT_UNRESOLVED") || codes.includes("SPLIT_JOIN_ATTEMPT_PENDING"), codes.join(","));
   assert.equal(firstWindow.getHeldSplitJoinPaymentRef("game-5"), server.posts[0].paymentRef);
+});
+
+test("a journal write that is not durable refuses before any create", async () => {
+  const { server, storage } = setup("accept");
+  const realSet = storage.setItem.bind(storage);
+  storage.setItem = (key: string, value: string) => {
+    if (key.startsWith("lk_split_join_attempt_refs_v1:")) throw new Error("QuotaExceededError");
+    realSet(key, value);
+  };
+  const client = await loadClient();
+  const result = await client.apiCreatePadelSplitParticipantPayment("game-6", joinParams("ref-Q") as never);
+  assert.equal(code(result), "SPLIT_JOIN_ATTEMPT_JOURNAL");
+  assert.equal(server.posts.length, 0);
+});
+
+test("another window starting an attempt between the check and the journal write prevents dispatch", async () => {
+  const { server, storage } = setup();
+  const client = await loadClient();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, "https://api.test");
+    // While this window re-reads the game, another (unlocked, older) client journals its own attempt.
+    if ((init?.method || "GET") === "GET" && url.pathname.endsWith("/lk/games/game-7")) {
+      storage.setItem("lk_split_join_attempt_refs_v1:game:game-7", JSON.stringify("ref-OTHER"));
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+  // Make the first resolve read happen by holding an attempt that the record proves terminal.
+  storage.setItem("lk_split_join_attempt_refs_v1:game:game-7", JSON.stringify("ref-OLD"));
+  server.payments.push({ clientId: "client-1", status: "CANCELLED", paymentRef: "ref-OLD" });
+  const result = await client.apiCreatePadelSplitParticipantPayment("game-7", joinParams("ref-MINE") as never);
+  assert.equal(code(result), "SPLIT_JOIN_ATTEMPT_UNRESOLVED");
+  assert.equal(server.posts.length, 0);
+  assert.equal(client.getHeldSplitJoinPaymentRef("game-7"), "ref-OTHER", "the other window's attempt is kept");
+});
+
+test("without Web Locks a one-time create is refused (fail closed)", async () => {
+  const { server } = setup("accept");
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { value: { userAgent: "old" }, configurable: true });
+  try {
+    const client = await loadClient();
+    const result = await client.apiCreatePadelSplitParticipantPayment("game-8", joinParams("ref-L") as never);
+    assert.equal(code(result), "SPLIT_JOIN_ATTEMPT_LOCK_UNAVAILABLE");
+    assert.equal(server.posts.length, 0);
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "navigator", descriptor);
+  }
 });

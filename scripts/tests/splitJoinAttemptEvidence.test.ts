@@ -29,7 +29,19 @@ test("malformed records and empty refs are never evidence", () => {
   assert.equal(classifySplitJoinAttempt(record([{ status: "PAID", paymentRef: "r" }]), " "), "absent");
 });
 
-test("only server 4xx except 408 is a definitive refusal", () => {
-  for (const status of [400, 401, 403, 404, 409, 422, 429]) assert.equal(isDefinitiveSplitJoinRefusal(status), true, String(status));
-  for (const status of [null, undefined, 0, 200, 201, 202, 408, 500, 503, Number.NaN]) assert.equal(isDefinitiveSplitJoinRefusal(status), false, String(status));
+test("only statuses rejected before the provider are definitive; 409 and in-flight codes are not", () => {
+  for (const status of [400, 401, 403, 404, 422]) assert.equal(isDefinitiveSplitJoinRefusal(status), true, String(status));
+  for (const status of [null, undefined, 0, 200, 201, 202, 408, 409, 423, 429, 500, 503, Number.NaN]) {
+    assert.equal(isDefinitiveSplitJoinRefusal(status), false, String(status));
+  }
+  assert.equal(isDefinitiveSplitJoinRefusal(400, { code: "SPLIT_JOIN_CHECKOUT_PENDING" }), false);
+});
+
+test("deadline-driven and money-ambiguous statuses never end an attempt", () => {
+  for (const status of ["EXPIRED", "RELEASED", "ERROR", "REFUNDED", "FAILED_REFUND"]) {
+    assert.equal(classifySplitJoinAttempt(record([{ status, paymentRef: "r" }]), "r"), "pending", status);
+  }
+  for (const status of ["CANCELLED", "DECLINED", "FAILED", "REJECTED", "VOIDED"]) {
+    assert.equal(classifySplitJoinAttempt(record([{ status, paymentRef: "r" }]), "r"), "terminal", status);
+  }
 });

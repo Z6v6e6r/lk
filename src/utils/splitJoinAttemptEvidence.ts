@@ -16,7 +16,10 @@ export type SplitJoinAttemptEvidence =
   | "absent";
 
 const PAID_MARKERS = ["PAID", "CONFIRMED", "SUCCEEDED", "SUCCESS", "COMPLETED"];
-const TERMINAL_MARKERS = ["CANCEL", "DECLIN", "FAIL", "ERROR", "EXPIRE", "REFUND", "REJECT", "RELEASED", "VOID"];
+// Only provider-confirmed refusals end an attempt. EXPIRED/RELEASED can be set by
+// a server deadline (effectively a timer) and a late PAID may still arrive;
+// ERROR/REFUND do not prove that no money moved. Those stay "pending".
+const TERMINAL_MARKERS = ["CANCEL", "DECLIN", "FAIL", "REJECT", "VOID"];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -42,11 +45,21 @@ export function classifySplitJoinAttempt(record: unknown, paymentRef: string): S
   // paid wins over terminal, because a late PAID is real money.
   const statuses = matches.map(item => normalizeStatus(item.status));
   if (statuses.some(status => PAID_MARKERS.some(marker => status === marker || status.startsWith(`${marker}_`)))) return "paid";
-  if (statuses.every(status => status && TERMINAL_MARKERS.some(marker => status.includes(marker)))) return "terminal";
+  const failedWithoutRefusal = (status: string) => status.includes("FAIL") && (status.includes("REFUND") || status.includes("ERROR"));
+  if (statuses.every(status => status && !failedWithoutRefusal(status) && TERMINAL_MARKERS.some(marker => status.includes(marker)))) return "terminal";
   return "pending";
 }
 
-/** A definitive refusal proves the create did not happen; anything else may have reached the provider. */
-export function isDefinitiveSplitJoinRefusal(status: number | null | undefined): boolean {
-  return typeof status === "number" && Number.isFinite(status) && status >= 400 && status < 500 && status !== 408;
+// Statuses the split JOIN rejects before any provider call (validation, auth,
+// actor mismatch, unknown game). 409/423/429 are NOT here: the paid-join pilot
+// answers 409 SPLIT_JOIN_CHECKOUT_PENDING after provider steps, and a 409 can
+// mean an earlier attempt is still in flight.
+const PRE_PROVIDER_REFUSAL_STATUSES = new Set([400, 401, 403, 404, 422]);
+const IN_FLIGHT_CODES = new Set(["SPLIT_JOIN_CHECKOUT_PENDING"]);
+
+/** True only when the server refused this exact request before reaching the provider. */
+export function isDefinitiveSplitJoinRefusal(status: number | null | undefined, raw?: unknown): boolean {
+  if (typeof status !== "number" || !PRE_PROVIDER_REFUSAL_STATUSES.has(status)) return false;
+  const code = raw && typeof raw === "object" ? (raw as { code?: unknown }).code : undefined;
+  return !(typeof code === "string" && IN_FLIGHT_CODES.has(code));
 }

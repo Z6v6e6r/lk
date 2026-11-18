@@ -35,7 +35,7 @@ const viewer: PadelGamePlayer = { id: profile.id, name: `${profile.firstName} ${
 const gamePayMode: 'split' | 'self' = routeParams.get('gamePayMode') === 'self' ? 'self' : 'split';
 // Synthetic server for the wired game-join checkout. Its state survives a page
 // reload (as a real server would) until the stand's reset counter changes.
-// joinOutcome: pending (default) | lost (created, response lost) | network | lost-invisible | lost-unreadable
+// joinOutcome: pending (default) | refused (422) | refused-409 | lost (created, response lost) | network | lost-invisible | lost-unreadable
 // (created, response lost, the next game read fails) | refused.
 let failNextRecordRead = false;
 // settle: paid | cancelled — applies a provider decision to a pending payment on load.
@@ -80,7 +80,9 @@ function syntheticJoinResponse(body: Record<string, unknown>): Response {
     sessionStorage.setItem(key, JSON.stringify([...JSON.parse(sessionStorage.getItem(key) || '[]'), paymentRef]));
   } catch { /* in-page list remains */ }
   const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
-  if (outcome === 'refused') return json(409, { message: 'Последнее место уже занято. Оплата не создана.' });
+  // refused: rejected before the provider (422). refused-409: may follow provider steps, so it holds.
+  if (outcome === 'refused') return json(422, { message: 'Участие недоступно: данные игры изменились. Оплата не создана.', code: 'SPLIT_JOIN_VALIDATION' });
+  if (outcome === 'refused-409') return json(409, { message: 'Проверяем предыдущую попытку оплаты.', code: 'SPLIT_JOIN_CHECKOUT_PENDING' });
   if (outcome === 'lost-invisible') throw new TypeError('Synthetic transport: response lost; payment not yet projected');
   const now = Date.now();
   const payment = {
