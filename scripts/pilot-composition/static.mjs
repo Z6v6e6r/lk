@@ -52,7 +52,7 @@ function serveFile(res, filePath) {
 function makeServer(kind, port, bundle, version) {
   const server = https.createServer(cert, (req, res) => {
     const url = new URL(req.url, "https://" + (req.headers.host || "localhost"));
-    
+
     if (url.pathname.startsWith("/lk/residency/")) return proxy(req, res);
     if (url.pathname === "/bundle.js") return serveFile(res, bundle);
     if (url.pathname === "/lk/release.json") {

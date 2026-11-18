@@ -9,7 +9,7 @@ release.json   version 20261118T164240Z source 27ea6a8c1665789786b8a6c6fc9c657dc
 ## New pilot bundle (this branch, production env; harness build used local VITE_RESIDENCY_PASS_API_BASE)
 sha256         0a83dbc72dc6c55549bab42ce597aa65089f9eca94f3577d803b04e018cbd59e
 bytes          2976424
-build_result   computing gzip size... dist/bundle.js  2,976.42 kB │ gzip: 1,318.46 kB ✓ built in 2.24s 
+build_result   computing gzip size... dist/bundle.js  2,976.42 kB │ gzip: 1,318.46 kB ✓ built in 2.24s
 
 ## Custom node (sources, no node_modules)
 tarball_sha256 47967d1e151dc8e3073c75d6bf1c9bb5971a03dcf73a873e57aad83a9dacd694

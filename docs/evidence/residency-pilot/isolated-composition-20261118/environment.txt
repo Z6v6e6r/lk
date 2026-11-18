@@ -22,7 +22,7 @@ new_origin     https://127.0.0.1:8443 (branch bundle, harness VITE_RESIDENCY_PAS
 {"name":"residency_order_expiry","key":{"tenantId":1,"state":1,"payment.expiresAt":1}}
 
 ## Node-RED startup
-18 Nov 19:49:47 - [info] 
+18 Nov 19:49:47 - [info]
 
 Welcome to Node-RED
 ===================
@@ -36,7 +36,7 @@ Welcome to Node-RED
 18 Nov 19:49:48 - [info] User directory : /data
 18 Nov 19:49:48 - [warn] Projects disabled : editorTheme.projects.enabled=false
 18 Nov 19:49:48 - [info] Flows file     : /data/flows.json
-18 Nov 19:49:48 - [warn] 
+18 Nov 19:49:48 - [warn]
 
 ---------------------------------------------------------------------
 Your flow credentials file is encrypted using a system-generated key.
