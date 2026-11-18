@@ -3216,6 +3216,16 @@ export async function apiFetchTournamentSubscriptionDiscounts(
   return result;
 }
 
+const tournamentCheckoutRetryKeys = new Map<string, string>();
+const tournamentCheckoutRefusalMessages: Record<string, string> = {
+  LEVEL_NOT_ALLOWED: "Ваш игровой уровень не подходит для этого турнира.",
+  PLAYER_LEVEL_REQUIRED: "Укажите игровой уровень, чтобы записаться на турнир.",
+  PLAYER_LEVEL_UNKNOWN: "Не удалось подтвердить ваш игровой уровень.",
+  ACTIVITY_LEVEL_INVALID: "Не удалось проверить ограничения по уровню для этого турнира.",
+  GENDER_NOT_ALLOWED: "Условия участия в этом турнире не позволяют записаться.",
+  PLAYER_GENDER_REQUIRED: "Укажите пол в профиле, чтобы записаться на турнир.",
+};
+
 export async function apiCreateTournamentVivaTransaction(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
@@ -3299,12 +3309,27 @@ export async function apiCreateTournamentVivaTransaction(
     return apiCreateTournamentVivaBookingFromSubscription(params);
   }
 
-  const paymentWatcher = await createVivaPaymentWatcher(params.clientId);
+  const tournamentOwnerTarget = resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.exercise)
+    === "tournament" || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.tournament) === "tournament";
+  const paymentWatcher = tournamentOwnerTarget ? null : await createVivaPaymentWatcher(params.clientId);
   const transactionStartedAtMs = Date.now();
   const returnUrls = buildTournamentPaymentReturnUrls(params.exerciseId);
   const successUrl = params.successUrl?.trim() || returnUrls.successUrl;
   const failUrl = params.failUrl?.trim() || returnUrls.failUrl;
   const payload = buildTournamentVivaTransactionPayload(params, successUrl, failUrl);
+
+  const initialTournamentKey = tournamentOwnerTarget
+    ? `tournament:${params.exerciseId}:${params.clientId || params.profile?.id || "self"}` : null;
+  let tournamentOperationId = initialTournamentKey;
+  if (initialTournamentKey) {
+    let saved: string | null | undefined;
+    try { saved = globalThis.sessionStorage?.getItem(`lk-tournament-checkout:${initialTournamentKey}`); }
+    catch { /* Embedded storage may be unavailable. */ }
+    if (saved && /^tournament-retry:tournament-owner:[0-9a-f-]{36}$/i.test(saved)) {
+      tournamentCheckoutRetryKeys.set(initialTournamentKey, saved);
+    }
+    tournamentOperationId = tournamentCheckoutRetryKeys.get(initialTournamentKey) ?? initialTournamentKey;
+  }
   const trialOperationId = trialGroupTarget
     ? trialGroupCheckoutOperationId(params.exerciseId, params.clientId || params.profile?.id || "", params.product.id, params.promoCode ?? null, params.product.source)
     : null;
@@ -3312,19 +3337,41 @@ export async function apiCreateTournamentVivaTransaction(
   const result = await request<unknown>(
     trialOperationId
       ? `/lk/trial-group-bookings?operationId=${encodeURIComponent(trialOperationId)}`
-      : `${API_BASE}/end-user/api/v2/${TENANT_KEY}/transactions`,
+      : tournamentOperationId
+        ? `${PHAB_API_BASE}/tournaments/${encodeURIComponent(params.exerciseId)}/checkout`
+        : `${API_BASE}/end-user/api/v2/${TENANT_KEY}/transactions`,
     {
       ...(trialOperationId ? { baseUrl: getServ2Origin() } : {}),
+      ...(tournamentOperationId ? { headers: { "Idempotency-Key": tournamentOperationId } } : {}),
       method: "POST",
       auth: true,
       retries: 0,
       body: JSON.stringify(trialOperationId ? {
         exerciseId: params.exerciseId, productId: params.product.id,
         source: params.product.source, promoCode: params.promoCode ?? null,
+      } : tournamentOperationId ? {
+        productId: params.product.id, source: params.product.source, promoCode: params.promoCode ?? null, successUrl, failUrl,
       } : payload),
     },
   );
-  if (trialOperationId && (result.error || pickString(result.data, ["state"]) === "PENDING_CONFIRMATION")) {
+  if (initialTournamentKey && pickString(result.data, ["state"]) === "REJECTED") {
+    const code = pickString(result.data, ["code"]);
+    const refusedOperation = pickString(result.data, ["operationId"]);
+    const message = code && Object.hasOwn(tournamentCheckoutRefusalMessages, code)
+      ? tournamentCheckoutRefusalMessages[code] : null;
+    if (message && refusedOperation && /^tournament-owner:[0-9a-f-]{36}$/i.test(refusedOperation)
+      && (tournamentCheckoutRetryKeys.get(initialTournamentKey) ?? initialTournamentKey) === tournamentOperationId) {
+      // Each explicit retry after a durable refusal has a stable key. A delayed
+      // response for an older attempt cannot change the current attempt's key.
+      const successor = `tournament-retry:${refusedOperation}`;
+      tournamentCheckoutRetryKeys.set(initialTournamentKey, successor);
+      try { globalThis.sessionStorage?.setItem(`lk-tournament-checkout:${initialTournamentKey}`, successor); }
+      catch { /* Preserve the current in-memory attempt. */ }
+    }
+    return { data: null, error: { status: 403,
+      message: message ?? "Запись не соответствует правилам турнира.", raw: result.data }, status: 403 };
+  }
+  if ((trialOperationId || tournamentOperationId) && (result.error || pickString(result.data, ["state"]) === "PENDING_CONFIRMATION")) {
     paymentWatcher?.close();
     return { data: null, error: result.error || { status: 202,
       message: "Запись ожидает подтверждения. Повторите проверку; повторная оплата не создаётся.", raw: result.data }, status: result.status };
@@ -3412,7 +3459,7 @@ export async function apiCreateTournamentVivaTransaction(
   }) ?? Promise.resolve<TournamentVivaPaymentResolution | null>(null);
   const paymentResolutionPromises: Array<Promise<TournamentVivaPaymentResolution | null>> = [
     watcherResolution,
-    pollTournamentVivaPaymentResolution(params.exerciseId, transactionId),
+    ...(tournamentOwnerTarget ? [] : [pollTournamentVivaPaymentResolution(params.exerciseId, transactionId)]),
   ];
   if (transactionId) {
     // The operation status is Viva's own checkout-link source; the websocket event alone
@@ -3464,6 +3511,11 @@ export async function apiCreateTournamentVivaTransaction(
       },
       status: result.status,
     };
+  }
+
+  if (tournamentOperationId && paid) {
+    await request(`${PHAB_API_BASE}/tournaments/${encodeURIComponent(params.exerciseId)}/checkout/reconcile`,
+      { method: "POST", auth: true, retries: 0 });
   }
 
   return {
