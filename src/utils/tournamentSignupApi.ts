@@ -1733,8 +1733,17 @@ function collectComparableIds(value: unknown, keys: string[], seen = new Set<unk
       if (nestedId) ids.add(nestedId);
     }
   }
-  Object.values(value).forEach((nested) => {
-    if (nested && typeof nested === "object") {
+  Object.entries(value).forEach(([key, nested]) => {
+    // Past/reserved visits are usage, not eligibility restrictions. Likewise,
+    // offered products must not contribute their ids to the exercise's own type.
+    if (key === "activationBooking" || key === "bookings"
+      || key === "availableClientSubscriptions" || key === "availableClientOneTimes") return;
+    if (Array.isArray(nested)) {
+      // Primitive arrays are ids only when their field is explicitly requested above.
+      nested.filter(isRecord).forEach((item) => {
+        collectComparableIds(item, keys, seen).forEach((id) => ids.add(id));
+      });
+    } else if (isRecord(nested)) {
       collectComparableIds(nested, keys, seen).forEach((id) => ids.add(id));
     }
   });
