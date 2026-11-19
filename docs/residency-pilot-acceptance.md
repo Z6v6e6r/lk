@@ -141,6 +141,13 @@ provider; the live 147 was not touched.
 | Isolated composition | `node scripts/pilot-composition/e2e.mjs` + `backend-transcript.sh` | 5/5 browser scenarios pass; deterministic old/new race withheld the second link; Node-RED 4.0.9-22 / Node 22.14.0 |
 | Backend HTTP transcript | `scripts/pilot-composition/backend-transcript.sh` | all steps as expected |
 
+## Supervised personal pilot
+
+The concrete decision Alexey is asked to make, the pre-flight absence check, the observer,
+stop signals, lost-response recovery, the mass-rollout option and the operator order are in
+[residency-pilot-alexey-decision.md](residency-pilot-alexey-decision.md). The Hermes browser
+handoff is in [HERMES-HANDOFF-20261119.md](evidence/residency-pilot/HERMES-HANDOFF-20261119.md).
+
 ## Manual acceptance scenario (for Alexey)
 
 Each row: user action → expected screen → server-verifiable result. Do not repeat a real

@@ -1,6 +1,10 @@
 # Residency LK1 pilot: installation and recovery packet
 
 Status: **prepared and exercised in the isolated composition; not installed on 147.**
+The supervised personal-pilot decision and the pre-flight absence check are in
+[residency-pilot-alexey-decision.md](residency-pilot-alexey-decision.md); the Hermes browser
+handoff is in
+[HERMES-HANDOFF-20261119.md](evidence/residency-pilot/HERMES-HANDOFF-20261119.md).
 Everything below is reversible and none of it changes the published old checkout until the
 separate frontend publication. Live mutations require the owner's explicit approval naming
 source, scope, target, order, verification, stop signal and recovery.
