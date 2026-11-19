@@ -65,6 +65,7 @@ test("FPR create rejects changed seeds, roster mismatch, legacy event IDs and al
     (t: ReturnType<typeof fixture>) => { t.participants.pop(); },
     (t: ReturnType<typeof fixture>) => { t.tournamentId = "12345"; t.params.fpr6x25.tournamentId = "12345"; },
     (t: ReturnType<typeof fixture>) => { t.params.fpr6x25.status = "in_progress"; },
+    (t: ReturnType<typeof fixture>) => { t.params.fpr6x25.gameWindowFromStart = true; },
   ]) {
     const input = fixture(); change(input);
     const [mongo, out] = prepare({ payload: input });
@@ -88,13 +89,14 @@ test("FPR creation preserves a selected publication without requiring its primar
     input.params.fpr6x25.communityRating);
 });
 
-test("new FPR server inserts add 45 minutes once for cached clients and replace client policy metadata", () => {
+test("server inserts own the FPR game window and keep the provisional deadline until first start", () => {
   const input = fixture(), before = structuredClone(input);
   input.params.fprDeadlinePolicy = { version: 999, extensionMinutes: 999, baseEndsAt: '2099-01-01' };
   const create = () => prepare({ payload: structuredClone(input) })[0];
   const first = create(), retry = create();
   const saved = first.payload.$setOnInsert;
   assert.equal(Date.parse(saved.params.fpr6x25.endsAt), Date.parse(before.params.fpr6x25.endsAt) + 45 * 60_000);
+  assert.equal(saved.params.fpr6x25.gameWindowFromStart, true);
   assert.deepEqual(saved.params.fprDeadlinePolicy, { version: 1, extensionMinutes: 45, baseEndsAt: before.params.fpr6x25.endsAt });
   assert.deepEqual(first.query, retry.query);
   assert.deepEqual(saved.params, retry.payload.$setOnInsert.params);
@@ -103,7 +105,7 @@ test("new FPR server inserts add 45 minutes once for cached clients and replace 
   assert.deepEqual(saved.params.fpr6x25.attempts, before.params.fpr6x25.attempts);
   assert.equal(input.params.fpr6x25.endsAt, before.params.fpr6x25.endsAt);
   const started = update(saved, { action: 'start_round' });
-  assert.equal(started.params.fpr6x25.endsAt, saved.params.fpr6x25.endsAt);
+  assert.equal(Date.parse(started.params.fpr6x25.endsAt) - Date.parse(started.params.fpr6x25.attempts[0].startedAt!), 180 * 60_000);
   assert.deepEqual(started.params.fprDeadlinePolicy, saved.params.fprDeadlinePolicy);
 });
 
@@ -125,6 +127,7 @@ test("real Mongo: repeated new-policy create cannot extend a saved ready, runnin
   assert.equal((await collection.updateOne(retry.query, retry.payload, { upsert: true })).modifiedCount, 0);
   assert.deepEqual(await collection.findOne({ _id: input._id }), initial);
   let saved = initial;
+  let startedDeadline: string | undefined;
   for (const action of ['start_round', 'finish']) {
     const next = update(saved, { action });
     await collection.updateOne({ _id: input._id }, { $set: { params: next.params } });
@@ -132,7 +135,9 @@ test("real Mongo: repeated new-policy create cannot extend a saved ready, runnin
     const duplicate = create();
     await assert.rejects(collection.updateOne(duplicate.query, duplicate.payload, { upsert: true }), { code: 11000 });
     assert.deepEqual(await collection.findOne({ _id: input._id }), saved);
-    assert.equal(saved.params.fpr6x25.endsAt, initial.params.fpr6x25.endsAt);
+    startedDeadline ??= saved.params.fpr6x25.endsAt;
+    assert.equal(saved.params.fpr6x25.endsAt, startedDeadline);
+    assert.equal(Date.parse(startedDeadline!) - Date.parse(saved.params.fpr6x25.attempts[0].startedAt), 180 * 60_000);
     assert.equal(await collection.countDocuments({}), 1);
   }
 });

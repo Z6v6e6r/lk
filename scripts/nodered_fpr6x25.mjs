@@ -125,6 +125,7 @@ if (fprBody.tournamentType === "fpr_6x25") {
     // Normalize only new server inserts; cached clients still send the event end.
     const deadlinePolicy = { version: 1, extensionMinutes: 45, baseEndsAt: state.endsAt };
     state.endsAt = new Date(Date.parse(state.endsAt) + 45 * 60_000).toISOString();
+    state.gameWindowFromStart = true;
     fpr.validateFprState(state);
     if (Date.parse(state.leagueSnapshotAt) > Date.now() + 60000 || Date.parse(state.endsAt) <= Date.now() + 180000) throw new Error("FPR_CREATE_TIME_INVALID");
     const participants = Array.isArray(fprBody.participants) ? fprBody.participants : [];

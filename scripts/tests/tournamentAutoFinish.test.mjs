@@ -153,6 +153,7 @@ test('new-policy FPR timer lasts 225 minutes, preserves old sessions and rejects
   const wrapped = buildAutoFinishNode(buildFprNodeFunction(source, 'recalculate'), 'write');
   const msg = invoke(wrapped, request(t, { params: { autoFinish: { durationMs: 999999999 }, fprCommand: { action: 'start_round', id: 'new-policy-start', expectedRevision: 0 } } }));
   const timing = msg.mongoUpdate.$set['params.autoFinish'];
+  assert.equal(msg.mongoUpdate.$set['params.fpr6x25'].endsAt, state.endsAt);
   assert.equal(timing.durationMs, 225 * 60_000);
   assert.equal(Date.parse(timing.deadlineAt) - Date.parse(timing.startedAt), 225 * 60_000);
   const saved = structuredClone(t);
@@ -179,6 +180,34 @@ test('new-policy FPR timer lasts 225 minutes, preserves old sessions and rejects
   const generic = fixture();
   generic.params.fprDeadlinePolicy = saved.params.fprDeadlinePolicy;
   assert.equal(planTournamentAutoFinish(generic, now, guarded).close, true, 'generic tournaments retain their 3-hour deadline');
+});
+
+test('the generated writer anchors gameplay and auto-finish to the same first server start', () => {
+  const t = fprFixture();
+  const state = createFprState({ ...t.params.fpr6x25, now: start });
+  const baseEndsAt = state.endsAt;
+  state.endsAt = new Date(Date.parse(baseEndsAt) + 45 * 60_000).toISOString();
+  state.gameWindowFromStart = true;
+  t.params = { ...fprProjection(state).params, fprDeadlinePolicy: { version: 1, extensionMinutes: 45, baseEndsAt } };
+  const wrapped = buildAutoFinishNode(buildFprNodeFunction(source, 'recalculate'), 'write');
+  for (const action of [{ action: 'start_round' }, { action: 'score', matchId: state.attempts[0].matches[0].id,
+    score1: 13, score2: 12, confirmed1: true, confirmed2: true, startIfScheduled: true, recordResult: true, autoCloseRound: true }]) {
+    const params = { fprCommand: { ...action, id: 'first-round', expectedRevision: 0 } };
+    const msg = invoke(wrapped, request(t, { params }));
+    assert.equal(msg.statusCode, 200);
+    const game = msg.mongoUpdate.$set['params.fpr6x25'];
+    const timer = msg.mongoUpdate.$set['params.autoFinish'];
+    assert.equal(timer.startedAt, game.attempts[0].startedAt);
+    assert.equal(Date.parse(game.endsAt), Date.parse(timer.startedAt) + 180 * 60_000);
+    assert.equal(Date.parse(timer.deadlineAt), Date.parse(timer.startedAt) + 225 * 60_000);
+    const saved = { ...t, params: { ...t.params, fpr6x25: game, autoFinish: timer } };
+    assert.equal(planTournamentAutoFinish(saved, Date.parse(game.endsAt), guarded).reason, 'NOT_DUE');
+    const shifted = { ...timer, startedAt: new Date(Date.parse(timer.startedAt) + 1).toISOString(),
+      deadlineAt: new Date(Date.parse(timer.deadlineAt) + 1).toISOString() };
+    assert.equal(planTournamentAutoFinish({ ...saved, params: { ...saved.params, autoFinish: shifted } },
+      Date.parse(shifted.deadlineAt), guarded).reason, 'INVALID_SERVER_DEADLINE');
+    assert.equal(planTournamentAutoFinish(saved, Date.parse(timer.deadlineAt), guarded).close, true);
+  }
 });
 test('dry run has no database writes; apply rejects missing writer guards', async () => {
   const t = fixture();
