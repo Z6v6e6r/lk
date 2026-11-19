@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { applyFprCommand, fprProjection } from '../../src/components/tournaments/fpr6x25.ts';
+import { applyFprCommand, FPR_GAME_WINDOW_MS, fprProjection } from '../../src/components/tournaments/fpr6x25.ts';
 import { isAutoFinishProtocolClosed, tournamentAutoFinishDurationMs } from './tournamentAutoFinishNodes.mjs';
 import { buildTournamentWriteSnapshot, tournamentWriteFilter } from './communityMonthlyFinalization.mjs';
 
@@ -22,20 +22,22 @@ export function planTournamentAutoFinish(tournament, nowTs, recalculateSource) {
   const lifecycle = tournament.params?.autoFinish;
   if (lifecycle?.version !== 1) return skip('NOT_MANAGED');
   const fpr = tournament.tournamentType === 'fpr_6x25';
-  if (fpr ? ['completed', 'incomplete'].includes(tournament.params?.fpr6x25?.status) : isAutoFinishProtocolClosed(tournament)) return skip('ALREADY_FINISHED');
+  const fprState = fpr ? tournament.params?.fpr6x25 : undefined;
+  if (fpr ? ['completed', 'incomplete'].includes(fprState?.status) : isAutoFinishProtocolClosed(tournament)) return skip('ALREADY_FINISHED');
   if (tournament.archived === true || tournament.cancelled === true || tournament.canceled === true) return skip('INACTIVE');
   const sessionStart = Date.parse(lifecycle.resumedAt || lifecycle.startedAt);
   const deadline = Date.parse(lifecycle.deadlineAt);
   const durationMs = tournamentAutoFinishDurationMs(tournament);
   if (!Number.isInteger(lifecycle.session) || lifecycle.session < 1 || !Number.isFinite(sessionStart)
       || (lifecycle.durationMs ?? TOURNAMENT_AUTO_FINISH_MS) !== durationMs
+      || (fprState?.gameWindowFromStart === true && Date.parse(fprState.endsAt) !== sessionStart + FPR_GAME_WINDOW_MS)
       || deadline !== sessionStart + durationMs) return skip('INVALID_SERVER_DEADLINE');
   if (nowTs < deadline) return skip('NOT_DUE');
   const nowIso = new Date(nowTs).toISOString();
   const nextLifecycle = { ...lifecycle, reason: 'time_limit', processedAt: nowIso };
   let set;
   if (fpr) {
-    const previous = tournament.params.fpr6x25;
+    const previous = fprState;
     const command = { action: 'finish', id: `auto-finish:${lifecycle.session}:${deadline}`, expectedRevision: previous.revision };
     const state = applyFprCommand(previous, command, nowIso);
     const projection = fprProjection(state, tournament.params);

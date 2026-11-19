@@ -66,6 +66,34 @@ test("the multi-court draw prioritizes gaps over two, and prefers new opponents 
   }
 });
 
+test("three-hour FPR window starts once and closing after the cutoff does not schedule a new draw", () => {
+  const ready = { ...event(), gameWindowFromStart: true as const, endsAt: at(120) };
+  assert.throws(() => command(ready, { action: "start_round" }, 117), /дедлайн/);
+  const matchId = ready.attempts[0].matches[0].id;
+  const record = { action: "score", id: "first-save", expectedRevision: 0, matchId,
+    score1: 15, score2: 10, confirmed1: true, confirmed2: true, recordResult: true, startIfScheduled: true } as const;
+  assert.throws(() => applyFprCommand(ready, { ...record, score2: 30 }, at(130)), /Счёт/);
+  assert.equal(ready.endsAt, at(120));
+  assert.equal(ready.attempts[0].startedAt, null);
+  const started = applyFprCommand(ready, record, at(130));
+  assert.equal(started.attempts[0].startedAt, at(130));
+  assert.equal(started.endsAt, at(310));
+  assert.strictEqual(applyFprCommand(started, record, at(140)), started);
+  const prepared = command(command(started, { action: "cancel_round", reason: "Court change" }, 135),
+    { action: "prepare_round" }, 136);
+  let state = command(prepared, { action: "start_round" }, 137);
+  assert.equal(state.endsAt, at(310));
+  for (const match of fprCurrentAttempt(state)!.matches) {
+    state = command(state, { action: "score", matchId: match.id, score1: 15, score2: 10,
+      confirmed1: true, confirmed2: true, recordResult: true }, 307);
+  }
+  state = command(state, { action: "close_round" }, 307);
+  assert.equal(fprCompletedRounds(state), 1);
+  assert.equal(fprCurrentAttempt(state), null);
+  assert.throws(() => command(state, { action: "prepare_round" }, 307), /Время для нового раунда закончилось/);
+  assert.throws(() => validateFprState({ ...state, endsAt: at(311) }), /первого старта/);
+});
+
 test("all 75 Appendix A combinations and protocol conservation, N=4..28, R=6..8", () => {
   for (let n = 4; n <= 28; n += 1) {
     let state = event(n);

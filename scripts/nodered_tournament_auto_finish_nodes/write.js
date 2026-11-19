@@ -45,7 +45,9 @@ let next = managed ? { ...lifecycle } : null;
 if (!next && fpr && original.params?.fpr6x25?.status === 'ready'
     && getParam('fpr6x25')?.status === 'in_progress') {
   const durationMs = AUTO_FINISH_DURATION_MS(original);
-  next = { version: 1, session: 1, startedAt: nowIso, deadlineAt: new Date(Date.parse(nowIso) + durationMs).toISOString(),
+  const state = getParam('fpr6x25');
+  const startedAt = state.gameWindowFromStart === true ? state.attempts.find(attempt => attempt.startedAt).startedAt : nowIso;
+  next = { version: 1, session: 1, startedAt, deadlineAt: new Date(Date.parse(startedAt) + durationMs).toISOString(),
     ...(durationMs !== 10800000 ? { durationMs } : {}) };
 }
 if (next && resume) next = {

@@ -1,6 +1,7 @@
 // Regulation 1.1, 26 October 2026. This module is also compiled into Node-RED.
 // Keep it self-contained: the server and browser must run the same planner/reducer.
 export const FPR_VERSION = "fpr-6x25-1.1.0";
+export const FPR_GAME_WINDOW_MS = 3 * 60 * 60_000;
 const PAIR_BALANCE_THRESHOLD = 2;
 export type FprPlayerInput = {
   id: string;
@@ -57,6 +58,7 @@ export type FprState = {
   leagueSource: string;
   leagueSnapshotAt: string;
   endsAt: string;
+  gameWindowFromStart?: true;
   reserveAllowed: boolean;
   testMode: boolean;
   communityRating?: FprCommunityRating;
@@ -416,19 +418,23 @@ function startFprRound(state: FprState, current: FprAttempt | null, now: string,
   requireFpr(current?.status === "scheduled", "Нет подготовленного раунда");
   if (!recording) requireFpr(Date.parse(now) < Date.parse(state.endsAt) - 180_000, "Игровой дедлайн уже наступил");
   if (current.round >= 7 && !recording) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
+  if (state.gameWindowFromStart && state.status === "ready") {
+    state.endsAt = new Date(Date.parse(now) + FPR_GAME_WINDOW_MS).toISOString();
+  }
   current.status = "running"; current.startedAt = now; state.status = "in_progress";
 }
 function closeFprRound(state: FprState, current: FprAttempt | null, now: string, automatic = false) {
   requireFpr(current?.status === "running" && current.matches.every(confirmed), "Подтвердите все матчи обеими парами; каждый матч — 25 очков");
   current.status = "closed";
   current.finishedAt = new Date(Math.max(...current.matches.map(m => Date.parse(m.completedAt!)))).toISOString();
+  const beforeCutoff = Date.parse(now) < Date.parse(state.endsAt) - 180_000;
   if (!automatic) {
-    if (current.round < 6) state.attempts.push(prepareAttempt(state));
+    if (current.round < 6 && (!state.gameWindowFromStart || beforeCutoff)) state.attempts.push(prepareAttempt(state));
     return;
   }
   // Accept a valid late score even when no new round can be played. Reserve
   // eligibility includes the round just closed and uses server time, not playedAt.
-  if (state.attempts.length >= 100 || current.round >= 8 || Date.parse(now) >= Date.parse(state.endsAt) - 180_000) return;
+  if (state.attempts.length >= 100 || current.round >= 8 || !beforeCutoff) return;
   if (current.round < 6 || fprReserveThreshold(state, now).allowed) state.attempts.push(prepareAttempt(state));
 }
 export function applyFprCommand(original: FprState, command: FprCommand, now: string): FprState {
@@ -621,6 +627,12 @@ export function validateFprState(value: unknown): asserts value is FprState {
     if (a.status === "running" || a.status === "scheduled") { open += 1; requireFpr(i === s.attempts.length - 1, "Открытая попытка должна быть последней"); }
   }
   requireFpr(open <= 1 && closed <= 8, "Несколько открытых попыток");
+  if (s.gameWindowFromStart !== undefined) {
+    const firstStart = s.attempts.find(a => a.startedAt)?.startedAt;
+    requireFpr(s.gameWindowFromStart === true && (firstStart
+      ? Date.parse(s.endsAt) === Date.parse(firstStart) + FPR_GAME_WINDOW_MS
+      : s.status !== "in_progress"), "Игровое окно ФПР должно отсчитываться от первого старта");
+  }
   if (s.status === "completed" || s.status === "incomplete") requireFpr(!open && validTime(s.finishedAt!)
     && (s.status === "completed" ? closed >= 6 : closed < 6), "Некорректное завершение турнира");
 }
