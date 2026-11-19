@@ -39,6 +39,7 @@
 // Preparation only: nothing is deployed, imported, restarted or written to a global here, and the
 // generation fails closed unless the preimage is exactly the reviewed 2026-10-05 snapshot.
 
+import { restoreSourceBeforeChildTournamentGuard } from "./prepare_child_tournament_one_time_release.mjs";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -160,7 +161,7 @@ const POST_G1_FRIENDSHIP_DELTAS = Object.freeze([
 export function g1ReviewedSource(source, relative, pin, label) {
   if (sha256(source) === pin) return source;
   const compatibility = POST_G1_SPANISH_DELTAS[relative];
-  let historical = restorePreCancelledAllowanceSource(source, relative);
+  let historical = restoreSourceBeforeChildTournamentGuard(restorePreCancelledAllowanceSource(source, relative), relative);
   if (compatibility?.pin === pin && historical.split(compatibility.delta).length === 2) {
     historical = historical.replace(compatibility.delta, "");
   }

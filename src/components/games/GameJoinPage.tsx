@@ -1594,6 +1594,17 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           return;
         }
 
+        if (paymentResult.data.checkoutStored) {
+          const checkout = paymentResult.data;
+          setSubmitting(null);
+          if (!checkout.paymentUrl || !checkout.paymentRef || !checkout.bookingId) {
+            setDecisionError("Не удалось открыть сохранённую оплату. Обновите карточку игры.");
+            return;
+          }
+          window.location.href = checkout.paymentUrl;
+          return;
+        }
+
         const subscriptionDecisionNotice = resolvedPaymentMode === "subscription"
           ? formatSubscriptionDecisionPresentation(resolveSubscriptionDecisionPresentation({
               action: "JOIN_GAME",

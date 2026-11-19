@@ -23,6 +23,7 @@ import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isTrialGroupTraining } from "../../utils/trialGroupTraining";
 import { resolveTrialGroupEligibilityCheck, type TrialGroupEligibilityDecision } from "../../utils/trialGroupEligibilityCheck";
 import { TRIAL_GROUP_CHECKOUT_ENABLED } from "../../consts/api_config";
+import { isKidsAcademyTraining } from "../../utils/kidsTrainingSubscriptions";
 import { isSpanishTrainingExercise } from "../../utils/spanishTrainingExclusion";
 import { isProTraining } from "../../utils/proTrainingExclusion";
 import { isTopokratyClubPack, isTopokratyExercise } from "../../utils/topokratyExclusion";
@@ -405,6 +406,7 @@ export default function GroupSchedulePage({
   const typeFilterListboxId = useId();
   const groupSchedulePromoSectionId = useId();
   const spanishTrainingSelected = isSpanishTrainingExercise(selectedDetail);
+  const kidsAcademyTrainingSelected = isKidsAcademyTraining(selectedDetail) || isKidsAcademyTraining(checkout?.exercise);
   // PRO retains server-confirmed monetary discounts and owned Energy packs.
   const proTrainingSelected = useMemo(
     () => Boolean(selectedDetail && isProTraining(selectedDetail)),
@@ -622,7 +624,7 @@ export default function GroupSchedulePage({
     const resolvedFor = `${selectedId}:${actorId}:${patriotsTournamentSelected}`;
     // Topokraty events keep their separate club-product rule. PRO training quotes
     // are requested normally and only the server's confirmed 50% price is shown.
-    if (spanishTrainingSelected || topokratyExcluded) {
+    if (spanishTrainingSelected || kidsAcademyTrainingSelected || topokratyExcluded) {
       setDiscountResolvedFor(resolvedFor);
       return;
     }
@@ -657,7 +659,7 @@ export default function GroupSchedulePage({
       setDiscountLoading(false);
     });
     return () => controller.abort();
-  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone, proTrainingSelected, spanishTrainingSelected, topokratyExcluded, patriotsTournamentSelected]);
+  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone, proTrainingSelected, spanishTrainingSelected, kidsAcademyTrainingSelected, topokratyExcluded, patriotsTournamentSelected]);
 
   useEffect(() => {
     promoRequestIdRef.current += 1;
@@ -750,9 +752,9 @@ export default function GroupSchedulePage({
 
   const selectedTraining = selectedDetail;
   const discountContextKey = `${selectedId}:${checkout?.profile?.id}:${patriotsTournamentSelected}`;
-  const discountPending = Boolean(checkout && !spanishTrainingSelected && !topokratyExcluded
+  const discountPending = Boolean(checkout && !spanishTrainingSelected && !kidsAcademyTrainingSelected && !topokratyExcluded
     && (discountLoading || discountResolvedFor !== discountContextKey));
-  const currentDiscountQuotes = !spanishTrainingSelected && discountResolvedFor === discountContextKey ? discountQuotes : [];
+  const currentDiscountQuotes = !spanishTrainingSelected && !kidsAcademyTrainingSelected && discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const ownedOneTimes = checkout?.purchasedProducts.filter(product => product.source === "client-one-time") ?? [];
@@ -794,7 +796,7 @@ export default function GroupSchedulePage({
       ? buildGamePlusTrainerDescription(selectedTraining)
       : buildGroupTrainingDescription(selectedTraining)
     : null;
-  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && !spanishTrainingSelected && !proTrainingSelected && !topokratyExcluded
+  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && !spanishTrainingSelected && !kidsAcademyTrainingSelected && !proTrainingSelected && !topokratyExcluded
     && selectedTraining?.directionId !== 6538
     && subscriptionOffer?.owner === phone
     && subscriptionOffer?.show && !discountPending

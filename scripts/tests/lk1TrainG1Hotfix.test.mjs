@@ -1,3 +1,4 @@
+import { restoreSourceBeforeChildTournamentGuard } from "../prepare_child_tournament_one_time_release.mjs";
 // G1 of the 2026-10-05 LK1 train (server 147): the focused generation that re-anchors the reviewed
 // court-window proof, the #174 open_game club gate and the Patriots money-only guard on the live
 // 4815-node body, and replaces the plan-rules writer with the `patriots` transition.
@@ -462,7 +463,7 @@ test("G1 retains original source pins while undoing only exact later Spanish/Fri
   ];
   for (const [relative, pin, delta] of rows) {
     const current = fs.readFileSync(new URL("../" + relative, import.meta.url), "utf8");
-    let historical = restorePreCancelledAllowanceSource(current, relative).replace(delta, "");
+    let historical = restoreSourceBeforeChildTournamentGuard(restorePreCancelledAllowanceSource(current, relative), relative).replace(delta, "");
     if (relative.endsWith("/gateway.js")) historical = historical
       .replace("  // «Время на друзей» session, including «Время на друзей (особый)» (2026-11-11).\n  // Other tournament directions keep their configured discount.\n",
         "  // «Время на друзей» session. Only that direction is covered, so the direction scope\n  // below keeps a ПадлхАБ tournament of the same category on its plain discount.\n")

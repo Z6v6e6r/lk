@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { lk1FreeBegin, lk1FreeBinding, lk1FreeJobKey, lk1FreeReturnedOperation } from '../lib/lk1FreeCancellation.mjs';
+import { lk1FreeBegin, lk1FreeBinding, lk1FreeJobKey, lk1FreeReturnedOperation, lk1FreeStep, lk1SeatCandidate } from '../lib/lk1FreeCancellation.mjs';
 import { runLk1FreeCancellationJob, createLk1FreeCancellationProvider } from '../lib/lk1FreeCancellationWorker.mjs';
 import { pollNativeSubscriptionCancellation, nativeSubscriptionCancellationVerified } from '../../src/utils/nativeSubscriptionCancellation.ts';
 
-import {fixture,drive,jobOf,instant,requestId} from './fixtures/lk1FreeCancellationFixtures.mjs';
+import {fixture,drive,jobOf,instant,requestId,exhaustedPrepared} from './fixtures/lk1FreeCancellationFixtures.mjs';
 
 test('server-owned native cancellation returns one visit, retains original evidence and needs no guard deletion', async () => {
   const f = fixture(), before = structuredClone(f.op);
@@ -47,6 +47,98 @@ test('SERVICE unavailable and an in-flight debit decline before dispatch, withou
   f.db.rows.get('pending').state = 'CONFIRMED';
   assert.equal((await drive(f, lk1FreeBegin({tenantKey:'fixture',actorClientId:'actor',bookingId:'booking',requestId:'next-cancel-request'}))).payload.state, 'RELEASED', 'a later explicit submission uses a new immutable job');
   assert.equal(jobOf(f).phase, 'DECLINED', 'a terminal decline is never restarted under a stale lock');
+});
+test('closing exhausted local attempts lets one explicit cancellation continue with the same provider checks', async () => {
+  const f = fixture(), exhausted = [exhaustedPrepared(f.op), exhaustedPrepared(f.op, 'older')];
+  for (const row of exhausted) f.db.rows.set(row._id, structuredClone(row));
+  const data = structuredClone(f.sub);
+  const stages = [];
+  f.db.afterWrite = (q, change) => {
+    const code = change.$set?.failure?.rawCode;
+    if (code) {
+      stages.push(code);
+      assert.equal(q.$expr.$eq[1].$literal.state, 'PREPARED');
+      assert.equal(f.provider.calls.some(call => call.method === 'PUT'), false);
+      assert.deepEqual(f.sub, data);
+    } else if (change.$set?.phase === 'CANCEL_INTENT') stages.push('CANCEL_INTENT');
+  };
+  const result = await drive(f);
+  assert.equal(result.payload.state, 'RELEASED');
+  assert.deepEqual(stages, ['LK1_PREPARED_ATTEMPTS_EXHAUSTED', 'LK1_PREPARED_ATTEMPTS_EXHAUSTED', 'CANCEL_INTENT']);
+  for (const row of exhausted) {
+    const { failure, failedAt, ...fixed } = f.db.rows.get(row._id);
+    assert.deepEqual(fixed, { ...row, state: 'FAILED', updatedAt: instant });
+    assert.equal(failedAt, instant);
+    assert.equal(failure.rawCode, 'LK1_PREPARED_ATTEMPTS_EXHAUSTED');
+    assert.equal(lk1SeatCandidate(f.db.rows.get(row._id)), false, 'cannot become a Released predecessor for another booking');
+  }
+  assert.equal(f.sub.visitsLeft, data.visitsLeft + 1);
+  assert.equal(f.provider.calls.filter(c => c.method === 'PUT').length, 1);
+});
+test('a fresh or ambiguous attempt, provider evidence, and foreign ownership keep the cancellation gate closed', async () => {
+  for (const change of [
+    o => { o.attempts = o.reclaimCount = 4; },
+    o => { o.reclaimCount = 3; },
+    o => { o.updatedAt = o.reclaimedAt = '2099-11-11T11:45:00.000Z'; },
+    o => { o.updatedAt = o.reclaimedAt = 'malformed'; },
+    o => { o.previousFailure = { statusCode: 409 }; },
+    o => { o.leaseUntil = '2099-11-11T11:45:00.000Z'; },
+    o => { o.upstreamAttemptedAt = instant; },
+    o => { o.acceptedAt = instant; },
+    o => { o.bookingId = 'already-sent'; },
+    o => { o.lk1.visitJob = { phase: 'DEBIT_PENDING' }; },
+    o => { o.lk1.transactionAttemptedAt = instant; },
+    o => { o.lk1.decision.benefit.finalPriceMinor = 1; },
+    o => { o.actorClientId = 'other'; o._id = 'lk1-product:["fixture","other","lk-subscription-old"]'; },
+  ]) {
+    const f = fixture(), old = exhaustedPrepared(f.op);
+    change(old);
+    f.db.rows.set(old._id, structuredClone(old));
+    assert.equal((await drive(f)).payload.details.code, 'LK1_FREE_CANCEL_VISIT_IN_FLIGHT');
+    assert.deepEqual(f.db.rows.get(old._id), old);
+    assert.ok(f.provider.calls.every(c => c.method === 'GET' && !c.path.endsWith('/cancel')));
+  }
+});
+test('an owned daily guard and the booking-side seat recovery cannot retire a sibling', async () => {
+  const f = fixture(), old = exhaustedPrepared(f.op);
+  f.db.rows.set(old._id, old);
+  const key = 'lk1-daily-visit:["fixture","subscription","2099-11-13"]';
+  f.db.rows.set(key, { _id: key, ownerOperationKey: old._id, kind: 'LK1_DAILY_VISIT_V1' });
+  assert.equal((await drive(f)).payload.details.code, 'LK1_FREE_CANCEL_VISIT_IN_FLIGHT');
+  assert.equal(f.db.rows.get(old._id).state, 'PREPARED');
+  const effect = lk1FreeStep({ stage: 'pending_operations', seatOnly: true, op: f.op, job: { phase: 'QUEUED' } }, { payload: [old] }, instant);
+  assert.equal(effect.change.$set.phase, 'DECLINED');
+  assert.equal(effect.change.$set.reason, 'LK1_FREE_CANCEL_VISIT_IN_FLIGHT');
+});
+test('a competing preaccept defeats the full-root recovery CAS without authorizing SERVICE', async () => {
+  const f = fixture(), old = exhaustedPrepared(f.op);
+  f.db.rows.set(old._id, old);
+  const write = f.db.updateOne.bind(f.db);
+  f.db.updateOne = (q, change, options) => {
+    if (q._id === old._id) {
+      old.state = 'PENDING_CONFIRMATION';
+      old.attempts++;
+      old.upstreamAttemptedAt = instant;
+    }
+    return write(q, change, options);
+  };
+  assert.equal((await drive(f)).status, 202);
+  assert.equal(jobOf(f).phase, 'QUEUED');
+  assert.equal(old.state, 'PENDING_CONFIRMATION');
+  assert.ok(f.provider.calls.every(c => c.method === 'GET' && !c.path.endsWith('/cancel')));
+});
+test('lost recovery ACK stays pending and worker resumption re-reads before sending exactly one cancellation', async () => {
+  const f = fixture(), old = exhaustedPrepared(f.op);
+  f.db.rows.set(old._id, old);
+  f.db.afterWrite = (_q, change, ack) => change.$set?.failure ? { ...ack, acknowledged: false } : ack;
+  assert.equal((await drive(f)).status, 202);
+  assert.equal(jobOf(f).phase, 'QUEUED');
+  assert.equal(old.state, 'FAILED');
+  assert.ok(f.provider.calls.every(c => c.method === 'GET' && !c.path.endsWith('/cancel')));
+  f.db.afterWrite = null;
+  const result = await runLk1FreeCancellationJob({ job: structuredClone(jobOf(f)), operations: f.db, provider: f.provider, now: () => instant });
+  assert.equal(result.state, 'RELEASED');
+  assert.equal(f.provider.calls.filter(c => c.method === 'PUT').length, 1);
 });
 test('different concurrent consumption changes or top-ups keep the reservation until verified', async () => {
   for (const change of [f => { f.sub.visitsTotal++; f.sub.visitsLeft++; },

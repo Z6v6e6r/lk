@@ -1,6 +1,14 @@
 import { isSubscriptionEventDiscountQuote, matchSubscriptionEventDiscount, type SubscriptionEventDiscountQuote } from "./groupSubscriptionDiscount.ts";
 import type { TournamentVivaProduct } from "./tournamentSignupApi.ts";
 
+export function isChildTournamentExercise(exercise: Record<string, unknown> | null | undefined): boolean {
+  const direction = exercise?.direction ?? exercise?.exerciseDirection;
+  const nested = direction && typeof direction === "object" ? direction as Record<string, unknown> : null;
+  const value = nested ? nested.id ?? nested.directionId : direction;
+  const directionId = value ?? exercise?.directionId ?? exercise?.exerciseDirectionId;
+  return directionId === 7108 || directionId === "7108";
+}
+
 export interface TournamentSubscriptionDiscountQuote extends SubscriptionEventDiscountQuote {
   kind: "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1";
 }
