@@ -4,6 +4,7 @@ import {
   isResidencyPurchaseQuoteUsable,
   parseResidencyPurchaseQuote,
   residencyQuoteExerciseIdFor,
+  reconcileResidencyPurchaseQuoteConfirmation,
 } from "../../src/residency/residencyPurchaseQuote.ts";
 import { RESIDENCY_PRODUCT_ID } from "../../src/residency/residencyPurchase.ts";
 
@@ -55,6 +56,9 @@ test("refuses an expired quote and stops consent at the expiry moment", () => {
     { ok: false, reason: "QUOTE_EXPIRED" });
   assert.deepEqual(parseResidencyPurchaseQuote(body({ expiresAt: SERVER_NOW }), { exerciseId: EXERCISE_A, requestedAtMs: 0, nowMs: 0 }),
     { ok: false, reason: "QUOTE_EXPIRED" });
+  assert.deepEqual(parseResidencyPurchaseQuote(body({ expiresAt: SERVER_NOW + 30001 }), {
+    exerciseId: EXERCISE_A, requestedAtMs: 0, nowMs: 0,
+  }), { ok: false, reason: "QUOTE_EXPIRED" });
   const ok = parseResidencyPurchaseQuote(body(), { exerciseId: EXERCISE_A, requestedAtMs: 0, nowMs: 10 });
   assert.ok(ok.ok);
   assert.equal(isResidencyPurchaseQuoteUsable(ok.quote, EXERCISE_A, 29999), true);
@@ -66,6 +70,26 @@ test("a device clock far ahead of the server does not expire or extend the quote
   const result = parseResidencyPurchaseQuote(body(), { exerciseId: EXERCISE_A, requestedAtMs: deviceAhead, nowMs: deviceAhead + 1000 });
   assert.ok(result.ok);
   assert.equal(result.quote.localExpiresAtMs, deviceAhead + 30000);
+});
+
+test("rechecks the quote at consent and requires new consent when a priced term changed", () => {
+  const first = parseResidencyPurchaseQuote(body(), { exerciseId: EXERCISE_A, requestedAtMs: 1000, nowMs: 1001 });
+  const same = parseResidencyPurchaseQuote(body({}, SERVER_NOW + 1000), {
+    exerciseId: EXERCISE_A, requestedAtMs: 2000, nowMs: 2001,
+  });
+  assert.ok(first.ok && same.ok);
+  assert.equal(reconcileResidencyPurchaseQuoteConfirmation(first.quote, same.quote),
+    reconcileResidencyPurchaseQuoteConfirmation(same.quote, same.quote));
+
+  const changed = parseResidencyPurchaseQuote(body({
+    participationBaseMinor: 560000,
+    participationDiscountMinor: 280000,
+    participationToPayMinor: 280000,
+    totalMinor: 359000,
+  }), { exerciseId: EXERCISE_A, requestedAtMs: 2000, nowMs: 2001 });
+  assert.ok(changed.ok);
+  assert.equal(reconcileResidencyPurchaseQuoteConfirmation(first.quote, changed.quote), null);
+  assert.equal(reconcileResidencyPurchaseQuoteConfirmation(first.quote, null), null);
 });
 
 test("refuses quotes that do not add up or do not describe a first residency purchase", () => {

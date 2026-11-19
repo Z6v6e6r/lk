@@ -74,6 +74,7 @@ const eventRoute = eventCategory === 'GROUP_TRAINING'
 // percent: `discountPercent` stays 0, and `chargeableHours`/`hourlyCourtPriceMinor`/`perHourMinor`
 // are what the widget validates and displays. The percentage kinds above stay byte-compatible.
 const COURT_COPAY_QUOTE_KIND = 'GROUP_TRAINING_COURT_COPAY_V1';
+const PURCHASE_RESIDENCY_PRODUCT_ID = '4037a3a3-e551-4f9a-a9db-1410e46b8635';
 const out = index => { const result = [null, null, null, null, null, null]; result[index] = msg; return result; };
 const stop = (code, status = 503) => { ctx.done = true; ctx.error = code; ctx.statusCode = status; return out(4); };
 // A decision blocker states something about this subscription, not about the request.
@@ -108,7 +109,9 @@ const http = (step, path, admin = false) => {
   ctx.step = step; delete msg.error; delete msg.responseUrl; delete msg.statusCode;
   msg.method = 'GET'; msg.url = 'https://api.vivacrm.ru' + path;
   msg.headers = { Authorization: admin ? `Bearer ${token}` : ctx.auth, Accept: 'application/json' };
-  msg.payload = undefined; msg.requestTimeout = 10000; msg.followRedirects = false; msg.maxRedirects = 0;
+  msg.payload = undefined; msg.requestTimeout = ctx.residencyPurchase ? Math.min(10000, ctx.startedAt + 28000 - Date.now()) : 10000;
+  if (msg.requestTimeout <= 0) return stop('PRICE_PREVIEW_TIMEOUT');
+  msg.followRedirects = false; msg.maxRedirects = 0;
   return out(0);
 };
 const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paidMinutes = 0, reasonCode = null, courtCoPay = null) => {
@@ -164,7 +167,31 @@ const previewRule = (owned, stationId) => {
 };
 const previewRuleCode = (configured) => configured.code === 'LK1_PRODUCT_RULE_SOURCE_MISMATCH'
   ? 'LK1_PLAN_RULES_INVALID' : configured.code;
+const residencyPurchaseSetting = (key, envKey) => global.get(key)
+  ?? (typeof env !== 'undefined' ? env.get(envKey) : undefined);
+const residencyPurchaseEnabled = () => [true, 'true', '1', 'yes'].includes(
+  residencyPurchaseSetting('subscriptions_residency_purchase_quote_enabled', 'SUBSCRIPTIONS_RESIDENCY_PURCHASE_QUOTE_ENABLED'));
+const residencyPurchaseConfig = () => {
+  if (!residencyPurchaseEnabled()
+    || residencyPurchaseSetting('subscriptions_runtime_environment', 'SUBSCRIPTIONS_RUNTIME_ENVIRONMENT') !== 'PROD'
+    || residencyPurchaseSetting('subscriptions_runtime_api_base_url', 'SUBSCRIPTIONS_RUNTIME_API_BASE_URL') !== 'https://padlhub.su/api') return null;
+  const token = residencyPurchaseSetting('subscriptions_runtime_context_integration_token', 'SUBSCRIPTIONS_RUNTIME_CONTEXT_INTEGRATION_TOKEN');
+  return typeof token === 'string' && token.length >= 32
+    ? { token, url: 'https://padlhub.su/api/internal/subscriptions/residency-purchase-policy' } : null;
+};
+const residencyPurchaseTarget = () => ({
+  exerciseId: ctx.exerciseId, stationId: ctx.target.stationId,
+  externalEventTypeId: canonical.managedExternalEventTypeId(ctx.exercise),
+  startsAt: new Date(ctx.target.startsAt).toISOString(), durationMinutes: ctx.target.durationMinutes
+});
+const residencyProductPath = () => '/end-user/api/v1/' + ctx.tenantKey + '/products/subscriptions/' + PURCHASE_RESIDENCY_PRODUCT_ID;
+const strictInstant = (value) => {
+  const ms = typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) && new Date(ms).toISOString() === value ? ms : NaN;
+};
 if (ctx.done) return out(4);
+if (ctx.residencyPurchase && !residencyPurchaseEnabled()) return stop('RESIDENCY_PURCHASE_QUOTE_DISABLED');
+if (ctx.residencyPurchase && ctx.step === 'start' && !residencyPurchaseConfig()) return stop('RESIDENCY_PURCHASE_POLICY_UNAVAILABLE');
 if (eventRoute && typeof canonical.identityMoneyOwned !== 'function') return stop(eventRoute.error + '_BACKEND_NOT_READY');
 if (msg.error) return stop('PRICE_PREVIEW_READ_FAILED');
 if (Date.now() - ctx.startedAt > 28000) return stop('PRICE_PREVIEW_TIMEOUT');
@@ -173,6 +200,9 @@ if (ctx.step === 'profile') {
   const profile = canonical.unwrapRecord(msg.payload);
   if (!ok() || !profile || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(profile.id || profile.clientId || '')) return stop('PRICE_PREVIEW_AUTH_REQUIRED', 401);
   ctx.actorClientId = profile.id || profile.clientId;
+  if (ctx.residencyPurchase && [profile.id, profile.clientId].some(id => id != null && id !== ctx.actorClientId)) {
+    return stop('PRICE_PREVIEW_AUTH_REQUIRED', 401);
+  }
   if (eventRoute) return http('groupExercise', `/end-user/api/v1/${ctx.tenantKey}/exercises/${ctx.exerciseId}`);
   if (ctx.existingGame) return find('game', { id: ctx.target.gameId }, 5);
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
@@ -264,11 +294,13 @@ if (ctx.step === 'groupExercise') {
     return targetUnresolved('target_lifecycle');
   }
   if (eventRoute.category === 'group_training' && [2468, 2975, 3163].includes(previewDirectionId(canonical, exercise))) {
+    if (ctx.residencyPurchase) return stop('RESIDENCY_PURCHASE_TARGET_NOT_COVERED', 422);
     ctx.quotes = [];
     ctx.done = true;
     return out(4);
   }
   if (canonical.isSpanishTrainingExercise(exercise) || previewDirectionId(canonical, exercise) === 7108) {
+    if (ctx.residencyPurchase) return stop('RESIDENCY_PURCHASE_TARGET_NOT_COVERED', 422);
     ctx.quotes = [];
     ctx.done = true;
     return out(4);
@@ -280,7 +312,12 @@ if (ctx.step === 'groupExercise') {
   ctx.directionId = previewDirectionId(canonical, exercise);
   ctx.target = { ...ctx.target, ...(proTraining ? { proTraining: true } : {}), startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
     durationMinutes: duration, stationId: exercise.studio?.id || exercise.studioId, roomId: canonical.exerciseRoomId(exercise) };
-  return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
+  if (ctx.residencyPurchase && (proTraining || ![60, 90, 120].includes(duration) || [6180, 6233].includes(ctx.directionId)
+    || (typeof isTopokratyExercise === 'function' && isTopokratyExercise(exercise)))) {
+    return stop('RESIDENCY_PURCHASE_TARGET_NOT_COVERED', 422);
+  }
+  const subscriptionPath = `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`;
+  return http('subscriptions', ctx.residencyPurchase ? subscriptionPath + '&page=0' : subscriptionPath);
 }
 if (ctx.step === 'game') {
   if (!Array.isArray(msg.payload) || msg.payload.length !== 1 || msg.payload[0]?.id !== ctx.target.gameId) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
@@ -417,6 +454,22 @@ if (ctx.step === 'subscriptions') {
     || (!Array.isArray(body) && (body.totalElements !== list.length || (body.number !== undefined && body.number !== 0)
       || (body.totalPages !== undefined && ![0, 1].includes(body.totalPages)) || body.last === false || body.hasNext === true))) {
     return stop('PRICE_PREVIEW_SUBSCRIPTIONS_INCOMPLETE');
+  }
+  if (ctx.residencyPurchase) {
+    if (list.length >= 1000 || (Array.isArray(body) && list.length > 0)) {
+      return stop('PRICE_PREVIEW_SUBSCRIPTIONS_INCOMPLETE');
+    }
+    const productIds = new Set();
+    for (const row of list) {
+      const ids = [...new Set(canonical.collectExactProductIds(row))];
+      if (ids.length !== 1 || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(ids[0])
+        || [row.clientId, row.client?.id].some(id => id != null && id !== ctx.actorClientId)) {
+        return stop('RESIDENCY_PURCHASE_OWNERSHIP_UNRESOLVED');
+      }
+      productIds.add(ids[0].toLowerCase());
+    }
+    if (productIds.has(PURCHASE_RESIDENCY_PRODUCT_ID)) return stop('RESIDENCY_PURCHASE_HISTORY_EXISTS', 409);
+    return http('groupTariff', '/end-user/api/v2/' + ctx.tenantKey + '/products/one-times?exerciseId=' + encodeURIComponent(ctx.exerciseId));
   }
   if (eventRoute && ctx.requestedIds === undefined) {
     ctx.requestedIds = list.filter(row => row.status === 'ACTIVE').map(row => row.subscriptionId || row.clientSubscriptionId || row.id);
@@ -801,6 +854,11 @@ if (ctx.step === 'groupTariff') {
   }
   ctx.basePriceMinor = paidAmounts[0]; ctx.priceProductId = productIds[0];
   if (ctx.basePriceMinor > 1000000) return tariffRefusal('amount_ceiling', observed);
+  if (ctx.residencyPurchase) {
+    if (ctx.basePriceMinor === 0) return stop('RESIDENCY_PURCHASE_TARIFF_NOT_PAID', 422);
+    ctx.residencyPriceRequestedAt = Date.now();
+    return http('residencyPurchaseProduct', residencyProductPath());
+  }
   // A club training of direction 6233 (priced by the club product) is charged against the
   // hour of court, so the quote has to prove that hour before it prices the event. Every other
   // event keeps this exact flow.
@@ -810,6 +868,73 @@ if (ctx.step === 'groupTariff') {
     return lk1StartCourtWindow();
   }
   ctx.pending = [...ctx.requestedIds]; ctx.quotes = []; ctx.step = 'next';
+}
+if (ctx.step === 'residencyPurchaseProduct') {
+  const config = residencyPurchaseConfig();
+  if (!config) return stop('RESIDENCY_PURCHASE_POLICY_UNAVAILABLE');
+  const product = canonical.unwrapRecord(msg.payload);
+  const productUrl = 'https://api.vivacrm.ru' + residencyProductPath();
+  const priceMinor = product?.discountPrice ?? product?.cost;
+  if (!ok() || msg.method !== 'GET' || msg.url !== productUrl
+    || (msg.responseUrl !== undefined && msg.responseUrl !== productUrl)
+    || product?.id !== PURCHASE_RESIDENCY_PRODUCT_ID || product.type !== 'GROUP' || product.variant !== 'BY_VISITS'
+    || product.appliesTo !== 'BOOKING' || product.validityDays !== 30 || product.visits !== 30 || product.activationDays !== 0
+    || product.hasStudioLimitation !== false || product.hasDirectionLimitation !== false
+    || product.hasDayLimitation !== false || product.hasTimeRangeLimitation !== false || product.hasDayTimeLimitation !== false
+    || product.hasTypeLimitation !== true || !Array.isArray(product.availableTypes)
+    || product.availableTypes.length !== 1 || product.availableTypes[0]?.id !== 2572
+    || !Number.isSafeInteger(product.cost) || !Number.isSafeInteger(priceMinor) || priceMinor <= 0
+    || priceMinor > product.cost || product.cost > 1000000) return stop('RESIDENCY_PURCHASE_PRODUCT_UNVERIFIED');
+
+  ctx.residencyPriceMinor = priceMinor;
+  ctx.residencyPolicyRequestedAt = Date.now();
+  ctx.step = 'residencyPurchasePolicy';
+  delete msg.error; delete msg.statusCode; delete msg.responseUrl;
+  msg.method = 'POST'; msg.url = config.url;
+  msg.headers = { Authorization: ctx.auth, Accept: 'application/json', 'Content-Type': 'application/json',
+    'X-Subscriptions-Integration-Token': config.token };
+  msg.requestTimeout = Math.min(10000, ctx.startedAt + 28000 - Date.now());
+  if (msg.requestTimeout <= 0) return stop('PRICE_PREVIEW_TIMEOUT');
+  msg.followRedirects = false; msg.maxRedirects = 0;
+  msg.payload = residencyPurchaseTarget();
+  return out(0);
+}
+if (ctx.step === 'residencyPurchasePolicy') {
+  const config = residencyPurchaseConfig();
+  if (!config || msg.method !== 'POST' || msg.url !== config.url
+    || msg.responseUrl !== config.url) return stop('RESIDENCY_PURCHASE_POLICY_UNAVAILABLE');
+  if (msg.statusCode === 422) return stop('RESIDENCY_PURCHASE_TARGET_NOT_COVERED', 422);
+  if (!ok()) return stop('RESIDENCY_PURCHASE_POLICY_UNAVAILABLE');
+  const policy = msg.payload;
+  const target = residencyPurchaseTarget();
+  const now = Date.now();
+  const observed = strictInstant(policy?.observedAt);
+  const validUntil = strictInstant(policy?.validUntil);
+  const percent = policy?.groupTrainingDiscountPercent;
+  const expiresAt = Math.min(validUntil, ctx.residencyPolicyRequestedAt + 30000, ctx.residencyPriceRequestedAt + 60000);
+  if (!canonical.isObj(policy) || policy.schemaVersion !== 1 || policy.providerProductId !== PURCHASE_RESIDENCY_PRODUCT_ID
+    || Object.entries(target).some(([key, value]) => policy[key] !== value)
+    || typeof policy.publicationId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(policy.publicationId)
+    || !Number.isSafeInteger(policy.policyVersion) || policy.policyVersion < 1
+    || typeof policy.policyDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(policy.policyDigest)
+    || !Number.isSafeInteger(percent) || percent <= 0 || percent > 100
+    || !Number.isFinite(observed) || observed > now || !Number.isFinite(expiresAt) || expiresAt <= now
+    || validUntil - observed > 30000 || validUntil > Date.parse(target.startsAt)) {
+    return stop('RESIDENCY_PURCHASE_POLICY_INVALID');
+  }
+  const participationDiscountMinor = Math.floor(ctx.basePriceMinor * percent / 100);
+  const participationToPayMinor = ctx.basePriceMinor - participationDiscountMinor;
+  ctx.residencyPurchaseQuote = {
+    schemaVersion: 1, kind: 'GROUP_TRAINING_RESIDENCY_PURCHASE_QUOTE', exerciseId: target.exerciseId,
+    startsAt: target.startsAt, durationMinutes: target.durationMinutes, currency: 'RUB',
+    participationProductId: ctx.priceProductId, residencyProductId: PURCHASE_RESIDENCY_PRODUCT_ID,
+    existingResidency: 'NONE', publicationId: policy.publicationId, policyVersion: policy.policyVersion,
+    policyDigest: policy.policyDigest, participationBaseMinor: ctx.basePriceMinor, discountPercent: percent,
+    participationDiscountMinor, participationToPayMinor, residencyMinor: ctx.residencyPriceMinor,
+    totalMinor: participationToPayMinor + ctx.residencyPriceMinor, expiresAt
+  };
+  ctx.done = true;
+  return out(4);
 }
 if (ctx.step === 'evaluate') {
   const decision = msg._managedSubscriptionPolicyDecision;
