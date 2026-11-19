@@ -455,7 +455,7 @@ export function createVivaCupResidencyPorts({
     return newest;
   }
 
-  async function cupContext({ clientSubscriptionId, refresh }) {
+  async function cupContext({ clientSubscriptionId, refresh, allowNotActive = false }) {
     const body = await requestJson(fetchImpl,
       c.cupBaseUrl + "/internal/subscriptions/" + (refresh ? "residency-booking-refresh" : "residency-booking-context"),
       { method: "POST", headers: {
@@ -464,8 +464,27 @@ export function createVivaCupResidencyPorts({
         "X-Subscriptions-Integration-Token": c.cupIntegrationToken,
       }, body: JSON.stringify({ clientSubscriptionId }) }, c);
     if (body?.providerProductId !== c.productId) throw providerError("RESIDENCY_EVIDENCE_PRODUCT_MISMATCH");
-    const instance = body?.context?.instance;
-    if (!instance || instance.state !== "ACTIVE" || !iso(instance.activeFrom) || !iso(instance.activeTo)
+    const context = body?.context;
+    if (!context || typeof context !== "object") throw providerError("RESIDENCY_EVIDENCE_INVALID");
+    const instance = context.instance;
+    // A read-only context is also evidence when it explicitly says that no active
+    // instance exists. A malformed active window is still an error: it cannot be
+    // interpreted as "not applied".
+    if (!instance || typeof instance !== "object" || typeof instance.state !== "string" || instance.state.length === 0) {
+      if (allowNotActive) {
+        return { state: "NOT_ACTIVE",
+          observedAt: iso(body.observedAt) ? isoMillis(body.observedAt) : now().toISOString() };
+      }
+      throw providerError("RESIDENCY_EVIDENCE_INVALID");
+    }
+    if (instance.state !== "ACTIVE") {
+      if (allowNotActive) {
+        return { state: "NOT_ACTIVE",
+          observedAt: iso(body.observedAt) ? isoMillis(body.observedAt) : now().toISOString() };
+      }
+      throw providerError("RESIDENCY_EVIDENCE_INVALID");
+    }
+    if (!iso(instance.activeFrom) || !iso(instance.activeTo)
       || Date.parse(instance.activeTo) <= Date.parse(instance.activeFrom)) {
       throw providerError("RESIDENCY_EVIDENCE_INVALID");
     }
@@ -486,7 +505,7 @@ export function createVivaCupResidencyPorts({
 
   /** Read-only CUP context used to finalize a stale IN_FLIGHT claim without a second refresh. */
   async function readContext({ clientSubscriptionId }) {
-    return cupContext({ clientSubscriptionId, refresh: false });
+    return cupContext({ clientSubscriptionId, refresh: false, allowNotActive: true });
   }
 
   async function statusRead() {

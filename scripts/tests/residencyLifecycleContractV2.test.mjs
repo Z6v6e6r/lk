@@ -134,7 +134,7 @@ function harness(overrides = {}) {
       state.contextReads = (state.contextReads || 0) + 1;
       if (state.contextFails) throw new Error("CUP context down");
       if (state.activation && state.activation.state === "ACTIVE") return state.activation;
-      return { state: "PENDING" };
+      return { state: "NOT_ACTIVE", observedAt: PAID_AT };
     },
   };
   const buildLifecycle = () => createResidencyLifecycle({

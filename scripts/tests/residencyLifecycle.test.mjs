@@ -1642,6 +1642,116 @@ test("an ambiguous activation without a CUP context port never repeats the refre
   assert.equal(activateCalls, 1);
 });
 
+test("an explicit NOT_ACTIVE context allows one bounded recovery retry", async () => {
+  const external = externalPort([]);
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const payments = {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  };
+  let activateCalls = 0;
+  let contextReads = 0;
+  const activation = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async read() {
+      contextReads += 1;
+      return { state: "NOT_ACTIVE", observedAt: PAID_AT };
+    },
+    async activate() {
+      activateCalls += 1;
+      if (activateCalls === 1) throw new Error("connection refused before CUP applied the command");
+      return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT };
+    },
+  };
+  const probe = build({ store: creator.store, external, config: GUARD, payments, activation });
+  probe.setNow(Date.parse("2026-11-18T09:06:00.000Z"));
+  const first = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-not-active-1" });
+  assert.equal(first.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(first.order.activation.state, "UNKNOWN");
+  assert.equal(activateCalls, 1);
+  assert.equal(contextReads, 0);
+
+  const second = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-not-active-2" });
+  assert.equal(second.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(activateCalls, 2);
+  assert.equal(contextReads, 1);
+
+  const third = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-not-active-3" });
+  assert.equal(third.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(activateCalls, 2);
+});
+
+test("a recovery retry that stays NOT_ACTIVE stops in review instead of looping", async () => {
+  const external = externalPort([]);
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const payments = {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  };
+  let activateCalls = 0;
+  const activation = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async read() { return { state: "NOT_ACTIVE", observedAt: PAID_AT }; },
+    async activate() {
+      activateCalls += 1;
+      if (activateCalls === 1) throw new Error("connection refused");
+      return { state: "PENDING" };
+    },
+  };
+  const probe = build({ store: creator.store, external, config: GUARD, payments, activation });
+  probe.setNow(Date.parse("2026-11-18T09:06:00.000Z"));
+  const first = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-exhausted-1" });
+  assert.equal(first.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(activateCalls, 1);
+
+  const second = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-exhausted-2" });
+  assert.equal(second.order.state, ORDER_STATES.PAID_REQUIRES_REVIEW);
+  assert.equal(second.order.activation.lastErrorCode, "ACTIVATION_RECOVERY_EXHAUSTED");
+  assert.equal(activateCalls, 2);
+  assert.equal(creator.store.orders.get(created.order.orderId).activation.recoveryRetries, 1);
+
+  const third = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-exhausted-3" });
+  assert.equal(third.order.state, ORDER_STATES.PAID_REQUIRES_REVIEW);
+  assert.equal(activateCalls, 2);
+});
+
+test("ACTIVATION_FAILED is not retried by a later reconcile", async () => {
+  let activateCalls = 0;
+  const activation = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async activate() {
+      activateCalls += 1;
+      return { state: "REJECTED", reason: "NO_ELIGIBLE_POLICY" };
+    },
+  };
+  const payments = {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  };
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const probe = build({ store: creator.store, payments, activation });
+  const first = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-rejected-1" });
+  assert.equal(first.order.state, ORDER_STATES.ACTIVATION_FAILED);
+  assert.equal(activateCalls, 1);
+  const second = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-rejected-2" });
+  assert.equal(second.order.state, ORDER_STATES.ACTIVATION_FAILED);
+  assert.equal(activateCalls, 1);
+});
+
 test("an external OPEN, UNKNOWN or PAID operation blocks reconcile activation", async () => {
   for (const externalState of ["OPEN", "UNKNOWN", "PAID"]) {
     let rows = [];

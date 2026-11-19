@@ -240,6 +240,35 @@ test("CUP context read is non-refresh and exposes the same window", async () => 
   assert.deepEqual(JSON.parse(context[0].options.body), { clientSubscriptionId: SUB });
 });
 
+test("CUP context read distinguishes explicit NOT_ACTIVE from a malformed context", async () => {
+  const inactive = build({ routes: { "residency-booking-context": () => response({
+    providerProductId: RESIDENCY_PRODUCT_ID, observedAt: "2026-11-18T09:06:00.000Z",
+    context: { instance: { state: "PENDING" } } }) } });
+  const inactiveResult = await inactive.ports.activation.read({ clientSubscriptionId: SUB });
+  assert.equal(inactiveResult.state, "NOT_ACTIVE");
+  assert.equal(inactiveResult.observedAt, "2026-11-18T09:06:00.000Z");
+
+  const absent = build({ routes: { "residency-booking-context": () => response({
+    providerProductId: RESIDENCY_PRODUCT_ID, observedAt: "2026-11-18T09:06:00.000Z", context: {} }) } });
+  assert.equal((await absent.ports.activation.read({ clientSubscriptionId: SUB })).state, "NOT_ACTIVE");
+
+  const malformedWindow = build({ routes: { "residency-booking-context": () => response({
+    providerProductId: RESIDENCY_PRODUCT_ID, observedAt: "2026-11-18T09:06:00.000Z",
+    context: { instance: { state: "ACTIVE", activeFrom: "2026-11-18T09:05:00.000Z" } } }) } });
+  await assert.rejects(malformedWindow.ports.activation.read({ clientSubscriptionId: SUB }), /RESIDENCY_EVIDENCE_INVALID/);
+
+  const noContext = build({ routes: { "residency-booking-context": () => response({
+    providerProductId: RESIDENCY_PRODUCT_ID, observedAt: "2026-11-18T09:06:00.000Z" }) } });
+  await assert.rejects(noContext.ports.activation.read({ clientSubscriptionId: SUB }), /RESIDENCY_EVIDENCE_INVALID/);
+
+  // A refresh is not a read-only answer: a non-ACTIVE response keeps the command
+  // ambiguous instead of authorizing a retry from the same response.
+  const refreshInactive = build({ routes: { "residency-booking-refresh": () => response({
+    providerProductId: RESIDENCY_PRODUCT_ID, observedAt: "2026-11-18T09:06:00.000Z",
+    context: { instance: { state: "PENDING" } } }) } });
+  await assert.rejects(refreshInactive.ports.activation.activate({ clientSubscriptionId: SUB }), /RESIDENCY_EVIDENCE_INVALID/);
+});
+
 test("CUP rejection is a closed activation denial, while a CUP outage is retryable", async () => {
   const rejected = build({ routes: { "residency-booking-refresh": () => response({ code: "RESIDENCY_SYNC_SUBSCRIPTION_NOT_ACTIVE" }, 403) } });
   assert.deepEqual(await rejected.ports.activation.activate({ clientSubscriptionId: SUB }),

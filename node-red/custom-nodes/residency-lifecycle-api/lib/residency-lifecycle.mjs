@@ -643,7 +643,8 @@ export function createResidencyLifecycle(deps) {
       returnTarget,
       payment: { status: "DISPATCHING", providerTransactionId: null, paymentUrl: null, expiresAt: null, paidAt: null,
         lastCheckedAt: now, lastErrorCode: null },
-      activation: { state: "DISPATCHING", attempts: 0, lastErrorCode: null, clientSubscriptionId: null, startedAt: null },
+      activation: { state: "DISPATCHING", attempts: 0, lastErrorCode: null, clientSubscriptionId: null,
+        startedAt: null, recoveryRetries: 0 },
       residency: null,
       events: [],
       activeSlot: 1,
@@ -1082,6 +1083,26 @@ export function createResidencyLifecycle(deps) {
     return activationOutcome(order, paymentConfirmed, { ...activationState, state: "UNKNOWN" });
   }
 
+  function recoveryRetries(order) {
+    return Number.isSafeInteger(order.activation.recoveryRetries) && order.activation.recoveryRetries >= 0
+      ? order.activation.recoveryRetries : 0;
+  }
+
+  /**
+   * The single bounded retry after an explicit non-ACTIVE context did not succeed.
+   * A paid order stops auto-retrying and becomes visible to support; no further
+   * refresh is issued. An unconfirmed dispatch keeps its unknown outcome.
+   */
+  function reviewExhaustedRecovery(order, paymentConfirmed, result) {
+    if (!paymentConfirmed) {
+      return keepUnconfirmed(order, { state: "UNKNOWN", lastErrorCode: "ACTIVATION_RECOVERY_EXHAUSTED" });
+    }
+    return transition(order, ORDER_STATES.PAID_REQUIRES_REVIEW, {
+      activation: { ...order.activation, state: "REQUIRES_REVIEW",
+        lastErrorCode: text(result?.reason, 64) ? result.reason : "ACTIVATION_RECOVERY_EXHAUSTED" },
+    });
+  }
+
   /**
    * Every activation, from create, reconcile, or an explicitly invoked expiry sweep, first reads
    * the provider's external list. OPEN/UNKNOWN always block; a PAID operation created at or
@@ -1159,7 +1180,7 @@ export function createResidencyLifecycle(deps) {
   }
 
   async function activate(order) {
-    const eligible = [ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING, ORDER_STATES.ACTIVATION_FAILED].includes(order.state)
+    const eligible = [ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING].includes(order.state)
       || (order.state === ORDER_STATES.PENDING_PAYMENT && ["DISPATCHING", "UNKNOWN"].includes(order.payment.status));
     if (!eligible) return order;
     if (order.state === ORDER_STATES.ACTIVE) return order;
@@ -1167,6 +1188,7 @@ export function createResidencyLifecycle(deps) {
     // evidence) may be presented as paid. A dispatch whose outcome is unknown is not proof
     // that money was received.
     const paymentConfirmed = order.payment.status === "PAID" || PAID_PHASES.includes(order.state);
+    const recoveryRetriesUsed = recoveryRetries(order);
     const inFlightSince = iso(order.activation.startedAt) ? Date.parse(order.activation.startedAt) : null;
     if (order.activation.state === "IN_FLIGHT" && inFlightSince !== null && clock.now() - inFlightSince < 120000) {
       // Another worker owns this activation. Do not call CUP twice and do not overwrite
@@ -1227,8 +1249,8 @@ export function createResidencyLifecycle(deps) {
     // A crash or a lost response may have left a refresh that already executed. The
     // durable marker (IN_FLIGHT or UNKNOWN) must survive every inconclusive answer:
     // read the CUP context without refresh first and finalize from it. Only an explicit
-    // non-ACTIVE context may fall through to a retry; an unreadable context or a missing
-    // context port keeps UNKNOWN and issues no command.
+    // NOT_ACTIVE context may fall through to one bounded retry; an unreadable context
+    // or a missing context port keeps UNKNOWN and issues no command.
     if (recovering && typeof activation.read !== "function") {
       return retryActivation(order, paymentConfirmed, {
         lastErrorCode: "ACTIVATION_CONTEXT_UNAVAILABLE",
@@ -1250,6 +1272,31 @@ export function createResidencyLifecycle(deps) {
         }, true);
       }
       if (prior?.state === "ACTIVE") return recordActivation(order, instance, prior, paymentConfirmed);
+      if (prior?.state !== "NOT_ACTIVE") {
+        // The context port did not return a usable explicit answer. Keep the marker and
+        // do not turn an unreadable/invalid read into a refresh command.
+        return retryActivation(order, paymentConfirmed, {
+          lastErrorCode: "ACTIVATION_CONTEXT_INVALID",
+          clientSubscriptionId: instance.clientSubscriptionId,
+        }, true);
+      }
+      if (recoveryRetriesUsed >= 1) {
+        return reviewExhaustedRecovery(order, paymentConfirmed, prior);
+      }
+      // Persist the single recovery retry before the command. A crash after this write
+      // leaves the counter at one, so the next pass cannot issue a second retry.
+      const retriedOrder = {
+        ...order,
+        activation: { ...order.activation, recoveryRetries: recoveryRetriesUsed + 1 },
+        updatedAt: nowIso(),
+        revision: order.revision + 1,
+      };
+      const retried = await store.updateOrder(order.tenantId, order.orderId, order.revision, retriedOrder);
+      if (!retried?.ok) {
+        const current = await store.getOrder(order.tenantId, order.userId, order.orderId);
+        return current || order;
+      }
+      order = retriedOrder;
     }
     let result;
     try {
@@ -1261,6 +1308,11 @@ export function createResidencyLifecycle(deps) {
     } catch {
       return retryActivation(order, paymentConfirmed,
         { attempts: order.activation.attempts + 1, lastErrorCode: "ACTIVATION_UNAVAILABLE" }, true);
+    }
+    if (recovering && (!result || (result.state !== "ACTIVE" && result.state !== "REJECTED"))) {
+      // The one authorized retry did not produce an active context. Stop auto-retrying
+      // and surface the paid order for support instead of issuing another refresh.
+      return reviewExhaustedRecovery(order, paymentConfirmed, result);
     }
     return recordActivation(order, instance, result, paymentConfirmed);
   }

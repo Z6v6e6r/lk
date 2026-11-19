@@ -358,12 +358,16 @@ mutation response and a different device:
   `activation.state=UNKNOWN`; the command may already have been applied. Every later
   reconcile or restarted process must call the read-only
   `residency-booking-context` first. An `ACTIVE` context finalizes the same
-  `clientSubscriptionId` with no second command. An unavailable context, a failed
-  instance lookup or a missing context port keeps `UNKNOWN` and sends nothing. Only an
-  explicit non-ACTIVE context may authorize one retry. A single confirmed payment
-  therefore issues at most one `residency-booking-refresh` across repetitions and
-  restarts; `ACTIVATION_CONTEXT_UNAVAILABLE` / `ACTIVATION_UNAVAILABLE` stay visible
-  as the retryable reason.
+  `clientSubscriptionId` with no second command. An explicit `NOT_ACTIVE` context
+  proves the first command did not produce an active instance and authorizes **one**
+  bounded retry (recorded durably before the command). If that retry does not produce
+  `ACTIVE`, the order becomes `PAID_REQUIRES_REVIEW` with
+  `ACTIVATION_RECOVERY_EXHAUSTED`; no further automatic refresh is sent. An
+  unavailable context, a malformed context, a failed instance lookup or a missing
+  context port keeps `UNKNOWN` and sends nothing. A single confirmed payment therefore
+  produces exactly one activation; `ACTIVATION_CONTEXT_UNAVAILABLE`,
+  `ACTIVATION_CONTEXT_INVALID`, `ACTIVATION_UNAVAILABLE` and
+  `ACTIVATION_RECOVERY_EXHAUSTED` stay visible as the reason.
 - The dispatch lease (2 minutes) is an **operator/client hint**, not a permission to buy
   again. Its expiry changes nothing: the slot stays held, the order stays unresolved and
   recovery continues through reconcile/CUP evidence.
@@ -431,8 +435,10 @@ CUP's context.instance.activeFrom/activeTo.
   idempotentReplay: true; activation is called at most once.
 - A refresh command whose answer is lost (timeout, unavailable context or no context
   port) leaves durable `activation.state=UNKNOWN`. The next reconcile, including a
-  restarted process, reads `residency-booking-context` first and never resends
-  `residency-booking-refresh` while the outcome is unknown.
+  restarted process, reads `residency-booking-context` first. An `ACTIVE` context
+  finalizes the already-issued instance. An explicit `NOT_ACTIVE` context authorizes
+  one bounded retry; an unavailable or malformed context never resends
+  `residency-booking-refresh`.
 - A PENDING/UNKNOWN read keeps the order pending and returns retryable: true.
 - FAILED/CANCELLED/REFUND is terminal PAYMENT_FAILED.
 - Amount/transaction mismatch is PAID_REQUIRES_REVIEW (no activation).
@@ -495,8 +501,8 @@ RESIDENCY_PAYMENT_STATUS_UNKNOWN, RESIDENCY_SUBSCRIPTIONS_PARTIAL,
 RESIDENCY_RATE_LIMITED, RESIDENCY_ORDERS_DISABLED, RESIDENCY_CREATE_NOT_ALLOWED,
 RESIDENCY_CREATE_POLICY_INVALID, RESIDENCY_INTERNAL. Activation error codes include
 INSTANCE_NOT_FOUND, INSTANCE_BEFORE_ORDER, INSTANCE_LOOKUP_UNAVAILABLE,
-ACTIVATION_UNAVAILABLE, ACTIVATION_CONTEXT_UNAVAILABLE, RENEWAL_WINDOW_OVERLAP,
-ACTIVATION_WINDOW_TERM_MISMATCH,
+ACTIVATION_UNAVAILABLE, ACTIVATION_CONTEXT_UNAVAILABLE, ACTIVATION_CONTEXT_INVALID,
+ACTIVATION_RECOVERY_EXHAUSTED, RENEWAL_WINDOW_OVERLAP, ACTIVATION_WINDOW_TERM_MISMATCH,
 DISPATCH_LEASE_EXPIRED, DISPATCH_OUTCOME_UNKNOWN and TRANSACTION_ID_MISSING.
 No code, message or log carries a token, phone, provider id, PII or raw provider body.
 
