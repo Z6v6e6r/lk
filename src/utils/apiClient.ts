@@ -3965,6 +3965,7 @@ export interface PadelSplitPaymentModeOption {
 
 export interface PadelSplitPaymentResult {
   paymentRef: string | null;
+  checkoutStored?: true;
   operationId?: string | null;
   gameId?: string | null;
   settlementState?: string | null;
@@ -8884,6 +8885,7 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
 
   return {
     paymentRef: pickString(data, ["paymentRef", "ref"]) ?? null,
+    ...(data.checkoutStored === true ? { checkoutStored: true as const } : {}),
     operationId: pickString(data, ["operationId"]) ?? null,
     gameId: pickString(data, ["gameId"]) ?? null,
     settlementState: pickString(data, ["settlementState"]) ?? null,

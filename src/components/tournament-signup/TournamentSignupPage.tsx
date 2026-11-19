@@ -45,6 +45,7 @@ import {
 } from "../../utils/tournamentSignupApi";
 import {
   buildTournamentSubscriptionDiscountProduct,
+  isChildTournamentExercise,
   isTournamentSubscriptionDiscountQuote,
   matchTournamentSubscriptionDiscount,
   type TournamentSubscriptionDiscountQuote,
@@ -1060,11 +1061,12 @@ export default function TournamentSignupPage({
   const checkoutContextKey = `${selectedId}:${selectedExerciseId}:${isAuthenticated ? `auth:${phone}` : "public"}:${isRestoringSession}`;
   const checkout = checkoutResolvedFor === checkoutContextKey ? checkoutSnapshot : null;
   const discountContextKey = `${checkoutContextKey}:${checkout?.profile?.id}`;
-  const discountPending = Boolean(isAuthenticated && checkout?.profile && !checkout.customPricing
+  const childTournament = isChildTournamentExercise(checkout?.exercise);
+  const discountPending = Boolean(!childTournament && isAuthenticated && checkout?.profile && !checkout.customPricing
     && (discountLoading || discountResolvedFor !== discountContextKey));
   const currentDiscountQuotes = useMemo(
-    () => discountResolvedFor === discountContextKey ? discountQuotes : [],
-    [discountResolvedFor, discountContextKey, discountQuotes],
+    () => !childTournament && discountResolvedFor === discountContextKey ? discountQuotes : [],
+    [childTournament, discountResolvedFor, discountContextKey, discountQuotes],
   );
 
   useEffect(() => {
@@ -1080,7 +1082,7 @@ export default function TournamentSignupPage({
     setDiscountResolvedFor(null);
     setDiscountError(null);
     setDiscountLoading(false);
-    if (!isAuthenticated || isRestoringSession || subscriptionUsageShadowEnabled
+    if (childTournament || !isAuthenticated || isRestoringSession || subscriptionUsageShadowEnabled
       || !selectedExerciseId || !checkout?.profile?.id || checkout.customPricing) return;
     const controller = new AbortController();
     const actorId = checkout.profile.id;
@@ -1110,7 +1112,7 @@ export default function TournamentSignupPage({
       setDiscountLoading(false);
     });
     return () => controller.abort();
-  }, [checkout, discountContextKey, selectedExerciseId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled]);
+  }, [checkout, childTournament, discountContextKey, selectedExerciseId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled]);
   const previewSubscriptionDiscount = useCallback(async (eventId: string) => {
     await subscriptionUsageShadowPreview({
       action: "BOOK_TOURNAMENT",
@@ -2330,7 +2332,7 @@ export default function TournamentSignupPage({
                                   onClick={() => setPurchasableListOpen((current) => !current)}
                                   disabled={actionLoading}
                                 >
-                                  {isPurchasableListOpen ? "Скрыть абонементы" : "Записаться разово или по абонементу"}
+                                  {childTournament ? "Разовая оплата" : isPurchasableListOpen ? "Скрыть абонементы" : "Записаться разово или по абонементу"}
                                 </button>
                                 {isPurchasableListOpen && (
                                   <div className="tournament-signup-payment-purchase-list">
@@ -2367,7 +2369,7 @@ export default function TournamentSignupPage({
                                 )}
                               </div>
                             )}
-                            {isAuthenticated ? (
+                            {childTournament ? null : isAuthenticated ? (
                               purchasableSubscriptionProducts.length > 0 && (
                                 <div className="tournament-signup-payment-group">
                                   <button

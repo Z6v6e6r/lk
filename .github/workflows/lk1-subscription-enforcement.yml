@@ -485,6 +485,7 @@ jobs:
           scripts/tests/splitOrdinaryPriceHook.test.mjs
           scripts/tests/splitJoinOrdinaryPriceSource.test.mjs
           scripts/tests/splitPayment.apiClient.test.ts
+          scripts/tests/paidSplitJoinRecovery.test.mjs
           scripts/tests/splitCreateRecovery.test.ts
           scripts/tests/splitCreateResult.test.mjs
           scripts/tests/gameCreateButtonPreparation.test.mjs

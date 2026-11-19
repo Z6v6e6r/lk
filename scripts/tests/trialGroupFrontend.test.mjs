@@ -1,3 +1,5 @@
+import { isKidsAcademyTraining } from "../../src/utils/kidsTrainingSubscriptions.ts";
+import { isChildTournamentExercise } from "../../src/utils/tournamentSubscriptionDiscount.ts";
 import { isSpanishTrainingExercise } from "../lib/spanishTrainingExclusion.mjs";
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -17,14 +19,14 @@ const compiled = ts.transpileModule(entry.getText(source).replace(/^export /, ''
 }).outputText;
 async function invoke(params, response = { error: { status: 503, message: 'Fixture unavailable' }, status: 503 }, enabled = true) {
   const calls = []; let closed = false;
-  const dependencies = { ...helpers, isSpanishTrainingExercise,
+  const dependencies = { ...helpers, isSpanishTrainingExercise, isChildTournamentExercise, isKidsAcademyTraining,
     TRIAL_GROUP_CHECKOUT_ENABLED: enabled,
     API_BASE: 'https://viva.example.test', TENANT_KEY: 'fixture',
     getServ2Origin: () => 'https://lk.example.test',
     apiCreateTournamentVivaBookingFromSubscription: async value => ({ routedSubscription: value }),
     createVivaPaymentWatcher: async () => ({ close() { closed = true; } }),
     buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
-    buildTournamentVivaTransactionPayload: () => ({ fixtureTransaction: true }),
+    buildTournamentVivaTransactionPayload: input => ({ fixtureTransaction: true, ...(input.promoCode ? { promoCode: input.promoCode } : {}) }),
     pickString: (value, keys) => keys.map(key => value?.[key]).find(value => typeof value === 'string') || null,
     readVivaFailureCode: () => null,
     request: async (url, options) => { calls.push({ url, options }); return response; },
@@ -142,4 +144,19 @@ test('Spanish individual/split training preserves one-time checkout and its sepa
   assert.equal(calls[0].url, 'https://viva.example.test/end-user/api/v2/fixture/transactions');
   assert.equal(calls[0].options.method, 'POST');
   assert.equal(result.status, 400, 'the request reaches the existing provider path instead of the subscription refusal');
+});
+
+test('child tournament rejects stale subscription purchases and forwards a one-time promo', async () => {
+  const target = params(false);
+  target.exercise.direction = { id: 7108 };
+  target.promoCode = 'FIXTURE-PROMO';
+  for (const staleProduct of [{ source: 'subscription' }, { isCustomTournamentEnergy: true }]) {
+    const { calls, result } = await invoke({ ...target, product: { ...target.product, ...staleProduct } });
+    assert.equal(result.status, 409);
+    assert.deepEqual(calls, []);
+  }
+  const { calls } = await invoke(target, { error: { status: 400, message: "Fixture validation" }, status: 400 });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/transactions$/);
+  assert.deepEqual(JSON.parse(calls[0].options.body), { fixtureTransaction: true, promoCode: 'FIXTURE-PROMO' });
 });

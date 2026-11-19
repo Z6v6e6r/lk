@@ -263,7 +263,12 @@ if (ctx.step === 'groupExercise') {
   if (['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) {
     return targetUnresolved('target_lifecycle');
   }
-  if (canonical.isSpanishTrainingExercise(exercise)) {
+  if (eventRoute.category === 'group_training' && [2468, 2975, 3163].includes(previewDirectionId(canonical, exercise))) {
+    ctx.quotes = [];
+    ctx.done = true;
+    return out(4);
+  }
+  if (canonical.isSpanishTrainingExercise(exercise) || previewDirectionId(canonical, exercise) === 7108) {
     ctx.quotes = [];
     ctx.done = true;
     return out(4);

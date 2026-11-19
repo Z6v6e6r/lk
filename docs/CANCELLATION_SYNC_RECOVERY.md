@@ -89,3 +89,27 @@ backend/worker generation guards. Ship matching frontend/backend/worker versions
 under the existing release runbook. Preserve backups and validate actual ACK,
 runtime, worker, passive booking state and the required soak. No real booking,
 cancellation, refund or data repair is part of these synthetic checks.
+## Exhausted local booking attempts
+
+The authenticated `cancel-free` action at `POST /lk/subscription-bookings` can
+close an exhausted local `PREPARED` operation for the same customer and
+subscription while it holds the existing subscription cancellation lock. The
+recovery requires five reclaims and five attempts, an unchanged attempt for at
+least 30 minutes, no dispatch or payment markers, and no daily guard for the
+stale quote. The exact ledger row is marked `FAILED` with majority write
+concern. The cancellation then re-reads the ledger and checks the requested
+booking and visit balance with the existing Viva policy before sending any
+cancellation. The stale operation stays outside seat-only recovery.
+
+To build a private candidate from a fresh verified live-flow workspace:
+
+```sh
+node scripts/prepare_lk1_exhausted_prepared_cancel.mjs /absolute/private/live-workspace
+```
+
+This replaces only the embedded protocol in
+`lk_subscription_booking_router_20260804` and writes
+`exhausted-prepared-candidate.json` and `exhausted-prepared-contract.json` into the
+private workspace. The worker bundle uses the same canonical protocol. A future
+release needs a matching worker bundle with the new gateway binding. The
+candidate command performs no import or restart.

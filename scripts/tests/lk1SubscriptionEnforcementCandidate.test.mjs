@@ -1,3 +1,4 @@
+import { restoreSourceBeforeKidsTrainingGuard } from "../prepare_kids_training_subscription_release.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -14,6 +15,7 @@ import { applyPaginationEdits, subscriptionBookingPaginationEdits } from "../pre
 import { PATRIOTS_PREIMAGE } from "../patch_live_lk1_patriots_friendship.mjs";
 import { applyReconciledEdits, timeoutPreservationEdits } from "../prepare_reconciled_cancellation_recovery.mjs";
 import { prepareChanges, replaceOnce } from "../prepare_game_private_projection_candidate.mjs";
+import { restoreSourceBeforeChildTournamentGuard } from "../prepare_child_tournament_one_time_release.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -37,6 +39,9 @@ function frozenBusinessHash(file) {
     text = applyReconciledEdits(text, timeoutPreservationEdits().reverse().map(([before, after]) => [after, before]));
   }
   if (file.endsWith('fn_subscription_booking_router.js')) {
+    text = restoreSourceBeforeKidsTrainingGuard(text, file.slice('scripts/'.length));
+    assert.equal(sha256(text), 'e1306a794fd815adab8f21ddca6c64a23dcf30ebfe820c665e015cfc8296bcdc', file);
+    text = restoreSourceBeforeChildTournamentGuard(text, file.slice('scripts/'.length));
     // Explicit pagination successor: prove its exact bytes and recover the frozen
     // source. Never advance a historical deployment/rebase contract to new code.
     assert.equal(sha256(text), '0b06938e198a63cb798dfc65a050fa20f866ceaf55ab2a95a34aa74b753fdcc6', file);
