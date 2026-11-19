@@ -11,3 +11,6 @@
 .ph-composite-residency-lines s { color: #8a8a8a; }
 .ph-composite-residency-total { padding-top: 8px; border-top: 1px solid #e6d9ff; font-weight: 700; color: #222; }
 .ph-composite-residency-note { margin: 12px 0; padding: 12px 16px; border-radius: 12px; background: #f4f4f4; color: #363636; font: 15px/1.4 Arial, sans-serif; }
+.ph-composite-residency-lines--first { padding-top: 0; border-top: 0; }
+.ph-composite-residency-refresh { padding: 0; border: 0; background: none; color: #7e2bc4; font: inherit; text-decoration: underline; cursor: pointer; }
+.ph-composite-residency-refresh:focus-visible { outline: 3px solid #7353d9; outline-offset: 2px; }

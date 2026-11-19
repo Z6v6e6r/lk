@@ -15,7 +15,7 @@ const load = (code, deps) => { const module = { exports: {} };
 const purchase = { RESIDENCY_PRODUCT_ID: '4037a3a3-e551-4f9a-a9db-1410e46b8635' };
 const planner = load(compile('../../src/residency/compositeResidencyOrder.ts'), name => {
   if (name === './residencyPurchase.ts') return purchase; throw new Error(name); });
-const { CompositeResidencyOffer } = load(compile('../../src/residency/CompositeResidencyOffer.tsx'), name => {
+const { CompositeResidencyOffer, ResidencyPurchaseQuoteOffer } = load(compile('../../src/residency/CompositeResidencyOffer.tsx'), name => {
   if (name === './compositeResidencyOrder.ts') return planner;
   if (name.endsWith('.css')) return {};
   return require(name); });
@@ -56,4 +56,29 @@ test('RES-006 and failures: active residency explains, unknown state and games r
 test('the composite offer flag is off by default', () => {
   const config = readFileSync(new URL('../../src/residency/residencyConfig.ts', import.meta.url), 'utf8');
   assert.match(config, /COMPOSITE_RESIDENCY_ENABLED = readBoolean\(ENV\.VITE_LK1_COMPOSITE_RESIDENCY_ENABLED, false\)/);
+});
+
+// lk#463 server quote for exercise 4c9f00aa-…: 5 500 ₽ − 2 750 ₽ + 790 ₽ = 3 540 ₽.
+const serverQuote = { exerciseId: '4c9f00aa-d286-4a48-ad29-98757bd0ca87', participationBaseMinor: 550000, discountPercent: 50,
+  participationDiscountMinor: 275000, participationToPayMinor: 275000, residencyMinor: 79000, totalMinor: 354000 };
+const renderQuote = (props) => renderToStaticMarkup(React.createElement(ResidencyPurchaseQuoteOffer,
+  { onConsentChange() {}, onRefresh() {}, consentAccepted: false, ...props }));
+
+test('server quote shows the training price, discount, residency price and total before consent', () => {
+  const html = renderQuote({ view: { state: 'READY', quote: serverQuote } }).replace(/\u00a0|\u202f/g, ' ');
+  assert.match(html, /Цена занятия<\/dt><dd>5 500 ₽/);
+  assert.match(html, /Скидка резидента 50%<\/dt><dd>−2 750 ₽/);
+  assert.match(html, /Резидентство, 30 дней<\/dt><dd>790 ₽/);
+  assert.match(html, /Итого<\/dt><dd>3 540 ₽/);
+  assert.match(html, /data-exercise-id="4c9f00aa-d286-4a48-ad29-98757bd0ca87"/);
+  assert.doesNotMatch(html, /checked/);
+});
+
+test('loading, refreshing and expired quotes offer no consent; unavailable renders nothing', () => {
+  for (const state of ['LOADING', 'REFRESHING', 'EXPIRED']) {
+    const html = renderQuote({ view: { state } });
+    assert.doesNotMatch(html, /type="checkbox"|₽/, state);
+  }
+  assert.match(renderQuote({ view: { state: 'EXPIRED' } }), /Обновить цену/);
+  assert.equal(renderQuote({ view: { state: 'UNAVAILABLE' } }), '');
 });

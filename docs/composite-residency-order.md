@@ -75,3 +75,24 @@ The preview is read-only; the probe also counts the client's bookings before and
 - OD-04 remainder: seat hold TTL and partial success (booking created, payment failed).
 - OD-11: boost product and rules (scenario Д).
 - Whether a refund of the participation line alone should keep the residency (today: no).
+
+## First purchase from the group schedule: server quote (lk#463)
+
+Behind `VITE_LK1_COMPOSITE_RESIDENCY_ENABLED`, the schedule asks
+`POST /lk/subscriptions/game-price-preview` with
+`{ target: { targetKind: "GROUP_TRAINING_RESIDENCY_PURCHASE", exerciseId } }` and renders
+`residencyPurchaseQuote` as is: training price, discount, residency price, total
+(`src/residency/residencyPurchaseQuote.ts`). The client sends no amounts. It refuses a quote
+for another exercise, one whose numbers do not add up, or one past `expiresAt`. Expiry is
+measured locally from the request time (`expiresAt - serverTimeMs`).
+
+- A change of training aborts the request in flight and drops the old answer and consent.
+- Consent binds to one exact fresh quote. On expiry the quote and consent are dropped and a
+  fresh quote is requested before the player can agree again: three times automatically,
+  then by the "Обновить цену" button.
+- An owned residency (`ownedResidencyRead` ACTIVE) shows "уже резидент" instead of a quote.
+- The pay button stays disabled until the single composite payment exists (lk#458).
+
+The opened training survives a host page that keeps passing `data.exerciseId`:
+`groupExerciseId` in the URL is written only by the widget and wins on mount
+(`resolveGroupScheduleInitialSelection`).

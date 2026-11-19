@@ -99,6 +99,36 @@ export function readGroupScheduleEntryDataFromHref(href: string): GroupScheduleE
   };
 }
 
+/**
+ * The training and date to open on mount (#459, A → B).
+ *
+ * The host page may keep passing the entry link's `data.exerciseId` (A) on every mount.
+ * `groupExerciseId` is written only by this widget, on an explicit selection and in payment
+ * return URLs, so once present it is the player's latest choice (B) and wins over the host
+ * entry; the date then follows the same URL. Without it the host entry wins, then the URL
+ * entry params, so the first visit by a link to A still opens A.
+ */
+export function resolveGroupScheduleInitialSelection(
+  href: string,
+  host: { exerciseId?: string | null; date?: string | null } = {},
+): { exerciseId: string | null; date: string | null } {
+  let url: URL | null = null;
+  try {
+    url = new URL(href, DEFAULT_GROUP_SCHEDULE_ORIGIN);
+  } catch {
+    url = null;
+  }
+  const entry = url ? readGroupScheduleEntryDataFromHref(url.toString()) : null;
+  const chosen = firstNonEmpty(url?.searchParams.get("groupExerciseId"));
+  if (chosen) {
+    return { exerciseId: chosen, date: entry?.date ?? normalizeGroupScheduleDate(host.date) };
+  }
+  return {
+    exerciseId: firstNonEmpty(host.exerciseId, entry?.exerciseId),
+    date: normalizeGroupScheduleDate(host.date) ?? entry?.date ?? null,
+  };
+}
+
 export function buildGroupScheduleReturnUrl(
   input: string | URL,
   params: {

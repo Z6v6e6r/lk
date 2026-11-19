@@ -193,6 +193,7 @@ function paymentOptions(overrides = {}) {
     subscriptionUsageShadowEnabled: false, registrationLoading: false, isRegistered: false,
     trialBookingBlocked: false, checkout: current, selectedTraining: training,
     compositeInput: null, compositePlan: null, orderStatus: { kind: "NONE", allowNewPayment: true },
+    residencyQuoteView: null, residencyQuoteConsent: false, usableResidencyQuote: null,
     ownedOneTimes: evaluate(owned.initializer.getText(page), { checkout: current }),
     ownedSubscriptions: [], purchasableProducts: current.oneTimes, discountPending: false, discountError: null,
     actionLoading: false, promoLoading: false, appliedPromo: null, currentDiscountQuotes: [],
@@ -542,4 +543,21 @@ test("kids training transaction rejects stale adult discounts and keeps the orig
     { exerciseId: training.id, productId: product().id, source: "one-time", promoCode: "FIXTURE-PROMO" },
     { visit: "fixture-kids-visit" },
   ]);
+});
+
+test("residency quote block: total only after consent to a fresh quote, never an enabled pay button", () => {
+  const quote = { exerciseId: training.id, totalMinor: 354000 };
+  const seen = [];
+  const ResidencyPurchaseQuoteOffer = (props) => { seen.push(props); return null; };
+  const common = { ResidencyPurchaseQuoteOffer, residencyQuoteView: { state: "READY", quote }, usableResidencyQuote: quote,
+    requestFreshResidencyQuote: () => {}, setResidencyQuoteNowMs: () => {}, setResidencyQuoteConsentFor: () => {} };
+  const before = renderToStaticMarkup(paymentOptions({ ...common, residencyQuoteConsent: false }));
+  assert.doesNotMatch(before, /Занятие и резидентство/);
+  assert.equal(seen.at(-1).view.quote, quote);
+  const tree = paymentOptions({ ...common, residencyQuoteConsent: true });
+  const html = renderToStaticMarkup(tree);
+  assert.match(html, /Занятие и резидентство/);
+  assert.match(html, /3540 ₽/);
+  const pay = elements(tree, "button").find(item => renderToStaticMarkup(item).includes("Занятие и резидентство"));
+  assert.equal(pay.props.disabled, true);
 });

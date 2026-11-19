@@ -23,7 +23,14 @@ import {
   normalizeGroupScheduleDate,
   syncGroupScheduleSelectionHref, readGroupSchedulePaymentReturnHint } from "../../utils/groupScheduleEntry";
 import { COMPOSITE_RESIDENCY_ENABLED } from "../../residency/residencyConfig";
-import { CompositeResidencyOffer } from "../../residency/CompositeResidencyOffer";
+import { CompositeResidencyOffer, ResidencyPurchaseQuoteOffer, type ResidencyPurchaseQuoteView } from "../../residency/CompositeResidencyOffer";
+import { apiFetchResidencyPurchaseQuote } from "../../residency/residencyPurchaseQuoteApi";
+import {
+  isResidencyPurchaseQuoteUsable,
+  parseResidencyPurchaseQuote,
+  RESIDENCY_PURCHASE_QUOTE_AUTO_REFRESH_LIMIT,
+  type ResidencyPurchaseQuote,
+} from "../../residency/residencyPurchaseQuote";
 import { planCompositeResidencyOrder } from "../../residency/compositeResidencyOrder";
 import { buildGroupScheduleCompositeInput } from "../../residency/groupScheduleCompositeOffer";
 import { apiReadOwnedResidencyRows, type OwnedResidencyRawRead } from "../../residency/ownedResidencyApi";
@@ -398,6 +405,15 @@ export default function GroupSchedulePage({
   const [ownedResidencyReadNonce, setOwnedResidencyReadNonce] = useState(0);
   const [registrationReadFailed, setRegistrationReadFailed] = useState(false);
   const orderAllowsNewPaymentRef = useRef(false);
+  const [residencyQuote, setResidencyQuote] = useState<{
+    key: string;
+    status: "loading" | "refreshing" | "ready" | "expired" | "unavailable";
+    quote: ResidencyPurchaseQuote | null;
+  } | null>(null);
+  const [residencyQuoteNonce, setResidencyQuoteNonce] = useState(0);
+  const [residencyQuoteNowMs, setResidencyQuoteNowMs] = useState(0);
+  const [residencyQuoteConsentFor, setResidencyQuoteConsentFor] = useState<string | null>(null);
+  const residencyQuoteAutoRefreshRef = useRef(0);
   const [trialEligibility, setTrialEligibility] = useState<(TrialGroupEligibilityDecision & { key: string }) | null>(null);
   const [trialEligibilityRetry, setTrialEligibilityRetry] = useState(0);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
@@ -881,6 +897,79 @@ export default function GroupSchedulePage({
   const compositePlan = compositeInput
     ? planCompositeResidencyOrder({ ...compositeInput, consentAccepted: compositeConsent })
     : null;
+
+  // First residency purchase with a group training: the server quote (lk#463 / ph-admin#134).
+  // Keyed by player and training: a change of training aborts the request in flight and the
+  // render check below drops any answer that is not for the training now open.
+  const residencyQuoteExerciseId = compositeEligible && !patriotsTournamentSelected && selectedTraining
+    && ownedResidency?.state !== "ACTIVE" ? selectedTraining.id : null;
+  const residencyQuoteKey = residencyQuoteExerciseId && checkout?.profile?.id
+    ? `${checkout.profile.id}:${residencyQuoteExerciseId}` : null;
+  useEffect(() => {
+    residencyQuoteAutoRefreshRef.current = 0;
+    setResidencyQuoteConsentFor(null);
+  }, [residencyQuoteKey]);
+  useEffect(() => {
+    if (!residencyQuoteKey || !residencyQuoteExerciseId) {
+      setResidencyQuote(null);
+      return;
+    }
+    const key = residencyQuoteKey;
+    const exerciseId = residencyQuoteExerciseId;
+    const controller = new AbortController();
+    setResidencyQuoteConsentFor(null);
+    setResidencyQuote((previous) => ({
+      key, quote: null, status: previous?.key === key && previous.status !== "loading" ? "refreshing" : "loading",
+    }));
+    void apiFetchResidencyPurchaseQuote(exerciseId, controller.signal).then((read) => {
+      if (controller.signal.aborted) return;
+      const nowMs = Date.now();
+      setResidencyQuoteNowMs(nowMs);
+      if (read.failed) {
+        setResidencyQuote({ key, quote: null, status: "unavailable" });
+        return;
+      }
+      const parsed = parseResidencyPurchaseQuote(read.body, { exerciseId, requestedAtMs: read.requestedAtMs, nowMs });
+      setResidencyQuote(parsed.ok
+        ? { key, quote: parsed.quote, status: "ready" }
+        : { key, quote: null, status: parsed.reason === "QUOTE_EXPIRED" ? "expired" : "unavailable" });
+    });
+    return () => controller.abort();
+  }, [residencyQuoteExerciseId, residencyQuoteKey, residencyQuoteNonce]);
+  // On expiry the price and any consent to it are dropped; a fresh quote is requested before
+  // the player can agree again (a few times automatically, then by the player's button).
+  useEffect(() => {
+    if (residencyQuote?.status !== "ready" || !residencyQuote.quote) return;
+    const timer = window.setTimeout(() => {
+      setResidencyQuoteNowMs(Date.now());
+      setResidencyQuoteConsentFor(null);
+      if (residencyQuoteAutoRefreshRef.current < RESIDENCY_PURCHASE_QUOTE_AUTO_REFRESH_LIMIT) {
+        residencyQuoteAutoRefreshRef.current += 1;
+        setResidencyQuoteNonce((value) => value + 1);
+      } else {
+        setResidencyQuote((previous) => previous && { ...previous, quote: null, status: "expired" });
+      }
+    }, Math.max(0, residencyQuote.quote.localExpiresAtMs - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [residencyQuote]);
+  const currentResidencyQuote = residencyQuote && residencyQuote.key === residencyQuoteKey ? residencyQuote : null;
+  const usableResidencyQuote = currentResidencyQuote?.quote
+    && isResidencyPurchaseQuoteUsable(currentResidencyQuote.quote, selectedId, residencyQuoteNowMs)
+    ? currentResidencyQuote.quote : null;
+  const residencyQuoteIdentity = (quote: ResidencyPurchaseQuote) =>
+    `${quote.exerciseId}:${quote.expiresAt}:${quote.policyDigest}:${quote.totalMinor}`;
+  const residencyQuoteConsent = Boolean(usableResidencyQuote
+    && residencyQuoteConsentFor === residencyQuoteIdentity(usableResidencyQuote));
+  const residencyQuoteView: ResidencyPurchaseQuoteView | null = !currentResidencyQuote ? null
+    : usableResidencyQuote ? { state: "READY", quote: usableResidencyQuote }
+      : currentResidencyQuote.status === "loading" ? { state: "LOADING" }
+        : currentResidencyQuote.status === "refreshing" ? { state: "REFRESHING" }
+          : currentResidencyQuote.status === "unavailable" ? { state: "UNAVAILABLE" }
+            : { state: "EXPIRED" };
+  const requestFreshResidencyQuote = () => {
+    setResidencyQuoteConsentFor(null);
+    setResidencyQuoteNonce((value) => value + 1);
+  };
 
   const purchasableProducts = !checkout
     ? []
@@ -1569,7 +1658,42 @@ export default function GroupSchedulePage({
                         )}
                         {discountPending && <div className="tournament-signup-muted" role="status">Проверяем скидку по подписке…</div>}
                         {discountError && <div className="tournament-signup-muted" role="status">{discountError}</div>}
-                        {compositeInput && (
+                        {residencyQuoteView && (
+                          <div className="tournament-signup-payment-group" data-exercise-id={selectedTraining.id}>
+                            <ResidencyPurchaseQuoteOffer
+                              view={residencyQuoteView}
+                              consentAccepted={residencyQuoteConsent}
+                              onRefresh={requestFreshResidencyQuote}
+                              onConsentChange={(accepted) => {
+                                const nowMs = Date.now();
+                                setResidencyQuoteNowMs(nowMs);
+                                if (!accepted) {
+                                  setResidencyQuoteConsentFor(null);
+                                  return;
+                                }
+                                // Consent binds to this exact fresh quote of the open training.
+                                const quote = currentResidencyQuote?.quote ?? null;
+                                if (!isResidencyPurchaseQuoteUsable(quote, selectedId, nowMs)) {
+                                  requestFreshResidencyQuote();
+                                  return;
+                                }
+                                setResidencyQuoteConsentFor(residencyQuoteIdentity(quote));
+                              }}
+                            />
+                            {residencyQuoteConsent && usableResidencyQuote && (
+                              <>
+                                <button className="tournament-signup-payment-option" type="button" disabled>
+                                  <span>Занятие и резидентство</span>
+                                  <strong>{formatMoneyMinor(usableResidencyQuote.totalMinor)}</strong>
+                                </button>
+                                <div className="tournament-signup-muted" role="status">
+                                  Оплата одной суммой пока недоступна. Можно записаться без резидентства.
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {compositeInput && !residencyQuoteView && (
                           <div className="tournament-signup-payment-group" data-exercise-id={selectedTraining.id}>
                             <CompositeResidencyOffer
                               input={compositeInput}

@@ -259,7 +259,7 @@
     "rating:game-results:worker": "node --experimental-strip-types scripts/game_result_rating_worker.mjs",
     "test:game-result-rating-worker": "node --experimental-strip-types --test scripts/tests/gameResultRatingWorker.test.ts",
     "rating:reconcile": "node --experimental-strip-types scripts/reconcile_player_rating.mjs",
-    "test:residency-client": "node --experimental-strip-types --test scripts/tests/residencyPassModel.test.ts scripts/tests/residencyPassClient.test.ts scripts/tests/residencyStationContext.test.ts scripts/tests/compositeResidencyOrder.test.ts scripts/tests/compositeResidencyOffer.test.mjs scripts/tests/groupScheduleCompositeOffer.test.ts scripts/tests/ownedResidencyRead.test.ts",
+    "test:residency-client": "node --experimental-strip-types --test scripts/tests/residencyPassModel.test.ts scripts/tests/residencyPassClient.test.ts scripts/tests/residencyStationContext.test.ts scripts/tests/compositeResidencyOrder.test.ts scripts/tests/compositeResidencyOffer.test.mjs scripts/tests/groupScheduleCompositeOffer.test.ts scripts/tests/ownedResidencyRead.test.ts scripts/tests/residencyPurchaseQuote.test.ts",
     "test:residency-gateway": "node --test scripts/tests/residencyPassGateway.nodered.test.mjs && node scripts/build_nodered_residency_pass_import.mjs --check",
     "nodered:residency-pass:build": "node scripts/build_nodered_residency_pass_import.mjs",
     "preview": "vite preview",
