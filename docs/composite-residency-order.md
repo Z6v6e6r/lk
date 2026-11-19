@@ -98,3 +98,45 @@ measured locally from the request time (`expiresAt - serverTimeMs`).
 The opened training survives a host page that keeps passing `data.exerciseId`:
 `groupExerciseId` in the URL is written only by the widget and wins on mount
 (`resolveGroupScheduleInitialSelection`).
+
+## Server quote and order rehearsal (19 November)
+
+The checkout takes its trusted price from the `residencyPurchaseQuote` response in
+#457 (`POST /lk/subscriptions/game-price-preview`, target kind
+`GROUP_TRAINING_RESIDENCY_PURCHASE`). The authenticated server resolves the Viva
+exercise, one-time tariff, residency product and ownership, then asks CUP for the
+published rule for that exercise. Checkout accepts the client's displayed terms only
+after comparing them with a fresh quote for the same actor and exercise.
+
+Example from the isolated test using the amounts reported in #457:
+
+| Amount | Minor units | RUB |
+| --- | ---: | ---: |
+| Participation before discount | 550000 | 5,500 |
+| CUP discount (50%) | 275000 | 2,750 |
+| Participation after discount | 275000 | 2,750 |
+| Residency | 79000 | 790 |
+| Agreed total | 354000 | 3,540 |
+
+`scripts/lib/compositeResidencyCheckout.mjs` re-reads the sources for a new attempt and
+compares the accepted quote, including the publication digest. It persists the exact price,
+lesson and operation ID before dispatch. MongoDB's unique `_id` protects the tenant,
+authenticated client and operation ID tuple. An unchanged repeat reopens the saved order.
+After a lost provider response it performs readback by the original reference and validates
+the actor, lesson, amounts and both lines before it records the provider order ID. A
+missing or conflicting readback leaves the same operation pending. The replay path never
+issues another create. If the quote expires while MongoDB confirms the insert, the owner
+records `EXPIRED_BEFORE_DISPATCH`. A process crash or lost Mongo ACK before the first
+provider call can leave a pending operation that needs reconciliation. Start the local
+rehearsal with:
+
+```sh
+node --experimental-strip-types --test scripts/tests/compositeResidencyCheckout.test.mjs
+```
+
+Viva preview v1/v2 returned 400 for the two-line service plus subscription request in #458.
+The server defaults to `VIVA_COMPOSITE_FORMAT_UNAVAILABLE` for a new checkout. The tested
+adapter is isolated. It commits one synthetic order and drops the reply, then returns the
+same order on recovery. Enabling Viva still requires a verified single-transaction create
+and readback-by-reference contract, replay protection across concurrent distinct attempts,
+and end-to-end payment/activation acceptance.
