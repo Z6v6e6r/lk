@@ -448,10 +448,10 @@ test("LK1 tournament booking checks an ambiguous 202 with reads and clears the n
   assert.equal(notice, null);
   assert.deepEqual(calls, ["POST booking", ...reads, ...reads, ...reads]);
 
-  const confirmation = find(source, node => ts.isJsxExpression(node)
-    && node.expression?.getText(source).includes(">Запись подтверждена.</div>"));
+  const confirmation = find(source, node => ts.isJsxElement(node) && node.children.some(child =>
+    ts.isJsxText(child) && child.getText(source).trim() === "Запись подтверждена."));
   const renderConfirmation = (registration, registrationSessionIdentity = token()) =>
-    renderToStaticMarkup(evaluate(`(${confirmation.expression.getText(source)})`, {
+    renderToStaticMarkup(evaluate(`(${confirmation.parent.parent.getText(source)})`, {
       loadingDetail: false, subscriptionConfirmationNotice: notice, isAuthenticated: true,
       selectedId: tournamentId, selectedExerciseId: exerciseId, registrationResolvedFor: `${tournamentId}:${exerciseId}`,
       registrationSessionIdentity, tournamentPaymentSessionIdentity: value => value, readAuthToken: token, registration,
