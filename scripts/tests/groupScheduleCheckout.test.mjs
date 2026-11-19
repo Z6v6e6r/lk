@@ -192,7 +192,7 @@ function paymentOptions(overrides = {}) {
   return evaluate(expression.expression.getText(page), {
     subscriptionUsageShadowEnabled: false, registrationLoading: false, isRegistered: false,
     trialBookingBlocked: false, checkout: current, selectedTraining: training,
-    compositeInput: null, compositePlan: null,
+    compositeInput: null, compositePlan: null, orderStatus: { kind: "NONE", allowNewPayment: true },
     ownedOneTimes: evaluate(owned.initializer.getText(page), { checkout: current }),
     ownedSubscriptions: [], purchasableProducts: current.oneTimes, discountPending: false, discountError: null,
     actionLoading: false, promoLoading: false, appliedPromo: null, currentDiscountQuotes: [],
@@ -261,11 +261,12 @@ test("tariff error alert retries reads, and failed tariffs are not reported as a
   }
 });
 
-test("booking callback forwards the promo unchanged and cannot bypass trial eligibility", async () => {
-  for (const blocked of [false, true]) {
+test("booking callback forwards the promo unchanged and cannot bypass trial eligibility or an unknown order", async () => {
+  for (const [blocked, allowsPayment] of [[false, true], [true, true], [false, false]]) {
     const calls = [];
     const complete = callback("completeRegistration", {
       subscriptionUsageShadowEnabled: false, selectedId: training.id,
+      orderAllowsNewPaymentRef: { current: allowsPayment },
       TRIAL_GROUP_CHECKOUT_ENABLED: true, isTrialGroupTraining: () => true,
       trialBookingBlocked: blocked, trialEligibilityKey: `${profile.id}:${training.id}`,
       currentTrialEligibility: { message: "fixture denial" },
@@ -278,8 +279,8 @@ test("booking callback forwards the promo unchanged and cannot bypass trial elig
       },
     });
     await complete(training, checkout(), product(), "FIXTURE-PROMO");
-    assert.equal(calls.length, blocked ? 0 : 1);
-    if (!blocked) assert.equal(calls[0].promoCode, "FIXTURE-PROMO");
+    assert.equal(calls.length, blocked || !allowsPayment ? 0 : 1);
+    if (calls.length) assert.equal(calls[0].promoCode, "FIXTURE-PROMO");
   }
 });
 

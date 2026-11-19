@@ -21,14 +21,14 @@ import {
 import {
   buildGroupScheduleReturnUrl,
   normalizeGroupScheduleDate,
-  syncGroupScheduleSelectionHref,
-} from "../../utils/groupScheduleEntry";
+  syncGroupScheduleSelectionHref, readGroupSchedulePaymentReturnHint } from "../../utils/groupScheduleEntry";
 import { COMPOSITE_RESIDENCY_ENABLED } from "../../residency/residencyConfig";
 import { CompositeResidencyOffer } from "../../residency/CompositeResidencyOffer";
 import { planCompositeResidencyOrder } from "../../residency/compositeResidencyOrder";
 import { buildGroupScheduleCompositeInput } from "../../residency/groupScheduleCompositeOffer";
 import { apiReadOwnedResidencyRows, type OwnedResidencyRawRead } from "../../residency/ownedResidencyApi";
 import { classifyOwnedResidency } from "../../residency/ownedResidencyRead";
+import { resolveGroupScheduleOrderStatus } from "../../utils/groupScheduleOrderStatus";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isTrialGroupTraining } from "../../utils/trialGroupTraining";
 import { resolveTrialGroupEligibilityCheck, type TrialGroupEligibilityDecision } from "../../utils/trialGroupEligibilityCheck";
@@ -396,6 +396,8 @@ export default function GroupSchedulePage({
   const [compositeNowMs, setCompositeNowMs] = useState(0);
   const [ownedResidencyRead, setOwnedResidencyRead] = useState<(OwnedResidencyRawRead & { key: string }) | null>(null);
   const [ownedResidencyReadNonce, setOwnedResidencyReadNonce] = useState(0);
+  const [registrationReadFailed, setRegistrationReadFailed] = useState(false);
+  const orderAllowsNewPaymentRef = useRef(false);
   const [trialEligibility, setTrialEligibility] = useState<(TrialGroupEligibilityDecision & { key: string }) | null>(null);
   const [trialEligibilityRetry, setTrialEligibilityRetry] = useState(0);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
@@ -585,6 +587,7 @@ export default function GroupSchedulePage({
     setCheckout(null);
     setCheckoutLoadError(null);
     setRegistrationLoading(true);
+    setRegistrationReadFailed(false);
     setDetailError(null);
     const [registrationResult, checkoutResult] = await Promise.all([
       apiFetchTournamentVivaMyRegistration(training.id).catch((error) => ({
@@ -600,7 +603,9 @@ export default function GroupSchedulePage({
     ]);
 
     if (registrationRequestIdRef.current !== requestId) return;
-    setRegistration(registrationResult.data ?? null);
+    // A failed read is UNKNOWN, never "not registered": it must not reopen a new payment.
+    setRegistration(registrationResult.error ? null : registrationResult.data ?? null);
+    setRegistrationReadFailed(Boolean(registrationResult.error) || !registrationResult.data);
     if (checkoutResult.error || !checkoutResult.data) {
       setCheckout(null);
       setCheckoutLoadError(getErrorMessage(checkoutResult.error, "Не удалось получить способы записи."));
@@ -646,6 +651,16 @@ export default function GroupSchedulePage({
     subscriptionUsageShadowEnabled,
     phone,
   ]);
+
+  // Lost network: once the browser is back online, re-read the order of the same training.
+  useEffect(() => {
+    if (typeof window === "undefined" || !selectedDetail || !isAuthenticated || isRestoringSession
+      || subscriptionUsageShadowEnabled) return;
+    const training = selectedDetail;
+    const onOnline = () => { void loadRegistrationState(training); };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [isAuthenticated, isRestoringSession, loadRegistrationState, selectedDetail, subscriptionUsageShadowEnabled]);
 
   useEffect(() => {
     setDiscountQuotes([]);
@@ -791,6 +806,16 @@ export default function GroupSchedulePage({
     && (discountLoading || discountResolvedFor !== discountContextKey));
   const currentDiscountQuotes = !spanishTrainingSelected && !kidsAcademyTrainingSelected && discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
+  // #459: the order status after refresh, payment return or lost network comes from the server
+  // read of the player's own booking; the return flag in the URL is only a hint.
+  const orderStatus = resolveGroupScheduleOrderStatus({
+    read: registrationReadFailed ? { state: "failed" }
+      : registration && !registrationLoading ? { state: "ok", registration } : { state: "loading" },
+    returnHint: typeof window === "undefined" ? null : readGroupSchedulePaymentReturnHint(window.location.href, selectedId),
+  });
+  useEffect(() => {
+    orderAllowsNewPaymentRef.current = orderStatus.allowNewPayment;
+  }, [orderStatus.allowNewPayment]);
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const ownedOneTimes = checkout?.purchasedProducts.filter(product => product.source === "client-one-time") ?? [];
   const requiresTrialEligibility = TRIAL_GROUP_CHECKOUT_ENABLED && isTrialGroupTraining(selectedTraining);
@@ -818,7 +843,8 @@ export default function GroupSchedulePage({
   // fail closed until the CUP policy (lk#457) is wired (owned residency: ownedResidencyRead), and it
   // never starts a payment here: the single composite Viva transaction is server-side (lk#458).
   const compositeEligible = Boolean(COMPOSITE_RESIDENCY_ENABLED && checkout && selectedTraining
-    && checkout.exercise.id === selectedTraining.id && !isRegistered && !registrationLoading);
+    && checkout.exercise.id === selectedTraining.id && !isRegistered && !registrationLoading
+    && orderStatus.allowNewPayment);
   const ownedResidencyKey = compositeEligible && checkout?.profile?.id && selectedTraining
     ? `${checkout.profile.id}:${selectedTraining.id}` : null;
   // Read only: one fresh GET of the client's own subscriptions; NONE expires after 60 s and is
@@ -993,6 +1019,11 @@ export default function GroupSchedulePage({
     }
     if (training.id !== selectedId || activeCheckout.exercise.id !== training.id) {
       setDetailError("Тренировка изменилась. Дождитесь обновления вариантов записи.");
+      return;
+    }
+    if (!orderAllowsNewPaymentRef.current) {
+      // Unknown, pending or processing order: never start a second payment for it.
+      setDetailError("Сначала проверьте статус текущего заказа.");
       return;
     }
     if (TRIAL_GROUP_CHECKOUT_ENABLED && isTrialGroupTraining(training)
@@ -1474,9 +1505,27 @@ export default function GroupSchedulePage({
                     )}
 
                     {!subscriptionUsageShadowEnabled
+                      && (orderStatus.kind === "UNKNOWN" || orderStatus.kind === "PROCESSING" || orderStatus.kind === "PAYMENT_FAILED") && (
+                      <div className="tournament-signup-payment-hold" role="status" aria-live="polite"
+                        data-order-status={orderStatus.kind} data-exercise-id={selectedTraining.id}>
+                        <span>{orderStatus.message}</span>
+                        {orderStatus.allowRecheck && (
+                          <button
+                            type="button"
+                            className="section-cta"
+                            onClick={() => void loadRegistrationState(selectedTraining)}
+                            disabled={actionLoading || registrationLoading}
+                          >
+                            Проверить статус
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {!subscriptionUsageShadowEnabled
                       && !registrationLoading
                       && !isRegistered
                       && !trialBookingBlocked
+                      && orderStatus.allowNewPayment
                       && checkout && (
                       <div className="tournament-signup-payment-options">
                         {ownedOneTimes.length > 0 && (

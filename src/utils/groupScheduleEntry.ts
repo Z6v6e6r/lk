@@ -162,3 +162,22 @@ export function syncGroupScheduleSelectionHref(
   url.searchParams.delete("groupPaymentFailed");
   return url.toString();
 }
+
+/**
+ * The payment page's return flag for this training, if any. A hint only: the order status
+ * itself always comes from the server read (`resolveGroupScheduleOrderStatus`).
+ */
+export function readGroupSchedulePaymentReturnHint(href: string, exerciseId: string | null): "success" | "failed" | null {
+  if (!exerciseId) return null;
+  let url: URL;
+  try {
+    url = new URL(href, DEFAULT_GROUP_SCHEDULE_ORIGIN);
+  } catch {
+    return null;
+  }
+  if (readGroupScheduleEntryDataFromHref(url.toString()).exerciseId !== exerciseId) return null;
+  const success = url.searchParams.get("groupPaymentSuccess") === "true";
+  const failed = url.searchParams.get("groupPaymentFailed") === "true";
+  if (success === failed) return null;
+  return success ? "success" : "failed";
+}
