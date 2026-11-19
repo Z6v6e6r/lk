@@ -149,6 +149,49 @@ test('LK1 completion preserves the existing payment safety check before telling 
   }
 });
 
+test('confirmed replay restores only a tracked original tournament and fences the completion ACK', () => {
+  const fixture = source.replace('if (ctx.managedCreateBinding !== undefined) {', `
+    if (ctx.step === "fixture_replay") {
+      const pending = tournamentAdmissionRestoreCompletion(ctx, msg.payload);
+      if (pending) return pending;
+      return tournamentAdmissionComplete(ctx, "original-booking") ?? finishConfirmed(ctx, "original-booking");
+    }
+    if (ctx.managedCreateBinding !== undefined) {`);
+  const execute = new Function('msg', 'env', 'global', 'node', 'tournamentOwnerUrl', fixture);
+  const config = { get: key => key === 'TOURNAMENT_OWNER_INTEGRATION_TOKEN' ? 'synthetic-integration' : env.get(key) };
+  const invoke = msg => execute(msg, config, { get: () => undefined }, { warn() {}, error() {} }, url);
+  const replay = tournamentAdmission => {
+    const msg = { _subscriptionBooking: context({ step: 'fixture_replay', category: undefined }),
+      payload: { category: 'tournament', ...(tournamentAdmission !== undefined ? { tournamentAdmission } : {}) } };
+    invoke(msg);
+    return msg;
+  };
+  const grant = { schemaVersion: 1, state: 'ADMITTED', operationId: 'original-owner', actorClientId: 'actor',
+    requestOperationId: 'op-id', clientSubscriptionId: 'subscription', exerciseId: 'exercise' };
+  const legacy = replay(undefined);
+  assert.equal(legacy.statusCode, 200);
+  assert.equal(legacy.method, undefined);
+  const foreign = replay({ ...grant, exerciseId: 'foreign-exercise' });
+  assert.equal(foreign.statusCode, 202);
+  assert.equal(foreign.method, undefined);
+
+  const completed = { state: 'COMPLETED', bookingId: 'original-booking', requestOperationId: 'op-id' };
+  for (const [payload, redirect, expected] of [
+    [completed, false, 200],
+    [{ ...completed, bookingId: 'another-booking' }, false, 202],
+    [{ ...completed, requestOperationId: 'another-request' }, false, 202],
+    [{ state: 'LEGACY_UNTRACKED', requestOperationId: 'op-id' }, false, 202],
+    [completed, true, 202],
+  ]) {
+    const msg = replay(grant);
+    assert.match(msg.url, /subscription-admission\/complete$/);
+    assert.deepEqual(msg.payload, { operationId: 'op-id', clientSubscriptionId: 'subscription',
+      bookingId: 'original-booking', ownerOperationId: 'original-owner' });
+    invoke(Object.assign(msg, { statusCode: 201, responseUrl: msg.url, payload, followRedirects: redirect }));
+    assert.equal(msg.statusCode, expected);
+  }
+});
+
 function admitted() {
   const ctx = context(); step(ctx, { acknowledged: true, insertedId: 'op-key' });
   const grant = { schemaVersion: 1, state: 'ADMITTED', operationId: 'owner-op', requestOperationId: ctx.operationId,

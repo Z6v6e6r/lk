@@ -58,6 +58,16 @@ const tournamentAdmissionTerminal = (ctx, row) => row?._id === ctx.operationKey 
   && !row.upstreamAttemptedAt && !row.bookingId && !row.upstreamBookingId
   && !row.managedEntitlementOperationId && !row.lk1?.createAttemptedAt && !row.lk1?.bookingAttemptedAt
   && !row.lk1?.transactionAttemptedAt && !row.lk1?.visitJob;
+const tournamentAdmissionRestoreCompletion = (ctx, row) => {
+  if (row.category !== "tournament" || row.tournamentAdmission === undefined) return null;
+  // The ingress lookup already matched the authenticated actor, target, subscription and original operation.
+  ctx.category = row.category;
+  ctx.tournamentAdmission = row.tournamentAdmission;
+  const grant = ctx.tournamentAdmission;
+  if (!tournamentAdmissionHasGrant(ctx) || grant.schemaVersion !== 1 || grant.state !== "ADMITTED"
+    || typeof grant.operationId !== "string" || !grant.operationId.trim()) return tournamentAdmissionPending(ctx);
+  return null;
+};
 const tournamentAdmissionComplete = (ctx, bookingId) => {
   if (ctx.category !== "tournament" || ctx.action === "release" || ctx.tournamentCompletion === true) return null;
   const base = tournamentAdmissionUrl(ctx), token = env.get("TOURNAMENT_OWNER_INTEGRATION_TOKEN");
@@ -65,7 +75,8 @@ const tournamentAdmissionComplete = (ctx, bookingId) => {
   ctx.tournamentCompletionBookingId = bookingId;
   ctx.tournamentAdmissionRequestedUrl = base + "/complete";
   return prepareManagedHttp(ctx, "tournament_completion", "POST", ctx.tournamentAdmissionRequestedUrl,
-    { operationId: ctx.operationId, clientSubscriptionId: ctx.clientSubscriptionId, bookingId },
+    { operationId: ctx.operationId, clientSubscriptionId: ctx.clientSubscriptionId, bookingId,
+      ...(tournamentAdmissionHasGrant(ctx) ? { ownerOperationId: ctx.tournamentAdmission.operationId } : {}) },
     { Authorization: ctx.authHeader, "x-cup-integration-token": token, "Content-Type": "application/json", Accept: "application/json" });
 };
 // Versioned predispatch evidence is persisted with preaccept. The older upstreamAttemptedAt
@@ -252,7 +263,9 @@ const tournamentAdmissionRoute = (ctx) => {
   if (ctx.step === "tournament_completion") {
     if (msg.error || !isHttpOk(msg.statusCode) || msg.responseUrl !== ctx.tournamentAdmissionRequestedUrl
       || msg.url !== ctx.tournamentAdmissionRequestedUrl || msg.method !== "POST"
+      || msg.followRedirects !== false || msg.maxRedirects !== 0
       || !["COMPLETED", "LEGACY_UNTRACKED"].includes(msg.payload?.state)
+      || (msg.payload.state === "LEGACY_UNTRACKED" && tournamentAdmissionHasGrant(ctx))
       || msg.payload.requestOperationId !== ctx.operationId
       || (msg.payload.state === "COMPLETED" && msg.payload.bookingId !== ctx.tournamentCompletionBookingId)) return tournamentAdmissionPending(ctx);
     ctx.tournamentCompletion = true;

@@ -76,6 +76,12 @@ export function patchTournamentAdmissionSource(source) {
     source = once(source, seatCandidate, seatCandidate + '\n  if (op?.tournamentAbort !== undefined) return false;');
   }
   if (source.includes('const lk1ReplayIdentityMatches =')) {
+    const confirmedReplay = '    if (ctx.caller !== "split") return lk1Finish(ctx);';
+    source = once(source, confirmedReplay, `    if (ctx.caller !== "split") {
+      const pending = tournamentAdmissionRestoreCompletion(ctx, operation);
+      if (pending) return pending;
+      return lk1Finish(ctx);
+    }`);
     const reclaim = '      return prepareMongoUpdate(ctx, "lk1_ingress_reclaim", reclaimQuery, {';
     source = once(source, reclaim,
       '      return prepareMongoUpdate(ctx, "lk1_ingress_reclaim", { ...reclaimQuery, ...tournamentAdmissionReclaimFence }, {');
