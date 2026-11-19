@@ -346,6 +346,38 @@ test("tournament checkout uses only the durable CUP route, carries promo, and ne
   }
 });
 
+test("the tournament page uses CUP even for unclassified or training-shaped source data", async () => {
+  const tournamentPage = parse("src/components/tournament-signup/TournamentSignupPage.tsx");
+  const checkoutCall = find(tournamentPage, node => ts.isCallExpression(node)
+    && node.expression.getText(tournamentPage) === "apiCreateTournamentVivaTransaction");
+  const context = find(tournamentPage, node => ts.isPropertyAssignment(node)
+    && node.parent === checkoutCall.arguments[0] && node.name.getText(tournamentPage) === "checkoutContext");
+  assert.equal(context.initializer.text, "tournament");
+
+  const entry = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
+  const calls = [];
+  const paused = { data: null, error: { status: 503, raw: { code: "TOURNAMENT_NEW_OPERATIONS_PAUSED" } }, status: 503 };
+  const create = evaluate(`(${entry.getText(api).replace(/^export /, "")})`, {
+    isSpanishTrainingExercise: () => false, isKidsAcademyTraining, isChildTournamentExercise,
+    isTrialGroupTraining: isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+    resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
+    createVivaPaymentWatcher: () => assert.fail("unexpected direct Viva payment watcher"),
+    buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
+    buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
+    tournamentCheckoutRetryKeys: new Map(), pickString: () => null,
+    request: async (url, options) => { calls.push([url, options.headers?.["Idempotency-Key"]]); return paused; },
+  });
+  for (const source of ["one-time", "client-one-time", "subscription"]) {
+    for (const exercise of [{}, training]) {
+      const result = await create({ checkoutContext: context.initializer.text, exerciseId: "cup-event",
+        clientId: "actor", exercise, product: product(source) });
+      assert.deepEqual(result, paused);
+    }
+  }
+  assert.deepEqual(calls, Array.from({ length: 6 },
+    () => ["https://cup.example/api/tournaments/cup-event/checkout", "tournament:cup-event:actor"]));
+});
+
 test("only a durable CUP refusal rotates the key for a new explicit action", async () => {
   const names = ["tournamentCheckoutRetryKeys", "tournamentCheckoutRefusalMessages"];
   const declarations = names.map(name =>

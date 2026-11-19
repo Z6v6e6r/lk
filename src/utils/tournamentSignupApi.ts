@@ -2775,6 +2775,7 @@ export async function apiFetchTournamentVivaPublicCheckout(
 
 type CreateTournamentVivaTransactionParams = {
   exerciseId: string;
+  checkoutContext?: "tournament";
   studioId: string | null;
   clientPhone: string;
   clientId?: string | null;
@@ -3284,7 +3285,8 @@ export async function apiCreateTournamentVivaTransaction(
     return { data: null, error: { status: 409,
       message: "На детские тренировки действуют разовая оплата и абонемент «Падел.Дети»." }, status: 409 };
   }
-  const trialGroupTarget = TRIAL_GROUP_CHECKOUT_ENABLED
+  const tournamentCheckout = params.checkoutContext === "tournament";
+  const trialGroupTarget = !tournamentCheckout && TRIAL_GROUP_CHECKOUT_ENABLED
     && (isTrialGroupTraining(params.exercise) || isTrialGroupTraining(params.tournament));
   if (trialGroupTarget && !["client-subscription", "one-time", "client-one-time"].includes(params.product.source)) {
     return { data: null, error: { status: 409,
@@ -3357,7 +3359,7 @@ export async function apiCreateTournamentVivaTransaction(
     return apiCreateTournamentVivaBookingFromSubscription(params);
   }
 
-  const tournamentOwnerTarget = resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.exercise)
+  const tournamentOwnerTarget = tournamentCheckout || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.exercise)
     === "tournament" || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.tournament) === "tournament";
   const paymentWatcher = tournamentOwnerTarget ? null : await createVivaPaymentWatcher(params.clientId);
   const transactionStartedAtMs = Date.now();
