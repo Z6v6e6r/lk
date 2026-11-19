@@ -1,6 +1,7 @@
 # GET route verification scenarios (Hermes)
 
-Source: PR #452 head `81da12551154bfca1f71444bdbfb6df3fdded595`.
+Source: build/code head `81da12551154bfca1f71444bdbfb6df3fdded595` (docs-only handoff commits
+leave the bundle unchanged).
 Scope: the three read-only residency GET routes and the activation guard they feed.
 Synthetic/isolated only: disposable Mongo, fixture Viva/CUP/Keycloak, no real payment,
 no 147 change. This document is the handoff script; it does not authorize a live call.

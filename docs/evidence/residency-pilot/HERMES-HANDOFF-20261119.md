@@ -7,7 +7,8 @@ No real Viva/CUP/Keycloak call, no payment, no 147 change.
 
 ## Final CI and exact build
 
-- PR #452 exact head `81da12551154bfca1f71444bdbfb6df3fdded595`.
+- Build/code head `81da12551154bfca1f71444bdbfb6df3fdded595`. Docs-only handoff commits after it
+  leave the bundle unchanged; the exact-head gate rechecks the current PR head.
 - `LK1 exact-head enforcement gate`: **success**, run
   [44488899865](https://github.com/Z6v6e6r/lk/actions/runs/44488899865) (7m20s), including
   the disposable-Mongo residency lifecycle matrix.
