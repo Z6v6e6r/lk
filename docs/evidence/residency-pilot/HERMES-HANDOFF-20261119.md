@@ -5,6 +5,17 @@ packet. The browser code is unchanged from the previous pilot artifact; the serv
 node now has the read-only GET contract and the pre-activation conflict guard.
 No real Viva/CUP/Keycloak call, no payment, no 147 change.
 
+## Final CI and exact build
+
+- PR #452 exact head `81da12551154bfca1f71444bdbfb6df3fdded595`.
+- `LK1 exact-head enforcement gate`: **success**, run
+  [44488899865](https://github.com/Z6v6e6r/lk/actions/runs/44488899865) (7m20s), including
+  the disposable-Mongo residency lifecycle matrix.
+- `monthly-mongodb`: **success**, run
+  [44488899897](https://github.com/Z6v6e6r/lk/actions/runs/44488899897).
+- Packet regenerated from that head; `SHA256SUMS` verifies and the bundle matches
+  `dist/bundle.js` byte-for-byte (`0a83dbc7…`, 2 976 424 B).
+
 ## Artifacts to use
 
 | Role | File / identity | Bytes | SHA-256 |
@@ -13,9 +24,12 @@ No real Viva/CUP/Keycloak call, no payment, no 147 change.
 | New pilot client (packet) | <code>frontend/bundle.js</code> from <code>residency-pilot-install-20261119</code>, source = <code>frontend/release.json</code>, <code>prepared-not-published</code> | 2 976 424 | <code>0a83dbc72dc6c55549bab42ce597aa65089f9eca94f3577d803b04e018cbd59e</code> |
 | Local synthetic bf3 (not production) | <code>artifacts/residency-client-bf3/bundle.js</code> | — | <code>4c3fdca47c6442e9a07801450558de78e7b1600160bc74e343d2f59c8db02c72</code> |
 
-Packet: <code>residency-pilot-install-20261119</code>; <code>SHA256SUMS</code> and the exact
-source commit are inside. Do not substitute the synthetic bf3 build for the packet artifact
-in accepted results.
+Packet: <code>residency-pilot-install-20261119</code>, 28 files, <code>SHA256SUMS</code>
+<code>ac11bb842ef72f1a556f3a8b216065a49b3ce23844d414c4cbdef274110f7eba</code>, source
+<code>81da12551154bfca1f71444bdbfb6df3fdded595</code>. <code>shasum -a 256 -c SHA256SUMS</code>
+passes, including <code>frontend/bundle.js</code>
+<code>0a83dbc72dc6c55549bab42ce597aa65089f9eca94f3577d803b04e018cbd59e</code> (2 976 424 B).
+Do not substitute the synthetic bf3 build for the packet artifact in accepted results.
 
 ## Shared composition snapshot
 
@@ -102,6 +116,10 @@ The server now guarantees:
 | Single confirmed payment, repeat + restart | exactly 1 activation total |
 | Stale `IN_FLIGHT` after a crash, CUP context ACTIVE | finalized from context, 0 second refresh |
 | ACTIVE order + later external PAID | list `count=0`, `paidAfterOrderCount=1`, `requiresReview=true` |
+
+Concrete check order for Hermes: `docs/evidence/residency-pilot/activation-guard-20261119/GET-SCENARIOS.md`
+(also copied into the packet). It contains G1-G9 with request, fixture, expected counters
+and the exact durable-row fields for the three GET routes.
 
 Evidence: `docs/evidence/residency-pilot/activation-guard-20261119/` and the packet's
 `evidence/activation-guard-20261119/`. Synthetic only; no real Viva/CUP/payment.
