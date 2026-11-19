@@ -14,6 +14,9 @@
  */
 import { RESIDENCY_PRODUCT_ID } from "./residencyPurchase.ts";
 
+/** The server emits short-lived advisory quotes; longer responses are not trusted. */
+export const RESIDENCY_PURCHASE_QUOTE_MAX_LIFETIME_MS = 30_000;
+
 export interface ResidencyPurchaseQuote {
   exerciseId: string;
   participationProductId: string;
@@ -83,7 +86,8 @@ export function parseResidencyPurchaseQuote(body: unknown, context: {
   if (q.exerciseId !== context.exerciseId) return { ok: false, reason: "QUOTE_EXERCISE_MISMATCH" };
   const lifetimeMs = q.expiresAt - serverTimeMs;
   const localExpiresAtMs = context.requestedAtMs + lifetimeMs;
-  if (!Number.isFinite(lifetimeMs) || lifetimeMs <= 0 || !isResidencyPurchaseQuoteFreshAt(localExpiresAtMs, context.nowMs)) {
+  if (!Number.isFinite(lifetimeMs) || lifetimeMs <= 0 || lifetimeMs > RESIDENCY_PURCHASE_QUOTE_MAX_LIFETIME_MS
+    || !isResidencyPurchaseQuoteFreshAt(localExpiresAtMs, context.nowMs)) {
     return { ok: false, reason: "QUOTE_EXPIRED" };
   }
   return {
@@ -137,6 +141,35 @@ export function residencyQuoteExerciseIdFor(params: {
 }): string | null {
   return params.compositeEligible && !params.isTournament && params.selectedExerciseId
     && params.ownedResidencyState === "NONE" ? params.selectedExerciseId : null;
+}
+
+/** Keep consent only when the fresh confirmation read preserves every priced term. */
+export function reconcileResidencyPurchaseQuoteConfirmation(
+  opened: ResidencyPurchaseQuote | null,
+  confirmed: ResidencyPurchaseQuote | null,
+): string | null {
+  if (!opened || !confirmed || opened.exerciseId !== confirmed.exerciseId
+    || opened.participationProductId !== confirmed.participationProductId
+    || opened.residencyProductId !== confirmed.residencyProductId
+    || opened.existingResidency !== confirmed.existingResidency
+    || opened.publicationId !== confirmed.publicationId
+    || opened.policyVersion !== confirmed.policyVersion
+    || opened.policyDigest !== confirmed.policyDigest
+    || opened.participationBaseMinor !== confirmed.participationBaseMinor
+    || opened.discountPercent !== confirmed.discountPercent
+    || opened.participationDiscountMinor !== confirmed.participationDiscountMinor
+    || opened.participationToPayMinor !== confirmed.participationToPayMinor
+    || opened.residencyMinor !== confirmed.residencyMinor
+    || opened.totalMinor !== confirmed.totalMinor) return null;
+  return residencyPurchaseQuoteConsentKey(confirmed);
+}
+
+/** Quote identity for consent; expiry is excluded so an identical fresh re-quote keeps consent. */
+export function residencyPurchaseQuoteConsentKey(quote: ResidencyPurchaseQuote): string {
+  return [quote.exerciseId, quote.participationProductId, quote.residencyProductId, quote.existingResidency,
+    quote.publicationId, quote.policyVersion, quote.policyDigest, quote.participationBaseMinor,
+    quote.discountPercent, quote.participationDiscountMinor, quote.participationToPayMinor,
+    quote.residencyMinor, quote.totalMinor].join(":");
 }
 
 /** Automatic re-quotes after expiry per opened training; afterwards the player asks for one. */

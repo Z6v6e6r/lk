@@ -87,9 +87,11 @@ for another exercise, one whose numbers do not add up, or one past `expiresAt`. 
 measured locally from the request time (`expiresAt - serverTimeMs`).
 
 - A change of training aborts the request in flight and drops the old answer and consent.
-- Consent binds to one exact fresh quote. On expiry the quote and consent are dropped and a
-  fresh quote is requested before the player can agree again: three times automatically,
-  then by the "Обновить цену" button.
+- Clicking consent fetches a second server quote. Consent remains only if the exercise,
+  products, published policy and all amounts still match. If any term changed, the new
+  amount appears unchecked and needs fresh consent. On expiry the quote and consent are
+  dropped and a fresh quote is requested before the player can agree again: three times
+  automatically, then by the "Обновить цену" button.
 - An owned residency (`ownedResidencyRead` ACTIVE) shows "уже резидент" instead of a quote.
 - The pay button stays disabled until the single composite payment exists (lk#458).
 

@@ -15,8 +15,12 @@ The response contains `residencyPurchaseQuote` and `serverTimeMs`. The quote inc
 `participationToPayMinor`, `residencyMinor`, and `totalMinor` in RUB minor units,
 along with the publication ID, policy version, policy digest and `expiresAt`
 (epoch milliseconds). The widget must match the exercise and discard an expired
-quote. This first-purchase route refuses an existing residency history or an
-incomplete ownership read. It cannot create a reservation or payment.
+quote. When the player confirms the offer, it fetches a second quote before
+accepting consent. A change to any price, product or policy term clears consent
+and displays the updated amount. This first-purchase route refuses an existing
+residency history or an incomplete ownership read. It cannot create a reservation
+or payment. A payment endpoint must resolve current prices and policy again on
+the server before creating a Viva transaction.
 
 The new request mode requires the default-off
 `subscriptions_residency_purchase_quote_enabled` global or

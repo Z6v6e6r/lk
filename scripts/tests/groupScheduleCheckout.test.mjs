@@ -16,6 +16,7 @@ import { isTrialGroupTraining, trialGroupCheckoutOperationId } from "../../src/u
 import { getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
 import { hasGroupTrainingSubscriptionEvidence } from "../../src/utils/groupScheduleSubscriptionOffer.ts";
 import { resolveSubscriptionUsageDisplay } from "../../src/utils/subscriptionValidity.ts";
+import { isResidencyPurchaseQuoteUsable, residencyPurchaseQuoteConsentKey } from "../../src/residency/residencyPurchaseQuote.ts";
 
 const require = createRequire(import.meta.url);
 const parse = path => ts.createSourceFile(path, fs.readFileSync(path, "utf8"),
@@ -546,14 +547,22 @@ test("kids training transaction rejects stale adult discounts and keeps the orig
 });
 
 test("residency quote block: total only after consent to a fresh quote, never an enabled pay button", () => {
-  const quote = { exerciseId: training.id, totalMinor: 354000 };
+  const quote = { exerciseId: training.id, totalMinor: 354000, localExpiresAtMs: Date.now() + 30000 };
   const seen = [];
+  const consentWrites = [];
+  let refreshRequests = 0;
   const ResidencyPurchaseQuoteOffer = (props) => { seen.push(props); return null; };
   const common = { ResidencyPurchaseQuoteOffer, residencyQuoteView: { state: "READY", quote }, usableResidencyQuote: quote,
-    requestFreshResidencyQuote: () => {}, setResidencyQuoteNowMs: () => {}, setResidencyQuoteConsentFor: () => {} };
+    currentResidencyQuote: { quote }, selectedId: training.id, isResidencyPurchaseQuoteUsable, residencyPurchaseQuoteConsentKey,
+    residencyQuotePendingConsentRef: { current: null },
+    requestFreshResidencyQuote: () => { refreshRequests += 1; }, setResidencyQuoteNowMs: () => {},
+    setResidencyQuoteConsentFor: value => consentWrites.push(value) };
   const before = renderToStaticMarkup(paymentOptions({ ...common, residencyQuoteConsent: false }));
   assert.doesNotMatch(before, /Занятие и резидентство/);
   assert.equal(seen.at(-1).view.quote, quote);
+  seen.at(-1).onConsentChange(true);
+  assert.equal(refreshRequests, 1, "consent must re-read the current server price");
+  assert.deepEqual(consentWrites, [null], "consent must stay clear while the confirmation quote is pending");
   const tree = paymentOptions({ ...common, residencyQuoteConsent: true });
   const html = renderToStaticMarkup(tree);
   assert.match(html, /Занятие и резидентство/);

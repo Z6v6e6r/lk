@@ -28,8 +28,10 @@ import { apiFetchResidencyPurchaseQuote } from "../../residency/residencyPurchas
 import {
   isResidencyPurchaseQuoteUsable,
   parseResidencyPurchaseQuote,
+  reconcileResidencyPurchaseQuoteConfirmation,
   RESIDENCY_PURCHASE_QUOTE_AUTO_REFRESH_LIMIT,
   residencyQuoteExerciseIdFor,
+  residencyPurchaseQuoteConsentKey,
   type ResidencyPurchaseQuote,
 } from "../../residency/residencyPurchaseQuote";
 import { planCompositeResidencyOrder } from "../../residency/compositeResidencyOrder";
@@ -415,6 +417,7 @@ export default function GroupSchedulePage({
   const [residencyQuoteNowMs, setResidencyQuoteNowMs] = useState(0);
   const [residencyQuoteConsentFor, setResidencyQuoteConsentFor] = useState<string | null>(null);
   const residencyQuoteAutoRefreshRef = useRef(0);
+  const residencyQuotePendingConsentRef = useRef<ResidencyPurchaseQuote | null>(null);
   const [trialEligibility, setTrialEligibility] = useState<(TrialGroupEligibilityDecision & { key: string }) | null>(null);
   const [trialEligibilityRetry, setTrialEligibilityRetry] = useState(0);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
@@ -913,6 +916,7 @@ export default function GroupSchedulePage({
     ? `${checkout.profile.id}:${residencyQuoteExerciseId}` : null;
   useEffect(() => {
     residencyQuoteAutoRefreshRef.current = 0;
+    residencyQuotePendingConsentRef.current = null;
     setResidencyQuoteConsentFor(null);
   }, [residencyQuoteKey]);
   useEffect(() => {
@@ -922,8 +926,8 @@ export default function GroupSchedulePage({
     }
     const key = residencyQuoteKey;
     const exerciseId = residencyQuoteExerciseId;
+    if (!residencyQuotePendingConsentRef.current) setResidencyQuoteConsentFor(null);
     const controller = new AbortController();
-    setResidencyQuoteConsentFor(null);
     setResidencyQuote((previous) => ({
       key, quote: null, status: previous?.key === key && previous.status !== "loading" ? "refreshing" : "loading",
     }));
@@ -932,10 +936,19 @@ export default function GroupSchedulePage({
       const nowMs = Date.now();
       setResidencyQuoteNowMs(nowMs);
       if (read.failed) {
+        residencyQuotePendingConsentRef.current = null;
+        setResidencyQuoteConsentFor(null);
         setResidencyQuote({ key, quote: null, status: "unavailable" });
         return;
       }
       const parsed = parseResidencyPurchaseQuote(read.body, { exerciseId, requestedAtMs: read.requestedAtMs, nowMs });
+      const pendingQuote = residencyQuotePendingConsentRef.current;
+      if (pendingQuote) {
+        residencyQuotePendingConsentRef.current = null;
+        setResidencyQuoteConsentFor(reconcileResidencyPurchaseQuoteConfirmation(
+          pendingQuote, parsed.ok ? parsed.quote : null,
+        ));
+      }
       setResidencyQuote(parsed.ok
         ? { key, quote: parsed.quote, status: "ready" }
         : { key, quote: null, status: parsed.reason === "QUOTE_EXPIRED" ? "expired" : "unavailable" });
@@ -962,10 +975,8 @@ export default function GroupSchedulePage({
   const usableResidencyQuote = currentResidencyQuote?.quote
     && isResidencyPurchaseQuoteUsable(currentResidencyQuote.quote, selectedId, residencyQuoteNowMs)
     ? currentResidencyQuote.quote : null;
-  const residencyQuoteIdentity = (quote: ResidencyPurchaseQuote) =>
-    `${quote.exerciseId}:${quote.expiresAt}:${quote.policyDigest}:${quote.totalMinor}`;
   const residencyQuoteConsent = Boolean(usableResidencyQuote
-    && residencyQuoteConsentFor === residencyQuoteIdentity(usableResidencyQuote));
+    && residencyQuoteConsentFor === residencyPurchaseQuoteConsentKey(usableResidencyQuote));
   const residencyQuoteView: ResidencyPurchaseQuoteView | null = !currentResidencyQuote ? null
     : usableResidencyQuote ? { state: "READY", quote: usableResidencyQuote }
       : currentResidencyQuote.status === "loading" ? { state: "LOADING" }
@@ -1674,16 +1685,21 @@ export default function GroupSchedulePage({
                                 const nowMs = Date.now();
                                 setResidencyQuoteNowMs(nowMs);
                                 if (!accepted) {
+                                  residencyQuotePendingConsentRef.current = null;
                                   setResidencyQuoteConsentFor(null);
                                   return;
                                 }
-                                // Consent binds to this exact fresh quote of the open training.
+                                // Confirm against a second server quote. If any term changes, the
+                                // new amount is shown without consent and must be accepted again.
                                 const quote = currentResidencyQuote?.quote ?? null;
                                 if (!isResidencyPurchaseQuoteUsable(quote, selectedId, nowMs)) {
+                                  residencyQuotePendingConsentRef.current = null;
                                   requestFreshResidencyQuote();
                                   return;
                                 }
-                                setResidencyQuoteConsentFor(residencyQuoteIdentity(quote));
+                                residencyQuotePendingConsentRef.current = quote;
+                                setResidencyQuoteConsentFor(null);
+                                requestFreshResidencyQuote();
                               }}
                             />
                             {residencyQuoteConsent && usableResidencyQuote && (
