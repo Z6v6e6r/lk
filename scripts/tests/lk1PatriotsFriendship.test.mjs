@@ -153,13 +153,15 @@ test('the exercise hook sends Patriots money events to fresh ownership readback 
   const actor = 'fixture-actor';
   const subscriptionId = 'fixture-subscription';
   const tenantKey = 'fixture-tenant';
-  const exercise = { id: 'fixture-exercise', studioId: 'fixture-station' };
+  const exercise = { id: 'fixture-exercise', studioId: 'fixture-station', directionId: 5278 };
   function run(productId, rule, selectedOwned = [{ subscriptionId, productId }]) {
     const ctx = { caller: 'http', actorClientId: actor, clientSubscriptionId: subscriptionId,
       tenantKey, lk1ProductIdentity: { actorClientId: actor, subscriptionId, tenantKey, productId } };
     const stubs = new Proxy({
       ctx, exercise, msg: {},
       findOwnedSubscriptions: () => selectedOwned,
+      exerciseDirectionId: value => value.directionId,
+      kidsTrainingExcludesSubscription: () => false,
       isProTrainingExercise: () => false,
       isSpanishTrainingExercise,
       isProTrainingEnergyPack: () => false,
