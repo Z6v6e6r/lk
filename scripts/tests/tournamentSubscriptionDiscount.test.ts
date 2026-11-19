@@ -13,7 +13,6 @@ import {
   matchTournamentSubscriptionDiscount,
   type TournamentSubscriptionDiscountQuote,
 } from "../../src/utils/tournamentSubscriptionDiscount.ts";
-import { pollSubscriptionBookingConfirmation } from "../../src/utils/subscriptionBookingConfirmation.ts";
 import {
   buildGroupScheduleSubscriptionDiscountProduct,
   isGroupScheduleSubscriptionQuote,
@@ -340,8 +339,8 @@ function bookingGateway(response: unknown, requests: { url: string; body: unknow
     isRecord: (value: unknown) => Boolean(value) && typeof value === "object" && !Array.isArray(value),
     pickString: (value: Record<string, unknown>, keys: string[]) => keys.map(key => value[key]).find(item => typeof item === "string") || null,
     normalizeConfirmedSubscriptionBookingPayment: loadFunction("normalizeConfirmedSubscriptionBookingPayment"),
-    pollSubscriptionBookingConfirmation: (request: () => Promise<never>) => pollSubscriptionBookingConfirmation(request, { delaysMs: [0], wait: async () => {} }),
-    request: async (url: string, options: { retries: number; body: string }) => {
+    request: async (url: string, options: { method: string; retries: number; body: string }) => {
+      assert.equal(options.method, "POST");
       assert.equal(options.retries, 0);
       requests.push({ url, body: JSON.parse(options.body) });
       if (releaseFirst && requests.length === 1) {
@@ -351,7 +350,8 @@ function bookingGateway(response: unknown, requests: { url: string; body: unknow
             nextOperationId: `${operationId}:rejoin:1` } } } };
       }
       return pendingFirst && requests.length === 1
-        ? { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 }
+        ? { data: { state: "PENDING_CONFIRMATION", message: "Запись принята и ожидает подтверждения Viva",
+          details: { code: "LK1_ALLOWANCE_BINDING_INVALID" } }, error: null, status: 202 }
         : { data: response, error: null, status: 201 };
     },
   });
@@ -370,9 +370,15 @@ test("released HTTP booking never auto-posts and only the next submission uses i
   assert.equal(decodeURIComponent(requests[1].url), `${requests[0].url}:rejoin:1`);
 });
 
-test("booking sends expectedTournamentDiscount and polls exactly the same operation before returning payment URL", async () => {
+test("202 binding refusal sends one POST and only an explicit later submission can retrieve a confirmed payment", async () => {
   const requests: { url: string; body: unknown }[] = [];
   const book = bookingGateway(confirmation, requests, true);
+  const unconfirmed = await book(params);
+  assert.equal(unconfirmed.status, 202);
+  assert.equal(unconfirmed.data, null);
+  assert.equal(unconfirmed.error.raw.details.code, "LK1_ALLOWANCE_BINDING_INVALID");
+  assert.equal(unconfirmed.error.message, "Подтверждение записи от Viva пока не получено.");
+  assert.equal(requests.length, 1, "a pending response cannot schedule another POST");
   const result = await book(params);
   assert.equal(result.error, null);
   assert.equal(result.data.paymentUrl, confirmation.paymentUrl);
@@ -411,7 +417,7 @@ test("tournament UI binds asynchronous checkout and quotes to actor/event and di
   assert.match(page, /formatMoneyMinor\(discount\.amountMinor\)/);
   assert.match(page, /discount\.discountPercent/);
   assert.match(page, /product\.source === "one-time" && \(discountPending \|\| Boolean\(discountError\)\)/);
-  assert.match(page, /completeVivaRegistration\(checkout, discount \? buildTournamentSubscriptionDiscountProduct\(discount\) : matchedProduct\)/);
+  assert.match(page, /onClick=\{\(\) => void completeVivaRegistration\(checkout, bookingProduct\)\}/);
 });
 
 
