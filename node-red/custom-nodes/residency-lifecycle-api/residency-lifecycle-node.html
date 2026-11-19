@@ -1,0 +1,48 @@
+<script type="text/javascript">
+  RED.nodes.registerType("padlhub-residency-lifecycle-store", {
+    category: "config",
+    defaults: {
+      name: { value: "Residency lifecycle store" },
+      enabledEnv: { value: "LK_RESIDENCY_LIFECYCLE_ENABLED", required: true },
+      mongoUriEnv: { value: "LK_RESIDENCY_LIFECYCLE_MONGO_URI", required: true },
+      databaseNameEnv: { value: "LK_RESIDENCY_LIFECYCLE_MONGO_DB", required: true }
+    },
+    label: function () { return this.name || "Residency lifecycle store"; }
+  });
+</script>
+
+<script type="text/html" data-template-name="padlhub-residency-lifecycle-store">
+  <div class="form-row"><label for="node-config-input-name">Name</label><input type="text" id="node-config-input-name"></div>
+  <div class="form-row"><label for="node-config-input-enabledEnv">Enabled env</label><input type="text" id="node-config-input-enabledEnv"></div>
+  <div class="form-row"><label for="node-config-input-mongoUriEnv">Mongo URI env</label><input type="text" id="node-config-input-mongoUriEnv"></div>
+  <div class="form-row"><label for="node-config-input-databaseNameEnv">Mongo database env</label><input type="text" id="node-config-input-databaseNameEnv"></div>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("padlhub-residency-lifecycle-http", {
+    category: "PadlHub",
+    color: "#ffd08a",
+    defaults: {
+      name: { value: "Residency lifecycle API" },
+      store: { value: "", type: "padlhub-residency-lifecycle-store", required: true }
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "font-awesome/fa-id-card",
+    label: function () { return this.name || "Residency lifecycle API"; }
+  });
+</script>
+
+<script type="text/html" data-template-name="padlhub-residency-lifecycle-http">
+  <div class="form-row"><label for="node-input-name">Name</label><input type="text" id="node-input-name"></div>
+  <div class="form-row"><label for="node-input-store">Store</label><input type="text" id="node-input-store"></div>
+</script>
+
+<script type="text/html" data-help-name="padlhub-residency-lifecycle-store">
+  <p>Server-only residency order storage. Secrets and the Mongo URI are read from environment variables; they are never stored in the flow.</p>
+</script>
+
+<script type="text/html" data-help-name="padlhub-residency-lifecycle-http">
+  <p>Authenticates the LK bearer, then applies the residency lifecycle contract: catalog, status, checkout, payment link, reconciliation and cancellation.</p>
+  <p>Every mutation requires Idempotency-Key. Activation is accepted only from CUP's verified residency evidence.</p>
+</script>

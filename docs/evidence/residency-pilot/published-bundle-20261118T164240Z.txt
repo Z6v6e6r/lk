@@ -1,0 +1,321 @@
+Residency LK1 pilot — опубликованный артефакт сменился (2026-11-18)
+
+Воркtree : /Users/zver/Desktop/project-fixed 6/.worktrees/residency-lk1-pilot-20261118
+Ветка    : codex/residency-lk1-pilot-20261118
+Снято    : 2026-11-18 22:28 MSK (19:28 UTC)
+Режим    : read-only проверка опубликованного фронтенда + обновление тестового фикстура.
+           Node-RED, custom node, src/ и docs/residency-*.md не изменялись.
+
+КРАТКО
+
+  Текущий опубликованный LK1 (проверено сейчас):
+    release.json version 20261118T164240Z
+    sourceCommit 27ea6a8c1665789786b8a6c6fc9c657dc48483ed
+    sourceBranch codex/kids-training-release-147-20261118
+    bundle.js sha256 fce60c89044f95ef7ec9faf1d53267dfce87fcc996efa00dbacee87ab50485be
+    bundle.js 2 946 728 bytes (две независимые загрузки совпали побайтно).
+
+  Предыдущий пин пилота (version 20261118T144752Z, source 8ff3735e7106815db702f47c2ec5faa0f91a88c4,
+  branch codex/child-tournament-release-147-20261118, sha256 79789bf8a5d755ed7c6391208b76a058738f39b393f3cd85175b08bbfb097a7f,
+  2 946 687 bytes) — ИСТОРИЧЕСКИЙ. Он больше не отдаётся padlhub.su и не является текущим.
+
+  Поверхность /lk/ путей не изменилась: 62 пути в старом фикстуре, 62 в текущем бандле,
+  добавленных и удалённых нет. Счётчики residency-маркеров тоже не изменились.
+  Текущий опубликованный клиент по-прежнему отправляет покупку резидента напрямую в VivaCRM
+  (Ea = https://api.vivacrm.ru), а не в /lk/residency/orders.
+
+1. МАНИФЕСТ И ЗАГРУЗКА БАНДЛА (команды и фактические выводы)
+
+  mkdir -p /tmp/lk1-pilot-artifacts && cd /tmp/lk1-pilot-artifacts
+  STAMP=20261118T192805Z
+  curl -fsS --max-time 60 -H 'Cache-Control: no-cache, no-store' \
+    "https://padlhub.su/lk/release.json?nc=$STAMP" -o release-$STAMP.json
+
+  Вывод release-$STAMP.json (дословно):
+    {
+      "version": "20261118T164240Z",
+      "generatedAt": "2026-11-18T16:42:40.708Z",
+      "sourceCommit": "27ea6a8c1665789786b8a6c6fc9c657dc48483ed",
+      "sourceBranch": "codex/kids-training-release-147-20261118",
+      "sourceDirty": false
+    }
+
+  Две независимые загрузки бандла (cache-busted query, чтобы не получить кэш):
+  curl -fsS --max-time 120 -H 'Cache-Control: no-cache, no-store' \
+    "https://padlhub.su/lk/bundle.js?nc=$STAMP-a" -o bundle-A-$STAMP.js
+  curl -fsS --max-time 120 -H 'Cache-Control: no-cache, no-store' \
+    "https://padlhub.su/lk/bundle.js?nc=$STAMP-b" -o bundle-B-$STAMP.js
+
+  shasum -a 256 bundle-A-$STAMP.js bundle-B-$STAMP.js
+    fce60c89044f95ef7ec9faf1d53267dfce87fcc996efa00dbacee87ab50485be  bundle-A-20261118T192805Z.js
+    fce60c89044f95ef7ec9faf1d53267dfce87fcc996efa00dbacee87ab50485be  bundle-B-20261118T192805Z.js
+  wc -c
+    2946728 bundle-A-20261118T192805Z.js
+    2946728 bundle-B-20261118T192805Z.js
+  cmp bundle-A-$STAMP.js bundle-B-$STAMP.js  ->  IDENTICAL (exit 0)
+
+  Ранее лежавшая копия /tmp/lk1-pilot-artifacts/bundle-20261118T164240Z.js имела тот же
+  sha256 и размер, но источником истины не считалась: обе загрузки выше сделаны заново.
+
+  HTTP-заголовки bundle.js (curl -I, cache-busted):
+    HTTP/2 200
+    server: nginx/1.24.0 (Ubuntu)
+    date: Wed, 18 Nov 2026 19:29:10 GMT
+    content-type: application/javascript
+    content-length: 2946728
+    last-modified: Wed, 18 Nov 2026 16:55:54 GMT
+    etag: "6afdd89a-2cf6a8"
+    cache-control: public, max-age=31536000, immutable
+
+  release.json: last-modified Wed, 18 Nov 2026 16:55:59 GMT, cache-control: no-store.
+  Это позже, чем сохранены ранние evidence-файлы пилота (host-readonly.txt — 16:12 GMT,
+  browser-states.txt — 16:33 GMT), то есть артефакт сменился уже после первой документации.
+
+2. АРТЕФАКТ СООТВЕТСТВУЕТ МАНИФЕСТУ (самоидентификация бандла)
+
+  В бандле есть объект production-конфигурации, где:
+    VITE_API_BASE:"https://api.vivacrm.ru"
+    VITE_DIAGNOSTIC_BUILD:"27ea6a8c1665789786b8a6c6fc9c657dc48483ed"
+  Проверка (node):
+    VITE_DIAGNOSTIC_BUILD   -> 27ea6a8c1665789786b8a6c6fc9c657dc48483ed  (совпадает с release.json)
+    вхождений 8ff3735e7106815db702f47c2ec5faa0f91a88c4 -> 0
+  То есть скачанный файл — это именно сборка sourceCommit 27ea6a8c..., а не подмена по URL.
+
+3. ПРЕДЫДУЩИЙ ПИН vs ТЕКУЩИЙ АРТЕФАКТ
+
+  Параметр        Предыдущий пин (исторический)              Текущий (проверен сейчас)
+  version         20261118T144752Z                            20261118T164240Z
+  sourceCommit    8ff3735e7106815db702f47c2ec5faa0f91a88c4    27ea6a8c1665789786b8a6c6fc9c657dc48483ed
+  sourceBranch    codex/child-tournament-release-147-20261118  codex/kids-training-release-147-20261118
+  bundle sha256   79789bf8a5d755ed7c6391208b76a058738f39b393f3cd85175b08bbfb097a7f  fce60c89044f95ef7ec9faf1d53267dfce87fcc996efa00dbacee87ab50485be
+  bundle bytes    2 946 687                                   2 946 728 (+41)
+
+  Источники предыдущего пина: scripts/tests/fixtures/lk1-published-bundle-20261118.json
+  и docs/evidence/residency-pilot/host-readonly.txt (оба не изменялись).
+  Исторический бандл 79789bf8... повторно не скачивался: padlhub.su его больше не отдаёт.
+  Его свойства взяты из ранее зафиксированного фикстура, снятого с хоста (host-readonly.txt).
+
+4. МЕТОД ИЗВЛЕЧЕНИЯ (воспроизводимо)
+
+  Скрипт ниже проверен: его вывод полностью совпал с полями нового фикстура
+  (sha256, bytes, lkPaths, vivaPaths, markers).
+
+  node extract-surface.cjs /tmp/lk1-pilot-artifacts/bundle-A-20261118T192805Z.js
+
+  // Reproducible extraction of the published LK1 bundle surface.
+  // usage: node extract-surface.cjs /tmp/lk1-pilot-artifacts/bundle.js
+  const fs = require('node:fs');
+  const crypto = require('node:crypto');
+  const buf = fs.readFileSync(process.argv[2]);
+  const s = buf.toString('utf8');
+  const INTERP = String.fromCharCode(36) + '{';
+  const EA = String.fromCharCode(36) + '{Ea}';
+  const lkPaths = [...new Set([...s.matchAll(/\/lk\/[A-Za-z0-9_?=&\/:.%~-]*/g)].map(m => m[0].split(INTERP)[0]))]
+    .filter(p => p !== '/lk/').sort();
+  const vivaPaths = [...new Set((() => {
+    const out = []; let i = -1;
+    while ((i = s.indexOf('/end-user/api/v', i + 1)) !== -1) {
+      const backtick = s.indexOf(String.fromCharCode(96), i);
+      const quote = s.indexOf(String.fromCharCode(34), i);
+      const firstInterp = s.indexOf(INTERP, i);
+      const isTemplate = firstInterp !== -1 && (quote === -1 || firstInterp < quote) && backtick !== -1 && (quote === -1 || backtick < quote || firstInterp < quote);
+      const end = isTemplate ? backtick : quote;
+      if (end === -1) continue;
+      out.push((s.slice(Math.max(0, i - EA.length), i) === EA ? EA : '') + s.slice(i, end));
+    }
+    return out;
+  })())].sort();
+  const markerKeys = ['buyResidency','phCheckoutReturn','4037a3a3-e551-4f9a-a9db-1410e46b8635','RESIDENCY_ORDERS_DISABLED','RESIDENCY_CREATE_NOT_ALLOWED','residency/orders','buyResidency=lifecycle','phResidencyLifecycleReturn'];
+  const markers = {};
+  for (const k of markerKeys) markers[k] = s.split(k).length - 1;
+  console.log(JSON.stringify({ bundleSha256: crypto.createHash('sha256').update(buf).digest('hex'), bundleBytes: buf.length, lkPaths, vivaPaths, markers }, null, 2));
+
+  Правила:
+  - lkPaths: все литеральные вхождения /lk/..., обрезанные на первой интерполяции ${...},
+    без служебного префикса "/lk/" (это проверка window.location.pathname, не маршрут),
+    дедупликация и сортировка. Правило воспроизводит исторический фикстур: все его 62 пути
+    присутствуют в текущем бандле, лишним оказался только сам префикс "/lk/".
+  - vivaPaths: точные шаблонные фрагменты запросов /end-user/api/vN/... в том виде, как они
+    написаны в коде, с сохранением префикса ${Ea}, если он стоит непосредственно перед путём.
+  - markers: число вхождений подстроки во весь текст бандла (bundle.split(marker).length - 1).
+
+  Результат текущего бандла:
+    lkPaths   62
+    vivaPaths 26 (включая ${Ea}/end-user/api/v1/${gn}/transactions)
+    markers   см. таблицу в разделе 5
+
+5. СРАВНЕНИЕ МАРШРУТОВ И МАРКЕРОВ: ДЕЛЬТА НУЛЕВАЯ
+
+  lkPaths: 62 -> 62; added=[]; removed=[]. Оба набора идентичны по каждому пути.
+  Маркеры (старый фикстур -> текущий бандл):
+    buyResidency                              1 -> 1
+    phCheckoutReturn                          3 -> 3
+    4037a3a3-e551-4f9a-a9db-1410e46b8635      2 -> 2
+    RESIDENCY_ORDERS_DISABLED                 0 -> 0
+    RESIDENCY_CREATE_NOT_ALLOWED              0 -> 0
+    residency/orders                          0 -> 0
+    buyResidency=lifecycle                    0 -> 0
+    phResidencyLifecycleReturn                (в старом фикстуре поля не было) -> 0
+
+  Ключевые пути, которые остались на месте:
+    /lk/residency/passes, /lk/residency/passes/
+    /lk/tournaments/summer-subscription/confirm, .../purchase, .../status?counterKey=
+    /lk/tournaments/summer-subscription/status?counterKey=friendship_two_hours
+  Ни одного пути /lk/residency/orders и ни одного нового refusal-кода нет.
+
+  Проверка против нового API (node-red/imports/lk_residency_lifecycle.import.json):
+    15 http in узлов (8 без OPTIONS), 7 различных URL:
+      /lk/residency/catalog, /lk/residency/status,
+      /lk/residency/orders, /lk/residency/orders/:orderId,
+      /lk/residency/orders/:orderId/payment, /lk/residency/orders/:orderId/reconcile,
+      /lk/residency/orders/:orderId/cancel
+    Ни одна из этих строк не встречается в бандле: exact-in-bundle=false для всех 15 узлов,
+    подстрока "residency/orders" — 0 вхождений.
+
+6. ПРЯМАЯ ОПЛАТА В VIVA (Ea base), А НЕ В /lk/residency/orders
+
+  Всего в бандле: "api.vivacrm.ru" — 3 вхождения (инициализация баз + env),
+  "/end-user/api/v1" — 25 вхождений, "/transactions" — 5 вхождений.
+
+  6.1 База Ea:
+    ...Ea=Jd("https://api.vivacrm.ru","https://api.vivacrm.ru"),Av=Jd("https://kc.vivacrm.ru",...
+    ...VITE_API_BASE:"https://api.vivacrm.ru"...
+    То есть ${Ea} — это https://api.vivacrm.ru (переопределяемая, но в production-конфиге та же).
+
+  6.2 Предложение резидента и product id:
+    ...label:e==="residency"?"Резидентство ПадлхАБ":... period:"30 дней", planId:...,
+       billingOptionId:..., target:null, promo:null, liveProductId:dI[e]...
+    ...const dI={vsk:UD,residency:"4037a3a3-e551-4f9a-a9db-1410e46b8635",...}
+    ...qae(e): [["residency","4037a3a3-e551-4f9a-a9db-1410e46b8635"],...]
+
+  6.3 Кнопка на странице резидента (pI="residency"):
+    ...onClick:n=>{...cse(pI,79e3,n.nativeEvent)...}  // 79 000 коп. = 790 ₽
+    cse(e,t,n) строит checkout-intent и открывает оплату (Eae/Fg), без запроса к /lk.
+
+  6.4 Проверка цены и условий — GET в Viva напрямую:
+    async function fI(e,t){const n=zl(e); if(!n?.liveProductId)return{priceMinor:await ese(e,t)};
+      const r=await lt(`${Ea}/end-user/api/v1/${gn}/products/subscriptions/${n.liveProductId}`,
+        {method:"GET",cache:"no-store",signal:t,retries:0}); ...}
+
+  6.5 Сама покупка — POST в Viva напрямую (функция R9):
+    async function R9(e,t,n={}){... return lt(`${Ea}/end-user/api/v1/${gn}/transactions`,{
+      method:"POST", auth:!0, retries:n.promoCode?.trim()?0:n.retries??1,
+      body:JSON.stringify({clientPhone:t,...n.promoCode?.trim()?{promoCode:n.promoCode.trim()}:{},
+        failUrl:s,failRedirectUrl:s,failureRedirectUrl:s,paymentMethod:"WIDGET",
+        products:[{id:e,type:"SUBSCRIPTION",count:1}],count:1,id:e,type:"SUBSCRIPTION",
+        baseRedirectUrl:o,redirectUrl:r,returnUrl:r,successRedirectUrl:r,successUrl:r})})}
+    Вызов из zero-checkout:
+      const p=await R9(o.productId,t,{baseRedirectUrl:h,successUrl:h,failUrl:h,retries:0});
+    URL абсолютный (${Ea} = https://api.vivacrm.ru), поэтому запрос уходит с браузера
+    прямо на api.vivacrm.ru, без участия padlhub.su.
+
+  6.6 Второй POST /transactions в бандле — резервный сценарий записи (booking fallback):
+    lt(`${Ea}/end-user/api/v1/${gn}/transactions`,{method:"POST",...products:[{id:Ee,type:"ONE_TIME",count:1}]...})
+    Он тоже идёт на Viva, не на padlhub.su.
+  Остальные вхождения "/transactions": 2 GET-проверки статуса
+    ${Ea}/end-user/api/v2/${gn}/transactions/${encodeURIComponent(e)}/status
+    и regex-детектор в очереди повторов (не запрос).
+
+  6.7 Единственные /lk/residency/* пути в бандле — чтение пропусков (не покупка):
+    async fetchStatus(t,n){const r=await e({method:"GET",path:`/lk/residency/passes/${encodeURIComponent(t)}`,...})
+    (тот же старый шлюз /lk/residency/passes, что и раньше; он не переиспользуется новой оплатой).
+
+  Вывод: в опубликованном клиенте нет ни строки "/lk/residency/orders", ни вызова
+  padlhub.su с этим путём. Покупка резидента — это браузерный POST на
+  https://api.vivacrm.ru/end-user/api/v1/<tenant>/transactions.
+
+7. ПОЧЕМУ ОПУБЛИКОВАННЫЙ КЛИЕНТ НЕ МОЖЕТ ВЫЗВАТЬ НОВЫЙ API
+
+  - Новый API добавляет 7 различных URL (15 http-in с OPTIONS) в namespace
+    /lk/residency/{catalog,status,orders...}; ни один из них не встречается в бандле.
+  - Нет маркера возврата phResidencyLifecycleReturn, нет buyResidency=lifecycle,
+    нет refusal-кодов RESIDENCY_ORDERS_DISABLED / RESIDENCY_CREATE_NOT_ALLOWED.
+  - Оплата уже сейчас уходит напрямую в Viva; переключить её на lifecycle-владельца
+    нечем — соответствующего кода в опубликованном клиенте нет.
+  - Старый (исторический) бандл 79789bf8... также не содержал этих путей (фикстур),
+    а текущий бандл не добавил ни одного /lk/ пути и ни одного маркера.
+  Следовательно: ни исторический, ни текущий опубликованный клиент не вызывает новый API;
+  установка lifecycle-флоу его не активирует для пользователей без нового фронтенда.
+
+8. ЯВНОЕ УТВЕРЖДЕНИЕ О СМЕНЕ АРТЕФАКТА
+
+  Опубликованный артефакт изменился после ранней документации пилота.
+  Предыдущий пин (20261118T144752Z / 8ff3735e... / 79789bf8... / 2 946 687 bytes)
+  теперь ИСТОРИЧЕСКИЙ, а не текущий. Его нельзя использовать как "текущий релиз"
+  ни в тестах, ни в отчётах, ни при проверке совместимости.
+  Текущий пин: 20261118T164240Z / 27ea6a8c... / fce60c89... / 2 946 728 bytes,
+  зафиксирован в scripts/tests/fixtures/lk1-published-bundle-20261118T164240Z.json.
+  Файл scripts/tests/fixtures/lk1-published-bundle-20261118.json сохранён без изменений
+  как исторический; docs/evidence/residency-pilot/host-readonly.txt и
+  docs/residency-pilot-acceptance.md по-прежнему содержат старые значения —
+  читать их следует как исторические (docs/residency-*.md в этой задаче не редактировались).
+
+9. ТЕСТЫ (фактические результаты)
+
+  npm run test:residency-lk1-compat
+    node --test scripts/tests/residencyLifecycleCompatibility.test.mjs \
+              scripts/tests/residencyLifecycleInstall.test.mjs
+    ✔ the added flow shares no URL/method or node id with the installed LK1 graph
+    ✔ the current published bundle cannot call the new lifecycle API
+    ✔ the new import does not carry credentials, redirects or a personal allowlist
+    ✔ the fixture pins the currently published release artifact
+    ✔ an additive candidate adds the reviewed nodes without touching the live graph
+    ✔ an existing node id or route refuses the candidate and writes nothing
+    ✔ a candidate is never overwritten
+    ℹ tests 7  pass 7  fail 0  skipped 0  todo 0  duration_ms 87.537375 (второй прогон; первый — 93.396708)
+    exit code 0
+
+  node --test scripts/tests/residencyLifecycleCompatibility.test.mjs
+    ✔ 4 теста (те же 4 compatibility-теста), pass 4, fail 0, duration_ms 100.191917 (первый прогон — 105.255708), exit 0
+
+  Набор прогонялся дважды (до и после финальной правки документа), оба раза 0 fail.
+
+  npm-скрипт отличается от одиночного запуска: он дополнительно запускает
+  residencyLifecycleInstall.test.mjs (3 теста), поэтому 7 против 4. Оба результата зелёные.
+
+  Изменения в тесте (scripts/tests/residencyLifecycleCompatibility.test.mjs):
+  - пин переведён на новый фикстур (version/sourceCommit/sha256/bytes);
+  - добавлены проверки phCheckoutReturn=3, phResidencyLifecycleReturn=0,
+    releaseUrl/bundleUrl/retrievedAt;
+  - добавлена проверка direct-to-Viva: наличие
+    "${Ea}/end-user/api/v1/${gn}/transactions" в vivaPaths и отсутствие
+    "residency/orders" в vivaPaths;
+  - добавлена защита исторического фикстура: он всё ещё пинит 79789bf8.../2 946 687,
+    previousPinned совпадает с ним, а новый sha/размер от него отличаются.
+  Ослаблений нет: product id, buyResidency, summer-subscription, /lk/residency/passes,
+  отсутствие residency/orders, buyResidency=lifecycle и refusal-кодов проверяются как раньше.
+
+10. ИЗМЕНЁННЫЕ ФАЙЛЫ (только эти три; коммита нет)
+
+  scripts/tests/fixtures/lk1-published-bundle-20261118T164240Z.json  (новый)
+  scripts/tests/residencyLifecycleCompatibility.test.mjs               (обновлён пин)
+  docs/evidence/residency-pilot/published-bundle-20261118T164240Z.txt   (этот файл)
+
+  Не выполнялось: commit, push, PR, merge, deploy, публикация фронтенда, импорт Node-RED,
+  установка custom node, изменение env, реальные операции Viva/оплаты.
+
+11. ОСТАТОЧНЫЕ РИСКИ
+
+  - Pin привязан к конкретной публикации: следующая публикация снова сделает его
+    историческим; проверку нужно повторять при каждой смене release.json.
+  - bundle.js отдаётся с cache-control immutable, поэтому проверять надо только
+    с cache-busted query (как в командах выше).
+  - Во время этой задачи в том же worktree параллельно изменялись файлы lifecycle
+    (src/residency, node-red/custom-nodes/..., другие тесты) другой задачей; мои три
+    файла — единственные, которые изменял я. Compatibility-тест читает также
+    node-red/custom-nodes/.../residency-lifecycle-node.cjs (только имена env-переменных)
+    и import JSON; на момент прогона они дали зелёный результат, но при финализации
+    параллельной задачи тест стоит перезапустить.
+
+12. КАК ПЕРЕПРОВЕРИТЬ
+
+  cd /tmp/lk1-pilot-artifacts
+  curl -fsS -H 'Cache-Control: no-cache' "https://padlhub.su/lk/release.json?nc=$(date +%s)"
+  curl -fsS -H 'Cache-Control: no-cache' "https://padlhub.su/lk/bundle.js?nc=$(date +%s)" -o bundle-check.js
+  shasum -a 256 bundle-check.js && wc -c bundle-check.js
+  node extract-surface.cjs bundle-check.js
+  cd "/Users/zver/Desktop/project-fixed 6/.worktrees/residency-lk1-pilot-20261118"
+  npm run test:residency-lk1-compat
+
+  Ожидаемо на момент снятия: sha256 fce60c89..., 2 946 728 bytes, 62 lkPaths, 26 vivaPaths,
+  маркеры из раздела 5, тесты 7/7 pass.

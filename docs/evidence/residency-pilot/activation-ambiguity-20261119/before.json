@@ -1,0 +1,79 @@
+{
+  "generatedAt": "2026-11-19T09:24:55.539Z",
+  "sourceHead": "8d84168c8b46540c8f9f0473bc35c904223ec292",
+  "cases": [
+    {
+      "case": "lost-ack-then-context-down",
+      "activateCalls": 3,
+      "contextReads": 0,
+      "states": [
+        "PENDING",
+        "PENDING",
+        "PENDING"
+      ],
+      "orderStates": [
+        "PAID_ACTIVATION_PENDING",
+        "PAID_ACTIVATION_PENDING",
+        "PAID_ACTIVATION_PENDING"
+      ]
+    },
+    {
+      "case": "successful-refresh-then-lost-active-write",
+      "firstState": "ACTIVE",
+      "activateCalls": 3,
+      "contextReads": 1,
+      "states": [
+        "PENDING",
+        "PENDING",
+        "PENDING"
+      ],
+      "orderStates": [
+        "PAID_ACTIVATION_PENDING",
+        "PAID_ACTIVATION_PENDING",
+        "PAID_ACTIVATION_PENDING"
+      ]
+    },
+    {
+      "case": "lost-ack-then-explicit-not-active-retry-succeeds",
+      "activateCalls": 2,
+      "contextReads": 0,
+      "states": [
+        "PENDING",
+        "ACTIVE",
+        "ACTIVE"
+      ],
+      "orderStates": [
+        "PAID_ACTIVATION_PENDING",
+        "ACTIVE",
+        "ACTIVE"
+      ]
+    },
+    {
+      "case": "not-active-retry-stays-pending",
+      "activateCalls": 3,
+      "contextReads": 0,
+      "states": [
+        "PENDING",
+        "PENDING",
+        "ACTIVE"
+      ],
+      "orderStates": [
+        "PAID_ACTIVATION_PENDING",
+        "PAID_ACTIVATION_PENDING",
+        "ACTIVE"
+      ]
+    },
+    {
+      "case": "activation-failed-is-not-retried",
+      "activateCalls": 2,
+      "states": [
+        "REJECTED",
+        "REJECTED"
+      ],
+      "orderStates": [
+        "ACTIVATION_FAILED",
+        "ACTIVATION_FAILED"
+      ]
+    }
+  ]
+}

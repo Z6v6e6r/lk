@@ -1,0 +1,49 @@
+# Isolated composition environment (2026-11-18)
+host_node      v26.8.2
+docker         29.6.1
+mongodb_image  mongo@sha256:7bd28e5eea1c5766a084d5818254046f3ebe3b8f20a65e3a274640189e296667
+nodered_image  sha256:f343130a2adede262a9bccd5c9e27a2b78f5ed3f40ac417744fb139c49d5e6ec
+nodered_base   nodered/node-red:4.0.9-22
+nodered_node   v22.14.0
+mongodb_driver 7.2.0
+playwright     1.62.1
+mongo_db       lk_residency_pilot (disposable container lk1-pilot-mongo)
+gateway        http://127.0.0.1:1880 (only localhost)
+fixture        https://127.0.0.1:9443 (self-signed, synthetic Viva/CUP/Keycloak)
+old_origin     https://127.0.0.1:8444 (published bundle, byte-identical)
+new_origin     https://127.0.0.1:8443 (branch bundle, harness VITE_RESIDENCY_PASS_API_BASE override)
+
+## Mongo indexes
+{"name":"_id_","key":{"_id":1}}
+{"name":"residency_order_identity","key":{"tenantId":1,"orderId":1},"unique":true}
+{"name":"residency_order_idempotency","key":{"tenantId":1,"idempotencyKeyHash":1},"unique":true}
+{"name":"residency_order_active_slot","key":{"tenantId":1,"userId":1,"activeSlot":1},"unique":true,"partial":{"activeSlot":1}}
+{"name":"residency_order_user_state","key":{"tenantId":1,"userId":1,"state":1}}
+{"name":"residency_order_expiry","key":{"tenantId":1,"state":1,"payment.expiresAt":1}}
+
+## Node-RED startup
+18 Nov 20:18:40 - [info]
+
+Welcome to Node-RED
+===================
+
+18 Nov 20:18:40 - [info] Node-RED version: v4.0.9
+18 Nov 20:18:40 - [info] Node.js  version: v22.14.0
+18 Nov 20:18:40 - [info] Linux 6.12.76-linuxkit arm64 LE
+18 Nov 20:18:40 - [info] Loading palette nodes
+18 Nov 20:18:40 - [info] Settings file  : /data/settings.js
+18 Nov 20:18:40 - [info] Context store  : 'default' [module=memory]
+18 Nov 20:18:40 - [info] User directory : /data
+18 Nov 20:18:40 - [warn] Projects disabled : editorTheme.projects.enabled=false
+18 Nov 20:18:40 - [info] Flows file     : /data/flows.json
+18 Nov 20:18:40 - [warn]
+
+---------------------------------------------------------------------
+Your flow credentials file is encrypted using a system-generated key.
+
+If the system-generated key is lost for any reason, your credentials
+file will not be recoverable, you will have to delete it and re-enter
+your credentials.
+
+You should set your own key using the 'credentialSecret' option in
+your settings file. Node-RED will then re-encrypt your credentials
