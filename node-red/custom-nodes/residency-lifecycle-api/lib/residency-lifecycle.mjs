@@ -1213,7 +1213,13 @@ export function createResidencyLifecycle(deps) {
     // written. The lease is stale (fresh IN_FLIGHT returns above); read the CUP context
     // without refresh first and finalize from it. Only an explicit non-ACTIVE context may
     // fall through to a retry; an unreadable context stays retryable without a command.
-    if (recovering && typeof activation.read === "function") {
+    if (recovering && typeof activation.read !== "function") {
+      return activationOutcome(order, paymentConfirmed, {
+        state: "PENDING", lastErrorCode: "ACTIVATION_CONTEXT_UNAVAILABLE",
+        clientSubscriptionId: instance.clientSubscriptionId,
+      });
+    }
+    if (recovering) {
       let prior;
       try {
         prior = await activation.read({
