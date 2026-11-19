@@ -1092,6 +1092,12 @@ export function createResidencyLifecycle(deps) {
     // evidence) may be presented as paid. A dispatch whose outcome is unknown is not proof
     // that money was received.
     const paymentConfirmed = order.payment.status === "PAID" || PAID_PHASES.includes(order.state);
+    const inFlightSince = iso(order.activation.startedAt) ? Date.parse(order.activation.startedAt) : null;
+    if (order.activation.state === "IN_FLIGHT" && inFlightSince !== null && clock.now() - inFlightSince < 120000) {
+      // Another worker owns this activation. Do not call CUP twice and do not overwrite
+      // its claim; that worker already passed the conflict check before claiming.
+      return order;
+    }
     const conflict = await activationExternalConflict(order);
     if (conflict?.code === "EXTERNAL_PAYMENT_DETECTED") {
       if (paymentConfirmed) {
@@ -1105,11 +1111,6 @@ export function createResidencyLifecycle(deps) {
       // The check could not be completed. A confirmed payment stays retryable, but it is
       // not activated; an unconfirmed dispatch stays unresolved and keeps its slot.
       return activationOutcome(order, paymentConfirmed, { state: "PENDING", lastErrorCode: conflict.code });
-    }
-    const inFlightSince = iso(order.activation.startedAt) ? Date.parse(order.activation.startedAt) : null;
-    if (order.activation.state === "IN_FLIGHT" && inFlightSince !== null && clock.now() - inFlightSince < 120000) {
-      // Another worker owns this activation. Do not call CUP twice.
-      return order;
     }
     const claimed = {
       ...order,

@@ -1391,6 +1391,30 @@ test("the three GET routes project the durable order without expiring or activat
   assert.equal(creator.calls.findInstance, 0);
 });
 
+test("an in-flight activation is not overwritten by a fresh external conflict read", async () => {
+  let rows = [];
+  const external = { calls: 0, async list() { this.calls += 1; return { transactions: rows.map((row) => ({ ...row })) }; } };
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const row = creator.store.orders.get(created.order.orderId);
+  creator.store.orders.set(created.order.orderId, { ...row, state: ORDER_STATES.ACTIVATION_PENDING,
+    revision: row.revision + 1,
+    payment: { ...row.payment, status: "PAID", paymentUrl: null, paidAt: PAID_AT },
+    activation: { ...row.activation, state: "IN_FLIGHT", startedAt: new Date(NOW).toISOString() } });
+  rows = [{ transactionId: "legacy-open-inflight", state: "OPEN", status: "UNPAID",
+    createdAt: new Date(Date.parse(created.order.createdAt) + 60000).toISOString() }];
+  const probe = build({ store: creator.store, external, config: GUARD, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  } });
+  const result = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-inflight" });
+  assert.equal(result.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(creator.store.orders.get(created.order.orderId).activation.state, "IN_FLIGHT");
+  assert.equal(probe.calls.activate, 0);
+});
+
 test("an external OPEN, UNKNOWN or PAID operation blocks reconcile activation", async () => {
   for (const externalState of ["OPEN", "UNKNOWN", "PAID"]) {
     let rows = [];
