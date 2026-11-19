@@ -1,0 +1,21 @@
+# Checks executed for #452 ambiguity fix
+
+Base: 8d84168c8b46540c8f9f0473bc35c904223ec292
+Fix:  158251bfc9e271e2b7cc140f86d0c53345f6200d
+
+- node --test scripts/tests/residencyLifecycle.test.mjs
+  75 tests, 75 pass, 0 fail
+- node --test scripts/tests/residencyLifecycleProvider.test.mjs
+  26 tests, 26 pass, 0 fail
+- npm run test:residency-lifecycle
+  144 tests, 133 pass, 0 fail, 11 skipped (real-Mongo suite without LK_TEST_MONGO_URI)
+- LK_TEST_MONGO_URI=mongodb://127.0.0.1:27119/?directConnection=true node --test scripts/tests/residencyLifecycleMongo.test.mjs
+  disposable mongo:8.0.5, 11 tests, 11 pass, 0 fail, 0 skipped
+- npm run test:residency-pilot
+  11 tests, 11 pass
+- npm run test:residency-lk1-compat
+  7 tests, 7 pass
+- npx eslint <changed js/mjs files>
+  exit 0
+- git diff --check
+  clean

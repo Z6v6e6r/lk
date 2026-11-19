@@ -442,6 +442,9 @@ CUP's context.instance.activeFrom/activeTo.
 - A PENDING/UNKNOWN read keeps the order pending and returns retryable: true.
 - FAILED/CANCELLED/REFUND is terminal PAYMENT_FAILED.
 - Amount/transaction mismatch is PAID_REQUIRES_REVIEW (no activation).
+- An explicit CUP refusal is terminal for automatic activation: it records
+  ACTIVATION_FAILED, and a later reconcile does not send another residency-booking-refresh.
+  Support owns the next decision.
 - A late PAID read can recover a locally EXPIRED or PAID_ACTIVATION_PENDING
   order. A CANCELLED order is never revived; a paid read sets
   reviewRequired: true for refund/support.
