@@ -58,6 +58,7 @@ Pages: old <code>https://joint.fixture/lk_new?buyResidency=1</code>, selector
 | Old click | exactly one <code>POST /end-user/api/v1/iSkq6G/transactions</code>; zero <code>/lk/residency/*</code> |
 | New create closed (<code>CREATE_ENABLED=false</code>) | direct <code>POST /lk/residency/orders</code> → 503 <code>RESIDENCY_ORDERS_DISABLED</code>; old POST still succeeds (residual) |
 | New pilot page | catalog/status 200, CTA visible |
+| OPTIONS on the stand | 204 from the stock gateway; the current stand wrapper returns 200 — any unauthenticated 2xx is acceptable |
 | Create without Idempotency-Key | 400 <code>RESIDENCY_IDEMPOTENCY_KEY_REQUIRED</code>, no order, no provider POST |
 | Ordinary account | 403 <code>RESIDENCY_CREATE_NOT_ALLOWED</code>, zero orders |
 | Pilot create | one 200, one order, one Viva transaction |
@@ -68,3 +69,11 @@ Pages: old <code>https://joint.fixture/lk_new?buyResidency=1</code>, selector
 
 The old path creating a transaction while the new create is stopped is expected and must be
 reported as the residual risk, not as a new-service failure.
+
+## Stand hygiene before acceptance
+
+The disposable <code>joint_residency_delivered_20261118</code> currently has one lifecycle
+order from the installation checks. Reset that collection (or use a fresh database) before
+the acceptance journey so the new page starts with <code>count=0</code>. The stand's
+synthetic <code>iSkq6G:10000000-…-0001</code> identity is fixture-only and must not be
+carried to 147.
