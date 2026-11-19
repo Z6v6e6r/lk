@@ -468,13 +468,17 @@ export function createVivaCupResidencyPorts({
     if (!context || typeof context !== "object") throw providerError("RESIDENCY_EVIDENCE_INVALID");
     const instance = context.instance;
     // A read-only context is also evidence when it explicitly says that no active
-    // instance exists. A malformed active window is still an error: it cannot be
+    // instance exists. A malformed instance is still an error: it cannot be
     // interpreted as "not applied".
-    if (!instance || typeof instance !== "object" || typeof instance.state !== "string" || instance.state.length === 0) {
+    if (instance === undefined || instance === null) {
       if (allowNotActive) {
         return { state: "NOT_ACTIVE",
           observedAt: iso(body.observedAt) ? isoMillis(body.observedAt) : now().toISOString() };
       }
+      throw providerError("RESIDENCY_EVIDENCE_INVALID");
+    }
+    if (typeof instance !== "object" || Array.isArray(instance)
+      || typeof instance.state !== "string" || instance.state.length === 0) {
       throw providerError("RESIDENCY_EVIDENCE_INVALID");
     }
     if (instance.state !== "ACTIVE") {

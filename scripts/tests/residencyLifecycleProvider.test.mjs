@@ -261,6 +261,11 @@ test("CUP context read distinguishes explicit NOT_ACTIVE from a malformed contex
     providerProductId: RESIDENCY_PRODUCT_ID, observedAt: "2026-11-18T09:06:00.000Z" }) } });
   await assert.rejects(noContext.ports.activation.read({ clientSubscriptionId: SUB }), /RESIDENCY_EVIDENCE_INVALID/);
 
+  const malformedInstance = build({ routes: { "residency-booking-context": () => response({
+    providerProductId: RESIDENCY_PRODUCT_ID, observedAt: "2026-11-18T09:06:00.000Z",
+    context: { instance: "garbage" } }) } });
+  await assert.rejects(malformedInstance.ports.activation.read({ clientSubscriptionId: SUB }), /RESIDENCY_EVIDENCE_INVALID/);
+
   // A refresh is not a read-only answer: a non-ACTIVE response keeps the command
   // ambiguous instead of authorizing a retry from the same response.
   const refreshInactive = build({ routes: { "residency-booking-refresh": () => response({
