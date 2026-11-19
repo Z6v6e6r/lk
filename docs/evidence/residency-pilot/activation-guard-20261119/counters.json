@@ -32,5 +32,10 @@
     "firstReconcileActivations": 1,
     "afterRepeatActivations": 1,
     "afterRestartActivations": 1
+  },
+  "inFlightClaim": {
+    "overwritten": false,
+    "activationCalls": 0,
+    "state": "PAID_ACTIVATION_PENDING"
   }
 }

@@ -8,7 +8,7 @@ call, no payment, no 147 change.
 
 | Command | Result |
 | --- | --- |
-| `LK_TEST_MONGO_URI=mongodb://127.0.0.1:27029 npm run test:residency-lifecycle` on disposable `mongo:8.0.5` | **132 pass, 0 fail, 0 skipped** |
+| `LK_TEST_MONGO_URI=mongodb://127.0.0.1:27029 npm run test:residency-lifecycle` on disposable `mongo:8.0.5` | **133 pass, 0 fail, 0 skipped** |
 | `node --test scripts/tests/residencyLifecycleMongo.test.mjs` with the same disposable Mongo | **10 pass, 0 fail** |
 | `npm run test:residency-pilot` | **11 pass, 0 fail** |
 | `npm run test:residency-lk1-compat` | **7 pass, 0 fail** |
@@ -31,6 +31,8 @@ involved.
 - An unavailable external list blocks activation; no CUP command is sent.
 - One confirmed payment activates exactly once: first reconcile 1, repeated reconcile 1,
   restart + reconcile 1.
+- A bounded IN_FLIGHT claim is not overwritten by a fresh external conflict read; the
+  second worker leaves the claim and activation calls at 0.
 
 ## Boundary
 
