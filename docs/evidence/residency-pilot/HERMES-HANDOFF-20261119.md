@@ -14,8 +14,9 @@ No real Viva/CUP/Keycloak call, no payment, no 147 change.
   the disposable-Mongo residency lifecycle matrix.
 - `monthly-mongodb`: **success**, run
   [44488899897](https://github.com/Z6v6e6r/lk/actions/runs/44488899897).
-- Packet regenerated from that head; `SHA256SUMS` verifies and the bundle matches
-  `dist/bundle.js` byte-for-byte (`0a83dbc7…`, 2 976 424 B).
+- Packet regenerated after the docs-only handoff commits; `SHA256SUMS` verifies and the
+  bundle matches `dist/bundle.js` byte-for-byte (`0a83dbc7…`, 2 976 424 B). The bundle
+  itself was built from code head `81da1255`.
 
 ## Artifacts to use
 
@@ -26,8 +27,9 @@ No real Viva/CUP/Keycloak call, no payment, no 147 change.
 | Local synthetic bf3 (not production) | <code>artifacts/residency-client-bf3/bundle.js</code> | — | <code>4c3fdca47c6442e9a07801450558de78e7b1600160bc74e343d2f59c8db02c72</code> |
 
 Packet: <code>residency-pilot-install-20261119</code>, 28 files, <code>SHA256SUMS</code>
-<code>ac11bb842ef72f1a556f3a8b216065a49b3ce23844d414c4cbdef274110f7eba</code>, source
-<code>81da12551154bfca1f71444bdbfb6df3fdded595</code>. <code>shasum -a 256 -c SHA256SUMS</code>
+<code>6f3b55b35dc32208a82eb3fd98154dff4b68ebe0bdd7074748d95b37665a354e</code>, packet tree
+<code>e139bc15e480b928982e44adb425a321dba98e88</code> (docs-only on top of build/code head
+<code>81da12551154bfca1f71444bdbfb6df3fdded595</code>). <code>shasum -a 256 -c SHA256SUMS</code>
 passes, including <code>frontend/bundle.js</code>
 <code>0a83dbc72dc6c55549bab42ce597aa65089f9eca94f3577d803b04e018cbd59e</code> (2 976 424 B).
 Do not substitute the synthetic bf3 build for the packet artifact in accepted results.
