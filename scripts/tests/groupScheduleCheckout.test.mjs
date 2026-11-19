@@ -39,9 +39,9 @@ function evaluate(expression, dependencies = {}) {
   return new Function("require", "exports", ...Object.keys(dependencies), code + "\nreturn subject;")(
     require, {}, ...Object.values(dependencies));
 }
-function callback(name, dependencies) {
-  const node = find(page, node => ts.isVariableDeclaration(node) && node.name.getText(page) === name);
-  return evaluate(node.initializer.arguments[0].getText(page), dependencies);
+function callback(name, dependencies, source = page) {
+  const node = find(source, node => ts.isVariableDeclaration(node) && node.name.getText(source) === name);
+  return evaluate(node.initializer.arguments[0].getText(source), dependencies);
 }
 const product = (source = "one-time", id = "fixture-product") => ({
   id, source, name: "Пробная тренировка", type: "SERVICE", cost: 150000, raw: {},
@@ -357,6 +357,8 @@ test("the tournament page uses CUP even for unclassified or training-shaped sour
   const entry = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
   const calls = [];
   const paused = { data: null, error: { status: 503, raw: { code: "TOURNAMENT_NEW_OPERATIONS_PAUSED" } }, status: 503 };
+  let salesPaused = true;
+  const ownerAttempts = [];
   const create = evaluate(`(${entry.getText(api).replace(/^export /, "")})`, {
     isSpanishTrainingExercise: () => false, isKidsAcademyTraining, isChildTournamentExercise,
     isTrialGroupTraining: isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: true,
@@ -364,8 +366,15 @@ test("the tournament page uses CUP even for unclassified or training-shaped sour
     createVivaPaymentWatcher: () => assert.fail("unexpected direct Viva payment watcher"),
     buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
     buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
-    tournamentCheckoutRetryKeys: new Map(), pickString: () => null,
-    request: async (url, options) => { calls.push([url, options.headers?.["Idempotency-Key"]]); return paused; },
+    tournamentCheckoutRetryKeys: new Map(), pickString: (row, keys) => row?.[keys[0]],
+    request: async (url, options) => {
+      assert.equal(options.method, "POST");
+      assert.equal(options.retries, 0);
+      calls.push([url, options.headers?.["Idempotency-Key"]]);
+      if (salesPaused) return paused;
+      ownerAttempts.push(url);
+      return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+    },
   });
   for (const source of ["one-time", "client-one-time", "subscription"]) {
     for (const exercise of [{}, training]) {
@@ -376,6 +385,93 @@ test("the tournament page uses CUP even for unclassified or training-shaped sour
   }
   assert.deepEqual(calls, Array.from({ length: 6 },
     () => ["https://cup.example/api/tournaments/cup-event/checkout", "tournament:cup-event:actor"]));
+
+  salesPaused = false;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 6);
+  assert.deepEqual(ownerAttempts, [], "lifting the pause does not create a checkout");
+  await create({ checkoutContext: "tournament", exerciseId: "cup-event", clientId: "actor", exercise: training, product: product() });
+  assert.equal(calls.length, 7);
+  assert.deepEqual(ownerAttempts, [calls[6][0]], "a new explicit checkout sends one POST after the pause");
+});
+
+test("LK1 tournament booking checks an ambiguous 202 with reads and clears the notice only on verified booking", async () => {
+  const source = parse("src/components/tournament-signup/TournamentSignupPage.tsx");
+  const pending = { data: null, error: { raw: { details: { code: "LK1_ALLOWANCE_BINDING_INVALID" } } }, status: 202 };
+  const tournamentId = "fixture-tournament";
+  const exerciseId = training.id;
+  const currentCheckout = checkout();
+  const token = () => "fixture-session";
+  const requestId = { current: 1 };
+  const noOp = () => {};
+  let notice;
+  let confirmed = false;
+  const calls = [];
+  const deps = {
+    selectedId: tournamentId, selectedExerciseId: exerciseId, actionLoading: false, subscriptionUsageShadowEnabled: false,
+    checkout: currentCheckout, isRestoringSession: false, checkoutRequestIdRef: requestId,
+    readAuthToken: token, tournamentPaymentSessionIdentity: value => value,
+    checkLevel: async () => true, detail: null, selectedTournament: null, normalizePhone: value => value,
+    setError: noOp, setActionLoading: noOp, setConfirmingSubscriptionProductKey: noOp, setCheckout: noOp,
+    setSubscriptionConfirmationNotice: value => { notice = value; },
+    isTournamentCapacityError: () => false, items: [],
+    setLoadingDetail: noOp, setRegistrationResolvedFor: noOp, setRegistrationSessionIdentity: noOp,
+    setDetail: noOp, setRegistration: noOp, publicRosterDetailAbortRef: { current: null },
+    apiFetchTournamentSignupDetail: async () => {
+      calls.push("GET detail");
+      return { data: { exerciseId } };
+    },
+    apiFetchTournamentMyRegistration: async () => {
+      calls.push("GET CUP registration");
+      return { data: { status: "NONE" } };
+    },
+    apiFetchTournamentVivaMyRegistration: async () => {
+      calls.push("GET Viva registration");
+      return { data: confirmed ? { status: "REGISTERED", bookingId: "fixture-booking" } : { status: "NONE" } };
+    },
+    loadPublicRoster: async () => { calls.push("GET roster"); },
+    mergeTournamentPendingPayment: async (_token, _exercise, registration) => registration,
+    apiReconcileTournamentOwner: () => assert.fail("read-only status check attempted a mutation"),
+    apiCreateTournamentVivaTransaction: async () => { calls.push("POST booking"); return pending; },
+  };
+  const loadDetail = callback("loadDetail", { ...deps, isAuthenticated: true }, source);
+  const book = callback("completeVivaRegistration", { ...deps, isAuthenticated: true, loadDetail }, source);
+  await book(currentCheckout, product("client-subscription"));
+  const reads = ["GET detail", "GET roster", "GET CUP registration", "GET Viva registration"];
+  assert.deepEqual(calls, ["POST booking", ...reads]);
+  assert.equal(notice, "Подтверждение записи или доплаты от Viva пока не получено.");
+
+  await loadDetail(tournamentId, { checkOnly: true });
+  assert.ok(notice);
+  confirmed = true;
+  await loadDetail(tournamentId, { checkOnly: true });
+  assert.equal(notice, null);
+  assert.deepEqual(calls, ["POST booking", ...reads, ...reads, ...reads]);
+
+  const confirmation = find(source, node => ts.isJsxExpression(node)
+    && node.expression?.getText(source).includes(">Запись подтверждена.</div>"));
+  const renderConfirmation = (registration, registrationSessionIdentity = token()) =>
+    renderToStaticMarkup(evaluate(`(${confirmation.expression.getText(source)})`, {
+      loadingDetail: false, subscriptionConfirmationNotice: notice, isAuthenticated: true,
+      selectedId: tournamentId, selectedExerciseId: exerciseId, registrationResolvedFor: `${tournamentId}:${exerciseId}`,
+      registrationSessionIdentity, tournamentPaymentSessionIdentity: value => value, readAuthToken: token, registration,
+    }));
+  assert.equal(renderConfirmation({ status: "REGISTERED", bookingId: null }), "");
+  assert.equal(renderConfirmation({ status: "REGISTERED", bookingId: "fixture-booking" }, "previous-session"), "");
+  assert.match(renderConfirmation({ status: "REGISTERED", bookingId: "fixture-booking" }), /Запись подтверждена\./u);
+
+  const submit = [];
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "completeVivaRegistration") submit.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(submit.length > 0);
+  assert.ok(submit.every(call => {
+    // The void expression and arrow are children of the JSX click attribute.
+    const attribute = call.parent.parent.parent.parent;
+    return ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "onClick";
+  }), "neither OAuth completion nor passive reload can submit a booking");
 });
 
 test("only a durable CUP refusal rotates the key for a new explicit action", async () => {
