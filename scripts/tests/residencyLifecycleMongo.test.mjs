@@ -258,6 +258,86 @@ test("the lifecycle persists an unresolved attempt and restarts from disk", { sk
   });
 });
 
+test("an ambiguous CUP activation survives a restarted process and is not refreshed twice", { skip }, async () => {
+  await withDatabase(async ({ collection }) => {
+    const store = createMongoResidencyLifecycleStore({ collection });
+    const now = NOW;
+    let activateCalls = 0;
+    let contextReads = 0;
+    let context = "DOWN";
+    const build = () => createResidencyLifecycle({
+      clock: { now: () => now },
+      ids: {
+        orderId: (tenantId, keyHash) => "00000000-0000-4000-8000-" + sha256(tenantId + keyHash).slice(0, 12),
+        eventId: () => "event-1",
+      },
+      sha256,
+      store,
+      catalog: { async read() {
+        return { productId: RESIDENCY_PRODUCT_ID, title: "Резидентство ПадлхАБ", termDays: 30, priceMinor: 79000,
+          currency: "RUB", benefits: [], checkedAt: new Date(NOW).toISOString() };
+      } },
+      payments: {
+        async create() {
+          return { status: "PENDING", providerTransactionId: "txn-1", paymentUrl: "https://bank.example/pay/1",
+            amountMinor: 79000, expiresAt: "2026-11-18T09:20:00.000Z" };
+        },
+        async read() {
+          return { status: "PAID", amountMinor: 79000, paidAt: new Date(NOW + 300000).toISOString(),
+            providerTransactionId: "txn-1" };
+        },
+      },
+      activation: {
+        async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: new Date(NOW + 300000).toISOString() }; },
+        async read() {
+          contextReads += 1;
+          if (context === "DOWN") throw new Error("CUP context unavailable");
+          return { state: "ACTIVE", validFrom: new Date(NOW + 300000).toISOString(),
+            validUntil: new Date(NOW + 300000 + 30 * 86400000).toISOString(), source: "CUP",
+            observedAt: new Date(NOW + 300000).toISOString() };
+        },
+        async activate() {
+          activateCalls += 1;
+          throw new Error("CUP timeout after the command may have been applied");
+        },
+      },
+      discounts: { async quote({ baseAmountMinor }) { return { discountLines: [], totalMinor: baseAmountMinor }; } },
+      status: { async read() { return { state: "NONE", source: "CUP", observedAt: new Date(NOW).toISOString() }; } },
+    });
+    const created = await build().createOrder({ tenantId: TENANT, userId: USER, idempotencyKey: KEY,
+      expectedTotalMinor: 79000, mode: "NEW" });
+    const orderId = created.order.orderId;
+    const first = await build().reconcile({ tenantId: TENANT, userId: USER, orderId,
+      idempotencyKey: KEY + "-r1", eventId: "evt-1" });
+    assert.equal(first.order.state, "PAID_ACTIVATION_PENDING");
+    assert.equal(first.order.activation.state, "UNKNOWN");
+    assert.equal(activateCalls, 1);
+    const durable = await store.getOrder(TENANT, USER, orderId);
+    assert.equal(durable.activation.state, "UNKNOWN");
+
+    // A fresh lifecycle instance over the same collection represents the restarted process.
+    const restarted = build();
+    const second = await restarted.reconcile({ tenantId: TENANT, userId: USER, orderId,
+      idempotencyKey: KEY + "-r2", eventId: "evt-2" });
+    assert.equal(second.order.state, "PAID_ACTIVATION_PENDING");
+    assert.equal(second.order.activation.state, "UNKNOWN");
+    assert.equal(second.order.activation.lastErrorCode, "ACTIVATION_CONTEXT_UNAVAILABLE");
+    assert.equal(activateCalls, 1);
+    assert.equal(contextReads, 1);
+
+    context = "ACTIVE";
+    const finalized = await restarted.reconcile({ tenantId: TENANT, userId: USER, orderId,
+      idempotencyKey: KEY + "-r3", eventId: "evt-3" });
+    assert.equal(finalized.order.state, "ACTIVE");
+    assert.equal(activateCalls, 1);
+    assert.equal(contextReads, 2);
+    const activeRow = await store.getOrder(TENANT, USER, orderId);
+    assert.equal(activeRow.state, "ACTIVE");
+    assert.equal(activeRow.activation.state, "ACTIVE");
+    assert.equal(activeRow.activation.attempts, 2);
+  });
+});
+
 test("a held create response that loses the CAS is persisted through the real store", { skip }, async () => {
   await withDatabase(async ({ collection }) => {
     const store = createMongoResidencyLifecycleStore({ collection });

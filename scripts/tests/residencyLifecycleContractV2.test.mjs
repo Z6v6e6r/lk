@@ -127,6 +127,15 @@ function harness(overrides = {}) {
       return state.activation || { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL,
         source: "CUP_RESIDENCY_POLICY", observedAt: PAID_AT };
     },
+    // A read-only context after an ambiguous command: an explicit non-ACTIVE answer
+    // proves the first refresh was not applied and allows one retry; an ACTIVE answer
+    // finalizes it without another command.
+    async read() {
+      state.contextReads = (state.contextReads || 0) + 1;
+      if (state.contextFails) throw new Error("CUP context down");
+      if (state.activation && state.activation.state === "ACTIVE") return state.activation;
+      return { state: "PENDING" };
+    },
   };
   const buildLifecycle = () => createResidencyLifecycle({
     clock: { now: () => state.now },

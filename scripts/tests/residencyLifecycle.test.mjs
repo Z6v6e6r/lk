@@ -457,14 +457,22 @@ test("an explicit provider rejection is a confirmed basis for a terminal failure
   assert.notEqual(replacement.order.orderId, failed.order.orderId);
 });
 
-test("CUP activation failure keeps the order PAID_ACTIVATION_PENDING and recovers on the next reconcile", async () => {
+test("a lost CUP activation answer is recovered from context without a second command", async () => {
   let activateCalls = 0;
+  let reads = 0;
+  let context = "DOWN";
   const activation = {
-    async findInstance() { return { clientSubscriptionId: "sub-1" }; },
+    async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async read() {
+      reads += 1;
+      if (context === "DOWN") throw new Error("CUP context unavailable");
+      return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT };
+    },
     async activate() {
       activateCalls += 1;
-      if (activateCalls === 1) throw new Error("CUP timeout");
-      return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT };
+      // The command reached CUP, but the response was lost. A retry must not be sent
+      // until the read-only context proves whether the first command was applied.
+      throw new Error("CUP timeout after the command may have been applied");
     },
   };
   const payments = {
@@ -476,10 +484,30 @@ test("CUP activation failure keeps the order PAID_ACTIVATION_PENDING and recover
   const { lifecycle } = build({ store: creator.store, payments, activation });
   const first = await lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-1" });
   assert.equal(first.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(first.order.activation.state, "UNKNOWN");
   assert.equal(first.order.activation.lastErrorCode, "ACTIVATION_UNAVAILABLE");
+  assert.equal(activateCalls, 1);
+
   const second = await lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-2" });
-  assert.equal(second.order.state, ORDER_STATES.ACTIVE);
-  assert.equal(activateCalls, 2);
+  assert.equal(second.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(second.order.activation.state, "UNKNOWN");
+  assert.equal(second.order.activation.lastErrorCode, "ACTIVATION_CONTEXT_UNAVAILABLE");
+  assert.equal(activateCalls, 1);
+  assert.equal(reads, 1);
+
+  // A restarted process reads the same durable uncertainty; the lost answer is not
+  // turned into a fresh activation command.
+  const restarted = build({ store: creator.store, payments, activation });
+  const third = await restarted.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-3" });
+  assert.equal(third.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(third.order.activation.state, "UNKNOWN");
+  assert.equal(activateCalls, 1);
+
+  context = "ACTIVE";
+  const fourth = await restarted.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-4" });
+  assert.equal(fourth.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(fourth.order.activation.attempts, 2);
+  assert.equal(activateCalls, 1);
 });
 
 test("a cancelled order never activates a late payment and is flagged for review", async () => {
@@ -1503,6 +1531,115 @@ test("an unreadable CUP context blocks a stale IN_FLIGHT retry", async () => {
   assert.equal(result.order.state, ORDER_STATES.ACTIVATION_PENDING);
   assert.equal(result.order.activation.lastErrorCode, "ACTIVATION_CONTEXT_UNAVAILABLE");
   assert.equal(activateCalls, 0);
+});
+
+test("a stale IN_FLIGHT with a lost ACTIVE write is not refreshed while CUP context is unavailable", async () => {
+  const external = externalPort([]);
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const payments = {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  };
+  let activateCalls = 0;
+  const firstActivation = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async activate() {
+      activateCalls += 1;
+      return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT };
+    },
+  };
+  const active = build({ store: creator.store, external, config: GUARD, payments, activation: firstActivation });
+  active.setNow(Date.parse("2026-11-18T09:05:00.000Z"));
+  const completed = await active.lifecycle.reconcile({ tenantId: TENANT, userId: USER,
+    orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-active" });
+  assert.equal(completed.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(activateCalls, 1);
+
+  // The CUP command succeeded, but the ACTIVE write was lost. This is the durable
+  // crash window the retest modeled: the first refresh must not be sent again.
+  const row = creator.store.orders.get(created.order.orderId);
+  creator.store.orders.set(created.order.orderId, { ...row, state: ORDER_STATES.ACTIVATION_PENDING,
+    revision: row.revision + 1, residency: null,
+    activation: { ...row.activation, state: "IN_FLIGHT", startedAt: "2026-11-18T09:00:00.000Z" } });
+
+  let contextReads = 0;
+  const contextDown = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async read() { contextReads += 1; throw new Error("CUP context unavailable"); },
+    async activate() { activateCalls += 1; throw new Error("must not refresh"); },
+  };
+  const restarted = build({ store: creator.store, external, config: GUARD, payments, activation: contextDown });
+  restarted.setNow(Date.parse("2026-11-18T09:06:00.000Z"));
+  const firstRecovery = await restarted.lifecycle.reconcile({ tenantId: TENANT, userId: USER,
+    orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-recovery-1" });
+  assert.equal(firstRecovery.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(firstRecovery.order.activation.state, "UNKNOWN");
+  assert.equal(firstRecovery.order.activation.lastErrorCode, "ACTIVATION_CONTEXT_UNAVAILABLE");
+  assert.equal(contextReads, 1);
+  assert.equal(activateCalls, 1);
+
+  // The old defect reset the marker to PENDING here; the next pass then sent refresh #2.
+  const repeated = await restarted.lifecycle.reconcile({ tenantId: TENANT, userId: USER,
+    orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-recovery-2" });
+  assert.equal(repeated.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(repeated.order.activation.state, "UNKNOWN");
+  assert.equal(repeated.order.activation.lastErrorCode, "ACTIVATION_CONTEXT_UNAVAILABLE");
+  assert.equal(contextReads, 2);
+  assert.equal(activateCalls, 1);
+
+  // A real restart against the same durable row must not resend either.
+  const restartedAgain = build({ store: creator.store, external, config: GUARD, payments, activation: contextDown });
+  restartedAgain.setNow(Date.parse("2026-11-18T09:07:00.000Z"));
+  const afterRestart = await restartedAgain.lifecycle.reconcile({ tenantId: TENANT, userId: USER,
+    orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-recovery-3" });
+  assert.equal(afterRestart.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(afterRestart.order.activation.state, "UNKNOWN");
+  assert.equal(activateCalls, 1);
+
+  contextDown.read = async function read() {
+    contextReads += 1;
+    return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP", observedAt: PAID_AT };
+  };
+  const finalized = await restartedAgain.lifecycle.reconcile({ tenantId: TENANT, userId: USER,
+    orderId: created.order.orderId, idempotencyKey: KEY2, eventId: "evt-recovery-4" });
+  assert.equal(finalized.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(finalized.order.activation.lastErrorCode, null);
+  assert.equal(activateCalls, 1);
+  assert.equal(contextReads, 4);
+});
+
+test("an ambiguous activation without a CUP context port never repeats the refresh", async () => {
+  let activateCalls = 0;
+  const activation = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", purchasedAt: PAID_AT }; },
+    async activate() { activateCalls += 1; throw new Error("ACK lost"); },
+  };
+  const payments = {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  };
+  const creator = build();
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const probe = build({ store: creator.store, payments, activation });
+  const first = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-no-port-1" });
+  assert.equal(first.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(first.order.activation.state, "UNKNOWN");
+  assert.equal(activateCalls, 1);
+  const second = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-no-port-2" });
+  assert.equal(second.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(second.order.activation.state, "UNKNOWN");
+  assert.equal(second.order.activation.lastErrorCode, "ACTIVATION_CONTEXT_UNAVAILABLE");
+  assert.equal(activateCalls, 1);
+  const restarted = build({ store: creator.store, payments, activation });
+  const third = await restarted.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-no-port-3" });
+  assert.equal(third.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(activateCalls, 1);
 });
 
 test("an external OPEN, UNKNOWN or PAID operation blocks reconcile activation", async () => {

@@ -115,6 +115,10 @@ export function createResidencyLifecycle(deps) {
   const externalLookbackMs = Number.isSafeInteger(config.externalLookbackMs) && config.externalLookbackMs > 0
     ? config.externalLookbackMs : 30 * 86400000;
   const EXTERNAL_PAID_GRACE_MS = 5 * 60 * 1000;
+  // A claimed CUP refresh whose answer was lost (timeout, unreadable context or no
+  // context port) must stay durably ambiguous. PENDING would let the next pass treat
+  // the command as never sent and issue a second one.
+  const AMBIGUOUS_ACTIVATION_STATES = ["IN_FLIGHT", "UNKNOWN"];
 
   const nowIso = () => new Date(clock.now()).toISOString();
 
@@ -1068,6 +1072,17 @@ export function createResidencyLifecycle(deps) {
   }
 
   /**
+   * A retryable outcome of a CUP activation. Once a refresh has been claimed, a timeout,
+   * an unreadable context or any other inconclusive result is not PENDING: the command
+   * may already have been applied. UNKNOWN is durable, so every later reconcile or
+   * restarted process must read the CUP context before it may send another refresh.
+   */
+  function retryActivation(order, paymentConfirmed, activationState, recovering) {
+    if (!recovering) return activationOutcome(order, paymentConfirmed, activationState);
+    return activationOutcome(order, paymentConfirmed, { ...activationState, state: "UNKNOWN" });
+  }
+
+  /**
    * Every activation, from create, reconcile, or an explicitly invoked expiry sweep, first reads
    * the provider's external list. OPEN/UNKNOWN always block; a PAID operation created at or
    * after this order also blocks. An unavailable list is fail-closed: no CUP activation
@@ -1158,7 +1173,7 @@ export function createResidencyLifecycle(deps) {
       // its claim; that worker already passed the conflict check before claiming.
       return order;
     }
-    const recovering = order.activation.state === "IN_FLIGHT";
+    const recovering = AMBIGUOUS_ACTIVATION_STATES.includes(order.activation.state);
     const conflict = await activationExternalConflict(order);
     if (conflict?.code === "EXTERNAL_PAYMENT_DETECTED") {
       if (paymentConfirmed) {
@@ -1166,12 +1181,12 @@ export function createResidencyLifecycle(deps) {
           activation: { ...order.activation, state: "REQUIRES_REVIEW", lastErrorCode: conflict.code },
         });
       }
-      return keepUnconfirmed(order, { state: "PENDING", lastErrorCode: conflict.code });
+      return retryActivation(order, paymentConfirmed, { state: "PENDING", lastErrorCode: conflict.code }, recovering);
     }
     if (conflict) {
       // The check could not be completed. A confirmed payment stays retryable, but it is
       // not activated; an unconfirmed dispatch stays unresolved and keeps its slot.
-      return activationOutcome(order, paymentConfirmed, { state: "PENDING", lastErrorCode: conflict.code });
+      return retryActivation(order, paymentConfirmed, { state: "PENDING", lastErrorCode: conflict.code }, recovering);
     }
     const claimed = {
       ...order,
@@ -1193,31 +1208,32 @@ export function createResidencyLifecycle(deps) {
         paidAt: order.payment.paidAt,
       });
     } catch {
-      return activationOutcome(order, paymentConfirmed,
-        { state: "PENDING", lastErrorCode: "INSTANCE_LOOKUP_UNAVAILABLE" });
+      return retryActivation(order, paymentConfirmed,
+        { state: "PENDING", lastErrorCode: "INSTANCE_LOOKUP_UNAVAILABLE" }, recovering);
     }
     if (!instance || !text(instance.clientSubscriptionId, 128)) {
       // An absent instance is retryable: CUP must confirm the purchase first, and a
       // later reconcile can see the issued instance without a second charge. For an
       // unconfirmed dispatch the absence proves nothing about the payment either.
-      return activationOutcome(order, paymentConfirmed,
-        { state: "PENDING", lastErrorCode: "INSTANCE_NOT_FOUND" });
+      return retryActivation(order, paymentConfirmed,
+        { state: "PENDING", lastErrorCode: "INSTANCE_NOT_FOUND" }, recovering);
     }
     if (iso(instance.purchasedAt) && Date.parse(instance.purchasedAt) < Date.parse(order.createdAt)) {
       // An instance purchased before this order is not evidence for it. This is the
       // renewal guard against binding an old subscription to the new payment.
-      return activationOutcome(order, paymentConfirmed,
-        { state: "PENDING", lastErrorCode: "INSTANCE_BEFORE_ORDER" });
+      return retryActivation(order, paymentConfirmed,
+        { state: "PENDING", lastErrorCode: "INSTANCE_BEFORE_ORDER" }, recovering);
     }
-    // A crash may have happened after the CUP refresh succeeded but before ACTIVE was
-    // written. The lease is stale (fresh IN_FLIGHT returns above); read the CUP context
-    // without refresh first and finalize from it. Only an explicit non-ACTIVE context may
-    // fall through to a retry; an unreadable context stays retryable without a command.
+    // A crash or a lost response may have left a refresh that already executed. The
+    // durable marker (IN_FLIGHT or UNKNOWN) must survive every inconclusive answer:
+    // read the CUP context without refresh first and finalize from it. Only an explicit
+    // non-ACTIVE context may fall through to a retry; an unreadable context or a missing
+    // context port keeps UNKNOWN and issues no command.
     if (recovering && typeof activation.read !== "function") {
-      return activationOutcome(order, paymentConfirmed, {
-        state: "PENDING", lastErrorCode: "ACTIVATION_CONTEXT_UNAVAILABLE",
+      return retryActivation(order, paymentConfirmed, {
+        lastErrorCode: "ACTIVATION_CONTEXT_UNAVAILABLE",
         clientSubscriptionId: instance.clientSubscriptionId,
-      });
+      }, true);
     }
     if (recovering) {
       let prior;
@@ -1228,10 +1244,10 @@ export function createResidencyLifecycle(deps) {
           clientSubscriptionId: instance.clientSubscriptionId,
         });
       } catch {
-        return activationOutcome(order, paymentConfirmed, {
-          state: "PENDING", lastErrorCode: "ACTIVATION_CONTEXT_UNAVAILABLE",
+        return retryActivation(order, paymentConfirmed, {
+          lastErrorCode: "ACTIVATION_CONTEXT_UNAVAILABLE",
           clientSubscriptionId: instance.clientSubscriptionId,
-        });
+        }, true);
       }
       if (prior?.state === "ACTIVE") return recordActivation(order, instance, prior, paymentConfirmed);
     }
@@ -1243,8 +1259,8 @@ export function createResidencyLifecycle(deps) {
         clientSubscriptionId: instance.clientSubscriptionId,
       });
     } catch {
-      return activationOutcome(order, paymentConfirmed,
-        { state: "PENDING", attempts: order.activation.attempts + 1, lastErrorCode: "ACTIVATION_UNAVAILABLE" });
+      return retryActivation(order, paymentConfirmed,
+        { attempts: order.activation.attempts + 1, lastErrorCode: "ACTIVATION_UNAVAILABLE" }, true);
     }
     return recordActivation(order, instance, result, paymentConfirmed);
   }
