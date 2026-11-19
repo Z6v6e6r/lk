@@ -246,7 +246,8 @@ test("the lifecycle persists an unresolved attempt and restarts from disk", { sk
       expectedTotalMinor: 79000, mode: "NEW" }), (error) => error.code === "RESIDENCY_ORDER_ALREADY_PENDING");
     // A crash that persisted no error code surfaces the lease itself.
     await store.updateOrder(TENANT, first.order.orderId, row.revision,
-      { ...row, payment: { ...row.payment, lastErrorCode: null } });
+      { ...row, payment: { ...row.payment, lastErrorCode: null },
+        activation: { ...row.activation, lastErrorCode: null } });
     const crash = await restarted.getOrder({ tenantId: TENANT, userId: USER, orderId: first.order.orderId });
     assert.equal(crash.order.recovery.reason, "DISPATCH_LEASE_EXPIRED");
   });

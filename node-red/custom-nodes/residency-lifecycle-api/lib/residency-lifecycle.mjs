@@ -806,59 +806,24 @@ export function createResidencyLifecycle(deps) {
     return order;
   }
 
-  /** Best-effort provider readback for a payment view; it never creates an operation. */
-  async function refreshFromProvider(order) {
-    if (order.state !== ORDER_STATES.PENDING_PAYMENT) return order;
-    if (!order.payment.providerTransactionId) return order;
-    if (order.payment.status === "PENDING" && order.payment.paymentUrl
-      && (!order.payment.expiresAt || clock.now() < Date.parse(order.payment.expiresAt))) {
-      return order;
-    }
-    let read;
-    try {
-      read = await payments.read({
-        tenantId: order.tenantId, userId: order.userId, orderId: order.orderId,
-        amountMinor: order.pricing.totalMinor, providerTransactionId: order.payment.providerTransactionId,
-      });
-    } catch { return order; }
-    if (!read || !["PAID", "PENDING", "FAILED", "UNKNOWN"].includes(read.status)) return order;
-    if (read.status === "PAID") {
-      if (!money(read.amountMinor) || read.amountMinor !== order.pricing.totalMinor) return order;
-      return transition(order, ORDER_STATES.PAID, {
-        payment: { ...order.payment, status: "PAID", paymentUrl: null,
-          paidAt: iso(read.paidAt) ? read.paidAt : nowIso(), lastCheckedAt: nowIso(), lastErrorCode: null },
-      });
-    }
-    if (read.status === "FAILED") {
-      return transition(order, ORDER_STATES.PAYMENT_FAILED, {
-        payment: { ...order.payment, status: "FAILED", paymentUrl: null, lastCheckedAt: nowIso(), lastErrorCode: "PAYMENT_FAILED" },
-      });
-    }
-    if (read.status === "PENDING") {
-      return transition(order, ORDER_STATES.PENDING_PAYMENT, {
-        payment: {
-          ...order.payment, status: "PENDING",
-          providerTransactionId: text(read.providerTransactionId, 128) ? read.providerTransactionId : order.payment.providerTransactionId,
-          paymentUrl: text(read.paymentUrl, 4096) ? read.paymentUrl : order.payment.paymentUrl,
-          expiresAt: iso(read.expiresAt) ? read.expiresAt : order.payment.expiresAt,
-          lastCheckedAt: nowIso(), lastErrorCode: null,
-        },
-      });
-    }
-    return transition(order, ORDER_STATES.PENDING_PAYMENT, {
-      payment: { ...order.payment, status: "UNKNOWN", lastCheckedAt: nowIso(), lastErrorCode: "PAYMENT_STATUS_UNKNOWN" },
-    });
-  }
-
-  async function getOrder(query) {
+  /**
+   * GET routes are durable projections. They must never expire, transition, activate or
+   * write: an expired local window is surfaced through recovery, not acted on by a read.
+   * Only reconcile (and the explicit expiry sweep) may move an order.
+   */
+  async function requireOrder(query) {
     if (!query || !text(query.tenantId, 128) || !text(query.userId, 128) || !uuid(query.orderId)) {
       fail(400, "RESIDENCY_REQUEST_INVALID", "Invalid order request");
     }
     const order = await store.getOrder(query.tenantId, query.userId, query.orderId);
     if (!order) fail(404, "RESIDENCY_ORDER_NOT_FOUND", "Order not found");
     assertOrderShape(order);
-    const effective = await expireIfDue(order);
-    return { order: publicOrder(effective) };
+    return order;
+  }
+
+  async function getOrder(query) {
+    const order = await requireOrder(query);
+    return { order: publicOrder(order) };
   }
 
   async function listOrders(query) {
@@ -871,26 +836,19 @@ export function createResidencyLifecycle(deps) {
     const orders = [];
     for (const row of rows) {
       assertOrderShape(row);
-      const effective = await expireIfDue(row);
-      if (!TERMINAL_STATES.includes(effective.state)) orders.push(publicOrder(effective));
+      if (!TERMINAL_STATES.includes(row.state)) orders.push(publicOrder(row));
     }
-    const externalView = await readExternalAttempts({ tenantId: query.tenantId, userId: query.userId });
+    const externalView = external ? await readExternalAttempts({ tenantId: query.tenantId, userId: query.userId }) : null;
     // The read remains available when the provider list is: a servicing path is never
     // taken down by an auxiliary check. The view says "unknown", not "no other purchase".
-    const externalCheck = external ? externalCheckView(externalView, orders) : null;
+    // Compute it over the original rows, before terminal filtering, so an activation cannot
+    // hide the conflicting paid operation it raced with.
+    const externalCheck = externalView ? externalCheckView(externalView, rows) : null;
     return { schemaVersion: RESIDENCY_LIFECYCLE_VERSION, orders, count: orders.length, externalCheck };
   }
 
   async function getPayment(query) {
-    await getOrder(query);
-    let order = await store.getOrder(query.tenantId, query.userId, query.orderId);
-    assertOrderShape(order);
-    order = await refreshFromProvider(order);
-    if (order.state === ORDER_STATES.PAID || order.state === ORDER_STATES.ACTIVATION_PENDING) {
-      // A paid order is surfaced as paid even before CUP activation is confirmed.
-      const view = publicOrder(order);
-      return { ...paymentPayload(view), state: order.state, paymentStatus: view.payment.status, paymentUrl: null };
-    }
+    const order = await requireOrder(query);
     const view = publicOrder(order);
     return { ...paymentPayload(view), state: view.state, paymentStatus: view.payment.status,
       paymentUrl: view.payment.paymentUrl };
@@ -1105,6 +1063,26 @@ export function createResidencyLifecycle(deps) {
       : keepUnconfirmed(order, activationState);
   }
 
+  /**
+   * Every activation, from create, reconcile, a late read or the expiry sweep, first reads
+   * the provider's external list. OPEN/UNKNOWN always block; a PAID operation created at or
+   * after this order also blocks. An unavailable list is fail-closed: no CUP activation
+   * without a completed conflict check.
+   */
+  async function activationExternalConflict(order) {
+    if (!external) return null;
+    const view = await readExternalAttempts({ tenantId: order.tenantId, userId: order.userId });
+    if (view.state !== "OK") return { code: "EXTERNAL_CHECK_UNAVAILABLE" };
+    const own = text(order.payment?.providerTransactionId, 128) ? order.payment.providerTransactionId : null;
+    const since = Date.parse(order.createdAt) - EXTERNAL_PAID_GRACE_MS;
+    const blocking = view.attempts.filter((row) => {
+      if (row.transactionId === own) return false;
+      if (row.state === "OPEN" || row.state === "UNKNOWN") return true;
+      return row.state === "PAID" && Date.parse(row.createdAt) >= since;
+    });
+    return blocking.length > 0 ? { code: "EXTERNAL_PAYMENT_DETECTED" } : null;
+  }
+
   async function activate(order) {
     const eligible = [ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING, ORDER_STATES.ACTIVATION_FAILED].includes(order.state)
       || (order.state === ORDER_STATES.PENDING_PAYMENT && ["DISPATCHING", "UNKNOWN"].includes(order.payment.status));
@@ -1114,6 +1092,20 @@ export function createResidencyLifecycle(deps) {
     // evidence) may be presented as paid. A dispatch whose outcome is unknown is not proof
     // that money was received.
     const paymentConfirmed = order.payment.status === "PAID" || PAID_PHASES.includes(order.state);
+    const conflict = await activationExternalConflict(order);
+    if (conflict?.code === "EXTERNAL_PAYMENT_DETECTED") {
+      if (paymentConfirmed) {
+        return transition(order, ORDER_STATES.PAID_REQUIRES_REVIEW, {
+          activation: { ...order.activation, state: "REQUIRES_REVIEW", lastErrorCode: conflict.code },
+        });
+      }
+      return keepUnconfirmed(order, { state: "PENDING", lastErrorCode: conflict.code });
+    }
+    if (conflict) {
+      // The check could not be completed. A confirmed payment stays retryable, but it is
+      // not activated; an unconfirmed dispatch stays unresolved and keeps its slot.
+      return activationOutcome(order, paymentConfirmed, { state: "PENDING", lastErrorCode: conflict.code });
+    }
     const inFlightSince = iso(order.activation.startedAt) ? Date.parse(order.activation.startedAt) : null;
     if (order.activation.state === "IN_FLIGHT" && inFlightSince !== null && clock.now() - inFlightSince < 120000) {
       // Another worker owns this activation. Do not call CUP twice.

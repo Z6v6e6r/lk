@@ -599,7 +599,7 @@ test("public order never exposes the Viva transaction id", async () => {
   assert.equal(created.order.payment.paymentUrl, "https://bank.example/pay/1");
 });
 
-test("a confirmed terminal provider read closes the order and frees the slot", async () => {
+test("a confirmed terminal provider read closes the order only through reconcile", async () => {
   const creator = build();
   const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER, idempotencyKey: KEY, mode: "NEW" });
   creator.setNow(Date.parse("2026-11-18T09:20:00.000Z"));
@@ -608,10 +608,20 @@ test("a confirmed terminal provider read closes the order and frees the slot", a
     async read() { return { status: "FAILED", amountMinor: 79000, providerTransactionId: "txn-1" }; },
   } });
   closed.setNow(Date.parse("2026-11-18T09:20:00.000Z"));
-  const order = await closed.lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
-  assert.equal(order.order.state, ORDER_STATES.PAYMENT_FAILED);
-  assert.equal(order.order.terminal, true);
-  assert.equal(order.order.payment.paymentUrl, null);
+  // A GET is a projection: the provider FAILED read must not close the order or free the slot.
+  const projected = await closed.lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(projected.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(projected.order.terminal, false);
+  assert.equal(projected.order.payment.paymentUrl, "https://bank.example/pay/1");
+  const projectedPayment = await closed.lifecycle.getPayment({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(projectedPayment.paymentUrl, "https://bank.example/pay/1");
+  assert.equal(projectedPayment.terminal, false);
+  assert.equal(creator.store.orders.get(created.order.orderId).activeSlot, 1);
+  const reconciled = await closed.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-terminal-failed" });
+  assert.equal(reconciled.order.state, ORDER_STATES.PAYMENT_FAILED);
+  assert.equal(reconciled.order.terminal, true);
+  assert.equal(reconciled.order.payment.paymentUrl, null);
   const payment = await closed.lifecycle.getPayment({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
   assert.equal(payment.paymentUrl, null);
   assert.equal(payment.terminal, true);
@@ -1344,6 +1354,144 @@ test("an unavailable external check does not take the servicing read down", asyn
   assert.equal(listed.externalCheck.state, "UNAVAILABLE");
   assert.equal(listed.externalCheck.requiresReview, false);
   assert.equal(listed.externalCheck.retryable, true);
+});
+
+test("the three GET routes project the durable order without expiring or activating", async () => {
+  let rows = [];
+  const external = { calls: 0, async list() { this.calls += 1; return { transactions: rows.map((row) => ({ ...row })) }; } };
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const orderId = created.order.orderId;
+  creator.setNow(Date.parse("2026-11-18T09:30:00.000Z"));
+  rows = [{ transactionId: "legacy-open-get", state: "OPEN", status: "UNPAID",
+    createdAt: new Date(Date.parse(created.order.createdAt) + 60000).toISOString() }];
+  const before = structuredClone(creator.store.orders.get(orderId));
+
+  const read = await creator.lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId });
+  const listed = await creator.lifecycle.listOrders({ tenantId: TENANT, userId: USER, state: "unresolved" });
+  const payment = await creator.lifecycle.getPayment({ tenantId: TENANT, userId: USER, orderId });
+
+  const after = creator.store.orders.get(orderId);
+  assert.deepEqual(after, before);
+  assert.equal(after.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(after.payment.status, "PENDING");
+  assert.equal(after.revision, before.revision);
+  assert.equal(read.order.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(read.order.payment.status, "PENDING");
+  assert.equal(listed.count, 1);
+  assert.equal(listed.orders[0].state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(listed.externalCheck.openCount, 1);
+  assert.equal(listed.externalCheck.requiresReview, true);
+  assert.equal(payment.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(payment.paymentStatus, "PENDING");
+  assert.equal(payment.paymentUrl, "https://bank.example/pay/1");
+  assert.equal(creator.calls.activate, 0);
+  assert.equal(creator.calls.read, 0);
+  assert.equal(creator.calls.findInstance, 0);
+});
+
+test("an external OPEN, UNKNOWN or PAID operation blocks reconcile activation", async () => {
+  for (const externalState of ["OPEN", "UNKNOWN", "PAID"]) {
+    let rows = [];
+    const external = { calls: 0, async list() { this.calls += 1; return { transactions: rows.map((row) => ({ ...row })) }; } };
+    const creator = build({ external, config: GUARD });
+    const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+      idempotencyKey: KEY, mode: "NEW" });
+    rows = [{ transactionId: "legacy-" + externalState, state: externalState, status: externalState,
+      createdAt: new Date(Date.parse(created.order.createdAt) + 60000).toISOString() }];
+    const paid = build({ store: creator.store, external, config: GUARD, payments: {
+      async create() { throw new Error("must not create"); },
+      async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+    } });
+    const result = await paid.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+      idempotencyKey: KEY2, eventId: "evt-external-" + externalState });
+    assert.equal(result.order.state, ORDER_STATES.PAID_REQUIRES_REVIEW, externalState);
+    assert.equal(result.order.activation.lastErrorCode, "EXTERNAL_PAYMENT_DETECTED", externalState);
+    assert.equal(paid.calls.activate, 0, externalState);
+    assert.equal(paid.calls.findInstance, 0, externalState);
+  }
+});
+
+test("an immediate PAID create checks the external list before its only activation", async () => {
+  for (const externalState of ["OPEN", "PAID"]) {
+    let rows = [];
+    const external = { calls: 0, async list() { this.calls += 1; return { transactions: rows.map((row) => ({ ...row })) }; } };
+    const creator = build({ external, config: GUARD, payments: {
+      async create() {
+        rows = [{ transactionId: "legacy-immediate", state: externalState, status: externalState,
+          createdAt: "2026-11-18T09:06:00.000Z" }];
+        return { status: "PAID", providerTransactionId: "txn-1", amountMinor: 79000, paidAt: PAID_AT };
+      },
+      async read() { throw new Error("must not read"); },
+    } });
+    const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+      idempotencyKey: KEY, mode: "NEW" });
+    assert.equal(created.order.state, ORDER_STATES.PAID_REQUIRES_REVIEW, externalState);
+    assert.equal(created.order.activation.lastErrorCode, "EXTERNAL_PAYMENT_DETECTED", externalState);
+    assert.equal(creator.calls.activate, 0, externalState);
+    assert.equal(creator.calls.findInstance, 0, externalState);
+  }
+});
+
+test("an unavailable external list blocks an immediate PAID activation", async () => {
+  let fail = false;
+  const external = { async list() {
+    if (fail) throw Object.assign(new Error("down"), { code: "EXTERNAL_DOWN" });
+    return { transactions: [] };
+  } };
+  const creator = build({ external, config: GUARD, payments: {
+    async create() {
+      fail = true;
+      return { status: "PAID", providerTransactionId: "txn-1", amountMinor: 79000, paidAt: PAID_AT };
+    },
+    async read() { throw new Error("must not read"); },
+  } });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  assert.equal(created.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(created.order.activation.lastErrorCode, "EXTERNAL_CHECK_UNAVAILABLE");
+  assert.equal(created.order.payment.status, "PAID");
+  assert.equal(creator.calls.activate, 0);
+});
+
+test("a single confirmed payment activates exactly once across repeated reconcile and restart", async () => {
+  const external = externalPort([]);
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const activationCalls = { count: 0 };
+  const activation = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", status: "ACTIVE" }; },
+    async activate() {
+      activationCalls.count += 1;
+      return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, source: "CUP_RESIDENCY_POLICY", observedAt: PAID_AT };
+    },
+  };
+  const payments = {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  };
+  const first = build({ store: creator.store, external, config: GUARD, payments, activation });
+  const result = await first.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-first" });
+  assert.equal(result.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(activationCalls.count, 1);
+
+  const repeated = await first.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-repeat" });
+  assert.equal(repeated.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(activationCalls.count, 1);
+
+  const restarted = build({ store: creator.store, external, config: GUARD, payments, activation });
+  const afterRestart = await restarted.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-restart" });
+  assert.equal(afterRestart.order.state, ORDER_STATES.ACTIVE);
+  const read = await restarted.lifecycle.getOrder({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  const payment = await restarted.lifecycle.getPayment({ tenantId: TENANT, userId: USER, orderId: created.order.orderId });
+  assert.equal(read.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(payment.state, ORDER_STATES.ACTIVE);
+  assert.equal(activationCalls.count, 1);
 });
 
 test("reconcile preserves the original order for review when a second paid operation exists", async () => {

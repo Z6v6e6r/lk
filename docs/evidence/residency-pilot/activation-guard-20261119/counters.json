@@ -1,0 +1,36 @@
+{
+  "source": "scripts/tests/residencyLifecycle.test.mjs and scripts/tests/residencyLifecycleHttp.test.mjs",
+  "synthetic": true,
+  "realProviderCalls": 0,
+  "getRoutes": {
+    "order": {
+      "writes": 0,
+      "activationCalls": 0
+    },
+    "unresolvedList": {
+      "writes": 0,
+      "activationCalls": 0
+    },
+    "payment": {
+      "writes": 0,
+      "activationCalls": 0,
+      "providerReads": 0
+    }
+  },
+  "conflict": {
+    "externalStates": [
+      "OPEN",
+      "UNKNOWN",
+      "PAID"
+    ],
+    "resultState": "PAID_REQUIRES_REVIEW",
+    "activationError": "EXTERNAL_PAYMENT_DETECTED",
+    "activationCalls": 0,
+    "findInstanceCalls": 0
+  },
+  "singleConfirmedPayment": {
+    "firstReconcileActivations": 1,
+    "afterRepeatActivations": 1,
+    "afterRestartActivations": 1
+  }
+}

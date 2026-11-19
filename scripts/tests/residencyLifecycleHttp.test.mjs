@@ -200,6 +200,32 @@ test("full user journey: catalog -> checkout -> payment -> CUP activation -> sta
   assert.equal(renewed.body.order.renewal.baseValidUntil, "2026-12-18T09:05:00.000Z");
 });
 
+test("order, unresolved and payment GETs are read-only and never activate", async () => {
+  const { api, state, store } = harness();
+  const created = await api.handle(req("POST", "/lk/residency/orders", { expectedTotalMinor: 79000 }, { "Idempotency-Key": KEY }));
+  const orderId = created.body.order.orderId;
+  const before = structuredClone(store.orders.get(orderId));
+  state.paid = true;
+  state.subscription = { subscriptionId: SUB, productId: RESIDENCY_PRODUCT_ID, clientId: CLIENT, status: "ACTIVE",
+    purchaseDate: "2026-11-18T09:05:00.000Z", activationDate: "2026-11-18T09:05:00.000Z" };
+  state.now = Date.parse("2026-11-18T09:30:00.000Z");
+
+  const read = await api.handle(req("GET", "/lk/residency/orders/" + orderId));
+  const listed = await api.handle(req("GET", "/lk/residency/orders?state=unresolved"));
+  const payment = await api.handle(req("GET", "/lk/residency/orders/" + orderId + "/payment"));
+
+  assert.deepEqual(store.orders.get(orderId), before);
+  assert.equal(read.body.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(read.body.payment.status, "PENDING");
+  assert.equal(listed.body.count, 1);
+  assert.equal(listed.body.orders[0].state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(payment.body.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(payment.body.paymentStatus, "PENDING");
+  assert.equal(payment.body.paymentUrl, "https://bank.example/pay/1");
+  assert.equal(state.activationCalls, 0);
+  assert.equal(state.cupCalls, 0);
+});
+
 test("personal pilot gate denies creation before any order, provider call or idempotency lookup", async () => {
   const denied = harness(undefined, ({ tenantId, userId }) => tenantId === TENANT && userId === "pilot-user"
     ? { allowed: true } : { allowed: false, statusCode: 403, code: "RESIDENCY_CREATE_NOT_ALLOWED", message: "not allowed" });

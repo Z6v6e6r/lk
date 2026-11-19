@@ -43,6 +43,8 @@ const evidence = path.join(root, "docs/evidence/residency-pilot/isolated-composi
 for (const name of ["README.md", "hashes.txt", "e2e-scenarios.json", "backend-http.txt", "environment.txt", "indexes.json"]) {
   copy(path.join(evidence, name), path.join(out, "evidence", name));
 }
+const guardEvidence = path.join(root, "docs/evidence/residency-pilot/activation-guard-20261119");
+if (fs.existsSync(guardEvidence)) copyTree(guardEvidence, path.join(out, "evidence", "activation-guard-20261119"));
 copy(dist, path.join(out, "frontend/bundle.js"));
 const head = execSync("git rev-parse HEAD", { cwd: root, encoding: "utf8" }).trim();
 const release = { version: "prepared-not-published", sourceCommit: head, generatedAt: new Date().toISOString(),

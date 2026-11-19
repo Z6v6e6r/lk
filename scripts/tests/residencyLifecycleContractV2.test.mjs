@@ -321,12 +321,17 @@ test("an unreadable provider readback never frees the checkout", async () => {
   assert.equal(next.statusCode, 409);
   assert.equal(h.state.createCalls, 1);
 
-  // Once the provider proves a terminal failure, the order closes and the slot is free.
+  // The GET stays read-only even when the provider later proves a terminal failure.
   h.state.readFails = false;
   h.state.readStatus = "FAILED";
-  const closed = await h.api.handle(h.request("GET", "/lk/residency/orders/" + created.body.order.orderId));
-  assert.equal(closed.body.state, ORDER_STATES.PAYMENT_FAILED);
-  assert.equal(closed.body.terminal, true);
+  const projected = await h.api.handle(h.request("GET", "/lk/residency/orders/" + created.body.order.orderId));
+  assert.equal(projected.body.state, ORDER_STATES.PENDING_PAYMENT);
+  assert.equal(projected.body.terminal, false);
+  assert.equal(h.store.orders.get(created.body.order.orderId).activeSlot, 1);
+  // Only reconcile closes the order and frees the slot.
+  const closed = await h.api.handle(h.request("POST", "/lk/residency/orders/" + created.body.order.orderId + "/reconcile", {}, H(KEY3)));
+  assert.equal(closed.body.order.state, ORDER_STATES.PAYMENT_FAILED);
+  assert.equal(closed.body.order.terminal, true);
   const replacement = await h.api.handle(h.request("POST", "/lk/residency/orders", createBody(), H(KEY2)));
   assert.equal(replacement.statusCode, 200);
   assert.notEqual(replacement.body.order.orderId, created.body.order.orderId);

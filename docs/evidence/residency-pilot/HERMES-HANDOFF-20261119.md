@@ -1,6 +1,8 @@
-# Hermes handoff: residency pilot browser artifacts (2026-11-19)
+# Hermes handoff: residency pilot browser artifacts and activation guard (2026-11-19)
 
-From PR #452 head <code>a7ca3270</code>; local stand installed from the 25-file packet.
+From the current PR #452 head; the exact source commit is in `frontend/release.json` in the
+packet. The browser code is unchanged from the previous pilot artifact; the server custom
+node now has the read-only GET contract and the pre-activation conflict guard.
 No real Viva/CUP/Keycloak call, no payment, no 147 change.
 
 ## Artifacts to use
@@ -8,11 +10,12 @@ No real Viva/CUP/Keycloak call, no payment, no 147 change.
 | Role | File / identity | Bytes | SHA-256 |
 | --- | --- | --- | --- |
 | Old published client (exact) | <code>artifacts/published-legacy-bundle.js</code>, release <code>20261118T164240Z</code>, source <code>27ea6a8c1665789786b8a6c6fc9c657dc48483ed</code> | 2 946 728 | <code>fce60c89044f95ef7ec9faf1d53267dfce87fcc996efa00dbacee87ab50485be</code> |
-| New pilot client (packet) | <code>frontend/bundle.js</code> from <code>residency-pilot-install-20261118</code>, source <code>a7ca3270</code>, <code>prepared-not-published</code> | 2 976 424 | <code>0a83dbc72dc6c55549bab42ce597aa65089f9eca94f3577d803b04e018cbd59e</code> |
+| New pilot client (packet) | <code>frontend/bundle.js</code> from <code>residency-pilot-install-20261119</code>, source = <code>frontend/release.json</code>, <code>prepared-not-published</code> | 2 976 424 | <code>0a83dbc72dc6c55549bab42ce597aa65089f9eca94f3577d803b04e018cbd59e</code> |
 | Local synthetic bf3 (not production) | <code>artifacts/residency-client-bf3/bundle.js</code> | — | <code>4c3fdca47c6442e9a07801450558de78e7b1600160bc74e343d2f59c8db02c72</code> |
 
-Packet: 25 files, <code>SHA256SUMS</code> <code>3bd31d631a155b1c07e7301d4ebb45b055b1952a573477baa546500526a69c2b</code>.
-Do not substitute the synthetic bf3 build for the packet artifact in accepted results.
+Packet: <code>residency-pilot-install-20261119</code>; <code>SHA256SUMS</code> and the exact
+source commit are inside. Do not substitute the synthetic bf3 build for the packet artifact
+in accepted results.
 
 ## Shared composition snapshot
 
@@ -69,6 +72,33 @@ Pages: old <code>https://joint.fixture/lk_new?buyResidency=1</code>, selector
 
 The old path creating a transaction while the new create is stopped is expected and must be
 reported as the residual risk, not as a new-service failure.
+
+## Activation guard acceptance (new head)
+
+The server now guarantees:
+
+- <code>GET /orders/{id}</code>, <code>GET /orders?state=unresolved</code> and
+  <code>GET /orders/{id}/payment</code> are projections. They do not change state,
+  revision or <code>activeSlot</code>, do not read the provider in the payment endpoint,
+  and send **0** CUP `residency-booking-refresh` commands.
+- Every activation path (immediate PAID create, reconcile, late read, expiry sweep) first
+  reads the provider's external transaction list. `OPEN`, `UNKNOWN` or a `PAID`
+  operation created at/after the order blocks activation. An unavailable list is
+  fail-closed.
+- A conflict ends in `PAID_REQUIRES_REVIEW` / `EXTERNAL_PAYMENT_DETECTED` with
+  **0** activation calls.
+- One confirmed payment activates exactly once: first reconcile 1, repeated reconcile 1,
+  restart + reconcile 1.
+
+| Case | Expected |
+| --- | --- |
+| Any of the three GETs after the local window | 200, same durable row/revision, 0 CUP activation |
+| External `OPEN` / `UNKNOWN` / `PAID` conflict at reconcile | `PAID_REQUIRES_REVIEW`, 0 activation, 0 CUP |
+| Conflict at immediate PAID create | `PAID_REQUIRES_REVIEW`, 0 activation |
+| Single confirmed payment, repeat + restart | exactly 1 activation total |
+
+Evidence: `docs/evidence/residency-pilot/activation-guard-20261119/` and the packet's
+`evidence/activation-guard-20261119/`. Synthetic only; no real Viva/CUP/payment.
 
 ## Stand hygiene before acceptance
 
