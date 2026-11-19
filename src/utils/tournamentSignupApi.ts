@@ -2980,8 +2980,12 @@ function normalizeConfirmedSubscriptionBookingPayment(payload: unknown): Tournam
     || (value.toPay !== undefined && value.toPay !== minor / 100)) return null;
   let paymentUrl: string | null = null;
   if (minor > 0) {
-    if (value.paid !== false || typeof value.transactionId !== "string" || !value.transactionId.trim()
-      || typeof value.paymentUrl !== "string") return null;
+    if (typeof value.transactionId !== "string" || !value.transactionId.trim()) return null;
+    if (value.paid === true && value.paymentUrl === null) {
+      return { bookingId: value.bookingId, paymentUrl: null, toPay: minor,
+        paid: true, paymentExpiresAt: null, raw: payload };
+    }
+    if (value.paid !== false || typeof value.paymentUrl !== "string") return null;
     try {
       const url = new URL(value.paymentUrl);
       if (url.protocol !== "https:" || url.username || url.password) return null;
