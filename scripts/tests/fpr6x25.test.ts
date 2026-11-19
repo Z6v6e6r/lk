@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   createFprState, applyFprCommand, fprCurrentAttempt, fprCompletedRounds, fprStandings,
   fprProjection, fprReserveThreshold, fprServeAt, fprStartingSides, validateFprState,
-  type FprState, type FprCommand,
+  type FprState, type FprCommand, type FprMatch,
 } from "../../src/components/tournaments/fpr6x25.ts";
 
 const start = Date.parse("2026-10-28T18:00:00Z");
@@ -32,15 +32,39 @@ type Action = FprCommand extends infer T ? T extends FprCommand ? Omit<T, "id" |
 function command(s: FprState, action: Action, minute: number): FprState {
   return applyFprCommand(s, { ...action, id: `cmd-${s.revision + 1}`, expectedRevision: s.revision } as FprCommand, at(minute));
 }
-function play(s: FprState, round: number, minute = round * 12): FprState {
+function play(s: FprState, round: number, scores?: number[]): FprState {
+  const minute = round * 12;
   if (!fprCurrentAttempt(s)) s = command(s, { action: "prepare_round" }, minute);
   s = command(s, { action: "start_round" }, minute);
   for (const [i, m] of fprCurrentAttempt(s)!.matches.entries()) {
-    const score1 = (round * 7 + i * 3) % 26;
+    const score1 = scores?.[i] ?? (round * 7 + i * 3) % 26;
     s = command(s, { action: "score", matchId: m.id, score1, score2: 25 - score1, confirmed1: true, confirmed2: true }, minute + 8);
   }
   return command(s, { action: "close_round" }, minute + 9);
 }
+
+test("the multi-court draw prioritizes gaps over two, and prefers new opponents within the threshold", () => {
+  const cases = [
+    // The old opponent-first draw repeated four opponent links but had gaps of 3 and 5.
+    { scores: [[8, 12], [16, 3], [24, 20]], gaps: [0, 2], repeatedOpponents: 6 },
+    // A strict balance rule gives two gaps of 0 here but repeats four opponent links.
+    { scores: [[2, 2], [10, 19]], gaps: [2, 2], repeatedOpponents: 0 },
+  ];
+  for (const { scores, gaps, repeatedOpponents } of cases) {
+    const state = scores.reduce((s, roundScores, i) => play(s, i + 1, roundScores), event(8, "balance-test"));
+    const ordered = fprStandings(state).map(player => player.id);
+    const matches = fprCurrentAttempt(state)!.matches;
+    const sum = (pair: string[]) => pair.reduce((total, id) => total + ordered.indexOf(id), 0);
+    const matchGaps = matches.map(match => Math.abs(sum(match.pair1) - sum(match.pair2)));
+    assert.deepEqual(matchGaps.sort((a, b) => a - b), gaps);
+
+    const opponents = (match: FprMatch) =>
+      match.pair1.flatMap(a => match.pair2.map(b => [a, b].sort().join("/")));
+    const pastOpponents = new Set(state.attempts.filter(attempt => attempt.status === "closed")
+      .flatMap(attempt => attempt.matches.flatMap(opponents)));
+    assert.equal(matches.flatMap(opponents).filter(link => pastOpponents.has(link)).length, repeatedOpponents);
+  }
+});
 
 test("all 75 Appendix A combinations and protocol conservation, N=4..28, R=6..8", () => {
   for (let n = 4; n <= 28; n += 1) {

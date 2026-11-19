@@ -1,6 +1,7 @@
 // Regulation 1.1, 26 October 2026. This module is also compiled into Node-RED.
 // Keep it self-contained: the server and browser must run the same planner/reducer.
 export const FPR_VERSION = "fpr-6x25-1.1.0";
+const PAIR_BALANCE_THRESHOLD = 2;
 export type FprPlayerInput = {
   id: string;
   name: string;
@@ -228,21 +229,24 @@ function planLargeRound(state: FprState, ordered: string[], window: 8 | 12): Pai
   const previous = state.attempts.filter(a => a.startedAt).at(-1);
   const previousPartners = new Set(previous?.matches.filter(hasPoints).flatMap(partnerKeys) ?? []);
   const cost = (matches: Pairing[]) => {
-    const result = [0, 0, 0, 0, 0, 0, 0];
+    const result = [0, 0, 0, 0, 0, 0, 0, 0];
     for (const match of matches) {
       for (const key of partnerKeys(match)) {
         const count = history.partners.get(key) ?? 0;
         result[0] += count > 0 ? 1 : 0; result[1] += count;
-        result[2] += previousPartners.has(key) ? 1 : 0;
+        result[3] += previousPartners.has(key) ? 1 : 0;
       }
+      const pairGap = Math.abs(ranks.get(match.pair1[0])! + ranks.get(match.pair1[1])!
+        - ranks.get(match.pair2[0])! - ranks.get(match.pair2[1])!);
+      // Let diversity decide within the soft threshold. Keep the exact gap as the last tie-break.
+      result[2] += Math.max(0, pairGap - PAIR_BALANCE_THRESHOLD) ** 2;
       for (const key of opponentKeys(match)) {
         const count = history.opponents.get(key) ?? 0;
-        result[3] += count > 0 ? 1 : 0; result[4] += count;
+        result[4] += count > 0 ? 1 : 0; result[5] += count;
       }
       const places = idsInMatch(match).map(id => ranks.get(id)!);
-      result[5] += (Math.max(...places) - Math.min(...places)) ** 2;
-      result[6] += (ranks.get(match.pair1[0])! + ranks.get(match.pair1[1])!
-        - ranks.get(match.pair2[0])! - ranks.get(match.pair2[1])!) ** 2;
+      result[6] += (Math.max(...places) - Math.min(...places)) ** 2;
+      result[7] += pairGap ** 2;
     }
     return result;
   };
