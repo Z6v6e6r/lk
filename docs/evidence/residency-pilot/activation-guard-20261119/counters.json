@@ -37,5 +37,22 @@
     "overwritten": false,
     "activationCalls": 0,
     "state": "PAID_ACTIVATION_PENDING"
+  },
+  "staleInFlightRecovery": {
+    "contextReads": 1,
+    "refreshCalls": 0,
+    "state": "ACTIVE",
+    "attempts": 1
+  },
+  "staleInFlightContextUnavailable": {
+    "contextReads": 0,
+    "refreshCalls": 0,
+    "state": "PAID_ACTIVATION_PENDING",
+    "error": "ACTIVATION_CONTEXT_UNAVAILABLE"
+  },
+  "externalCheckAfterActive": {
+    "count": 0,
+    "paidAfterOrderCount": 1,
+    "requiresReview": true
   }
 }

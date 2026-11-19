@@ -88,7 +88,11 @@ The server now guarantees:
 - A conflict ends in `PAID_REQUIRES_REVIEW` / `EXTERNAL_PAYMENT_DETECTED` with
   **0** activation calls.
 - One confirmed payment activates exactly once: first reconcile 1, repeated reconcile 1,
-  restart + reconcile 1.
+  restart + reconcile 1. A stale `IN_FLIGHT` after a crash is finalized from CUP
+  `residency-booking-context` (refresh false), so a successful first refresh is not
+  repeated; an unreadable context is retryable without a refresh command.
+- `GET /orders?state=unresolved` computes `externalCheck` over recently terminal orders
+  too, so an ACTIVE activation cannot hide a later external PAID operation.
 
 | Case | Expected |
 | --- | --- |
@@ -96,6 +100,8 @@ The server now guarantees:
 | External `OPEN` / `UNKNOWN` / `PAID` conflict at reconcile | `PAID_REQUIRES_REVIEW`, 0 activation, 0 CUP |
 | Conflict at immediate PAID create | `PAID_REQUIRES_REVIEW`, 0 activation |
 | Single confirmed payment, repeat + restart | exactly 1 activation total |
+| Stale `IN_FLIGHT` after a crash, CUP context ACTIVE | finalized from context, 0 second refresh |
+| ACTIVE order + later external PAID | list `count=0`, `paidAfterOrderCount=1`, `requiresReview=true` |
 
 Evidence: `docs/evidence/residency-pilot/activation-guard-20261119/` and the packet's
 `evidence/activation-guard-20261119/`. Synthetic only; no real Viva/CUP/payment.

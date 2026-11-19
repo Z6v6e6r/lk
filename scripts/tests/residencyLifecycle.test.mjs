@@ -60,6 +60,13 @@ function memoryStore() {
         .slice(0, limit)
         .map((o) => structuredClone(o));
     },
+    async listRecentOrders(tenantId, userId, sinceIso, limit) {
+      return [...orders.values()].filter((o) => o.tenantId === tenantId && o.userId === userId
+        && o.updatedAt >= sinceIso)
+        .sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1))
+        .slice(0, limit)
+        .map((o) => structuredClone(o));
+    },
     async listExpiredPending(tenantId, nowIso) {
       return [...orders.values()].filter((o) => o.tenantId === tenantId && o.state === "PENDING_PAYMENT"
         && o.payment.expiresAt && o.payment.expiresAt <= nowIso).map((o) => structuredClone(o));
@@ -1344,6 +1351,27 @@ test("listOrders exposes an open external attempt created after the order", asyn
   assert.equal(listed.externalCheck.requiresReview, true);
 });
 
+test("listOrders externalCheck sees a paid conflict after the order became ACTIVE", async () => {
+  let rows = [];
+  const external = { calls: 0, async list() { this.calls += 1; return { transactions: rows.map((row) => ({ ...row })) }; } };
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const paid = build({ store: creator.store, external, config: GUARD, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  } });
+  const activated = await paid.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-active-before-conflict" });
+  assert.equal(activated.order.state, ORDER_STATES.ACTIVE);
+  rows = [{ transactionId: "legacy-paid-after-active", state: "PAID", status: "PAID",
+    createdAt: new Date(Date.parse(created.order.createdAt) + 60000).toISOString() }];
+  const listed = await creator.lifecycle.listOrders({ tenantId: TENANT, userId: USER, state: "unresolved" });
+  assert.equal(listed.count, 0);
+  assert.equal(listed.externalCheck.paidAfterOrderCount, 1);
+  assert.equal(listed.externalCheck.requiresReview, true);
+});
+
 test("an unavailable external check does not take the servicing read down", async () => {
   const external = externalPort(Object.assign(new Error("down"), { code: "RESIDENCY_EXTERNAL_ATTEMPTS_PARTIAL" }));
   const { lifecycle } = build({ external, config: GUARD });
@@ -1413,6 +1441,68 @@ test("an in-flight activation is not overwritten by a fresh external conflict re
   assert.equal(result.order.state, ORDER_STATES.ACTIVATION_PENDING);
   assert.equal(creator.store.orders.get(created.order.orderId).activation.state, "IN_FLIGHT");
   assert.equal(probe.calls.activate, 0);
+});
+
+test("a stale IN_FLIGHT activation is finalized from CUP context without a second refresh", async () => {
+  const external = externalPort([]);
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const row = creator.store.orders.get(created.order.orderId);
+  creator.store.orders.set(created.order.orderId, { ...row, state: ORDER_STATES.ACTIVATION_PENDING,
+    revision: row.revision + 1,
+    payment: { ...row.payment, status: "PAID", paymentUrl: null, paidAt: PAID_AT },
+    activation: { ...row.activation, state: "IN_FLIGHT", startedAt: "2026-11-18T09:00:00.000Z" } });
+  let readCalls = 0;
+  let activateCalls = 0;
+  const activation = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", status: "ACTIVE", purchasedAt: PAID_AT }; },
+    async read() {
+      readCalls += 1;
+      return { state: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL,
+        source: "CUP_RESIDENCY_POLICY", observedAt: PAID_AT };
+    },
+    async activate() { activateCalls += 1; throw new Error("must not refresh"); },
+  };
+  const probe = build({ store: creator.store, external, config: GUARD, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  }, activation });
+  probe.setNow(Date.parse("2026-11-18T09:06:00.000Z"));
+  const result = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-inflight-recovery" });
+  assert.equal(result.order.state, ORDER_STATES.ACTIVE);
+  assert.equal(result.order.activation.attempts, 1);
+  assert.equal(readCalls, 1);
+  assert.equal(activateCalls, 0);
+});
+
+test("an unreadable CUP context blocks a stale IN_FLIGHT retry", async () => {
+  const external = externalPort([]);
+  const creator = build({ external, config: GUARD });
+  const created = await creator.lifecycle.createOrder({ expectedTotalMinor: 79000, tenantId: TENANT, userId: USER,
+    idempotencyKey: KEY, mode: "NEW" });
+  const row = creator.store.orders.get(created.order.orderId);
+  creator.store.orders.set(created.order.orderId, { ...row, state: ORDER_STATES.ACTIVATION_PENDING,
+    revision: row.revision + 1,
+    payment: { ...row.payment, status: "PAID", paymentUrl: null, paidAt: PAID_AT },
+    activation: { ...row.activation, state: "IN_FLIGHT", startedAt: "2026-11-18T09:00:00.000Z" } });
+  let activateCalls = 0;
+  const activation = {
+    async findInstance() { return { clientSubscriptionId: "sub-1", status: "ACTIVE", purchasedAt: PAID_AT }; },
+    async read() { throw Object.assign(new Error("context down"), { code: "RESIDENCY_UPSTREAM_TIMEOUT" }); },
+    async activate() { activateCalls += 1; throw new Error("must not refresh"); },
+  };
+  const probe = build({ store: creator.store, external, config: GUARD, payments: {
+    async create() { throw new Error("must not create"); },
+    async read() { return { status: "PAID", amountMinor: 79000, paidAt: PAID_AT, providerTransactionId: "txn-1" }; },
+  }, activation });
+  probe.setNow(Date.parse("2026-11-18T09:06:00.000Z"));
+  const result = await probe.lifecycle.reconcile({ tenantId: TENANT, userId: USER, orderId: created.order.orderId,
+    idempotencyKey: KEY2, eventId: "evt-inflight-context-down" });
+  assert.equal(result.order.state, ORDER_STATES.ACTIVATION_PENDING);
+  assert.equal(result.order.activation.lastErrorCode, "ACTIVATION_CONTEXT_UNAVAILABLE");
+  assert.equal(activateCalls, 0);
 });
 
 test("an external OPEN, UNKNOWN or PAID operation blocks reconcile activation", async () => {

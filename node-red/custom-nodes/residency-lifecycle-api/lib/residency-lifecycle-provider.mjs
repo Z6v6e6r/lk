@@ -484,6 +484,11 @@ export function createVivaCupResidencyPorts({
     }
   }
 
+  /** Read-only CUP context used to finalize a stale IN_FLIGHT claim without a second refresh. */
+  async function readContext({ clientSubscriptionId }) {
+    return cupContext({ clientSubscriptionId, refresh: false });
+  }
+
   async function statusRead() {
     try {
       const instance = await findInstance({ productId: c.productId });
@@ -505,7 +510,7 @@ export function createVivaCupResidencyPorts({
   return {
     catalog: { read: catalogRead },
     payments: { create: createPayment, read: readPayment },
-    activation: { findInstance, activate },
+    activation: { findInstance, activate, read: readContext },
     discounts: { quote: discountsQuote },
     status: { read: statusRead },
     external: {

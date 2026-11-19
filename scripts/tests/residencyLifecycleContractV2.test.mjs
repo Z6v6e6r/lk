@@ -69,6 +69,13 @@ function memoryStore() {
         .slice(0, limit)
         .map((o) => structuredClone(o));
     },
+    async listRecentOrders(tenantId, userId, sinceIso, limit) {
+      return [...orders.values()].filter((o) => o.tenantId === tenantId && o.userId === userId
+        && o.updatedAt >= sinceIso)
+        .sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1))
+        .slice(0, limit)
+        .map((o) => structuredClone(o));
+    },
     async listExpiredPending(tenantId, nowIso) {
       return [...orders.values()].filter((o) => o.tenantId === tenantId && o.state === "PENDING_PAYMENT"
         && o.payment.expiresAt && o.payment.expiresAt <= nowIso).map((o) => structuredClone(o));

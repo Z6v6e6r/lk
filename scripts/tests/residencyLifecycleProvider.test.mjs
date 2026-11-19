@@ -228,6 +228,18 @@ test("CUP context is the only activation authority and exposes the exact window"
   assert.deepEqual(JSON.parse(cup.options.body), { clientSubscriptionId: SUB });
 });
 
+test("CUP context read is non-refresh and exposes the same window", async () => {
+  const { ports, calls } = build();
+  const result = await ports.activation.read({ clientSubscriptionId: SUB });
+  assert.equal(result.state, "ACTIVE");
+  assert.equal(result.validFrom, "2026-11-18T09:05:00.000Z");
+  assert.equal(result.validUntil, "2026-12-18T09:05:00.000Z");
+  const context = calls.filter((call) => call.url.includes("residency-booking-context"));
+  assert.equal(context.length, 1);
+  assert.equal(calls.some((call) => call.url.includes("residency-booking-refresh")), false);
+  assert.deepEqual(JSON.parse(context[0].options.body), { clientSubscriptionId: SUB });
+});
+
 test("CUP rejection is a closed activation denial, while a CUP outage is retryable", async () => {
   const rejected = build({ routes: { "residency-booking-refresh": () => response({ code: "RESIDENCY_SYNC_SUBSCRIPTION_NOT_ACTIVE" }, 403) } });
   assert.deepEqual(await rejected.ports.activation.activate({ clientSubscriptionId: SUB }),

@@ -60,6 +60,13 @@ function memoryStore() {
       return [...orders.values()].filter((o) => o.tenantId === tenantId && o.userId === userId
         && ["PENDING_PAYMENT", "PAID", "PAID_ACTIVATION_PENDING", "ACTIVATION_FAILED", "PAID_REQUIRES_REVIEW"].includes(o.state)).slice(0, limit);
     },
+    async listRecentOrders(tenantId, userId, sinceIso, limit) {
+      return [...orders.values()].filter((o) => o.tenantId === tenantId && o.userId === userId
+        && o.updatedAt >= sinceIso)
+        .sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1))
+        .slice(0, limit)
+        .map((o) => structuredClone(o));
+    },
     async listExpiredPending() { return []; },
   };
 }

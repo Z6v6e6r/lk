@@ -91,6 +91,18 @@ export function createMongoResidencyLifecycleStore({ collection }) {
     return rows.map((row) => clone(withoutMongoId(row)));
   }
 
+  /**
+   * Recent orders for the external-conflict view. Unlike listUnresolvedOrders this includes
+   * ACTIVE and terminal rows: an activation must not hide the paid operation it raced with.
+   * The window is bounded by the external lookback; the caller still decides the view.
+   */
+  async function listRecentOrders(tenantId, userId, sinceIso, limit = 50) {
+    const cursor = collection.find({ tenantId, userId, updatedAt: { $gte: sinceIso } })
+      .sort({ updatedAt: -1 }).limit(Math.max(1, Math.min(50, limit)));
+    const rows = await cursor.toArray();
+    return rows.map((row) => clone(withoutMongoId(row)));
+  }
+
   async function listExpiredPending(tenantId, nowIso) {
     const cursor = collection.find({
       tenantId,
@@ -102,7 +114,7 @@ export function createMongoResidencyLifecycleStore({ collection }) {
   }
 
   return { findOrderByKey, getOrder, insertOrder, updateOrder, findUnresolvedOrder, listUnresolvedOrders,
-    findOrdersByTransactionIds, listExpiredPending };
+    listRecentOrders, findOrdersByTransactionIds, listExpiredPending };
 }
 
 /**

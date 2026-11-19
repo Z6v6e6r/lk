@@ -182,6 +182,11 @@ test("the unresolved and expiry queries work on real Mongo operators", { skip },
     await store.insertOrder(pending);
     const paid = orderDocument({ orderId: crypto.randomUUID(), activeSlot: null, state: "PAID" });
     await store.insertOrder(paid);
+    const active = orderDocument({ orderId: crypto.randomUUID(), activeSlot: null, state: "ACTIVE",
+      updatedAt: "2026-11-18T09:10:00.000Z" });
+    await store.insertOrder(active);
+    const recent = await store.listRecentOrders(TENANT, USER, "2026-11-18T09:00:00.000Z", 20);
+    assert.equal(recent.some((row) => row.orderId === active.orderId), true);
     const unresolved = await store.listUnresolvedOrders(TENANT, USER, 20);
     assert.deepEqual(unresolved.map((row) => row.orderId).sort(), [paid.orderId, pending.orderId].sort());
     const expired = await store.listExpiredPending(TENANT, "2026-11-18T09:30:00.000Z");

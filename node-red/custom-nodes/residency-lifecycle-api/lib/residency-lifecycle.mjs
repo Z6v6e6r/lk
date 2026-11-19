@@ -809,7 +809,8 @@ export function createResidencyLifecycle(deps) {
   /**
    * GET routes are durable projections. They must never expire, transition, activate or
    * write: an expired local window is surfaced through recovery, not acted on by a read.
-   * Only reconcile (and the explicit expiry sweep) may move an order.
+   * Only reconcile may move an order. `sweepExpired` is an explicit helper for a caller
+   * or timer that invokes it; it is not wired to any GET route.
    */
   async function requireOrder(query) {
     if (!query || !text(query.tenantId, 128) || !text(query.userId, 128) || !uuid(query.orderId)) {
@@ -841,9 +842,12 @@ export function createResidencyLifecycle(deps) {
     const externalView = external ? await readExternalAttempts({ tenantId: query.tenantId, userId: query.userId }) : null;
     // The read remains available when the provider list is: a servicing path is never
     // taken down by an auxiliary check. The view says "unknown", not "no other purchase".
-    // Compute it over the original rows, before terminal filtering, so an activation cannot
-    // hide the conflicting paid operation it raced with.
-    const externalCheck = externalView ? externalCheckView(externalView, rows) : null;
+    // Include recently terminal orders: an activation must not hide the paid operation it
+    // raced with. Older stores without the method keep the unresolved-only view.
+    const guardRows = externalView && typeof store.listRecentOrders === "function"
+      ? await store.listRecentOrders(query.tenantId, query.userId, new Date(clock.now() - externalLookbackMs).toISOString(), 50)
+      : rows;
+    const externalCheck = externalView ? externalCheckView(externalView, guardRows.length ? guardRows : rows) : null;
     return { schemaVersion: RESIDENCY_LIFECYCLE_VERSION, orders, count: orders.length, externalCheck };
   }
 
@@ -1064,7 +1068,7 @@ export function createResidencyLifecycle(deps) {
   }
 
   /**
-   * Every activation, from create, reconcile, a late read or the expiry sweep, first reads
+   * Every activation, from create, reconcile, or an explicitly invoked expiry sweep, first reads
    * the provider's external list. OPEN/UNKNOWN always block; a PAID operation created at or
    * after this order also blocks. An unavailable list is fail-closed: no CUP activation
    * without a completed conflict check.
@@ -1083,6 +1087,62 @@ export function createResidencyLifecycle(deps) {
     return blocking.length > 0 ? { code: "EXTERNAL_PAYMENT_DETECTED" } : null;
   }
 
+  /**
+   * Records the CUP result. The same projection is used for a fresh activation and for a
+   * stale IN_FLIGHT recovery, so recovery never sends a second refresh when CUP context
+   * already proves the first one succeeded.
+   */
+  function recordActivation(order, instance, result, paymentConfirmed) {
+    if (result?.state === "ACTIVE" && iso(result.validFrom) && iso(result.validUntil)
+      && Date.parse(result.validUntil) > Date.parse(result.validFrom)) {
+      const anomaly = activationAnomaly(order, result);
+      if (anomaly) {
+        // The provider/rights owner returned a window that contradicts the pinned CUP
+        // contract. This is an anomaly after payment, never the routine renewal path.
+        return transition(order, ORDER_STATES.ACTIVATION_FAILED, {
+          activation: { ...order.activation, state: "REJECTED", attempts: order.activation.attempts + 1,
+            lastErrorCode: anomaly, clientSubscriptionId: instance.clientSubscriptionId },
+        });
+      }
+      return transition(order, ORDER_STATES.ACTIVE, {
+        payment: order.payment.status === "PAID" ? order.payment : {
+          ...order.payment,
+          status: "PAID",
+          providerTransactionId: order.payment.providerTransactionId || null,
+          paymentUrl: null,
+          paidAt: iso(instance.purchasedAt) ? instance.purchasedAt : nowIso(),
+          lastCheckedAt: nowIso(),
+        },
+        activation: {
+          state: "ACTIVE", attempts: order.activation.attempts + 1,
+          lastErrorCode: null, clientSubscriptionId: instance.clientSubscriptionId,
+        },
+        residency: {
+          state: RESIDENCY_STATES.ACTIVE,
+          validFrom: result.validFrom,
+          validUntil: result.validUntil,
+          source: text(result.source, 64) ? result.source : "CUP_RESIDENCY_POLICY",
+          observedAt: iso(result.observedAt) ? result.observedAt : nowIso(),
+        },
+      });
+    }
+    if (result?.state === "REJECTED") {
+      const rejected = {
+        state: "REJECTED", attempts: order.activation.attempts + 1,
+        lastErrorCode: text(result.reason, 64) ? result.reason : "ACTIVATION_REJECTED",
+        clientSubscriptionId: instance.clientSubscriptionId,
+      };
+      return paymentConfirmed
+        ? transition(order, ORDER_STATES.ACTIVATION_FAILED, { activation: { ...order.activation, ...rejected } })
+        : keepUnconfirmed(order, rejected);
+    }
+    return activationOutcome(order, paymentConfirmed, {
+      state: "PENDING", attempts: order.activation.attempts + 1,
+      lastErrorCode: text(result?.reason, 64) ? result.reason : "ACTIVATION_UNAVAILABLE",
+      clientSubscriptionId: instance.clientSubscriptionId,
+    });
+  }
+
   async function activate(order) {
     const eligible = [ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING, ORDER_STATES.ACTIVATION_FAILED].includes(order.state)
       || (order.state === ORDER_STATES.PENDING_PAYMENT && ["DISPATCHING", "UNKNOWN"].includes(order.payment.status));
@@ -1098,6 +1158,7 @@ export function createResidencyLifecycle(deps) {
       // its claim; that worker already passed the conflict check before claiming.
       return order;
     }
+    const recovering = order.activation.state === "IN_FLIGHT";
     const conflict = await activationExternalConflict(order);
     if (conflict?.code === "EXTERNAL_PAYMENT_DETECTED") {
       if (paymentConfirmed) {
@@ -1148,6 +1209,26 @@ export function createResidencyLifecycle(deps) {
       return activationOutcome(order, paymentConfirmed,
         { state: "PENDING", lastErrorCode: "INSTANCE_BEFORE_ORDER" });
     }
+    // A crash may have happened after the CUP refresh succeeded but before ACTIVE was
+    // written. The lease is stale (fresh IN_FLIGHT returns above); read the CUP context
+    // without refresh first and finalize from it. Only an explicit non-ACTIVE context may
+    // fall through to a retry; an unreadable context stays retryable without a command.
+    if (recovering && typeof activation.read === "function") {
+      let prior;
+      try {
+        prior = await activation.read({
+          tenantId: order.tenantId, userId: order.userId, orderId: order.orderId,
+          productId: order.product.productId, providerTransactionId: order.payment.providerTransactionId,
+          clientSubscriptionId: instance.clientSubscriptionId,
+        });
+      } catch {
+        return activationOutcome(order, paymentConfirmed, {
+          state: "PENDING", lastErrorCode: "ACTIVATION_CONTEXT_UNAVAILABLE",
+          clientSubscriptionId: instance.clientSubscriptionId,
+        });
+      }
+      if (prior?.state === "ACTIVE") return recordActivation(order, instance, prior, paymentConfirmed);
+    }
     let result;
     try {
       result = await activation.activate({
@@ -1159,54 +1240,7 @@ export function createResidencyLifecycle(deps) {
       return activationOutcome(order, paymentConfirmed,
         { state: "PENDING", attempts: order.activation.attempts + 1, lastErrorCode: "ACTIVATION_UNAVAILABLE" });
     }
-    if (result?.state === "ACTIVE" && iso(result.validFrom) && iso(result.validUntil)
-      && Date.parse(result.validUntil) > Date.parse(result.validFrom)) {
-      const anomaly = activationAnomaly(order, result);
-      if (anomaly) {
-        // The provider/rights owner returned a window that contradicts the pinned CUP
-        // contract. This is an anomaly after payment, never the routine renewal path.
-        return transition(order, ORDER_STATES.ACTIVATION_FAILED, {
-          activation: { ...order.activation, state: "REJECTED", attempts: order.activation.attempts + 1,
-            lastErrorCode: anomaly, clientSubscriptionId: instance.clientSubscriptionId },
-        });
-      }
-      return transition(order, ORDER_STATES.ACTIVE, {
-        payment: order.payment.status === "PAID" ? order.payment : {
-          ...order.payment,
-          status: "PAID",
-          providerTransactionId: order.payment.providerTransactionId || null,
-          paymentUrl: null,
-          paidAt: iso(instance.purchasedAt) ? instance.purchasedAt : nowIso(),
-          lastCheckedAt: nowIso(),
-        },
-        activation: {
-          state: "ACTIVE", attempts: order.activation.attempts + 1,
-          lastErrorCode: null, clientSubscriptionId: instance.clientSubscriptionId,
-        },
-        residency: {
-          state: RESIDENCY_STATES.ACTIVE,
-          validFrom: result.validFrom,
-          validUntil: result.validUntil,
-          source: text(result.source, 64) ? result.source : "CUP_RESIDENCY_POLICY",
-          observedAt: iso(result.observedAt) ? result.observedAt : nowIso(),
-        },
-      });
-    }
-    if (result?.state === "REJECTED") {
-      const rejected = {
-        state: "REJECTED", attempts: order.activation.attempts + 1,
-        lastErrorCode: text(result.reason, 64) ? result.reason : "ACTIVATION_REJECTED",
-        clientSubscriptionId: instance.clientSubscriptionId,
-      };
-      return paymentConfirmed
-        ? transition(order, ORDER_STATES.ACTIVATION_FAILED, { activation: { ...order.activation, ...rejected } })
-        : keepUnconfirmed(order, rejected);
-    }
-    return activationOutcome(order, paymentConfirmed, {
-      state: "PENDING", attempts: order.activation.attempts + 1,
-      lastErrorCode: text(result?.reason, 64) ? result.reason : "ACTIVATION_UNAVAILABLE",
-      clientSubscriptionId: instance.clientSubscriptionId,
-    });
+    return recordActivation(order, instance, result, paymentConfirmed);
   }
 
   /**
