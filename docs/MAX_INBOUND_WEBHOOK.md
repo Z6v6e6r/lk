@@ -1,9 +1,9 @@
-# Prospective MAX PadlHub webhook intake
+# MAX PadlHub webhook intake
 
-The `scripts/max_inbound_webhook` service restores **new message_created events**
-for the main MAX_BOT support connector through an independent HTTPS webhook.
-It does not change Node-RED, the unpaid worker, the outgoing sender/queue, or any
-legacy custody/archive record. It makes no MAX send or polling calls.
+The `scripts/max_inbound_webhook` service receives new messages for the main
+MAX_BOT support connector through an independent HTTPS webhook. The optional
+station flow uses MAX directly for its private keyboard and callback answers.
+Support replies continue through the existing outgoing queue.
 
 The public exact route `/integrations/max/padlhub/webhook` proxies only to
 `127.0.0.1:18941/webhook`. A new dedicated 256-bit webhook secret is mandatory:
@@ -45,8 +45,8 @@ retry is a separate explicit per-record decision, not a queue reset.
 
 - Fixed connector MAX_BOT and CLIENT/INBOUND, sender/chat identities from provider
   fields. Incoming URLs/connector/credential/phone/station overrides are ignored.
-- Bot-origin echoes and non-dialog events are retained as IGNORED, not fed back
-  into support. Only message_created is registered initially.
+- Bot-origin echoes and non-dialog events are retained as IGNORED. A receiver
+  without station configuration handles the original message_created subscription.
 - Text is represented in ordered, individually trimmed parts up to1900 characters
   for the current CUP DTO limit. Exact original event/text remains in metadata and
   the private inbox. A receipt and persistence proof is required for every part.
@@ -63,6 +63,59 @@ CUP's existing quick-reply rules can create their normal auto-reply outbox as a
 consequence of a natural incoming message; deliverToClient:false prevents direct
 forwarding of the event, not configured CUP auto-replies. No legacy NR/GSheet or
 SDK sender is invoked by this service.
+
+## Station selection for the main MAX bot
+
+- An attachment-free `/station` opens the station keyboard in the private dialog
+  after the receiver verifies that the same MAX user and chat belong to a
+  confirmed CUP client. A caption with `/station` and a photo follows the media
+  path.
+- `message_callback` is admitted only on the same authenticated webhook. The
+  receiver uses the actor in `callback.user` and checks the original message
+  sender and private chat. The keyboard uses the existing station catalog.
+  Known buttons from the previous keyboard are accepted too. Unrelated buttons
+  and callbacks with a deleted original message are recorded as IGNORED.
+- A selection sends one `STATION_SELECTED` event to CUP. CUP resolves the
+  canonical station via its existing action mapping. The receiver proves that
+  the new station is recorded on the service message, dialog and verified client
+  before editing the keyboard message to confirm the selection.
+- The original message ID deduplicates commands. The MAX callback ID deduplicates
+  clicks. Both the station write and the subsequent MAX reply have separate
+  durable intents. An uncertain write or reply goes to REVIEW without automatic
+  replay. The dispatch pause covers station actions. Historical `/station` events
+  keep their original inbox disposition.
+
+### Station activation and rollback
+
+1. Prepare the existing protected receiver config with `stationBotToken` from
+   the authorized main bot credential. Set `mongo.serviceMessages` to the active
+   CUP collection for service messages from `SUPPORT_MAX_SERVICE_MESSAGES_COLLECTION`.
+   The observed value on 147 was `max_support_service_messages`. Verify `GET /me`
+   against the configured `botId` from server 147 before activating. Keep the
+   existing webhook secret, CUP media token and ownership/mode of the config
+   file. The receiver validates bot identity again before station writes or replies.
+2. Release the receiver through the existing fenced stop/drain and start
+   sequence. Check the original inbox and health, including
+   `stationEnabled: true`. This field confirms configuration. Verify provider
+   reachability and identity separately.
+3. Update the exact existing main-bot subscription in place to include
+   `message_callback` alongside `message_created`, using its original URL and
+   secret. Read back the provider subscription before proceeding. Other bots and
+   webhook subscriptions retain their settings.
+4. Verify in a confirmed client's test dialog that `/station` opens the menu,
+   the station button updates the CUP profile and dialog, and the next text and
+   photo arrive in that dialog. Observe the bot's confirmation and repeat with a
+   second station.
+5. To revert, restore the exact prior subscription first. Follow the receiver's
+   fenced stop/drain and binary/config rollback using the same inbox. Previous
+   binaries see unfinished station actions as REVIEW and leave them untouched.
+   Reconcile these records under the station-capable version before any decision
+   to resume pending work. Preserve REVIEW records and the existing outgoing
+   archive.
+
+Provider contracts: [callback event](https://dev.max.ru/docs-api/objects/Update/),
+[keyboard](https://dev.max.ru/docs-api/use-cases/sending-messages/keyboard/),
+[callback answer](https://dev.max.ru/docs-api/methods/POST/answers/).
 
 ## Release and rollback
 
