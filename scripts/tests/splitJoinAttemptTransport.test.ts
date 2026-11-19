@@ -221,6 +221,21 @@ test("a proven pre-write refusal (400 + prepare code) allows a new deliberate at
   assert.equal(client.getHeldSplitJoinPaymentRef("game-2"), "ref-2");
 });
 
+test("without a session token nothing is sent and nothing is held; signing in allows the attempt", async () => {
+  const { server, storage } = setup("accept");
+  const client = await loadClient();
+  const token = storage.getItem("padlhub_auth_token_v1");
+  storage.removeItem("padlhub_auth_token_v1");
+  const signedOut = await client.apiCreatePadelSplitParticipantPayment("game-3", joinParams("ref-1") as never);
+  assert.equal(signedOut.error?.status, 401);
+  assert.deepEqual(server.posts, [], "no money command without a session");
+  assert.equal(client.getHeldSplitJoinPaymentRef("game-3"), null, "a request that was never sent holds nothing");
+  storage.setItem("padlhub_auth_token_v1", token!);
+  await client.apiCreatePadelSplitParticipantPayment("game-3", joinParams("ref-2") as never);
+  assert.deepEqual(server.posts.map(post => post.paymentRef), ["ref-2"]);
+  assert.equal(client.getHeldSplitJoinPaymentRef("game-3"), "ref-2");
+});
+
 for (const mode of ["refuse-409", "refuse-422", "checkout-pending-409", "status-500", "status-408"] as const) {
   test(`a ${mode} answer keeps the attempt held: no new key is sent`, async () => {
     const { server } = setup(mode);

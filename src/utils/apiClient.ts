@@ -9519,6 +9519,16 @@ export async function apiCreatePadelSplitParticipantPayment(
           status: 409 as ApiStatus,
         } };
       }
+      // Without a session token request() answers a local 401 and sends nothing. Refuse
+      // before journaling, so the release rule stays server-proof only (status + pre-write
+      // code) and a signed-out click never holds an attempt that no server ever saw.
+      if (!readAuthToken()) {
+        return { early: {
+          data: null as PadelSplitPaymentResult | null,
+          error: { status: 401, message: "Не авторизован" },
+          status: 401 as ApiStatus,
+        } };
+      }
       try {
         const journal = getSplitJoinAttempts();
         const started = journal.begin(attemptKey, paymentRef);

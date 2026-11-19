@@ -56,7 +56,7 @@ export function classifySplitJoinAttempt(record: unknown, paymentRef: string): S
 // the split router forwards a failed GET /transactions/{id} (or a 4xx from the
 // create itself) with Viva's own 400/401/403/404/422 and a provider payload.
 // Each code below is emitted only at one pre-write point; the contract test
-// scripts/tests/splitJoinRefusalContract.test.mjs pins those origins.
+// scripts/tests/splitJoinRefusalContract.test.ts pins those origins.
 const PRE_PROVIDER_REFUSALS = new Map<string, number>([
   // fn_split_join_prepare.js: the stored game cannot address a court; no Viva call yet.
   ["SPLIT_GAME_LOCATION_INCOMPLETE", 400],
