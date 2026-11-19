@@ -5,6 +5,7 @@ import {
   DEFAULT_GROUP_SCHEDULE_PATH,
   normalizeGroupScheduleDate,
   readGroupScheduleEntryDataFromHref,
+  syncGroupScheduleSelectionHref,
 } from "../../src/utils/groupScheduleEntry.ts";
 import { GROUP_SCHEDULE_KIDS_ACADEMY_DIRECTION_IDS } from "../../src/utils/groupScheduleModel.ts";
 import { isTrialGroupTraining, TRIAL_GROUP_DIRECTION_ID } from "../../src/utils/trialGroupTraining.ts";
@@ -136,4 +137,45 @@ test("builds payment return URLs without stale payment flags", () => {
   assert.equal(url.searchParams.get("4lGIgL_date"), null);
   assert.equal(url.searchParams.get("groupPaymentSuccess"), "true");
   assert.equal(url.searchParams.get("groupPaymentFailed"), null);
+});
+
+test("selected training survives refresh and payment return with the same id", () => {
+  const entry = "https://padlhub.ru/group?exerciseId=from-link&authMode=viva";
+  const selected = syncGroupScheduleSelectionHref(entry, { exerciseId: "exercise-7", date: "2026-11-21T10:00:00+03:00" });
+  assert.ok(selected);
+  const afterRefresh = readGroupScheduleEntryDataFromHref(selected);
+  assert.equal(afterRefresh.exerciseId, "exercise-7");
+  assert.equal(afterRefresh.date, "2026-11-21");
+  assert.equal(new URL(selected).searchParams.get("authMode"), "viva");
+
+  const success = buildGroupScheduleReturnUrl(selected, { exerciseId: "exercise-7", date: "2026-11-21", paymentStatus: "success" });
+  const afterPayment = readGroupScheduleEntryDataFromHref(success.toString());
+  assert.equal(afterPayment.exerciseId, "exercise-7");
+  assert.equal(afterPayment.date, "2026-11-21");
+});
+
+test("reopening the paid training keeps its payment return flag", () => {
+  const returned = "https://padlhub.ru/group?groupExerciseId=exercise-7&date=2026-11-21&groupPaymentSuccess=true";
+  assert.equal(syncGroupScheduleSelectionHref(returned, { exerciseId: "exercise-7" }), null);
+  assert.equal(syncGroupScheduleSelectionHref(returned, { exerciseId: "exercise-7", date: "2026-11-21" }), null);
+  const moved = syncGroupScheduleSelectionHref(returned, { exerciseId: "exercise-7", date: "2026-11-22" });
+  assert.equal(new URL(String(moved)).searchParams.get("groupPaymentSuccess"), "true");
+});
+
+test("choosing another training drops the previous payment flag", () => {
+  const returned = "https://padlhub.ru/group?groupExerciseId=exercise-7&date=2026-11-21&groupPaymentFailed=true";
+  const next = new URL(String(syncGroupScheduleSelectionHref(returned, { exerciseId: "exercise-8", date: "2026-11-21" })));
+  assert.equal(next.searchParams.get("groupExerciseId"), "exercise-8");
+  assert.equal(next.searchParams.has("groupPaymentFailed"), false);
+});
+
+test("closing the training clears every exercise alias so refresh shows the list", () => {
+  const opened = "https://padlhub.ru/group?id=a&exerciseId=b&groupExerciseId=c&4lGIgL_exercise=d&date=2026-11-21&groupPaymentSuccess=true&studioId=s";
+  const closed = String(syncGroupScheduleSelectionHref(opened, { exerciseId: null }));
+  const data = readGroupScheduleEntryDataFromHref(closed);
+  assert.equal(data.exerciseId, null);
+  assert.equal(data.date, "2026-11-21");
+  assert.equal(data.studioId, "s");
+  assert.equal(new URL(closed).searchParams.has("groupPaymentSuccess"), false);
+  assert.equal(syncGroupScheduleSelectionHref(closed, { exerciseId: null }), null);
 });

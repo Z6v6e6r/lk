@@ -192,6 +192,7 @@ function paymentOptions(overrides = {}) {
   return evaluate(expression.expression.getText(page), {
     subscriptionUsageShadowEnabled: false, registrationLoading: false, isRegistered: false,
     trialBookingBlocked: false, checkout: current, selectedTraining: training,
+    compositeInput: null, compositePlan: null,
     ownedOneTimes: evaluate(owned.initializer.getText(page), { checkout: current }),
     ownedSubscriptions: [], purchasableProducts: current.oneTimes, discountPending: false, discountError: null,
     actionLoading: false, promoLoading: false, appliedPromo: null, currentDiscountQuotes: [],

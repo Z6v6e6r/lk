@@ -18,7 +18,15 @@ import {
   type GroupTrainingScope,
   type GroupTrainingSummary,
 } from "../../utils/groupScheduleApi";
-import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
+import {
+  buildGroupScheduleReturnUrl,
+  normalizeGroupScheduleDate,
+  syncGroupScheduleSelectionHref,
+} from "../../utils/groupScheduleEntry";
+import { COMPOSITE_RESIDENCY_ENABLED } from "../../residency/residencyConfig";
+import { CompositeResidencyOffer } from "../../residency/CompositeResidencyOffer";
+import { planCompositeResidencyOrder } from "../../residency/compositeResidencyOrder";
+import { buildGroupScheduleCompositeInput } from "../../residency/groupScheduleCompositeOffer";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isTrialGroupTraining } from "../../utils/trialGroupTraining";
 import { resolveTrialGroupEligibilityCheck, type TrialGroupEligibilityDecision } from "../../utils/trialGroupEligibilityCheck";
@@ -381,6 +389,9 @@ export default function GroupSchedulePage({
   const [detailRosterError, setDetailRosterError] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<TournamentVivaCheckout | null>(null);
   const [checkoutLoadError, setCheckoutLoadError] = useState<string | null>(null);
+  const [checkoutObservedAtMs, setCheckoutObservedAtMs] = useState(0);
+  const [compositeConsent, setCompositeConsent] = useState(false);
+  const [compositeNowMs, setCompositeNowMs] = useState(0);
   const [trialEligibility, setTrialEligibility] = useState<(TrialGroupEligibilityDecision & { key: string }) | null>(null);
   const [trialEligibilityRetry, setTrialEligibilityRetry] = useState(0);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
@@ -481,6 +492,23 @@ export default function GroupSchedulePage({
     };
   }, [isTypeFilterOpen]);
 
+  // The opened training lives in the URL: a refresh or a payment return reopens the same id.
+  const selectedDetailDate = selectedDetail?.id === selectedId ? selectedDetail?.date ?? null : null;
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const next = syncGroupScheduleSelectionHref(window.location.href, { exerciseId: selectedId, date: selectedDetailDate });
+    if (!next) return;
+    try {
+      window.history.replaceState(window.history.state, "", next);
+    } catch {
+      // A sandboxed embed may forbid history writes; payment return URLs still carry the id.
+    }
+  }, [selectedId, selectedDetailDate]);
+
+  useEffect(() => {
+    setCompositeConsent(false);
+  }, [selectedId]);
+
   useEffect(() => {
     if (!selectedId) {
       setSelectedDetail(null);
@@ -574,6 +602,9 @@ export default function GroupSchedulePage({
       setCheckoutLoadError(getErrorMessage(checkoutResult.error, "Не удалось получить способы записи."));
     } else {
       setCheckout(checkoutResult.data);
+      const observedAtMs = Date.now();
+      setCheckoutObservedAtMs(observedAtMs);
+      setCompositeNowMs(observedAtMs);
     }
     setRegistrationLoading(false);
   }, [isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled]);
@@ -779,6 +810,22 @@ export default function GroupSchedulePage({
     return () => { cancelled = true; };
   }, [isAuthenticated, isRestoringSession, selectedId, subscriptionUsageShadowEnabled, trialEligibilityKey, trialEligibilityRetry]);
   // PRO offers one-time monetary quotes and existing owned Energy visit packs.
+  // #459: participation + residency offer from #441, behind its default-off flag. It stays
+  // fail closed until the CUP policy (lk#457) and an owned-residency read are wired, and it
+  // never starts a payment here: the single composite Viva transaction is server-side (lk#458).
+  const compositeInput = COMPOSITE_RESIDENCY_ENABLED && checkout && selectedTraining
+    && checkout.exercise.id === selectedTraining.id && !isRegistered && !registrationLoading
+    ? buildGroupScheduleCompositeInput({
+      isTournament: patriotsTournamentSelected,
+      checkout: { ...checkout, exerciseId: selectedTraining.id },
+      checkoutObservedAtMs,
+      nowMs: compositeNowMs,
+    })
+    : null;
+  const compositePlan = compositeInput
+    ? planCompositeResidencyOrder({ ...compositeInput, consentAccepted: compositeConsent })
+    : null;
+
   const purchasableProducts = !checkout
     ? []
     : spanishTrainingSelected || proTrainingSelected || topokratyExcluded ? checkout.oneTimes : [...checkout.oneTimes, ...checkout.subscriptions];
@@ -1443,6 +1490,30 @@ export default function GroupSchedulePage({
                         )}
                         {discountPending && <div className="tournament-signup-muted" role="status">Проверяем скидку по подписке…</div>}
                         {discountError && <div className="tournament-signup-muted" role="status">{discountError}</div>}
+                        {compositeInput && (
+                          <div className="tournament-signup-payment-group" data-exercise-id={selectedTraining.id}>
+                            <CompositeResidencyOffer
+                              input={compositeInput}
+                              consentAccepted={compositeConsent}
+                              onConsentChange={(accepted) => {
+                                // Re-check the residency price age at the moment of consent.
+                                setCompositeNowMs(Date.now());
+                                setCompositeConsent(accepted);
+                              }}
+                            />
+                            {compositePlan?.ok && (
+                              <>
+                                <button className="tournament-signup-payment-option" type="button" disabled>
+                                  <span>Участие и резидентство</span>
+                                  <strong>{formatMoneyMinor(compositePlan.breakdown.totalMinor)}</strong>
+                                </button>
+                                <div className="tournament-signup-muted" role="status">
+                                  Оплата одной суммой пока недоступна. Можно записаться без резидентства.
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                         {purchasableProducts.length > 0 && (
                           <div className="tournament-signup-payment-group">
                             <div className="tournament-signup-payment-purchase-list">
