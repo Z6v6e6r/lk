@@ -288,6 +288,9 @@ const tournamentAdmissionRoute = (ctx) => {
     if (copay && body.state === "COMPLETED" && msg.payload?.state === "CONFIRMED") {
       msg.payload.paymentUrl = null;
       msg.payload.paid = true;
+      msg.payload.settlementState = "CONFIRMED";
+      // The legacy HTTP replay finalizer would reattach the stored checkout URL.
+      if (ctx.caller === "http") delete ctx.lk1IngressReplay;
     }
     return out;
   }

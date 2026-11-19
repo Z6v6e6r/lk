@@ -1252,11 +1252,12 @@ export default function TournamentSignupPage({
       : [null, null];
 
     let ownerRegistration = registrationResult?.data;
-    const ownsCopay = ownerRegistration?.status === "PAYMENT_PENDING";
-    if ((ownsCopay || (!checkOnly && vivaRegistrationResult?.data?.status === "REGISTERED"))
+    const pendingCopay = ownerRegistration?.status === "PAYMENT_PENDING";
+    const ownsCopay = pendingCopay || Boolean(ownerRegistration?.status === "REGISTERED" && ownerRegistration.bookingId);
+    if ((pendingCopay || (!ownsCopay && !checkOnly && vivaRegistrationResult?.data?.status === "REGISTERED"))
       && tournamentPaymentSessionIdentity(requestToken) === tournamentPaymentSessionIdentity(readAuthToken())) {
       const reconciliation = await apiReconcileTournamentOwner(exerciseId);
-      if (ownsCopay && (reconciliation.data?.state === "COMPLETED" || reconciliation.data?.state === "CANCELLED")) {
+      if (pendingCopay && (reconciliation.data?.state === "COMPLETED" || reconciliation.data?.state === "CANCELLED")) {
         ownerRegistration = (await apiFetchTournamentMyRegistration(tournamentId)).data ?? ownerRegistration;
         void loadPublicRoster(exerciseId, { force: true, signal: rosterAbortController.signal });
       }
