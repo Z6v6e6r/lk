@@ -23,6 +23,7 @@ const files = [
   ["src/services/player-rating/fprTournamentRating.ts", "src/services/player-rating/fprTournamentRating.ts"],
   ["src/services/player-rating/fprRatingReplay.ts", "src/services/player-rating/fprRatingReplay.ts"],
   ["scripts/lib/fprLevelLedger.mjs", "scripts/lib/fprLevelLedger.mjs"],
+  ["scripts/lib/ratingTransaction.mjs", "scripts/lib/ratingTransaction.mjs"],
   ["scripts/lib/fprLevelIdentity.mjs", "scripts/lib/fprLevelIdentity.mjs"],
   ["src/components/tournaments/fpr6x25.ts", "src/components/tournaments/fpr6x25.ts"],
   ["src/services/community-rating/fpr.ts", "src/services/community-rating/fpr.ts"],
