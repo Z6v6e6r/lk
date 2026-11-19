@@ -11,6 +11,10 @@ The project includes:
 - Community rating, recalculation, and data repair scripts.
 - Android/Capacitor wrapper artifacts.
 
+## Shared agent assignments
+
+When starting or resuming a shared PadlHub assignment, open the [agent work queue](https://github.com/Z6v6e6r/lk/issues/456). Choose your assigned card, read its latest comments and linked results, and record when you take it. Keep progress, blockers, and the final evidence on that card so the owner and the next agent can continue. If you report through a coordinator, have them post the update with your name.
+
 ## Read by trigger
 
 For every task:
