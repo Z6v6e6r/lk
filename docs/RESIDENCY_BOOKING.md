@@ -1,5 +1,29 @@
 # Residency discounts in the server booking owner
 
+## First purchase from group training
+
+To request a price before buying residency, POST to `/lk/subscriptions/game-price-preview`
+with the player's bearer and `{"target":{"targetKind":"GROUP_TRAINING_RESIDENCY_PURCHASE","exerciseId":"…"}}`.
+The server resolves the exercise, verifies the player's Viva subscription list
+and reads the exercise tariff and the exact residency card in Viva. It then
+calls CUP's internal `residency-purchase-policy` and checks the response against
+the resolved exercise. The request accepts only the exercise ID and no money fields.
+
+The response contains `residencyPurchaseQuote` and `serverTimeMs`. The quote includes
+`exerciseId`, `participationProductId`, `residencyProductId`, `existingResidency: "NONE"`,
+`participationBaseMinor`, `discountPercent`, `participationDiscountMinor`,
+`participationToPayMinor`, `residencyMinor`, and `totalMinor` in RUB minor units,
+along with the publication ID, policy version, policy digest and `expiresAt`
+(epoch milliseconds). The widget must match the exercise and discard an expired
+quote. This first-purchase route refuses an existing residency history or an
+incomplete ownership read. It cannot create a reservation or payment.
+
+The new request mode requires the default-off
+`subscriptions_residency_purchase_quote_enabled` global or
+`SUBSCRIPTIONS_RESIDENCY_PURCHASE_QUOTE_ENABLED` setting, the bound runtime-context
+transport, and the corresponding default-off CUP policy endpoint. The currently
+installed preview remains unchanged until an exact-graph rollout is prepared.
+
 Owner: LK1 subscription booking/payment owner. Audience: holders of Viva product
 `4037a3a3-e551-4f9a-a9db-1410e46b8635` across all stations. Outcome: a game costs
 70% and group training 50% of the verified ordinary tariff, for the published
