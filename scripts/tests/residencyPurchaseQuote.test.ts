@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   isResidencyPurchaseQuoteUsable,
   parseResidencyPurchaseQuote,
+  residencyQuoteExerciseIdFor,
 } from "../../src/residency/residencyPurchaseQuote.ts";
 import { RESIDENCY_PRODUCT_ID } from "../../src/residency/residencyPurchase.ts";
 
@@ -87,4 +88,16 @@ test("refuses quotes that do not add up or do not describe a first residency pur
   assert.deepEqual(parseResidencyPurchaseQuote({ quotes: [], serverTimeMs: SERVER_NOW }, ctx), { ok: false, reason: "QUOTE_MISSING" });
   assert.deepEqual(parseResidencyPurchaseQuote(null, ctx), { ok: false, reason: "QUOTE_MISSING" });
   assert.deepEqual(parseResidencyPurchaseQuote({ ...body(), serverTimeMs: "now" }, ctx), { ok: false, reason: "QUOTE_INVALID" });
+});
+
+test("asks for a first-residency quote only after a confirmed NONE owned-residency read", () => {
+  const base = { compositeEligible: true, isTournament: false, selectedExerciseId: EXERCISE_B };
+  assert.equal(residencyQuoteExerciseIdFor({ ...base, ownedResidencyState: "NONE" }), EXERCISE_B);
+  // In flight, resident, or unknown (failed/partial/stale read): no request, no price, no consent.
+  for (const ownedResidencyState of [null, "ACTIVE", "UNKNOWN"] as const) {
+    assert.equal(residencyQuoteExerciseIdFor({ ...base, ownedResidencyState }), null, String(ownedResidencyState));
+  }
+  assert.equal(residencyQuoteExerciseIdFor({ ...base, ownedResidencyState: "NONE", compositeEligible: false }), null);
+  assert.equal(residencyQuoteExerciseIdFor({ ...base, ownedResidencyState: "NONE", isTournament: true }), null);
+  assert.equal(residencyQuoteExerciseIdFor({ ...base, ownedResidencyState: "NONE", selectedExerciseId: null }), null);
 });

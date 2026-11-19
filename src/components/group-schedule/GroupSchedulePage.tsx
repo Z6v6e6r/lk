@@ -29,6 +29,7 @@ import {
   isResidencyPurchaseQuoteUsable,
   parseResidencyPurchaseQuote,
   RESIDENCY_PURCHASE_QUOTE_AUTO_REFRESH_LIMIT,
+  residencyQuoteExerciseIdFor,
   type ResidencyPurchaseQuote,
 } from "../../residency/residencyPurchaseQuote";
 import { planCompositeResidencyOrder } from "../../residency/compositeResidencyOrder";
@@ -901,8 +902,13 @@ export default function GroupSchedulePage({
   // First residency purchase with a group training: the server quote (lk#463 / ph-admin#134).
   // Keyed by player and training: a change of training aborts the request in flight and the
   // render check below drops any answer that is not for the training now open.
-  const residencyQuoteExerciseId = compositeEligible && !patriotsTournamentSelected && selectedTraining
-    && ownedResidency?.state !== "ACTIVE" ? selectedTraining.id : null;
+  // Only a confirmed NONE asks for the quote; an in-flight, ACTIVE or UNKNOWN read shows none.
+  const residencyQuoteExerciseId = residencyQuoteExerciseIdFor({
+    compositeEligible,
+    isTournament: patriotsTournamentSelected,
+    selectedExerciseId: selectedTraining?.id ?? null,
+    ownedResidencyState: ownedResidency?.state ?? null,
+  });
   const residencyQuoteKey = residencyQuoteExerciseId && checkout?.profile?.id
     ? `${checkout.profile.id}:${residencyQuoteExerciseId}` : null;
   useEffect(() => {

@@ -122,5 +122,22 @@ export function isResidencyPurchaseQuoteUsable(
     && isResidencyPurchaseQuoteFreshAt(quote.localExpiresAtMs, nowMs));
 }
 
+/**
+ * The exercise to request a first-residency quote for, or null.
+ *
+ * Only a confirmed NONE owned-residency read asks for a quote. While the read is in flight
+ * (null), and on ACTIVE or UNKNOWN, no quote is requested or shown: an UNKNOWN residency
+ * refuses the sale (fail closed) and a resident must never see a first-purchase price.
+ */
+export function residencyQuoteExerciseIdFor(params: {
+  compositeEligible: boolean;
+  isTournament: boolean;
+  selectedExerciseId: string | null;
+  ownedResidencyState: "ACTIVE" | "NONE" | "UNKNOWN" | null;
+}): string | null {
+  return params.compositeEligible && !params.isTournament && params.selectedExerciseId
+    && params.ownedResidencyState === "NONE" ? params.selectedExerciseId : null;
+}
+
 /** Automatic re-quotes after expiry per opened training; afterwards the player asks for one. */
 export const RESIDENCY_PURCHASE_QUOTE_AUTO_REFRESH_LIMIT = 3;
