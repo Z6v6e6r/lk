@@ -7,8 +7,9 @@
  * - participation price: the ordinary one-time product of the selected training (Viva checkout);
  * - residency price: the residency product card, only when the same checkout read returned it;
  * - existing residency: ACTIVE when the checkout shows an owned residency; otherwise only a
- *   dedicated owned-residency read may say NONE, because Viva may omit a discount-only product
- *   from the client's available subscriptions (no such read is wired yet → UNKNOWN);
+ *   dedicated owned-residency read (`classifyOwnedResidency`, a fresh GET of the client's own
+ *   subscriptions) may say NONE, because Viva may omit a discount-only product from the
+ *   client's available subscriptions; without that read the state stays UNKNOWN;
  * - CUP policy for a residency not yet bought: no source yet (Б1, lk#457) → null.
  */
 import type { CompositeResidencyInput } from "./compositeResidencyOrder.ts";

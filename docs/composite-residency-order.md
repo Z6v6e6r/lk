@@ -32,6 +32,12 @@ Separate residency purchase (`/lk_new?buyResidency=1`) is unchanged.
 | CUP policy for a residency not yet bought (percent source, Б1) | ph-admin                                                        | missing                          |
 | Server-side single Viva transaction from the plan (Б4)         | Node-RED, reuse `nodered_trial_group_nodes/checkout.js` pattern | missing; needs PROVIDER evidence |
 | Wiring into group schedule and tournament signup               | `GroupSchedulePage.tsx`, tournament signup                      | missing                          |
+| Owned-residency read: ACTIVE / NONE / UNKNOWN (read only)      | `src/residency/ownedResidencyRead.ts`, `ownedResidencyApi.ts`   | done, flag off (lk#459)          |
+
+Owned-residency read: one fresh `GET …/subscriptions?includeFinished=true&size=1000`, bypassing
+the subscription session snapshot. NONE needs a complete page, a product id on every row, no
+live/pending/frozen residency and a read at most 60 s old; it is re-read on consent. Anything
+else is UNKNOWN and refuses the sale. A row's name never proves residency.
 
 ## Viva questions to close before the server checkout (PROVIDER)
 

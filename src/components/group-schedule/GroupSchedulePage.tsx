@@ -27,6 +27,8 @@ import { COMPOSITE_RESIDENCY_ENABLED } from "../../residency/residencyConfig";
 import { CompositeResidencyOffer } from "../../residency/CompositeResidencyOffer";
 import { planCompositeResidencyOrder } from "../../residency/compositeResidencyOrder";
 import { buildGroupScheduleCompositeInput } from "../../residency/groupScheduleCompositeOffer";
+import { apiReadOwnedResidencyRows, type OwnedResidencyRawRead } from "../../residency/ownedResidencyApi";
+import { classifyOwnedResidency } from "../../residency/ownedResidencyRead";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isTrialGroupTraining } from "../../utils/trialGroupTraining";
 import { resolveTrialGroupEligibilityCheck, type TrialGroupEligibilityDecision } from "../../utils/trialGroupEligibilityCheck";
@@ -392,6 +394,8 @@ export default function GroupSchedulePage({
   const [checkoutObservedAtMs, setCheckoutObservedAtMs] = useState(0);
   const [compositeConsent, setCompositeConsent] = useState(false);
   const [compositeNowMs, setCompositeNowMs] = useState(0);
+  const [ownedResidencyRead, setOwnedResidencyRead] = useState<(OwnedResidencyRawRead & { key: string }) | null>(null);
+  const [ownedResidencyReadNonce, setOwnedResidencyReadNonce] = useState(0);
   const [trialEligibility, setTrialEligibility] = useState<(TrialGroupEligibilityDecision & { key: string }) | null>(null);
   const [trialEligibilityRetry, setTrialEligibilityRetry] = useState(0);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
@@ -811,14 +815,40 @@ export default function GroupSchedulePage({
   }, [isAuthenticated, isRestoringSession, selectedId, subscriptionUsageShadowEnabled, trialEligibilityKey, trialEligibilityRetry]);
   // PRO offers one-time monetary quotes and existing owned Energy visit packs.
   // #459: participation + residency offer from #441, behind its default-off flag. It stays
-  // fail closed until the CUP policy (lk#457) and an owned-residency read are wired, and it
+  // fail closed until the CUP policy (lk#457) is wired (owned residency: ownedResidencyRead), and it
   // never starts a payment here: the single composite Viva transaction is server-side (lk#458).
-  const compositeInput = COMPOSITE_RESIDENCY_ENABLED && checkout && selectedTraining
-    && checkout.exercise.id === selectedTraining.id && !isRegistered && !registrationLoading
+  const compositeEligible = Boolean(COMPOSITE_RESIDENCY_ENABLED && checkout && selectedTraining
+    && checkout.exercise.id === selectedTraining.id && !isRegistered && !registrationLoading);
+  const ownedResidencyKey = compositeEligible && checkout?.profile?.id && selectedTraining
+    ? `${checkout.profile.id}:${selectedTraining.id}` : null;
+  // Read only: one fresh GET of the client's own subscriptions; NONE expires after 60 s and is
+  // re-read when the player gives consent. A failed, partial or stale read stays UNKNOWN.
+  useEffect(() => {
+    if (!ownedResidencyKey) return;
+    const controller = new AbortController();
+    setOwnedResidencyRead(null);
+    void apiReadOwnedResidencyRows(controller.signal).then((read) => {
+      if (controller.signal.aborted) return;
+      setOwnedResidencyRead({ ...read, key: ownedResidencyKey });
+      setCompositeNowMs(Date.now());
+    });
+    return () => controller.abort();
+  }, [ownedResidencyKey, ownedResidencyReadNonce]);
+  const ownedResidency = ownedResidencyKey && ownedResidencyRead?.key === ownedResidencyKey
+    ? classifyOwnedResidency({
+      payload: ownedResidencyRead.payload,
+      readFailed: ownedResidencyRead.readFailed,
+      actorId: checkout?.profile?.id ?? null,
+      observedAtMs: ownedResidencyRead.observedAtMs,
+      nowMs: compositeNowMs,
+    })
+    : null;
+  const compositeInput = compositeEligible && checkout && selectedTraining
     ? buildGroupScheduleCompositeInput({
       isTournament: patriotsTournamentSelected,
       checkout: { ...checkout, exerciseId: selectedTraining.id },
       checkoutObservedAtMs,
+      existingResidency: ownedResidency?.state ?? "UNKNOWN",
       nowMs: compositeNowMs,
     })
     : null;
@@ -1499,6 +1529,8 @@ export default function GroupSchedulePage({
                                 // Re-check the residency price age at the moment of consent.
                                 setCompositeNowMs(Date.now());
                                 setCompositeConsent(accepted);
+                                // NONE is only as fresh as its read: re-read owned residency on consent.
+                                if (accepted) setOwnedResidencyReadNonce((value) => value + 1);
                               }}
                             />
                             {compositePlan?.ok && (
