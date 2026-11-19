@@ -30,6 +30,17 @@ if (invalid(Object.keys(body || {}).some(key => !['target', 'subscriptionIds'].i
 if (!auth || !/^Bearer\s+\S+$/i.test(auth) || !body || typeof body !== 'object' || Array.isArray(body)) return bad('PRICE_PREVIEW_AUTH_REQUIRED');
 const target = body.target;
 const ids = body.subscriptionIds;
+if (target?.targetKind === 'GROUP_TRAINING_RESIDENCY_PURCHASE') {
+  if (invalid(Object.keys(target).some(key => !['targetKind', 'exerciseId'].includes(key)), 'TARGET_EXTRA_KEYS', target)
+    || invalid(!uuid(target.exerciseId), 'EVENT_ID_SHAPE', target.exerciseId)
+    || invalid(ids !== undefined, 'SUBSCRIPTIONS_SHAPE', ids)) {
+    return bad('PRICE_PREVIEW_REQUEST_INVALID');
+  }
+  msg._subscriptionPricePreview = { done: false, step: 'start', auth, tenantKey: 'iSkq6G',
+    target: { ...target }, exerciseId: target.exerciseId, eventCategory: 'GROUP_TRAINING',
+    residencyPurchase: true, startedAt: Date.now() };
+  return msg;
+}
 const eventCategory = ['GROUP_TRAINING', 'TOURNAMENT'].includes(target?.targetKind) ? target.targetKind : null;
 if (eventCategory) {
   if (invalid(!target, 'TARGET_SHAPE', target)
