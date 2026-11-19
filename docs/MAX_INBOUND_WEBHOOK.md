@@ -87,6 +87,15 @@ SDK sender is invoked by this service.
 
 ### Station activation and rollback
 
+The current Node.js runtime on 147 needs the
+[official Russian Trusted Root CA](https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt)
+to connect to `platform-api2.max.ru`. Use a root-owned PEM file and set
+`NODE_EXTRA_CA_CERTS` in a drop-in for `padlhub-max-inbound.service`. Keep
+the operating system trust store and other services outside this change.
+An unauthenticated `GET /me` returning HTTP 401 from the receiver's Node.js
+runtime proves the TLS handshake succeeded. Record the verified PEM
+fingerprint and preserve the service drop-in preimage for rollback.
+
 1. Prepare the existing protected receiver config with `stationBotToken` from
    the authorized main bot credential. Set `mongo.serviceMessages` to the active
    CUP collection for service messages from `SUPPORT_MAX_SERVICE_MESSAGES_COLLECTION`.
@@ -107,7 +116,7 @@ SDK sender is invoked by this service.
    photo arrive in that dialog. Observe the bot's confirmation and repeat with a
    second station.
 5. To revert, restore the exact prior subscription first. Follow the receiver's
-   fenced stop/drain and binary/config rollback using the same inbox. Previous
+   fenced stop/drain and binary/config/TLS drop-in rollback using the same inbox. Previous
    binaries see unfinished station actions as REVIEW and leave them untouched.
    Reconcile these records under the station-capable version before any decision
    to resume pending work. Preserve REVIEW records and the existing outgoing
