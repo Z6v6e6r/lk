@@ -14,7 +14,7 @@ test('real disposable Mongo: majority persistence requires exact IDs, content, i
     const names = { messages: 'messages', serviceMessages: 'serviceMessages', dialogs: 'dialogs', clients: 'clients' };
     const confirm = persistenceConfirmer(db, names, { waitMs: 0, sleepMs: 0 });
     assert.equal(await confirm(dto, receipt), false);
-    await db.collection('messages').insertOne(message); assert.equal(await confirm(dto, receipt), false);
+    await db.collection('messages').insertOne({ ...message }); assert.equal(await confirm(dto, receipt), false);
     await db.collection('dialogs').insertOne({ id: 'd', clientId: 'c', updatedAt: dto.timestamp });
     await db.collection('clients').insertOne({ id: 'c', identities: [{ connector: 'MAX_BOT', externalUserId: '111', externalChatId: '222' }] }); assert.equal(await confirm(dto, receipt), true);
     await db.collection('messages').updateOne({ id: 'm' }, { $set: { externalMessageId: 'wrong' } }); assert.equal(await confirm(dto, receipt), false);
@@ -28,9 +28,9 @@ test('real disposable Mongo: majority persistence requires exact IDs, content, i
     await db.collection('dialogs').updateOne({ id: 'd' }, { $set: { stationId } });
     await db.collection('clients').updateOne({ id: 'c' }, { $set: { authStatus: 'VERIFIED', currentStationId: stationId,
       identities: [{ connector: 'MAX_BOT', externalUserId: '111', externalChatId: '222' }] } });
-    await db.collection('messages').insertOne(selectionMessage);
+    await db.collection('messages').insertOne({ ...selectionMessage });
     assert.equal(await confirm(stationDto, selectionReceipt), false);
-    await db.collection('serviceMessages').insertOne(selectionMessage);
+    await db.collection('serviceMessages').insertOne({ ...selectionMessage });
     assert.equal(await confirm(stationDto, selectionReceipt), true);
     await db.collection('clients').updateOne({ id: 'c' }, { $set: { currentStationId: 'Skolkovo' } });
     assert.equal(await confirm(stationDto, selectionReceipt), false);
