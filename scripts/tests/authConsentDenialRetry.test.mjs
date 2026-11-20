@@ -5,7 +5,8 @@ import { webcrypto } from 'node:crypto';
 import test from 'node:test';
 import ts from 'typescript';
 
-const clientSource = fs.readFileSync('src/utils/authConsents.ts', 'utf8');
+const clientSource = fs.readFileSync('src/utils/authConsents.ts', 'utf8')
+  .replaceAll('import.meta.env', 'consentEnv');
 const buildSource = fs.readFileSync('scripts/nodered_auth_consent_nodes/fn_auth_consent_build_upsert.js', 'utf8');
 const prepareSource = fs.readFileSync('scripts/nodered_auth_consent_nodes/fn_auth_consent_prepare.js', 'utf8');
 function storage() {
@@ -18,7 +19,7 @@ function client({ status = 401, saved = storage(), crypto = webcrypto } = {}) {
   const calls = [], telemetry = [], timers = new Map();
   let timerId = 0;
   const module = { exports: {} };
-  const context = { exports: module.exports, module, TextEncoder, crypto, URL, AbortController,
+  const context = { exports: module.exports, module, TextEncoder, crypto, URL, AbortController, consentEnv: {},
     window: { localStorage: saved, sessionStorage: storage(),
       setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id) },
     fetch: async (url, options) => { calls.push({ url, options }); return { ok: status >= 200 && status < 300, status }; },

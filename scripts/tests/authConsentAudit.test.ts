@@ -280,7 +280,7 @@ test("frontend stages before auth and flushes after token acquisition", () => {
   assert.match(providerSource, /startVivaOAuthRedirect\([\s\S]*bindingType: "oauth-state"/);
   assert.match(providerSource, /applyTokenState\(data\);[\s\S]*syncPendingAuthConsents\(\{[\s\S]*bindingType: "oauth-state"/);
   assert.match(providerSource, /applyTokenState\(data, phoneNumber\);[\s\S]*syncPendingAuthConsents\(\{[\s\S]*bindingType: "sms-phone"/);
-  assert.match(clientSource, /AUTH_CONSENT_DOCUMENT_SET_VERSION = "2026-07-14"/);
+  assert.match(clientSource, /AUTH_CONSENT_DOCUMENT_SET_VERSION = import\.meta\.env\?\.VITE_AUTH_CONSENT_VERSION \|\| "2026-07-14"/);
   assert.match(clientSource, /removePendingAuthConsent\(pending\.attemptFingerprint\)/);
   assert.match(clientSource, /storageKeyForAttempt/);
   assert.match(clientSource, /attemptFingerprint/);
