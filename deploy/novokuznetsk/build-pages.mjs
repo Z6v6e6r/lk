@@ -35,7 +35,7 @@ let keycloakBase = "https://kc.vivacrm.ru";
 let assetBase;
 let backendBase;
 let cabinetUrl;
-let gamesMasterServiceId;
+let gamesMasterServiceId = club.masterServiceId;
 let consentVersion;
 let offerUrl;
 let privacyUrl;
@@ -60,16 +60,13 @@ if (mode === "--preview") {
   assetBase = httpsUrl(config.assetBase, "assetBase");
   backendBase = httpsUrl(config.backendBase, "backendBase");
   cabinetUrl = httpsUrl(config.cabinetUrl, "cabinetUrl");
-  gamesMasterServiceId = config.gamesMasterServiceId;
   consentVersion = config.consentVersion;
   offerUrl = httpsUrl(config.offerUrl, "offerUrl");
   privacyUrl = httpsUrl(config.privacyUrl, "privacyUrl");
   if (!backendBase.endsWith("/novokuznetsk") || new URL(cabinetUrl).origin !== pageOrigin
     || new URL(offerUrl).origin !== pageOrigin || new URL(privacyUrl).origin !== pageOrigin
-    || typeof consentVersion !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(consentVersion)
-    || typeof gamesMasterServiceId !== "string"
-    || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(gamesMasterServiceId)) {
-    throw new Error("Release config requires the /novokuznetsk API, the club cabinet and consent documents, and the verified Viva master-service ID");
+    || typeof consentVersion !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(consentVersion)) {
+    throw new Error("Release config requires the /novokuznetsk API, the club cabinet and versioned consent documents");
   }
 }
 

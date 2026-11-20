@@ -4,5 +4,11 @@
   "stationId": "9d43f278-a38d-4df1-ae20-5bd6d8a85261",
   "stationName": "Падел Прайм Новокузнецк",
   "utcOffset": "+07:00",
-  "timeZone": "Asia/Novokuznetsk"
+  "timeZone": "Asia/Novokuznetsk",
+  "masterServiceId": "0d67fbfc-0997-4e4c-a62f-fad29ec182b1",
+  "preferredSubServiceId": "cb2e6f6d-7b7b-4fa9-b09c-fb4f2765a899",
+  "subServiceIds": [
+    "cb2e6f6d-7b7b-4fa9-b09c-fb4f2765a899",
+    "9d549c8c-b1a0-465d-a9e8-18206c3fd015"
+  ]
 }
