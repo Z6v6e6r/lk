@@ -30,6 +30,7 @@ const payload = () => ({ expectedUpdatedAt: stale.updatedAt, participants: [{ id
 function client({ patchStatus = 409, readStatus = 200, readBody = fresh, throwRead = false, throwPatch = false, diagnosticUnavailable = false } = {}) {
   const calls = [], delays = [], diagnostics = [];
   const context = vm.createContext({
+    CLUB_ON_SITE_BOOKING: false,
     Headers, Response, FormData, URL, performance,
     API_BASE: "https://fixture.invalid", SERV2: "https://fixture.invalid", SERV2_FALLBACK: "https://fixture.invalid",
     getServ2Origin: () => "https://fixture.invalid", resolveLkApiBaseUrlCandidates: () => ["https://fixture.invalid"],

@@ -28,6 +28,7 @@ const actualApi = compile(functions.map(name => {
 function client({ statuses = [404], networkError = false, fallback = false } = {}) {
   const calls = [], delays = [];
   const context = vm.createContext({
+    CLUB_ON_SITE_BOOKING: false,
     Headers, Response, FormData, URL, URLSearchParams, performance,
     API_BASE:'https://fixture.invalid',SERV2:'https://fixture.invalid',SERV2_FALLBACK:'https://fallback.invalid',
     getServ2Origin:()=>'https://fixture.invalid',
