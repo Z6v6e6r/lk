@@ -7108,7 +7108,7 @@ export async function apiFetchPadelGamesByPhone(
   } = {},
 ) {
   const normalizedPhone = phone.replace(/\D/g, "");
-  if (!normalizedPhone) {
+  if (!normalizedPhone && !CLUB_ON_SITE_BOOKING) {
     return {
       data: { games: [] as PadelGameRecord[], total: 0 } as PadelGamesByPhoneResponse,
       error: { status: 400, message: "Телефон не указан для получения игр" },
@@ -7161,17 +7161,11 @@ export async function apiFetchPadelGamesByPhone(
     return query.toString();
   };
 
-  const queryVariants = [buildQuery(normalizedClientId)];
-  if (normalizedClientId) {
-    // Some handlers narrow the result too aggressively when clientId is present,
-    // so keep a pure phone lookup as a fallback and merge both result sets.
-    queryVariants.push(buildQuery(null));
-  }
-
-  const endpoints = queryVariants.flatMap((query) => [
-    `/lk/games/by-phone?${query}`,
-    `/lk/games?${query}`,
-  ]);
+  // Novokuznetsk uses the verified Viva identity for private game reads.
+  // The phone and client ID fallback lookups only apply to the legacy API.
+  const endpoints = CLUB_ON_SITE_BOOKING ? ["/lk/games"] : (
+    normalizedClientId ? [buildQuery(normalizedClientId), buildQuery(null)] : [buildQuery(null)]
+  ).flatMap((query) => [`/lk/games/by-phone?${query}`, `/lk/games?${query}`]);
 
   let firstError: ApiError | null = null;
   let firstStatus: ApiStatus = null;
@@ -7186,6 +7180,7 @@ export async function apiFetchPadelGamesByPhone(
       auth: CLUB_ON_SITE_BOOKING,
       baseUrl,
       retries: 1,
+      ...(CLUB_ON_SITE_BOOKING ? { nonRetryableStatuses: [401, 403] } : {}),
       ...(IS_DEV_RELEASE_CHANNEL
         ? {
             cacheTtlMs: DEV_GAMES_CACHE_TTL_MS,

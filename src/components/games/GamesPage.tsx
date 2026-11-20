@@ -5479,7 +5479,7 @@ export default function GamesPage({
   );
 
   const refreshUnreadChats = useCallback(async () => {
-    if (!profilePhoneNorm) {
+    if (CLUB_ON_SITE_BOOKING || !profilePhoneNorm) {
       setChatUnreadByGame({});
       return;
     }

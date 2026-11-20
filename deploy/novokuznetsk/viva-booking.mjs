@@ -1,3 +1,4 @@
+import { createVivaFetch } from "../../scripts/lib/vivaUserAgent.mjs";
 import { createHash } from "node:crypto";
 
 export class ClubError extends Error {
@@ -17,18 +18,19 @@ const timeKey = value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:
   ? Date.parse(value) : NaN;
 
 export function createVivaClient(club, { fetcher = fetch } = {}) {
+  const vivaFetch = createVivaFetch(fetcher);
   const v1 = `/end-user/api/v1/${club.tenantKey}`;
   const v2 = `/end-user/api/v2/${club.tenantKey}`;
   const master = `/products/master-services/${club.masterServiceId}`;
   async function request(path, bearer, body) {
     let response;
     try {
-      response = await fetcher(new URL(path, "https://api.vivacrm.ru"), {
+      response = await vivaFetch(new URL(path, "https://api.vivacrm.ru"), {
         method: body === undefined ? "GET" : "POST",
         headers: {
           accept: "application/json",
           ...(bearer ? { authorization: bearer } : {}),
-          ...(body === undefined ? {} : { "content-type": "application/json" }),
+          ...(bearer || body !== undefined ? { "content-type": "application/json" } : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         redirect: "error",
@@ -45,7 +47,9 @@ export function createVivaClient(club, { fetcher = fetch } = {}) {
         throw new ClubError(401, "AUTH_REQUIRED", "Войдите в личный кабинет.");
       }
       const result = await request(v1 + "/profile", bearer);
-      if ([401, 403].includes(result.status)) throw new ClubError(401, "AUTH_REQUIRED", "Войдите в личный кабинет.");
+      if ([401, 403].includes(result.status)) {
+        throw new ClubError(401, "VIVA_SESSION_REJECTED", "VivaCRM не подтвердила сессию. Войдите заново.");
+      }
       const user = result.value;
       if (!result.ok || !uuid(user?.id)) throw unavailable();
       return { id: user.id, name: firstString([user.firstName, user.lastName].filter(value => typeof value === "string").join(" "), "Игрок"), bearer };

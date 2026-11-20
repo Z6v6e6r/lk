@@ -178,7 +178,10 @@ test("cancellation close refreshes bookings, subscriptions and game records", ()
   );
   assert.match(refreshSource, /apiFetchBookings\(false\)/);
   assert.match(refreshSource, /apiFetchSubscriptions\(\)/);
-  assert.match(refreshSource, /apiFetchPadelGamesByPhone/);
+  assert.match(refreshSource, /fetchCabinetGameLists\(phone,/);
+  const gameListsSource = sourceSlice(cabinetSource, "function fetchCabinetGameLists(", "export function Cabinet(");
+  assert.match(gameListsSource, /const active = apiFetchPadelGamesByPhone\(/);
+  assert.match(gameListsSource, /CLUB_ON_SITE_BOOKING \? active : apiFetchPadelGamesByPhone/);
   assert.match(refreshSource, /setCreatedGames\(mergedGames\)/);
 });
 

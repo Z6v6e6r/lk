@@ -1617,6 +1617,16 @@ function readChatReadMap(phoneNorm: string): Record<string, number> {
   }
 }
 
+function fetchCabinetGameLists(phone: string, clientId: string | null) {
+  const active = apiFetchPadelGamesByPhone(phone, clientId, false, { limit: ACTIVE_RESULT_WINDOW_LIMIT });
+  const recent = CLUB_ON_SITE_BOOKING ? active : apiFetchPadelGamesByPhone(phone, clientId, true, {
+    limit: ACTIVE_RESULT_WINDOW_LIMIT,
+    windowHours: 24,
+    needsResult: true,
+  });
+  return [active, recent] as const;
+}
+
 export function Cabinet({
   onOpenGames,
   onOpenTournaments,
@@ -2016,26 +2026,7 @@ export function Cabinet({
     setLoadingCreatedGames(true);
     setCreatedGamesError(null);
 
-    Promise.all([
-      apiFetchPadelGamesByPhone(
-        phone,
-        profile?.id ?? null,
-        false,
-        {
-          limit: ACTIVE_RESULT_WINDOW_LIMIT,
-        },
-      ),
-      apiFetchPadelGamesByPhone(
-        phone,
-        profile?.id ?? null,
-        true,
-        {
-          limit: ACTIVE_RESULT_WINDOW_LIMIT,
-          windowHours: 24,
-          needsResult: true,
-        },
-      ),
-    ])
+    Promise.all(fetchCabinetGameLists(phone, profile?.id ?? null))
       .then(([activeGamesResult, resultWindowGamesResult]) => {
         if (!alive) return;
         const activeGames = Array.isArray(activeGamesResult.data?.games)
@@ -2147,7 +2138,7 @@ export function Cabinet({
   }, [profilePhoneNorm]);
 
   useEffect(() => {
-    if (!profilePhoneNorm) {
+    if (CLUB_ON_SITE_BOOKING || !profilePhoneNorm) {
       setChatUnreadByGame({});
       return;
     }
@@ -2967,6 +2958,9 @@ export function Cabinet({
     try {
       const shouldRefreshHistory = isBookingHistoryOpen || historyBookings !== null;
       const phone = profile?.phone?.trim() || null;
+      const gameLists = phone
+        ? fetchCabinetGameLists(phone, profile?.id ?? null)
+        : [Promise.resolve(null), Promise.resolve(null)] as const;
       const [
         activeBookingsData,
         historyBookingsData,
@@ -2979,26 +2973,7 @@ export function Cabinet({
         shouldRefreshHistory ? loadHistoryBookings(true) : Promise.resolve(null),
         apiFetchSubscriptions(),
         apiFetchSubscriptions(REFERRAL_SUBSCRIPTIONS_FETCH_OPTIONS),
-        phone
-          ? apiFetchPadelGamesByPhone(
-              phone,
-              profile?.id ?? null,
-              false,
-              { limit: ACTIVE_RESULT_WINDOW_LIMIT },
-            )
-          : Promise.resolve(null),
-        phone
-          ? apiFetchPadelGamesByPhone(
-              phone,
-              profile?.id ?? null,
-              true,
-              {
-                limit: ACTIVE_RESULT_WINDOW_LIMIT,
-                windowHours: 24,
-                needsResult: true,
-              },
-            )
-          : Promise.resolve(null),
+        ...gameLists,
       ]);
       if (activeBookingsData) setActiveBookings(activeBookingsData.data);
       if (userSubscriptionsData.data) setUserSubscriptions(userSubscriptionsData.data);
