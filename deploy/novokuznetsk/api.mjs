@@ -20,7 +20,12 @@ const tidy = (value, max) => typeof value === "string" ? value.trim().slice(0, m
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const nonMember = () => new ClubError(404, "COMMUNITY_NOT_FOUND", "Сообщество недоступно.");
 const notFound = () => new ClubError(404, "NOT_FOUND", "Раздел недоступен.");
-const stripMongo = ({ _id, creationKey, ...value }) => value;
+function stripMongo(document) {
+  const value = { ...document };
+  delete value._id;
+  delete value.creationKey;
+  return value;
+}
 const member = actor => ({ id: actor.id, name: actor.name, status: "ACTIVE" });
 const gamePlayer = actor => ({ id: actor.id, name: actor.name, source: "INVITE_LINK", status: "CONFIRMED" });
 
@@ -141,7 +146,7 @@ export function createClubApi({ client, viva = createVivaClient(club), consentVe
       if (input.publishGame && input.ratingGame && !await levels.findOne({ _id: actor.id })) {
         throw new ClubError(409, "ONBOARDING_REQUIRED", "Пройдите онбординг для рейтинговой игры.");
       }
-      const booking = await reserveCourt({ ledger: bookingLedger, viva, club, actor, slot });
+      const booking = await reserveCourt({ ledger: bookingLedger, viva, actor, slot });
       if (!input.publishGame) return { bookingId: booking.bookingId };
       const now = new Date().toISOString();
       const id = randomUUID();

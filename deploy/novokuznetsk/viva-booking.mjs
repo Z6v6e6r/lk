@@ -134,7 +134,7 @@ export function validateBookingSlot(club, input, now = Date.now()) {
   };
 }
 
-export async function reserveCourt({ ledger, viva, club, actor, slot }) {
+export async function reserveCourt({ ledger, viva, actor, slot }) {
   const key = createHash("sha256").update(JSON.stringify([actor.id, slot.roomId, slot.timeFrom, slot.timeTo])).digest("hex");
   let row = await ledger.findOne({ _id: key, actorId: actor.id });
   if (row?.state === "REJECTED") {
