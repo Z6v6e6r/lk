@@ -6,6 +6,8 @@ import { webcrypto } from 'node:crypto';
 import ts from 'typescript';
 import { parseZeroAttempt } from '../../src/components/subscription-storefront/zeroCheckoutCustody.ts';
 const product='6b98e7e3-5bd3-4e94-9dc3-7723ea52513e',transaction='00000000-0000-4000-8000-000000000001',ref='zero-00000000-0000-4000-8000-000000000002';
+const ra='b91e14d1-fe6e-4d0b-be39-3e45ad86b759';
+const directProducts = { FRIENDSHIP_TWO_HOURS_PRODUCT_ID: product, TOURNAMENT_SUBSCRIPTION_DIRECT_PRODUCT_IDS: { ra } };
 const phone='+'+'7'+'9000000000',zeroKey='padlhub_zero_checkout_attempt_v1:friendship-two-hours';
 function load(file: string, stubs: Record<string, unknown>, globals: Record<string, unknown> = {}) {
   const source=fs.readFileSync(new URL('../../src/'+file,import.meta.url),'utf8').replace(/^import[\s\S]*?from\s+['"][^'"]+['"];\n/gm,'');
@@ -14,16 +16,20 @@ function load(file: string, stubs: Record<string, unknown>, globals: Record<stri
 }
 const closure=()=>({ok:true,directCheckoutClosure:{version:1,productId:product,transactionId:transaction,state:'PROVIDER_CARD_EXPIRED_UNPAID',operationId:'00000000-0000-4000-8000-000000000003',closed:true,paid:false,verifiedAt:new Date().toISOString()}});
 test('fresh server closure must bind exact product/transaction, unpaid state and current observation',async()=>{
- const api=load('components/subscription-storefront/directCheckoutRecovery.ts',{});
+ const api=load('components/subscription-storefront/directCheckoutRecovery.ts',directProducts);
  assert.equal(api.isFreshDirectClosure(closure(),product,transaction),true);
  for(const update of [{productId:'foreign'},{transactionId:'foreign'},{paid:true},{closed:false},{version:2},{operationId:'invalid'},{verifiedAt:'2000-01-01T00:00:00Z'},{verifiedAt:'2999-01-01T00:00:00Z'}]){
   const body=closure();Object.assign(body.directCheckoutClosure,update);assert.equal(api.isFreshDirectClosure(body,product,transaction),false);
  }
  assert.equal(api.isFreshDirectClosure(closure(),'foreign',transaction),false);
+ const raClosure = { ...closure(), directCheckoutClosure: { ...closure().directCheckoutClosure, productId: ra } };
+ assert.equal(api.isFreshDirectClosure(raClosure,ra,transaction),true);
+ assert.equal(api.isFreshDirectClosure(raClosure,product,transaction),false);
+ assert.equal(api.isFreshDirectClosure(closure(),ra,transaction),false);
 });
 test('closure reads use the exact captured token, no cache/retry; actor drift cannot release',async()=>{
  let token='captured-actor',calls=0,drift=false;
- const api=load('components/subscription-storefront/directCheckoutRecovery.ts',{checkoutSessionToken:()=>token,getServ2Origin:()=> 'https://fixture.invalid',request:async(path: string,options: any)=>{ // eslint-disable-line @typescript-eslint/no-explicit-any
+ const api=load('components/subscription-storefront/directCheckoutRecovery.ts',{...directProducts,checkoutSessionToken:()=>token,getServ2Origin:()=> 'https://fixture.invalid',request:async(path: string,options: any)=>{ // eslint-disable-line @typescript-eslint/no-explicit-any
   calls++;assert.equal(path,'/lk/tournaments/summer-subscription/confirm');assert.equal(options.auth,false);assert.equal(options.headers.Authorization,'Bearer captured-actor');assert.equal(options.dedupe,false);assert.equal(options.retries,0);assert.equal(options.cacheTtlMs,0);assert.ok(options.signal);assert.deepEqual(JSON.parse(options.body),{directCheckoutRecoveryVersion:1,transactionId:transaction});if(drift)token='other-actor';return {status:200,error:null,data:closure()};
  }});
  assert.equal(await api.readClosedDirectCheckout(product,transaction,()=>true),true);
@@ -36,7 +42,7 @@ async function guardFixture() {
  let mutate=()=>{};
  const window={localStorage:{getItem:(k:string)=>storage.get(k)??null,setItem:(k:string,v:string)=>storage.set(k,v),removeItem:(k:string)=>storage.delete(k)}};
  const navigator={locks:{request:async(k:string,_options:unknown,fn:(lock:object|null)=>unknown)=>{if(active.has(k))return fn(null);active.add(k);try{if(k===zeroKey)lockMutation();return await fn({});}finally{active.delete(k);}}}};
- const api=load('components/subscription-storefront/promoCodeAttempt.ts',{checkoutSessionToken:()=>viva,DIRECT_RECOVERY_PRODUCT:product,parseZeroAttempt,legacyZeroOffersForProduct:()=>['friendship-two-hours'],readAuthToken:()=>actor,readSubscriptionPromoTransactionPaid:async()=>false,apiConfirmTournamentSubscriptionPurchase:async()=>({}),readClosedDirectCheckout:async(p:string,id:string,current:()=>boolean)=>{calls.proof++;assert.equal(p,product);assert.equal(id,transaction);assert.ok(active.has(key));mutate();return closed&&current();}},{window,navigator});
+ const api=load('components/subscription-storefront/promoCodeAttempt.ts',{checkoutSessionToken:()=>viva,isDirectRecoveryProduct:(id: string) => id === product,parseZeroAttempt,legacyZeroOffersForProduct:()=>['friendship-two-hours'],readAuthToken:()=>actor,readSubscriptionPromoTransactionPaid:async()=>false,apiConfirmTournamentSubscriptionPurchase:async()=>({}),readClosedDirectCheckout:async(p:string,id:string,current:()=>boolean)=>{calls.proof++;assert.equal(p,product);assert.equal(id,transaction);assert.ok(active.has(key));mutate();return closed&&current();}},{window,navigator});
  const key=await api.subscriptionPromoAttemptKey(product,phone);
  const shared={kind:'ordinary',transactionId:transaction,paymentRef:ref};
  const zero={key:'friendship-two-hours',paymentRef:ref,transactionId:transaction,state:'pending'};

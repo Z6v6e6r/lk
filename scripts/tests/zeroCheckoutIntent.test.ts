@@ -178,17 +178,19 @@ test('resume without a fresh catalogue price can only claim the saved purchase',
   } finally { h.restore(); }
 });
 
-test('fresh purchase after verified reset keeps the current trusted monthly price and is one-time', async () => {
+test('fresh purchase after verified reset keeps the trusted monthly or RA price and is one-time', async () => {
   const { claimFastRestart } = await import('../../src/components/subscription-storefront/zeroCheckoutIntent.ts');
-  const h = harness(); try {
-    const intent = createFastIntent('friendship', 980000, Object.assign(h.event(), { target: new h.w.Element('friendship') }), true);
-    assert.equal(claimFastRestart(intent.id, { priceMinor: 980000 }), false);
-    armFastResume(intent.id); claimFastResume(intent.id);
-    assert.equal(claimFastRestart(intent.id, { priceMinor: 990000 }), false);
-    assert.equal(claimFastRestart(intent.id, { priceMinor: 980000 }), true);
-    assert.equal(readFastIntent(intent.id)?.resume, false);
-    assert.equal(claimFastRestart(intent.id, { priceMinor: 980000 }), false);
-  } finally { h.restore(); }
+  for (const [key, priceMinor] of [['friendship', 980000], ['ra', 2380000]] as const) {
+    const h = harness(); try {
+      const intent = createFastIntent(key, priceMinor, Object.assign(h.event(), { target: new h.w.Element(key) }), true);
+      assert.equal(claimFastRestart(intent.id, { priceMinor }), false);
+      armFastResume(intent.id); claimFastResume(intent.id);
+      assert.equal(claimFastRestart(intent.id, { priceMinor: priceMinor + 100 }), false);
+      assert.equal(claimFastRestart(intent.id, { priceMinor }), true);
+      assert.equal(readFastIntent(intent.id)?.resume, false);
+      assert.equal(claimFastRestart(intent.id, { priceMinor }), false);
+    } finally { h.restore(); }
+  }
 });
 
 test('2.0 restart requires the same displayed price and exact one-day activation term once', async () => {

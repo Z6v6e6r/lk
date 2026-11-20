@@ -1,10 +1,14 @@
 import { request, getServ2Origin } from '../../utils/apiClient';
+import { TOURNAMENT_SUBSCRIPTION_DIRECT_PRODUCT_IDS } from '../../utils/tournamentSubscriptionCatalog';
+import { FRIENDSHIP_TWO_HOURS_PRODUCT_ID } from './catalog';
 import { checkoutSessionToken } from './zeroCheckoutSession';
 
-export const DIRECT_RECOVERY_PRODUCT = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';
+export function isDirectRecoveryProduct(productId: string | null | undefined): productId is string {
+  return productId === FRIENDSHIP_TWO_HOURS_PRODUCT_ID || productId === TOURNAMENT_SUBSCRIPTION_DIRECT_PRODUCT_IDS.ra;
+}
 const uuid = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(x);
 export function isFreshDirectClosure(payload: unknown, productId: string, transactionId: string): boolean {
-  if (productId !== DIRECT_RECOVERY_PRODUCT || !uuid(transactionId) || !payload || typeof payload !== 'object') return false;
+  if (!isDirectRecoveryProduct(productId) || !uuid(transactionId) || !payload || typeof payload !== 'object') return false;
   const body = payload as Record<string, unknown>, proof = body.directCheckoutClosure as Record<string, unknown> | null;
   if (body.ok !== true || !proof || Array.isArray(proof) || proof.version !== 1 || proof.productId !== productId
     || proof.transactionId !== transactionId || proof.state !== 'PROVIDER_CARD_EXPIRED_UNPAID'
@@ -17,7 +21,7 @@ export function isFreshDirectClosure(payload: unknown, productId: string, transa
 export async function readClosedDirectCheckout(productId: string, transactionId: string, canProceed: () => boolean): Promise<boolean> {
   const token = checkoutSessionToken();
   const current = () => !!token && checkoutSessionToken() === token && canProceed();
-  if (productId !== DIRECT_RECOVERY_PRODUCT || !uuid(transactionId) || !current()) return false;
+  if (!isDirectRecoveryProduct(productId) || !uuid(transactionId) || !current()) return false;
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 16000);
   try {
     const result = await request<unknown>('/lk/tournaments/summer-subscription/confirm', {

@@ -1,4 +1,4 @@
-import { DIRECT_RECOVERY_PRODUCT, readClosedDirectCheckout } from './directCheckoutRecovery';
+import { isDirectRecoveryProduct, readClosedDirectCheckout } from './directCheckoutRecovery';
 import { parseZeroOperationLink } from './zeroCheckoutResume';
 import { hasVerifiedCheckoutReset, parseZeroAttempt, type ZeroPaymentAttempt as Attempt } from './zeroCheckoutCustody';
 import { withSubscriptionPromoLock, recordOrdinarySubscriptionAttempt, subscriptionPromoAttemptKey } from './promoCodeAttempt';
@@ -433,14 +433,14 @@ export async function resumeZeroPayment(key: string, phone: string, canProceed: 
     }
     if (attempt.state === 'paid') return { status: 'paid' as const, message: 'Оплата подтверждена. Подписка оформлена.' };
     if (attempt.state !== 'pending') return pending;
-    if (key === 'friendship-two-hours' && attempt.transactionId) {
+    if (isDirectRecoveryProduct(productId) && attempt.transactionId) {
       const sharedRaw = window.localStorage.getItem(accountKey);
       let shared;
       try { shared = JSON.parse(sharedRaw || 'null'); } catch { return pending; }
       if (shared && (shared.kind !== 'ordinary' || shared.paid === true || shared.transactionId && shared.transactionId !== attempt.transactionId
         || !(shared.transactionId === attempt.transactionId || shared.paymentRef === attempt.paymentRef))) return pending;
       const unchanged = () => current() && window.localStorage.getItem(accountKey) === sharedRaw;
-      if (await readClosedDirectCheckout(DIRECT_RECOVERY_PRODUCT, attempt.transactionId, unchanged) && unchanged()) {
+      if (await readClosedDirectCheckout(productId, attempt.transactionId, unchanged) && unchanged()) {
         return navigator.locks.request(accountKey, { ifAvailable: true }, lock => {
           if (!lock || !unchanged()) return pending;
           if (sharedRaw !== null) window.localStorage.removeItem(accountKey);
