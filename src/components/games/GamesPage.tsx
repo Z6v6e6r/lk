@@ -1,6 +1,6 @@
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
 import { mergeRosterMetadata } from "./rosterMetadata";
-import { moscowBookingEndIso } from "../../utils/bookingEndTime";
+import { bookingEndIso, moscowBookingEndIso } from "../../utils/bookingEndTime";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isRequestTimeoutError, runWithAbortTimeout } from "../../utils/requestTimeout";
 import { BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence } from "./bookingConversionEvidence";
@@ -125,6 +125,8 @@ import {
 import {
   CABINET_URL,
   GAMES_BUNDLE_URL,
+  GAME_BOOKING_UTC_OFFSET,
+  PUBLIC_GAME_STATION_ID,
   IS_DEV_RELEASE_CHANNEL,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
@@ -284,7 +286,7 @@ const MATCH_RESULT_RATING_DEFAULT_PARAMS = {
   round: 5,
 };
 const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = true;
-const ENABLE_SPLIT_GAME_PAYMENT = true;
+const ENABLE_SPLIT_GAME_PAYMENT = import.meta.env.VITE_GAME_SPLIT_PAYMENT_ENABLED !== "false";
 const SPLIT_PAYMENT_DEADLINE_MINUTES = 25;
 const SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES = 10;
 const SPLIT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
@@ -5265,7 +5267,10 @@ export default function GamesPage({
     apiFetchOnboardingStations()
       .then((res) => {
         if (!alive) return;
-        const nextStudios = Array.isArray(res.data) ? res.data : [];
+        const allStudios = Array.isArray(res.data) ? res.data : [];
+        const nextStudios = publicCreateEntry && PUBLIC_GAME_STATION_ID
+          ? allStudios.filter((station) => station.id === PUBLIC_GAME_STATION_ID)
+          : allStudios;
         setStudios(nextStudios);
         setStudio((prev) =>
           prev && nextStudios.some((station) => station.id === prev.id) ? prev : null,
@@ -5286,7 +5291,7 @@ export default function GamesPage({
     return () => {
       alive = false;
     };
-  }, [step]);
+  }, [step, publicCreateEntry]);
 
   useEffect(() => {
     if (!publicCreateEntry || publicCreatePresetHandledRef.current) return;
@@ -5302,7 +5307,7 @@ export default function GamesPage({
     if (step !== "place" || loadingStudios) return;
 
     if (studios.length === 0) {
-      publicCreatePresetHandledRef.current = true;
+      if (!PUBLIC_GAME_STATION_ID) publicCreatePresetHandledRef.current = true;
       if (presetStudioName) {
         setStudiosQuery((prev) => prev || presetStudioName);
       }
@@ -11173,8 +11178,8 @@ export default function GamesPage({
         date: fromDate,
         timeFrom: fromTime,
         timeTo: toTime,
-        timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-        timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
+        timeFromIso: `${fromDate}T${fromTime}:00${GAME_BOOKING_UTC_OFFSET}`,
+        timeToIso: bookingEndIso(fromDate, fromTime, toTime, GAME_BOOKING_UTC_OFFSET),
         durationMinutes: duration,
         slotId: selectedSlotId,
         bookingIds: resolvedBookingIds,
@@ -11504,8 +11509,8 @@ export default function GamesPage({
           date: fromDate,
           timeFrom: fromTime,
           timeTo: toTime,
-          timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-          timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
+          timeFromIso: `${fromDate}T${fromTime}:00${GAME_BOOKING_UTC_OFFSET}`,
+          timeToIso: bookingEndIso(fromDate, fromTime, toTime, GAME_BOOKING_UTC_OFFSET),
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,
@@ -11628,8 +11633,8 @@ export default function GamesPage({
           date: fromDate,
           timeFrom: fromTime,
           timeTo: toTime,
-          timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-          timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
+          timeFromIso: `${fromDate}T${fromTime}:00${GAME_BOOKING_UTC_OFFSET}`,
+          timeToIso: bookingEndIso(fromDate, fromTime, toTime, GAME_BOOKING_UTC_OFFSET),
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,

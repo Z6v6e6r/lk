@@ -161,6 +161,10 @@ function getActiveLkBaseUrl(): string | null {
   return INITIAL_ACTIVE_LK_BASE_URL ?? detectDocumentScriptLkBaseUrl();
 }
 
+// A tenant backend can use a path on a shared host. Preserve that path and
+// avoid the default LK1 fallback when the tenant API is pinned.
+const PINNED_LK_API_BASE = normalizeLkBaseUrl(importMetaEnv?.VITE_LK_PINNED_API_BASE);
+
 const CONFIGURED_LK_API_FALLBACK_BASE_URLS = parseOriginList(
   importMetaEnv?.VITE_LK_API_FALLBACK_BASE_URLS,
 );
@@ -206,6 +210,8 @@ export function resolveLkApiBaseUrlCandidates(
   fallbackServ2: string | null | undefined,
   options: ResolveLkApiBaseUrlOptions = {},
 ): string[] {
+  if (PINNED_LK_API_BASE) return [PINNED_LK_API_BASE];
+
   const primaryOrigin = normalizeOrigin(primaryServ2);
   const fallbackOrigin = normalizeOrigin(fallbackServ2);
   const windowApiBaseUrls = options.windowApiBaseUrls ?? getWindowApiBaseUrls();
@@ -259,6 +265,18 @@ export function buildProjectUrlCandidates(
     parsedTargetUrl = new URL(normalizedTargetUrl);
   } catch {
     return [normalizedTargetUrl];
+  }
+
+  if (PINNED_LK_API_BASE) {
+    const prefix = new URL(PINNED_LK_API_BASE);
+    const targetPath = parsedTargetUrl.pathname;
+    if (parsedTargetUrl.origin !== prefix.origin) return [];
+    if (targetPath === prefix.pathname || targetPath.startsWith(prefix.pathname + "/")) {
+      return [normalizedTargetUrl];
+    }
+    if (!targetPath.startsWith("/lk/")) return [];
+    parsedTargetUrl.pathname = prefix.pathname + targetPath;
+    return [parsedTargetUrl.href];
   }
 
   const knownApiHosts = buildKnownApiHosts(primaryServ2, fallbackServ2, options);

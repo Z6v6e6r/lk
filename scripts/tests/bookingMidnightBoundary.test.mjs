@@ -16,9 +16,11 @@ const extract = (source, roots) => {
 };
 const { splitCreateEndDate, splitCreateDurationMinutes, extractConflictExerciseId } = extract(routerSource,
   ['splitCreateEndDate', 'splitCreateDurationMinutes', 'extractConflictExerciseId']);
-const client = ts.transpileModule(read('../src/utils/bookingEndTime.ts').replace('export ', ''),
+const client = ts.transpileModule(read('../src/utils/bookingEndTime.ts').replaceAll('export ', ''),
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const endIso = new Function(client + ';return moscowBookingEndIso;')();
+const { endIso, endIsoWithOffset } = new Function(client
+  + ';return { endIso: moscowBookingEndIso, endIsoWithOffset: bookingEndIso };')();
+
 const dates = [['2099-09-21', '2099-09-22'], ['2099-09-30', '2099-10-01'],
   ['2099-12-31', '2100-01-01'], ['2104-02-28', '2104-02-29'], ['2104-02-29', '2104-03-01']];
 const clocks = [['23:00', 60], ['22:30', 90], ['22:00', 120]];
@@ -145,7 +147,7 @@ test('client promo, one-time filter and pay use a positive next-day interval wit
     calls.push({ url, options });
     return { status: 503, data: null, error: { message: 'synthetic refusal; no real request' } };
   };
-  const deps = { moscowBookingEndIso: endIso, API_BASE: 'https://provider.invalid', TENANT_KEY: 'synthetic-tenant',
+  const deps = { moscowBookingEndIso: endIso, bookingEndIso: endIsoWithOffset, GAME_BOOKING_UTC_OFFSET: '+03:00', API_BASE: 'https://provider.invalid', TENANT_KEY: 'synthetic-tenant',
     SUCCESS_URL: 'https://return.invalid', ENABLE_MASTER_SERVICE_AUTO_DISCOVERY: false,
     masterServiceStudioPreferredSubServiceCache: new Map(), masterServiceStudioSubServicesCache: new Map(),
     bootstrapMasterService: async () => {}, uniqueIds: x => [...new Set(x)], request,
@@ -169,6 +171,13 @@ test('client promo, one-time filter and pay use a positive next-day interval wit
   assert.equal(body.paymentMethod, 'WIDGET');
   assert.equal(Object.hasOwn(body, 'amount'), false);
   assert.equal(calls.filter(c => c.options.method === 'POST').length, 1);
+});
+
+test('Novokuznetsk closing boundary preserves UTC+7 and advances only the end date', () => {
+  const end = endIsoWithOffset('2099-12-31', '22:30', '00:00', '+07:00');
+  assert.equal(end, '2100-01-01T00:00:00+07:00');
+  assert.equal(Date.parse(end) - Date.parse('2099-12-31T22:30:00+07:00'), 90 * 60000);
+  assert.equal(endIsoWithOffset('2099-12-31', '16:00', '17:30', '+07:00'), '2099-12-31T17:30:00+07:00');
 });
 
 const original350 = process.env.LK_MIDNIGHT_ORIGINAL350_SOURCE;

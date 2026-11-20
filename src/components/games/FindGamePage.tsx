@@ -10,6 +10,8 @@ import {
 } from "../../utils/apiClient";
 import {
   CABINET_URL,
+  GAME_BOOKING_UTC_OFFSET,
+  PUBLIC_GAME_TIME_ZONE,
   IS_DEV_RELEASE_CHANNEL,
   PUBLIC_GAME_CREATE_PATH,
   PUBLIC_INVITE_ORIGIN,
@@ -29,6 +31,7 @@ import {
   normalizeLevelGradeLabel,
   parseNumericLevel,
 } from "../../utils/customFields";
+import { bookingEndIso } from "../../utils/bookingEndTime";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
@@ -339,7 +342,10 @@ function resolveGameStartTs(game: PadelGameRecord): number | null {
   const time = booking?.timeFrom || booking?.timeTo;
   if (!date || !time) return null;
   const normalizedTime = /^\d{2}:\d{2}$/.test(time) ? `${time}:00` : time;
-  const parsed = new Date(`${date}T${normalizedTime}`);
+  const startIso = PUBLIC_GAME_TIME_ZONE
+    ? `${date}T${normalizedTime}${GAME_BOOKING_UTC_OFFSET}`
+    : `${date}T${normalizedTime}`;
+  const parsed = new Date(startIso);
   return Number.isFinite(parsed.getTime()) ? parsed.getTime() : null;
 }
 
@@ -349,7 +355,10 @@ function resolveGameEndTs(game: PadelGameRecord): number | null {
   const time = booking?.timeTo || booking?.timeFrom;
   if (!date || !time) return null;
   const normalizedTime = /^\d{2}:\d{2}$/.test(time) ? `${time}:00` : time;
-  const parsed = new Date(`${date}T${normalizedTime}`);
+  const endIso = PUBLIC_GAME_TIME_ZONE
+    ? bookingEndIso(date, booking.timeFrom || time, normalizedTime, GAME_BOOKING_UTC_OFFSET)
+    : `${date}T${normalizedTime}`;
+  const parsed = new Date(endIso);
   return Number.isFinite(parsed.getTime()) ? parsed.getTime() : null;
 }
 
@@ -628,7 +637,13 @@ function readAtlasMultiValues<T extends string>(key: string, allowed?: readonly 
 }
 
 function getDefaultAtlasDateKey(): string {
-  return formatDateLocalIso(new Date());
+  const now = new Date();
+  if (!PUBLIC_GAME_TIME_ZONE) return formatDateLocalIso(now);
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: PUBLIC_GAME_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const dateParts = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
 }
 
 function getGameStatusValue(game: PadelGameRecord): string {
@@ -1260,7 +1275,7 @@ export default function FindGamePage({
   const shouldIncludeGamePlusTrainer = includeGamePlusTrainer === true;
 
   const dates = useMemo(() => {
-    const base = new Date();
+    const base = parseLocalGameDate(getDefaultAtlasDateKey()) ?? new Date();
     const totalDays = DAYS_BEFORE_TODAY + DAYS_AFTER_TODAY + 1;
     return Array.from({ length: totalDays }).map((_, i) => {
       const d = new Date(base);

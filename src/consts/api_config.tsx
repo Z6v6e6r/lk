@@ -116,6 +116,16 @@ export const PUBLIC_GAME_CREATE_PATH =
   (import.meta.env.VITE_PUBLIC_GAME_CREATE_PATH as string | undefined) ?? "/game_create";
 export const PUBLIC_GAME_FIND_PATH =
   (import.meta.env.VITE_PUBLIC_GAME_FIND_PATH as string | undefined) ?? "/finde_game";
+export const PUBLIC_CLUB_NAME =
+  (import.meta.env.VITE_PUBLIC_CLUB_NAME as string | undefined)?.trim() || "";
+export const PUBLIC_GAME_STATION_ID =
+  (import.meta.env.VITE_PUBLIC_GAME_STATION_ID as string | undefined)?.trim() || "";
+export const PUBLIC_GAME_STATION_NAME =
+  (import.meta.env.VITE_PUBLIC_GAME_STATION_NAME as string | undefined)?.trim() || "";
+export const PUBLIC_GAME_TIME_ZONE =
+  (import.meta.env.VITE_PUBLIC_GAME_TIME_ZONE as string | undefined)?.trim() || "";
+export const GAME_BOOKING_UTC_OFFSET =
+  (import.meta.env.VITE_GAME_BOOKING_UTC_OFFSET as string | undefined)?.trim() || "+03:00";
 export const PUBLIC_COMMUNITY_JOIN_PATH =
   (import.meta.env.VITE_PUBLIC_COMMUNITY_JOIN_PATH as string | undefined) ?? "/community_join";
 export const CABINET_URL = resolveReleaseChannelUrl(

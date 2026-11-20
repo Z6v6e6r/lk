@@ -1,4 +1,4 @@
-import { moscowBookingEndIso } from "./bookingEndTime";
+import { bookingEndIso, moscowBookingEndIso } from "./bookingEndTime";
 import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
@@ -13,6 +13,7 @@ import {
   SUCCESS_URL,
   FAIL_URL,
   GAMES_MASTER_SERVICE_ID,
+  GAME_BOOKING_UTC_OFFSET,
   IS_DEV_RELEASE_CHANNEL,
   ALLOW_LOCAL_PRODUCTION_HISTORY_API,
   LEGACY_ROSTER_BRIDGE_ENABLED,
@@ -10121,10 +10122,10 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
     };
   }
 
-  const fromDateTimeWithOffset = `${fromDate}T${fromTime}:00+03:00`;
-  const toDateTimeWithOffset = moscowBookingEndIso(fromDate, fromTime, toTime);
+  const fromDateTimeWithOffset = `${fromDate}T${fromTime}:00${GAME_BOOKING_UTC_OFFSET}`;
+  const toDateTimeWithOffset = bookingEndIso(fromDate, fromTime, toTime, GAME_BOOKING_UTC_OFFSET);
   const fromDateTimeLocal = `${fromDate}T${fromTime}:00`;
-  const toDateTimeLocal = moscowBookingEndIso(fromDate, fromTime, toTime).slice(0, -6);
+  const toDateTimeLocal = toDateTimeWithOffset.slice(0, -6);
   const clientId = params.clientId?.trim() || null;
   let promoDiscountAmount: number | null = null;
   if (clientId) {

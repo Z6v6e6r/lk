@@ -1,0 +1,56 @@
+<div id="root" aria-busy="true">Загружаем страницу…</div>
+<script>
+  (function () {
+    var config = __LK_PAGE_CONFIG__;
+    var root = document.getElementById("root");
+    if (!root) return;
+
+    function showError() {
+      root.removeAttribute("aria-busy");
+      root.setAttribute("role", "alert");
+      root.textContent = "Не удалось загрузить страницу. Обновите её и попробуйте снова.";
+    }
+
+    function loadBundle(version) {
+      window.__LK_RELEASE_VERSION__ = version;
+      window.__LK_ACTIVE_BASE_URL__ = config.assetBase;
+
+      var script = document.createElement("script");
+      script.src = config.assetBase + "/padel-prime-lk.js?v=" + encodeURIComponent(version);
+      script.charset = "utf-8";
+      script.crossOrigin = "anonymous";
+      script.onload = function () {
+        clearTimeout(timer);
+        root.removeAttribute("aria-busy");
+      };
+      script.onerror = function () {
+        clearTimeout(timer);
+        showError();
+      };
+      var timer = setTimeout(function () {
+        script.remove();
+        showError();
+      }, 15000);
+      document.head.appendChild(script);
+    }
+
+    if (location.origin !== config.pageOrigin) {
+      showError();
+      return;
+    }
+
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, 8000);
+    fetch(config.assetBase + "/release.json", {
+      cache: "no-store",
+      credentials: "omit",
+      signal: controller.signal
+    }).then(function (response) {
+      if (!response.ok) throw new Error("Release manifest unavailable");
+      return response.json();
+    }).then(function (manifest) {
+      if (!/^[A-Za-z0-9._-]+$/.test(manifest.version || "")) throw new Error("Invalid release version");
+      loadBundle(manifest.version);
+    }).catch(showError).finally(function () { clearTimeout(timer); });
+  })();
+</script>
