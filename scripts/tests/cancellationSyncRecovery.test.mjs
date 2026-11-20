@@ -6,7 +6,7 @@ import { composeCancellationSyncRecovery, patchCancellationSyncRouter } from '..
 import { validateReviewedFlowContract } from '../nodered_reviewed_flow_deploy/runtime_contract.mjs';
 import { fixture } from './fixtures/lk1FreeCancellationFixtures.mjs';
 import { lk1SeatReleasedOperation } from '../lib/lk1FreeCancellation.mjs';
-import { LK1_UNPAID_FLOW_SHA256, LK1_UNPAID_GATEWAY_SHA256 } from '../lib/lk1LiveGatewayGuard.mjs';
+import { LK1_UNPAID_GATEWAY_SHA256 } from '../lib/lk1LiveGatewayGuard.mjs';
 const edits = JSON.parse(fs.readFileSync('scripts/lib/cancellationSyncSourceEdits.json'));
 const input = process.env.CANCELLATION_SYNC_LIVE_SOURCE;
 test('owned split-leave edits reproduce maintained sources exactly and reject repeated application', () => {
@@ -69,7 +69,8 @@ test('private frozen baseline yields only the reviewed delta; inverse and tamper
 }, () => {
   const liveBytes = fs.readFileSync(input), result = composeCancellationSyncRecovery(liveBytes);
   const before = JSON.parse(liveBytes), after = JSON.parse(result.candidateBytes);
-  assert.equal(result.candidateSha256, LK1_UNPAID_FLOW_SHA256);
+  // This rehearsal reconstructs the cancellation-sync release that preceded PATCH #426.
+  assert.equal(result.candidateSha256, 'da92d76f5b679034f70be9b36d6ac8ff60b3f203a3ebafafdca102e425c7a405');
   const router = after.find(n => n.id === 'lk_subscription_booking_router_20260804');
   assert.equal(crypto.createHash('sha256').update(router.func).digest('hex'), LK1_UNPAID_GATEWAY_SHA256);
   assert.equal(after.length - before.length, 54); assert.equal(result.allowedChanges.length, 20);
