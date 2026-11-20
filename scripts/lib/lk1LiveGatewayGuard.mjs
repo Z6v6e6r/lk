@@ -6,8 +6,8 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-export const LK1_UNPAID_FLOW_SHA256 = 'a756904affa3fde3d6f652bfbfaaa9623bc5232f28c69d1b06ee2c0d25e9ba0a';
-export const LK1_UNPAID_GATEWAY_SHA256 = '4c004bd49a37ef75f4751e9d82d7d2554c8ca0aba4916b284c5d6161a4bbae13';
+export const LK1_UNPAID_FLOW_SHA256 = 'b41bd43b68ea266f4a1a060d90f4b7eb7d2708f126041b0bf16a977c75147dad';
+export const LK1_UNPAID_GATEWAY_SHA256 = 'a493d63f7950d7062f4fb6e6f4022b67b6598dbef00fa8ad81c79b056f08eb1b';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const bindingNames = ['VIVA_SERVICE_TOKEN_URL', 'VIVA_SERVICE_CLIENT_ID',
   'VIVA_SERVICE_USERNAME', 'VIVA_SERVICE_PASSWORD'];

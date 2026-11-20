@@ -107,6 +107,23 @@ URLs, phone numbers, bearer tokens, or raw provider responses.
 
 ## Release and activation
 
+### Worker bundle paired with LK1 #470
+
+For the offline worker rehearsal, the source disk snapshot from 147 is
+`a490eaa815ee3c3a28c727a92faa27971c4fb8defcfb3fb895ebf824069041dd`.
+Run `patch_cup_only_player_level.mjs` first and
+`prepare_tournament_admission_candidate.mjs` second. The worker bundle pins the
+resulting exact file
+`b41bd43b68ea266f4a1a060d90f4b7eb7d2708f126041b0bf16a977c75147dad`
+and the booking router function
+`a493d63f7950d7062f4fb6e6f4022b67b6598dbef00fa8ad81c79b056f08eb1b`.
+The bundle manifest covers the guard file containing both pins. Re-serialization
+or any later graph edit requires a new byte-level check and paired bundle.
+Production rollout still requires the final deployment graph and live
+attestation under the coordinated release.
+
+### General release procedure
+
 The repository source alone is not a deployed service. The gateway guard also
 requires a separate reviewed-flow release: pull a fresh private 147 workspace,
 run `scripts/patch_live_lk1_unpaid_cancel_guard.mjs`, prepare a function-only
