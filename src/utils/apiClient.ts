@@ -14,6 +14,7 @@ import {
   FAIL_URL,
   GAMES_MASTER_SERVICE_ID,
   GAME_BOOKING_UTC_OFFSET,
+  PUBLIC_GAME_TIME_ZONE,
   IS_DEV_RELEASE_CHANNEL,
   ALLOW_LOCAL_PRODUCTION_HISTORY_API,
   LEGACY_ROSTER_BRIDGE_ENABLED,
@@ -2397,10 +2398,10 @@ async function bootstrapMasterService(masterServiceId: string, studioId?: string
     signal,
   });
   signal?.throwIfAborted();
-  const timeZone =
-    extractMasterServiceTimeZone(studiosResult.data, studioId) ??
-    masterServiceTimeZoneCache.get(masterServiceId) ??
-    "Europe/Moscow";
+  const timeZone = PUBLIC_GAME_TIME_ZONE ||
+    (extractMasterServiceTimeZone(studiosResult.data, studioId) ??
+      masterServiceTimeZoneCache.get(masterServiceId) ??
+      "Europe/Moscow");
   masterServiceTimeZoneCache.set(masterServiceId, timeZone);
 
   signal?.throwIfAborted();

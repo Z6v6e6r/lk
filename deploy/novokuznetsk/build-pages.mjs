@@ -123,6 +123,7 @@ for (const [entry, outputFile] of [
   await build({
     root: repo,
     configFile: false,
+    publicDir: false,
     envFile: false,
     plugins: [react(), cssInjectedByJsPlugin()],
     define: {
