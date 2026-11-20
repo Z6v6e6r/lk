@@ -4,12 +4,13 @@ import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { protectRosterTerminal } from "../patch_live_tournament_participants_cup_source.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const NODES = path.join(ROOT, "nodered_tournament_participants_nodes");
 
-function run(file, msg, envValues = {}, globalValues = {}) {
-  const source = fs.readFileSync(path.join(NODES, file), "utf8");
+function run(file, msg, envValues = {}, globalValues = {}, transform = (source) => source) {
+  const source = transform(fs.readFileSync(path.join(NODES, file), "utf8"));
   const context = {
     msg,
     env: { get: (key) => envValues[key] },
@@ -112,7 +113,7 @@ test("participants terminal never forwards upstream authorization or cookies", (
     participantCacheSkipTerminalState: true,
     headers: { Authorization: "fixture-only", "Set-Cookie": "fixture", "x-lk-participants-cache": "hit" },
   };
-  const out = run("fn_terminal_v2.js", msg);
+  const out = run("fn_terminal_v2.js", msg, {}, {}, protectRosterTerminal);
   assert.deepEqual(Object.keys(out.headers), ["x-lk-participants-cache"]);
 });
 

@@ -1,11 +1,7 @@
 const CACHE_KEY = "lkTournamentParticipantResponseCacheV2";
 const EPOCH_KEY = "lkTournamentParticipantEpochV1";
 const MANUAL_COOLDOWN_KEY = "lkTournamentParticipantManualRefreshCooldownV1";
-const BLOCKED_RESPONSE_HEADERS = new Set([
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "set-cookie",
+const NODE_RED_MANAGED_RESPONSE_HEADERS = new Set([
   "connection",
   "content-length",
   "transfer-encoding",
@@ -14,7 +10,7 @@ const sanitizeResponseHeaders = () => {
   if (!msg.headers || typeof msg.headers !== "object" || Array.isArray(msg.headers)) return;
   msg.headers = Object.fromEntries(
     Object.entries(msg.headers).filter(
-      ([name]) => !BLOCKED_RESPONSE_HEADERS.has(String(name).trim().toLowerCase()),
+      ([name]) => !NODE_RED_MANAGED_RESPONSE_HEADERS.has(String(name).trim().toLowerCase()),
     ),
   );
 };

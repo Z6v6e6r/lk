@@ -29,7 +29,6 @@ export const CUP_ROSTER_PATCH_CONTRACT = Object.freeze({
     publicRequest: "fn_cup_public_request_v1.js",
     normalize: "fn_cup_roster_normalize_v1.js",
     vivaFallback: "fn_cup_viva_fallback_prepare_v1.js",
-    terminal: "fn_terminal_v2.js",
   },
 });
 
@@ -128,6 +127,21 @@ function httpRequestNode(id, name, x, y, wires) {
   };
 }
 
+export function protectRosterTerminal(func) {
+  if (sha256(func) !== CUP_ROSTER_PATCH_CONTRACT.functionPreimages.terminal) {
+    fail("Participants terminal function preimage mismatch");
+  }
+  return func
+    .replaceAll("NODE_RED_MANAGED_RESPONSE_HEADERS", "BLOCKED_RESPONSE_HEADERS")
+    .replace('  "connection",', [
+      '  "authorization",',
+      '  "proxy-authorization",',
+      '  "cookie",',
+      '  "set-cookie",',
+      '  "connection",',
+    ].join("\n"));
+}
+
 export function applyCupRosterPatch(flow) {
   const { validate, vivaHttp, vivaNormalize, terminal } = assertFlow(flow);
   const source = {
@@ -135,7 +149,6 @@ export function applyCupRosterPatch(flow) {
     publicRequest: readSource("publicRequest"),
     normalize: readSource("normalize"),
     vivaFallback: readSource("vivaFallback"),
-    terminal: readSource("terminal"),
   };
   const patched = structuredClone(flow);
 
@@ -150,7 +163,7 @@ export function applyCupRosterPatch(flow) {
 
   const vivaNormalizePatched = exactNode(patched, vivaNormalize.id, "Participants normalize");
   vivaNormalizePatched.name = "Normalize Viva fallback bookings";
-  exactNode(patched, terminal.id, "Participants terminal").func = source.terminal;
+  exactNode(patched, terminal.id, "Participants terminal").func = protectRosterTerminal(terminal.func);
 
   patched.push(
     {
