@@ -413,6 +413,8 @@ jobs:
           node --experimental-strip-types --test
           scripts/tests/tournamentParticipantRead.test.ts
           scripts/tests/tournamentParticipantRead.apiClient.test.mjs
+          scripts/tests/tournamentParticipantsCupSource.test.mjs
+          scripts/tests/tournamentParticipantsRefreshNginx.test.ts
           scripts/tests/tournamentParticipantsContainmentV2.test.ts
           scripts/tests/tournamentParticipantsManualRefreshBackend.test.ts
           scripts/tests/tournamentParticipantsManualRefreshPatch.test.mjs

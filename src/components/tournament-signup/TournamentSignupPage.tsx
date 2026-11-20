@@ -1239,11 +1239,14 @@ export default function TournamentSignupPage({
     publicRosterDetailAbortRef.current?.abort();
     const rosterAbortController = new AbortController();
     publicRosterDetailAbortRef.current = rosterAbortController;
-    void loadPublicRoster(exerciseId, { force: checkOnly, signal: rosterAbortController.signal }).finally(() => {
+    const rosterOptions = { signal: rosterAbortController.signal };
+    let rosterRequest = checkOnly ? null : loadPublicRoster(exerciseId, rosterOptions);
+    // Keep the attached controller available until the post-reconciliation read completes.
+    const finishRosterRead = () => {
       if (publicRosterDetailAbortRef.current === rosterAbortController) {
         publicRosterDetailAbortRef.current = null;
       }
-    });
+    };
     const [registrationResult, vivaRegistrationResult] = isAuthenticated && !subscriptionUsageShadowEnabled
       ? await Promise.all([
           apiFetchTournamentMyRegistration(tournamentId),
@@ -1254,14 +1257,21 @@ export default function TournamentSignupPage({
     let ownerRegistration = registrationResult?.data;
     const pendingCopay = ownerRegistration?.status === "PAYMENT_PENDING";
     const ownsCopay = pendingCopay || Boolean(ownerRegistration?.status === "REGISTERED" && ownerRegistration.bookingId);
-    if ((pendingCopay || (!ownsCopay && !checkOnly && vivaRegistrationResult?.data?.status === "REGISTERED"))
+    let ownerRosterChanged = false;
+    if ((pendingCopay || (checkOnly && ownsCopay)
+      || (!ownsCopay && !checkOnly && vivaRegistrationResult?.data?.status === "REGISTERED"))
       && tournamentPaymentSessionIdentity(requestToken) === tournamentPaymentSessionIdentity(readAuthToken())) {
       const reconciliation = await apiReconcileTournamentOwner(exerciseId);
-      if (pendingCopay && (reconciliation.data?.state === "COMPLETED" || reconciliation.data?.state === "CANCELLED")) {
+      ownerRosterChanged = reconciliation.data?.state === "COMPLETED" || reconciliation.data?.state === "CANCELLED";
+      if (pendingCopay && ownerRosterChanged) {
         ownerRegistration = (await apiFetchTournamentMyRegistration(tournamentId)).data ?? ownerRegistration;
-        void loadPublicRoster(exerciseId, { force: true, signal: rosterAbortController.signal });
       }
     }
+    if (!rosterOptions.signal.aborted && (checkOnly || ownerRosterChanged)) {
+      rosterRequest = loadPublicRoster(exerciseId, { ...rosterOptions, force: true });
+    }
+    if (rosterRequest) void rosterRequest.finally(finishRosterRead);
+    else finishRosterRead();
 
     const resolvedRegistration = await mergeTournamentPendingPayment(
       requestToken, exerciseId,

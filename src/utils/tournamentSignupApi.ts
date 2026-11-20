@@ -2436,8 +2436,13 @@ export async function apiCancelTournamentVivaRegistration(
 }
 
 export function apiReconcileTournamentOwner(exerciseId: string, cancelledBookingId?: string) {
+  const id = encodeURIComponent(exerciseId);
+  // LK invalidates the public roster before returning CUP's confirmed payment.
+  const url = cancelledBookingId
+    ? `${PHAB_API_BASE}/tournaments/${id}/checkout/reconcile`
+    : `${getServ2Origin()}/lk/tournaments/participants/reconcile-payment?exerciseId=${id}`;
   return request<{ state?: string; actorClientId?: string; requestKey?: string; operationId?: string }>(
-    `${PHAB_API_BASE}/tournaments/${encodeURIComponent(exerciseId)}/checkout/reconcile`,
+    url,
     { method: "POST", auth: true, retries: 0, ...(cancelledBookingId && {
       body: JSON.stringify({ cancelledBookingId }),
     }) },
@@ -3126,6 +3131,9 @@ async function apiCreateTournamentVivaBookingFromSubscription(
     return { data: null, error: { status: 202,
       message: "Запись создана; доплата требует подтверждения. Не создавайте повторную запись.",
       raw: response.data }, status: 202 };
+  }
+  if (params.product.tournamentDiscountQuote && payment.paid) {
+    await apiReconcileTournamentOwner(params.exerciseId);
   }
   return {
     data: payment,

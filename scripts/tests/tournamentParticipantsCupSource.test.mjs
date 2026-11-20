@@ -132,3 +132,108 @@ test("CUP lookup rejects an untrusted base before any request", () => {
   assert.equal(error.statusCode, 503);
   assert.equal(error.payload.error, "CUP_API_BASE_URL invalid");
 });
+
+const PRIMARY_EXERCISE = "11111111-1111-4111-8111-111111111111";
+const OTHER_EXERCISE = "22222222-2222-4222-8222-222222222222";
+const CACHE_EPOCH = "lkTournamentParticipantEpochV1";
+const COMPLETED = {
+  state: "COMPLETED",
+  requestOperationId: "fixture-operation",
+  bookingId: "fixture-booking",
+  transactionId: "fixture-transaction",
+};
+const RECONCILE_NODE = "fn_cup_reconcile_payment_v1.js";
+const CUP_BASE = "http://127.0.0.1:3000/api";
+
+function rosterRuntime() {
+  const flowValues = new Map();
+  const globalValues = new Map();
+  const context = (store) => ({ get: store.get.bind(store), set: store.set.bind(store) });
+  const execute = (file, msg, transform = (source) => source, base = CUP_BASE) => {
+    const source = transform(fs.readFileSync(path.join(NODES, file), "utf8"));
+    return vm.runInNewContext(`(function(){ ${source} })()`, {
+      msg,
+      flow: context(flowValues),
+      global: context(globalValues),
+      env: { get: (key) => key === "CUP_API_BASE_URL" ? base : undefined },
+      cupUrl: { URL },
+    }, { filename: file });
+  };
+  const read = (exerciseId, size = 100) => execute("fn_cache_gate_v2.js", { req: { query: { exerciseId, size } } });
+  const terminate = (msg, payload) => execute("fn_terminal_v2.js", { ...msg, payload, statusCode: 200 }, protectRosterTerminal);
+  const prepare = (exerciseId, auth = "Bearer fixture", base = CUP_BASE) => execute(RECONCILE_NODE, {
+    req: { query: { exerciseId }, headers: { authorization: auth } },
+    payload: { ...COMPLETED, exerciseId: OTHER_EXERCISE },
+  }, undefined, base);
+  const reconcile = (payload, override) => {
+    const [request] = prepare(PRIMARY_EXERCISE);
+    return execute(RECONCILE_NODE, {
+      ...request,
+      payload,
+      statusCode: 201,
+      responseUrl: request.url,
+      ...override,
+    })[1];
+  };
+  return { read, terminate, prepare, reconcile, epochs: () => globalValues.get(CACHE_EPOCH) };
+}
+
+test("verified payment invalidates both capacities of just the paid tournament before responding", () => {
+  const runtime = rosterRuntime();
+  for (const exerciseId of [PRIMARY_EXERCISE, OTHER_EXERCISE]) {
+    const [request] = runtime.read(exerciseId, 200);
+    assert.equal(runtime.terminate(request, []).payload.length, 0);
+    assert.equal(runtime.read(exerciseId, 4)[1].headers["x-lk-participants-cache"], "hit");
+  }
+
+  assert.equal(runtime.reconcile({ ...COMPLETED, state: "PAYMENT_PENDING" }).payload.state, "PAYMENT_PENDING");
+  assert.equal(runtime.read(PRIMARY_EXERCISE)[1].payload.length, 0);
+  assert.equal(runtime.epochs(), undefined);
+
+  const completed = runtime.reconcile(COMPLETED, {
+    headers: { "Set-Cookie": "fixture", Authorization: "fixture" },
+  });
+  assert.equal(completed.statusCode, 201);
+  assert.equal(completed.payload.state, "COMPLETED");
+  assert.deepEqual(Object.keys(completed.headers), ["Content-Type", "Cache-Control"]);
+  const [refresh] = runtime.read(PRIMARY_EXERCISE, 4);
+  assert.equal(refresh.participantCacheEpoch, 1);
+  assert.equal(runtime.read(OTHER_EXERCISE)[1].headers["x-lk-participants-cache"], "hit");
+  assert.equal(runtime.terminate(refresh, [{ id: "fixture-paid-player" }]).payload.length, 1);
+
+  assert.equal(runtime.reconcile(COMPLETED).payload.state, "COMPLETED");
+  assert.equal(runtime.epochs()[PRIMARY_EXERCISE], 1);
+  const [, otherCapacity] = runtime.read(PRIMARY_EXERCISE, 200);
+  assert.equal(otherCapacity, null);
+  assert.equal(runtime.read(PRIMARY_EXERCISE, 4)[1].payload.length, 1);
+  assert.deepEqual(Object.keys(runtime.epochs()), [PRIMARY_EXERCISE]);
+});
+
+test("a roster response started before settlement cannot repopulate the previous epoch", () => {
+  const runtime = rosterRuntime();
+  const [oldRead] = runtime.read(PRIMARY_EXERCISE);
+  runtime.reconcile(COMPLETED);
+  const [newRead] = runtime.read(PRIMARY_EXERCISE);
+  const late = runtime.terminate(oldRead, []);
+  assert.equal(late.statusCode, 409);
+  assert.equal(late.headers["x-lk-participants-cache"], "epoch-changed");
+  runtime.terminate(newRead, [{ id: "fixture-paid-player" }]);
+  assert.equal(runtime.read(PRIMARY_EXERCISE)[1].payload.length, 1);
+});
+
+test("only the configured CUP target can authorize invalidation", () => {
+  const runtime = rosterRuntime();
+  assert.equal(runtime.prepare("not-an-exercise")[1].statusCode, 400);
+  assert.equal(runtime.prepare(PRIMARY_EXERCISE, "")[1].statusCode, 401);
+  assert.equal(runtime.prepare(PRIMARY_EXERCISE, undefined, "http://example.test/api")[1].statusCode, 503);
+  const [request] = runtime.prepare(PRIMARY_EXERCISE);
+  assert.equal(request.url, `${CUP_BASE}/tournaments/${PRIMARY_EXERCISE}/checkout/reconcile`);
+  assert.deepEqual(Object.keys(request.payload), []);
+  assert.equal(request.headers.Authorization, "Bearer fixture");
+  assert.equal(request.followRedirects, false);
+  assert.equal(runtime.reconcile(COMPLETED, { responseUrl: "https://example.test/api" }).statusCode, 502);
+  assert.equal(runtime.reconcile(COMPLETED, { statusCode: 401 }).statusCode, 401);
+  assert.equal(runtime.reconcile(COMPLETED, { statusCode: 302 }).statusCode, 502);
+  assert.equal(runtime.reconcile({ ...COMPLETED, transactionId: null }).statusCode, 502);
+  assert.equal(runtime.epochs(), undefined);
+});

@@ -12,6 +12,7 @@ const SOURCE_DIR = path.join(SCRIPT_DIR, "nodered_tournament_participants_nodes"
 export const CUP_ROSTER_PATCH_CONTRACT = Object.freeze({
   routeId: "e0836350a9474a78",
   routeUrl: "/lk/tournaments/participants",
+  paymentRouteUrl: "/lk/tournaments/participants/reconcile-payment",
   tabId: "f9575c8726e29196",
   nodes: {
     validate: "4970937254c10761",
@@ -29,6 +30,7 @@ export const CUP_ROSTER_PATCH_CONTRACT = Object.freeze({
     publicRequest: "fn_cup_public_request_v1.js",
     normalize: "fn_cup_roster_normalize_v1.js",
     vivaFallback: "fn_cup_viva_fallback_prepare_v1.js",
+    reconcilePayment: "fn_cup_reconcile_payment_v1.js",
   },
 });
 
@@ -38,6 +40,10 @@ const NEW_IDS = Object.freeze({
   publicNormalize: "lk_tournament_participants_cup_public_normalize_20261120",
   vivaFallbackPrepare: "lk_tournament_participants_cup_viva_fallback_prepare_20261120",
   vivaFallbackHttp: "lk_tournament_participants_cup_viva_fallback_http_20261120",
+  paymentIn: "lk_tournament_participants_payment_in_20261120",
+  paymentRouter: "lk_tournament_participants_payment_router_20261120",
+  paymentHttp: "lk_tournament_participants_payment_http_20261120",
+  paymentResponse: "lk_tournament_participants_payment_response_20261120",
 });
 
 function fail(message) {
@@ -85,6 +91,13 @@ function assertFlow(flow) {
     }
     if (ids.has(node.id)) fail(`Duplicate Node-RED node id: ${node.id}`);
     ids.add(node.id);
+  }
+  for (const id of Object.values(NEW_IDS)) {
+    if (ids.has(id)) fail(`New participants node already exists: ${id}`);
+  }
+  if (flow.some((node) => node.type === "http in" && node.method === "post"
+    && node.url === CUP_ROSTER_PATCH_CONTRACT.paymentRouteUrl)) {
+    fail("Payment reconciliation route already exists");
   }
   const route = exactNode(flow, CUP_ROSTER_PATCH_CONTRACT.routeId, "Participants route");
   if (route.type !== "http in" || route.method !== "get" || route.url !== CUP_ROSTER_PATCH_CONTRACT.routeUrl) {
@@ -149,6 +162,7 @@ export function applyCupRosterPatch(flow) {
     publicRequest: readSource("publicRequest"),
     normalize: readSource("normalize"),
     vivaFallback: readSource("vivaFallback"),
+    reconcilePayment: readSource("reconcilePayment"),
   };
   const patched = structuredClone(flow);
 
@@ -216,6 +230,46 @@ export function applyCupRosterPatch(flow) {
       wires: [[NEW_IDS.vivaFallbackHttp], [CUP_ROSTER_PATCH_CONTRACT.nodes.terminal]],
     },
     httpRequestNode(NEW_IDS.vivaFallbackHttp, "Viva Admin bookings (fallback)", 1_550, 1_150, [[vivaNormalize.id]]),
+    {
+      id: NEW_IDS.paymentIn,
+      type: "http in",
+      z: CUP_ROSTER_PATCH_CONTRACT.tabId,
+      name: "Tournament payment reconciliation",
+      url: CUP_ROSTER_PATCH_CONTRACT.paymentRouteUrl,
+      method: "post",
+      upload: false,
+      x: 650,
+      y: 1_250,
+      wires: [[NEW_IDS.paymentRouter]],
+    },
+    {
+      id: NEW_IDS.paymentRouter,
+      type: "function",
+      z: CUP_ROSTER_PATCH_CONTRACT.tabId,
+      name: "Reconcile CUP payment and invalidate roster",
+      func: source.reconcilePayment,
+      outputs: 2,
+      timeout: 0,
+      noerr: 0,
+      initialize: "",
+      finalize: "",
+      libs: [{ var: "cupUrl", module: "url" }],
+      x: 1_010,
+      y: 1_250,
+      wires: [[NEW_IDS.paymentHttp], [NEW_IDS.paymentResponse]],
+    },
+    httpRequestNode(NEW_IDS.paymentHttp, "CUP checkout reconciliation", 1_370, 1_240, [[NEW_IDS.paymentRouter]]),
+    {
+      id: NEW_IDS.paymentResponse,
+      type: "http response",
+      z: CUP_ROSTER_PATCH_CONTRACT.tabId,
+      name: "Tournament payment reconciliation response",
+      statusCode: "",
+      headers: {},
+      x: 1_420,
+      y: 1_300,
+      wires: [],
+    },
   );
 
   return patched;

@@ -443,7 +443,7 @@ test("LK1 tournament booking checks an ambiguous 202 with reads and clears the n
   const loadDetail = callback("loadDetail", { ...deps, isAuthenticated: true }, source);
   const book = callback("completeVivaRegistration", { ...deps, isAuthenticated: true, loadDetail }, source);
   await book(currentCheckout, product("client-subscription"));
-  const reads = ["GET detail", "GET roster", "GET CUP registration", "GET Viva registration"];
+  const reads = ["GET detail", "GET CUP registration", "GET Viva registration", "GET roster"];
   assert.deepEqual(calls, ["POST booking", ...reads]);
   assert.equal(notice, "Подтверждение записи или доплаты от Viva пока не получено.");
 
