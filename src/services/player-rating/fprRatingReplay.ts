@@ -2,6 +2,8 @@ import { replayPlayerRatingEvents, roundPlayerRating, type PlayerRatingEventDocu
 
 const BASELINES = new Set(["RATING_INITIAL_ASSIGNED", "RATING_INITIAL_IMPORTED", "RATING_BOOTSTRAPPED_FROM_VIVA", "RATING_BOOTSTRAPPED_FROM_TOURNAMENT",
   "RATING_BOOTSTRAPPED_FROM_GAME_RESULT", "RATING_TOURNAMENT_CANONICAL_RECONCILED"]);
+const isManualRatingTarget = (event: PlayerRatingEventDocument) =>
+  event.eventType === "RATING_MANUALLY_CHANGED" && event.source.kind === "ADMIN_MANUAL";
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const generated = (event: PlayerRatingEventDocument) => event.source.fprReconciliation === true;
 const fpr = (event: PlayerRatingEventDocument) => typeof event.source.fprProtocolId === "string";
@@ -23,7 +25,8 @@ function rawLedgerRating(input: PlayerRatingEventDocument[]) {
   let raw = baseline.change.after!;
   for (const event of ordered) {
     if (event.id === baseline.id || BASELINES.has(event.eventType) || Date.parse(event.occurredAt) < Date.parse(baseline.occurredAt)) continue;
-    if (finite(event.change.delta)) raw += event.change.delta;
+    if (isManualRatingTarget(event) && finite(event.change.after)) raw = event.change.after;
+    else if (finite(event.change.delta)) raw += event.change.delta;
   }
   return raw;
 }
@@ -73,7 +76,7 @@ export function replayFprRatingTargets(input: PlayerRatingEventDocument[]) {
   for (const event of ordered) {
     if (!fpr(event) && event.source.compensatesEventId && finite(event.change.delta)) {
       rating += event.change.delta;
-    } else if (BASELINES.has(event.eventType) || ["TOURNAMENT", "TOURNAMENT_START"].includes(String(event.source.domain))) {
+    } else if (isManualRatingTarget(event) || BASELINES.has(event.eventType) || ["TOURNAMENT", "TOURNAMENT_START"].includes(String(event.source.domain))) {
       if (!finite(event.change.after)) throw new Error("FPR_REPLAY_TARGET_MISSING");
       rating = event.change.after;
     } else if (finite(event.change.delta)) {

@@ -122,3 +122,12 @@ test('verified equal-time order wins over IDs and survives compensation/correcti
   const mixed=event('mixed',1,'GAME_RESULT_SUBMITTED_APPLIED','GAME_RESULT',2,2.1);
   assert.throws(()=>replayFprRatingTargets([baseline(),first,last,mixed]),/ORDER_MIXED/);
 });
+
+
+test("manual CUP targets reset accumulated FPR levels without hiding later game effects", () => {
+  const manual = event("manual-cup", 3, "RATING_MANUALLY_CHANGED", "ADMIN_MANUAL", 2.01, 4.7, { kind: "ADMIN_MANUAL" });
+  const after = event("later-game", 4, "GAME_RESULT_SUBMITTED_APPLIED", "GAME_RESULT", 4.7, 4.71);
+  const events = [baseline(), award(), manual, after];
+  assert.equal(replayFprRatingTargets(events)?.ratingNumeric, 4.71);
+  assert.equal(planFprRatingReconciliation(events), null);
+});
