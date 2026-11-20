@@ -623,3 +623,18 @@ idempotency key with a collision-free tenant-qualified durable identity and
 primary/majority read-back. Result lifecycle side effects are asynchronous: the durable
 transition returns `202`, while rating/event/Viva sinks are driven by the versioned
 outbox and exact tenant/result/revision contracts.
+
+### Обновление состава после подтверждения доплаты ЦУП
+
+`POST /lk/tournaments/participants/reconcile-payment?exerciseId=<Viva UUID>` передаёт
+Bearer пользователя только настроенному ЦУП на `POST /api/tournaments/:id/checkout/reconcile`.
+Когда ЦУП подтверждает исходную доплату и возвращает `COMPLETED` с идентификаторами
+операции, транзакции и брони, ЛК повышает поколение кэша этого `exerciseId` до
+ответа на POST. Следующий GET читает актуальный состав. Обе ёмкости кэша и
+незавершённые чтения используют ту же проверку поколения. Повтор подтверждения
+одной оплаты в пределах времени жизни кэша не повышает поколение второй раз.
+
+Маршрут и функция добавляются `scripts/patch_live_tournament_participants_cup_source.mjs`.
+При установке кандидата HTTP-прокси должен направлять этот путь в Node-RED с
+правилами из `scripts/nginx/lk-tournament-participants-location.conf`. Хеш воркера
+отмены соответствует байтам полного сгенерированного графа.
