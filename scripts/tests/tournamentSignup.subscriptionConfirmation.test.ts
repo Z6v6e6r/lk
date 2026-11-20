@@ -104,6 +104,10 @@ test("subscription checkout keeps the server money leg unpaid and rejects ambigu
   assert.equal(normalize(mixed).paid, false);
   assert.equal(normalize(mixed).toPay, 35_000, "existing checkout consumes minor units");
   assert.equal(normalize(mixed).paymentUrl, mixed.paymentUrl);
+  const settled = normalize({ ...mixed, paid: true, paymentUrl: null });
+  assert.equal(settled.paid, true);
+  assert.equal(settled.toPay, 35_000);
+  assert.equal(settled.paymentUrl, null);
   for (const delta of [{ paid: true }, { toPay: 700 }, { paymentUrl: null },
     { paymentUrl: "javascript:alert(1)" }, { transactionId: null },
     { state: "PENDING_CONFIRMATION" }, { toPayMinor: -1 }]) {

@@ -72,11 +72,19 @@ const tournamentAdmissionComplete = (ctx, bookingId) => {
   if (ctx.category !== "tournament" || ctx.action === "release" || ctx.tournamentCompletion === true) return null;
   const base = tournamentAdmissionUrl(ctx), token = env.get("TOURNAMENT_OWNER_INTEGRATION_TOKEN");
   if (!base || typeof token !== "string" || !token || !bookingId) return tournamentAdmissionPending(ctx);
+  const checkout = ctx.lk1?.checkout;
+  const amount = ctx.lk1?.decision?.benefit?.finalPriceMinor;
+  const copay = ctx.lk1 && Number.isSafeInteger(amount) && amount > 0;
+  if (copay && (!tournamentAdmissionHasGrant(ctx) || checkout?.toPayMinor !== amount
+    || !checkout.transactionId || checkout.transactionId !== ctx.lk1.transactionId
+    || ctx.lk1.decision.subscriptionVisitCount !== 0)) return tournamentAdmissionPending(ctx);
+  ctx.tournamentCompletionPayment = copay ? { transactionId: checkout.transactionId, amountMinor: amount } : null;
   ctx.tournamentCompletionBookingId = bookingId;
-  ctx.tournamentAdmissionRequestedUrl = base + "/complete";
+  ctx.tournamentAdmissionRequestedUrl = base + (copay ? "/copay" : "/complete");
   return prepareManagedHttp(ctx, "tournament_completion", "POST", ctx.tournamentAdmissionRequestedUrl,
     { operationId: ctx.operationId, clientSubscriptionId: ctx.clientSubscriptionId, bookingId,
-      ...(tournamentAdmissionHasGrant(ctx) ? { ownerOperationId: ctx.tournamentAdmission.operationId } : {}) },
+      ...(tournamentAdmissionHasGrant(ctx) ? { ownerOperationId: ctx.tournamentAdmission.operationId } : {}),
+      ...(ctx.tournamentCompletionPayment ? { payment: ctx.tournamentCompletionPayment } : {}) },
     { Authorization: ctx.authHeader, "x-cup-integration-token": token, "Content-Type": "application/json", Accept: "application/json" });
 };
 // Versioned predispatch evidence is persisted with preaccept. The older upstreamAttemptedAt
@@ -264,13 +272,27 @@ const tournamentAdmissionRoute = (ctx) => {
     if (msg.error || !isHttpOk(msg.statusCode) || msg.responseUrl !== ctx.tournamentAdmissionRequestedUrl
       || msg.url !== ctx.tournamentAdmissionRequestedUrl || msg.method !== "POST"
       || msg.followRedirects !== false || msg.maxRedirects !== 0
-      || !["COMPLETED", "LEGACY_UNTRACKED"].includes(msg.payload?.state)
-      || (msg.payload.state === "LEGACY_UNTRACKED" && tournamentAdmissionHasGrant(ctx))
-      || msg.payload.requestOperationId !== ctx.operationId
-      || (msg.payload.state === "COMPLETED" && msg.payload.bookingId !== ctx.tournamentCompletionBookingId)) return tournamentAdmissionPending(ctx);
+      || msg.payload?.requestOperationId !== ctx.operationId) return tournamentAdmissionPending(ctx);
+    const body = msg.payload;
+    const copay = ctx.tournamentCompletionPayment;
+    if (copay) {
+      if (!["PAYMENT_PENDING", "COMPLETED"].includes(body.state) || body.bookingId !== ctx.tournamentCompletionBookingId
+        || body.transactionId !== copay.transactionId) return tournamentAdmissionPending(ctx);
+    } else if (!(body.state === "LEGACY_UNTRACKED" && !tournamentAdmissionHasGrant(ctx))
+      && !(body.state === "COMPLETED" && body.bookingId === ctx.tournamentCompletionBookingId)) {
+      return tournamentAdmissionPending(ctx);
+    }
     ctx.tournamentCompletion = true;
-    return ctx.lk1 && typeof lk1Finish === "function" ? lk1Finish(ctx)
-      : finishConfirmed(ctx, ctx.tournamentCompletionBookingId);
+    if (!ctx.lk1 || typeof lk1Finish !== "function") return finishConfirmed(ctx, ctx.tournamentCompletionBookingId);
+    const out = lk1Finish(ctx);
+    if (copay && body.state === "COMPLETED" && msg.payload?.state === "CONFIRMED") {
+      msg.payload.paymentUrl = null;
+      msg.payload.paid = true;
+      msg.payload.settlementState = "CONFIRMED";
+      // The legacy HTTP replay finalizer would reattach the stored checkout URL.
+      if (ctx.caller === "http") delete ctx.lk1IngressReplay;
+    }
+    return out;
   }
   // A crash after the durable refusal resumes cleanup, never the provider call.
   if (["operation_find", "lk1_operation_find", "lk1_ingress_operation_find"].includes(ctx.step)

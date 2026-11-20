@@ -1251,14 +1251,22 @@ export default function TournamentSignupPage({
         ])
       : [null, null];
 
-    if (!checkOnly && vivaRegistrationResult?.data?.status === "REGISTERED"
+    let ownerRegistration = registrationResult?.data;
+    const pendingCopay = ownerRegistration?.status === "PAYMENT_PENDING";
+    const ownsCopay = pendingCopay || Boolean(ownerRegistration?.status === "REGISTERED" && ownerRegistration.bookingId);
+    if ((pendingCopay || (!ownsCopay && !checkOnly && vivaRegistrationResult?.data?.status === "REGISTERED"))
       && tournamentPaymentSessionIdentity(requestToken) === tournamentPaymentSessionIdentity(readAuthToken())) {
-      await apiReconcileTournamentOwner(exerciseId);
+      const reconciliation = await apiReconcileTournamentOwner(exerciseId);
+      if (pendingCopay && (reconciliation.data?.state === "COMPLETED" || reconciliation.data?.state === "CANCELLED")) {
+        ownerRegistration = (await apiFetchTournamentMyRegistration(tournamentId)).data ?? ownerRegistration;
+        void loadPublicRoster(exerciseId, { force: true, signal: rosterAbortController.signal });
+      }
     }
 
     const resolvedRegistration = await mergeTournamentPendingPayment(
       requestToken, exerciseId,
-      vivaRegistrationResult?.data ?? registrationResult?.data ?? detailResult.data?.registration ?? null,
+      (ownsCopay ? ownerRegistration : vivaRegistrationResult?.data ?? ownerRegistration)
+        ?? detailResult.data?.registration ?? null,
     );
     if (checkOnly && checkoutRequestIdRef.current !== requestId) return;
     if (tournamentPaymentSessionIdentity(requestToken) !== tournamentPaymentSessionIdentity(readAuthToken())) {
@@ -1273,8 +1281,7 @@ export default function TournamentSignupPage({
     }
     setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(requestToken));
     setRegistration(resolvedRegistration);
-    const vivaRegistration = vivaRegistrationResult?.data;
-    if (checkoutRequestIdRef.current === requestId && vivaRegistration?.status === "REGISTERED" && vivaRegistration.bookingId) {
+    if (checkoutRequestIdRef.current === requestId && resolvedRegistration?.status === "REGISTERED" && resolvedRegistration.bookingId) {
       setSubscriptionConfirmationNotice(null);
     }
     setRegistrationResolvedFor(`${tournamentId}:${exerciseId}`);
@@ -2395,7 +2402,7 @@ export default function TournamentSignupPage({
                       </div>
                     )}
 
-                    {!subscriptionUsageShadowEnabled && (canPayPending || canCancel) && (
+                    {!subscriptionUsageShadowEnabled && (canPayPending || canCancel || registration?.status === "PAYMENT_PENDING") && (
                       <div className="tournament-signup-actions">
                         {canPayPending && (
                           <button
@@ -2405,6 +2412,12 @@ export default function TournamentSignupPage({
                             disabled={actionLoading}
                           >
                             Оплатить
+                          </button>
+                        )}
+                        {registration?.status === "PAYMENT_PENDING" && (
+                          <button type="button" className="tournament-signup-payment-purchase-toggle"
+                            onClick={() => void loadDetail(selectedId, { checkOnly: true })} disabled={actionLoading}>
+                            Проверить оплату
                           </button>
                         )}
                         {canCancel && (

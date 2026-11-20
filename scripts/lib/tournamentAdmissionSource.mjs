@@ -4,6 +4,14 @@ const once = (source, anchor, replacement) => {
   if (source.split(anchor).length !== 2) throw Error('Tournament admission source drift: ' + anchor);
   return source.replace(anchor, () => replacement);
 };
+export function updateTournamentAdmissionCopay(source, previousAdmission) {
+  const start = source.indexOf('// CUP reserves a canonical tournament seat');
+  const end = source.indexOf('const ctx = isObj(msg._subscriptionBooking)', start);
+  if (start < 0 || end < 0 || source.slice(start, end).trim() !== previousAdmission.trim()) {
+    throw Error('Installed tournament admission fragment drift');
+  }
+  return source.slice(0, start) + read('admission.js') + '\n' + source.slice(end);
+}
 // Apply LAST to a composed booking owner, including the daily guard. Never regenerate a live graph.
 export function patchTournamentAdmissionSource(source) {
   if (source.includes('const tournamentAdmissionGate =')) throw Error('Tournament admission already installed');
