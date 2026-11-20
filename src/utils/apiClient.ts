@@ -91,6 +91,7 @@ export interface UserProfileType {
   birthDate: string | null;
   deposit: number;
   trialUsed: boolean;
+  isNewClient?: boolean;
   withCard: boolean;
   loyaltyCard: string;
   clientCategory: { id: number; name: string };
@@ -4718,22 +4719,31 @@ async function withRetry<T>(
   }
 }
 
-export async function apiFetchProfile(signal?: AbortSignal) {
+const vivaProfilePath = `/end-user/api/v1/${TENANT_KEY}/profile`;
+
+export async function apiFetchProfile(signal?: AbortSignal, { clubLevel = true } = {}): Promise<ApiResult<UserProfileType>> {
   signal?.throwIfAborted();
-  const profile = await request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
-    method: "GET",
-    auth: true,
-    retries: 1,
-    signal,
+  const token = CLUB_ON_SITE_BOOKING ? readAuthToken() : null;
+  const clubSession = token ? { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" as const } : undefined;
+  const changedSession = (): ApiResult<UserProfileType> => ({
+    data: null,
+    error: { status: 409, message: "Сессия изменилась. Обновите профиль." },
+    status: 409,
   });
-  if (!CLUB_ON_SITE_BOOKING || !profile.data || profile.error) return profile;
+  const profile = await request<UserProfileType>(vivaProfilePath, {
+    ...clubSession, method: "GET", auth: true, retries: 1, signal,
+  });
+  if (!CLUB_ON_SITE_BOOKING) return profile;
+  if (readAuthToken() !== token) return changedSession();
+  if (!profile.data || profile.error || !clubLevel) return profile;
   const levels = await request<{ level: number | null; grade: string | null }>("/lk/onboarding/level", {
-    method: "GET", baseUrl: getServ2Origin(), auth: true, retries: 0, signal,
+    ...clubSession, method: "GET", baseUrl: getServ2Origin(), auth: true, retries: 0, signal,
   });
-  if (levels.error) return { data: null, error: levels.error, status: levels.status };
+  if (readAuthToken() !== token) return changedSession();
+  // Viva has already authenticated this profile. Level lookup can fail independently.
   const customFields = (profile.data.customFields || []).filter(({ id }) =>
     id !== CUSTOM_FIELD_IDS.lkPadelLevel && id !== CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
-  if (levels.data?.grade && typeof levels.data.level === "number") {
+  if (!levels.error && levels.data?.grade && typeof levels.data.level === "number") {
     customFields.push(
       { id: CUSTOM_FIELD_IDS.lkPadelLevel, name: "Уровень клуба", value: [levels.data.grade] },
       { id: CUSTOM_FIELD_IDS.lkPadelLevelNumeric, name: "Уровень клуба", value: [String(levels.data.level)] },
@@ -4743,12 +4753,42 @@ export async function apiFetchProfile(signal?: AbortSignal) {
 }
 
 export async function apiUpdateProfile(data: UpdateProfileData) {
-  return request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
+  return request<UserProfileType>(vivaProfilePath, {
     method: "PATCH",
     auth: true,
     retries: 1,
     body: JSON.stringify(data),
   });
+}
+
+// A profile form may stay open while the session changes in another tab.
+export async function apiSaveVivaRegistrationName(
+  profileId: string,
+  names: Pick<UpdateProfileData, "firstName" | "lastName">,
+) {
+  const token = readAuthToken();
+  if (!token) return false;
+
+  const options = { auth: true, retries: 0, cache: "no-store" as const, headers: { Authorization: `Bearer ${token}` } };
+  const { data: current } = await request<UserProfileType>(vivaProfilePath, options);
+  if (current?.id !== profileId || readAuthToken() !== token) return false;
+  if (current.firstName?.trim() && current.lastName?.trim()) return true;
+  if (current.isNewClient !== true) return false;
+
+  const updated = await request<UserProfileType>(vivaProfilePath, {
+    ...options,
+    method: "PATCH",
+    body: JSON.stringify({
+      email: current.email,
+      firstName: current.firstName?.trim() ? current.firstName : names.firstName,
+      lastName: current.lastName?.trim() ? current.lastName : names.lastName,
+      middleName: current.middleName,
+      photo: current.photo,
+      sex: current.sex,
+      birthDate: current.birthDate,
+    }),
+  });
+  return !updated.error;
 }
 
 export interface OnboardingLevelPayload {

@@ -2,6 +2,7 @@ type ImportMetaEnvLike = {
   VITE_KEYCLOAK_BASE?: string;
   VITE_TENANT_KEY?: string;
   VITE_CABINET_URL?: string;
+  VITE_VIVA_SELF_REGISTRATION?: string;
 };
 
 function readEnv(): ImportMetaEnvLike {
@@ -14,6 +15,8 @@ function readEnv(): ImportMetaEnvLike {
 }
 
 const env = readEnv();
+
+export const VIVA_SELF_REGISTRATION = env.VITE_VIVA_SELF_REGISTRATION === "true";
 
 export const AUTH_RUNTIME_KEYCLOAK_BASE =
   String(env.VITE_KEYCLOAK_BASE || "").trim() || "https://kc.vivacrm.ru";

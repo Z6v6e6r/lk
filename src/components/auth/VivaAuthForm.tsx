@@ -8,6 +8,7 @@ import { useAuth } from "../../context/authShared";
 import { useCountdown } from "../../hooks/useCountdown";
 import { AUTH_CONSENT_DOCUMENTS, stageAuthConsents } from "../../utils/authConsents";
 import { PhoneInput } from "./PhoneInput";
+import { VIVA_SELF_REGISTRATION } from "../../consts/authRuntime";
 
 type VivaAuthStep = "chooser" | "phone" | "code" | "verify-phone" | "verify-code";
 
@@ -166,6 +167,7 @@ export function VivaAuthForm({
   const offerConsentId = useId();
   const personalDataConsentId = useId();
   const hasRequiredConsents = hasAcceptedOffer && hasAcceptedPersonalData;
+  const showPhoneMenu = allowOAuth && !VIVA_SELF_REGISTRATION;
 
   useEffect(() => {
     setDraftPhone(phone || "");
@@ -246,7 +248,7 @@ export function VivaAuthForm({
     return (
       <div className="auth-wrapper">
         <div className="auth-card">
-          <p className="auth-title">Вход по SMS</p>
+          <p className="auth-title">{VIVA_SELF_REGISTRATION ? "Вход и регистрация" : "Вход по SMS"}</p>
           <p className="auth-subtitle">Введите номер телефона, чтобы получить код подтверждения.</p>
           <PhoneInput value={draftPhone} onChange={setDraftPhone} />
           <button
@@ -394,15 +396,15 @@ export function VivaAuthForm({
               className="auth-btn auth-btn-secondary auth-more-options-btn"
               onClick={() => {
                 clearError();
-                if (!allowOAuth) { openPhoneLogin(); return; }
+                if (!showPhoneMenu) { openPhoneLogin(); return; }
                 setIsMoreOptionsOpen((current) => !current);
               }}
               disabled={isLoading || !hasRequiredConsents}
-              aria-expanded={isMoreOptionsOpen}
-              aria-controls="auth-more-options-popover"
+              aria-expanded={showPhoneMenu ? isMoreOptionsOpen : undefined}
+              aria-controls={showPhoneMenu ? "auth-more-options-popover" : undefined}
             >
-              <span>{allowOAuth ? "Еще варианты" : "Войти по номеру"}</span>
-              {allowOAuth && <ChevronDownIcon />}
+              <span>{showPhoneMenu ? "Еще варианты" : VIVA_SELF_REGISTRATION ? "Войти или зарегистрироваться по номеру" : "Войти по номеру"}</span>
+              {showPhoneMenu && <ChevronDownIcon />}
             </button>
             {isMoreOptionsOpen && (
               <div id="auth-more-options-popover" className="auth-more-options-popover">

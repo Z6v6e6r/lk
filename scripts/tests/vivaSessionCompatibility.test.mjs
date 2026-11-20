@@ -26,7 +26,7 @@ function harness({ token = jwt(), refresh = 'fixture-refresh', response = { acce
     const require = id => {
       if (id === 'react') return { useMemo: fn => fn(), useCallback: fn => fn, useRef: value => ({ current: value }), useState: initial => { const i = state.length; state.push(initial); return [initial, v => { state[i] = v; }]; }, useEffect: fn => effects.push(fn) };
       if (id === 'react/jsx-runtime') return { jsx: (type, props) => ({ type, props }) };
-      if (id.includes('authRuntime')) return config;
+      if (id.includes('authRuntime')) return { ...config, VIVA_SELF_REGISTRATION: viteEnv.VITE_VIVA_SELF_REGISTRATION === 'true' };
       if (id.endsWith('/authShared')) return { AuthContext: { Provider: 'provider' } };
       if (id.endsWith('/analytics') || id.endsWith('/pushNotifications')) return new Proxy({}, { get: () => () => {} });
       if (id.endsWith('/authConsents')) return { syncPendingAuthConsents: async () => { consentSyncs++; return consentsSynced; }, hasRetryablePendingAuthConsents: () => true, clearPendingAuthConsents: () => { consentClears++; }, stageAuthConsents: async () => true };
@@ -137,4 +137,26 @@ test('OAuth continuation signal is emitted only after matching state, successful
     assert.equal(h.continuations.length, Object.keys(change).length === 0 ? 1 : 0);
   }
   const restored = harness(); restored.runEffects(); await settle(); assert.equal(restored.continuations.length, 0);
+});
+
+test('new-club OAuth and refresh both pass the configured tenant without changing the granted scope', async () => {
+  const pending = { state: 'fixture-state', provider: 'yandex', codeVerifier: 'fixture-verifier', redirectUri: 'https://cabinet.example.test', returnTo: '' };
+  for (const enabled of [false, true]) {
+    const viteEnv = { VITE_VIVA_SELF_REGISTRATION: String(enabled) };
+    const oauth = harness({ pending, location: '?code=fixture-code&state=fixture-state', viteEnv });
+    oauth.runEffects();
+    await settle();
+    const exchange = new URLSearchParams(oauth.requests[0].options.body);
+    assert.equal(exchange.get('grant_type'), 'authorization_code');
+    assert.equal(exchange.get('tenant_key'), enabled ? config.AUTH_RUNTIME_TENANT_KEY : null);
+
+    const session = harness({ viteEnv });
+    session.runEffects();
+    session.refresh();
+    await settle();
+    const refresh = new URLSearchParams(session.requests[0].options.body);
+    assert.equal(refresh.get('grant_type'), 'refresh_token');
+    assert.equal(refresh.get('tenant_key'), enabled ? config.AUTH_RUNTIME_TENANT_KEY : null);
+    assert.equal(refresh.has('scope'), false);
+  }
 });

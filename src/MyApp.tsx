@@ -8,6 +8,8 @@ import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
 import { RemoteWidgetHost } from "./components/UI/RemoteWidgetHost";
 import { Cabinet } from "./components/cabinet/Cabinet";
+import { VivaRegistrationGate } from "./components/cabinet/VivaRegistrationProfile";
+import { VIVA_SELF_REGISTRATION } from "./consts/authRuntime";
 import CommunityJoinPage from "./components/communities/CommunityJoinPage";
 import FindGamePage from "./components/games/FindGamePage";
 import GamesPage from "./components/games/GamesPage";
@@ -1080,7 +1082,9 @@ export default function App() {
     <AuthProvider
       authMode={Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android" ? "viva" : "auto"}
     >
-      <AppContent />
+      {VIVA_SELF_REGISTRATION ? (
+        <VivaRegistrationGate><AppContent /></VivaRegistrationGate>
+      ) : <AppContent />}
     </AuthProvider>
   );
 }

@@ -79,6 +79,7 @@ const env = {
   VITE_SERV2_FALLBACK: backendBase,
   VITE_LK_PINNED_API_BASE: backendBase,
   VITE_LK_PINNED_AUTH_MODE: "viva",
+  VITE_VIVA_SELF_REGISTRATION: "true",
   VITE_PHAB_API_BASE: backendBase,
   VITE_SUPPORT_API_BASE: backendBase,
   VITE_PUSH_REGISTRATION_URL: `${backendBase}/push/register`,
