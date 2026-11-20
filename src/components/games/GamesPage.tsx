@@ -15587,7 +15587,7 @@ export default function GamesPage({
           </div>
         </div>
 
-        {usePublicCreateWizard && canProceedToPayment && (
+        {!CLUB_ON_SITE_BOOKING && usePublicCreateWizard && canProceedToPayment && (
           <>
             <div className="game-section">
               <div className="team-card game-create-payment-card">

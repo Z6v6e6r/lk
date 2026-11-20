@@ -4056,7 +4056,7 @@ export function Cabinet({
         onLoadMoreActiveRecords={loadAllActiveRecords}
         gameRecords={createdGames}
         onCreateTeamGame={handleCreateTeamGameFromBooking}
-        canCreateTeamGame={canCreateTeamGameFromBooking}
+        canCreateTeamGame={CLUB_ON_SITE_BOOKING ? () => false : canCreateTeamGameFromBooking}
         hasTeamGameForBooking={hasTeamGameForBooking}
         renderGameCard={renderGameCard}
         loadingGameRecords={loadingCreatedGames}
@@ -4071,20 +4071,22 @@ export function Cabinet({
       />
 
       {/* Реклама */}
-      <Advertisement profile={profile} />
+      {!CLUB_ON_SITE_BOOKING && <Advertisement profile={profile} />}
 
       {/* Абонементы */}
-      <SubscriptionsContainer
-        UserSubscriptions={userSubscriptions}
-        phone={profile.phone}
-        openSubInfo={openSubInfo}
-      />
+      {!CLUB_ON_SITE_BOOKING && (
+        <SubscriptionsContainer
+          UserSubscriptions={userSubscriptions}
+          phone={profile.phone}
+          openSubInfo={openSubInfo}
+        />
+      )}
 
       {/* Резидентство: пропуск резидента (одноразовый QR) */}
-      <ResidencySection subscriptions={userSubscriptions} />
+      {!CLUB_ON_SITE_BOOKING && <ResidencySection subscriptions={userSubscriptions} />}
 
       {/* Турниры */}
-      {canOpenTournamentsBlock && (
+      {!CLUB_ON_SITE_BOOKING && canOpenTournamentsBlock && (
         <div className="section">
           <div className="section-header">
             <span className="section-title">Турниры</span>
@@ -4099,7 +4101,9 @@ export function Cabinet({
       )}
 
       {/* Соцсети */}
-      <ButtonModule />
+      {CLUB_ON_SITE_BOOKING
+        ? <button type="button" className="section-cta section-cta-secondary" onClick={() => void logout()}>Выйти</button>
+        : <ButtonModule />}
 
       {/* Модалки */}
       <ProfileEditForm
@@ -4186,7 +4190,7 @@ export function Cabinet({
         sub={currenSub}
         subName={currenSubName}
       />
-      <SupportChatWidget profile={profile} />
+      {!CLUB_ON_SITE_BOOKING && <SupportChatWidget profile={profile} />}
     </div>
   );
 }
