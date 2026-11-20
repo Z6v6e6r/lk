@@ -32,6 +32,7 @@ function harness(stage) {
     cardPayloads: [], completed: [], step: null };
   const context = {
     AbortController, Promise, Date, Math, Set, isRequestTimeoutError, runWithAbortTimeout,
+    CLUB_ON_SITE_BOOKING: false, clubBookingOnly: false,
     subscriptionUsageShadowEnabled: false, studioId: 'studio', selectedDate: new Date('2030-01-01'),
     courtId: 'court', time: '20:00', duration: 60, selectedSlotId: 'slot', studioMasterServiceId: 'master',
     studioName: 'Station', selectedCourtName: 'Court', resolvedSelectedSubServiceIds: ['service'],

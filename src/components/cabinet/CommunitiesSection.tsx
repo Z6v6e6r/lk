@@ -80,7 +80,7 @@ import {
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
-import { PUBLIC_GAME_FIND_PATH } from "../../consts/api_config";
+import { CLUB_ON_SITE_BOOKING, PUBLIC_GAME_FIND_PATH } from "../../consts/api_config";
 import { getGameCommunityAutopublishState } from "../../utils/gameCommunityAutopublish";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { resolveTournamentSignupExerciseId } from "../../utils/tournamentExerciseId";
@@ -5333,7 +5333,7 @@ export function CommunitiesSection({
                 disabled={formState.visibility === "CLOSED"}
               >
                 <option value="INSTANT">Сразу</option>
-                <option value="MODERATED">После модерации</option>
+                <option value="MODERATED" disabled={CLUB_ON_SITE_BOOKING}>После модерации</option>
                 <option value="INVITE_ONLY">Только по приглашению</option>
               </select>
             </div>
@@ -5977,7 +5977,7 @@ export function CommunitiesSection({
                           disabled={editFormState.visibility === "CLOSED"}
                         >
                           <option value="INSTANT">Сразу</option>
-                          <option value="MODERATED">После модерации</option>
+                          <option value="MODERATED" disabled={CLUB_ON_SITE_BOOKING}>После модерации</option>
                           <option value="INVITE_ONLY">Только по приглашению</option>
                         </select>
                       </div>

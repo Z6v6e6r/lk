@@ -19,6 +19,10 @@ const collections = {
   lk_community_rankings: [{ name: "novokuznetsk_ranking_community", key: { communityId: 1 } }],
   lk_community_feed: [{ name: "community_feed_created_ts_v1", key: { communityId: 1, createdTs: -1 } }],
   lk_community_events: [],
+  lk_club_booking_operations: [],
+  lk_auth_consents: [],
+  lk_player_levels: [],
+  lk_game_rating_events: [],
 };
 const report = { database, collections };
 const mode = process.argv[2] ?? "--plan";

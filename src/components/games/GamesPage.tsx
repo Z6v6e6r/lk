@@ -67,6 +67,8 @@ import {
   apiFetchProfile,
   apiAcceptPadelGameResultCorrection,
   apiConfirmPadelGameResult,
+  apiReserveClubCourt,
+  apiJoinClubGame,
   apiDisputePadelGameResult,
   apiExpirePadelGameResult,
   apiFetchPadelGameResultState,
@@ -126,6 +128,7 @@ import {
   CABINET_URL,
   GAMES_BUNDLE_URL,
   GAME_BOOKING_UTC_OFFSET,
+  CLUB_ON_SITE_BOOKING,
   PUBLIC_GAME_STATION_ID,
   IS_DEV_RELEASE_CHANNEL,
   PUBLIC_INVITE_ORIGIN,
@@ -4949,7 +4952,7 @@ export default function GamesPage({
   const [detailsSplitSubscriptions, setDetailsSplitSubscriptions] = useState<Subscription[]>([]);
   const [detailsSplitSubscriptionNamesById, setDetailsSplitSubscriptionNamesById] = useState<Record<string, string>>({});
   const [applyingPromo, setApplyingPromo] = useState(false);
-  const [ratingGame, setRatingGame] = useState(true);
+  const [ratingGame, setRatingGame] = useState(!CLUB_ON_SITE_BOOKING);
   const [minRating, setMinRating] = useState(1);
   const [maxRating, setMaxRating] = useState(4);
   const [publicCreatePreciseRatingRange, setPublicCreatePreciseRatingRange] = useState<PublicCreatePreciseRatingRange>(
@@ -7292,7 +7295,11 @@ export default function GamesPage({
   const publicCreateSubscriptionSubmitTitle = publicCreateSurchargeMinor != null
     ? `Создать игру по подписке с доплатой ${formatPrice(publicCreateSurchargeMinor / 100)} ₽`
     : "Создать игру по подписке";
-  const publicCreateFinalSubmitTitle = loadingPay
+  const clubBookingOnly = CLUB_ON_SITE_BOOKING && publicCreateEntry
+    && new URLSearchParams(window.location.search).get("booking") === "1";
+  const publicCreateFinalSubmitTitle = CLUB_ON_SITE_BOOKING
+    ? loadingPay ? "Проверяем бронь…" : "Оплачу на месте"
+    : loadingPay
     ? gamePreparationStage === "profile"
       ? "Проверяем профиль…"
       : gamePreparationStage === "slot"
@@ -7665,7 +7672,8 @@ export default function GamesPage({
     () => isCurrentUserOrganizerOfGame(activeGameRecord),
     [activeGameRecord, isCurrentUserOrganizerOfGame],
   );
-  const canCurrentUserInviteInDetails = isGamePaid !== false
+  const isClubOnSiteGame = CLUB_ON_SITE_BOOKING && activeGameRecord?.metadata?.source === "novokuznetsk_on_place";
+  const canCurrentUserInviteInDetails = (isClubOnSiteGame || isGamePaid !== false)
     && !isGameCancelledStatus(gameRecordStatus)
     && Boolean(inviteLink);
   const detailsMaxPlayers = useMemo(
@@ -9498,6 +9506,7 @@ export default function GamesPage({
     return Math.max(0, detailsMatchResultDisputeDeadlineTs - matchResultNowTs);
   }, [detailsMatchResultDisputeDeadlineTs, matchResultNowTs]);
   const canEditMatchResult = isDetailsMatchStarted
+    && (!CLUB_ON_SITE_BOOKING || detailsMaxPlayers === 4)
     && isCurrentUserResultParticipant
     && !isMatchResultPendingReview
     && !isMatchResultAgreed
@@ -9513,13 +9522,16 @@ export default function GamesPage({
     && detailsCompletedMatchResultSets.length > 0
     && !detailsMatchResultValidationError
     && !updatingGameMeta;
+  const clubResultPermissions = isRecordObject(detailsMetadata.matchResult) ? detailsMetadata.matchResult : null;
   const canDisputeMatchResult = isDetailsMatchStarted
+    && (!CLUB_ON_SITE_BOOKING || clubResultPermissions?.canDispute === true)
     && isCurrentUserResultParticipant
     && isMatchResultPendingReview
     && !isMatchResultSubmittedByCurrentUser
     && (detailsMatchResultDisputeTimeLeftMs == null || detailsMatchResultDisputeTimeLeftMs > 0)
     && !updatingGameMeta;
   const canConfirmMatchResult = isDetailsMatchStarted
+    && (!CLUB_ON_SITE_BOOKING || clubResultPermissions?.canConfirm === true)
     && isCurrentUserResultParticipant
     && isMatchResultPendingReview
     && !isMatchResultSubmittedByCurrentUser
@@ -9628,7 +9640,7 @@ export default function GamesPage({
   }, []);
 
   useEffect(() => {
-    if (step !== "details" || detailsActiveTab !== "result" || !gameRecordId || !profilePhoneNorm || !canEditMatchResult) {
+    if (CLUB_ON_SITE_BOOKING || step !== "details" || detailsActiveTab !== "result" || !gameRecordId || !profilePhoneNorm || !canEditMatchResult) {
       return;
     }
     const openKey = `${gameRecordId}:${profilePhoneNorm}`;
@@ -11383,7 +11395,7 @@ export default function GamesPage({
       return;
     }
     if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
-    if (!validateGamePublicationFields()) return;
+    if (!clubBookingOnly && !validateGamePublicationFields()) return;
 
     setLoadingPay(true);
     setPayError(null);
@@ -11405,6 +11417,44 @@ export default function GamesPage({
     }
     const clientId = profile.clientId;
     const clientPhone = profile.clientPhone;
+
+    if (CLUB_ON_SITE_BOOKING) {
+      try {
+        const result = await apiReserveClubCourt({
+          studioId, roomId: courtId,
+          timeFrom: `${fromDate}T${fromTime}:00${GAME_BOOKING_UTC_OFFSET}`,
+          timeTo: bookingEndIso(fromDate, fromTime, toTime, GAME_BOOKING_UTC_OFFSET),
+          publishGame: !clubBookingOnly, ratingGame: effectiveRatingGame, isPrivate, title: gameTitleDraft,
+        });
+        if (result.error || !result.data?.bookingId || (!clubBookingOnly && !result.game)) {
+          setPayError(result.error?.message || "Не удалось подтвердить бронь.");
+          return;
+        }
+        if (clubBookingOnly) {
+          window.location.assign(CABINET_URL);
+          return;
+        }
+        const record = result.game;
+        if (!record) return;
+        upsertGameRecordInStores(record, { communityMode: "upsert" });
+        setActiveGameRecordStore(record);
+        setParticipants(record.participants || []);
+        setWaitlistPlayers([]);
+        setGameRecordId(record.id);
+        setGameRecordStatus(record.status ?? "OPEN");
+        setInviteLink(resolveGameInviteUrl(record) ?? buildInviteFallbackUrl(record.id));
+        setGamePaymentUrl(null);
+        setGamePaid(false);
+        setGameSnapshot(buildMatchSnapshotFromRecord(record));
+        setConfirmCancelUnpaidGame(false);
+        setStep("details");
+      } catch {
+        setPayError("Не удалось проверить бронь. Повторная попытка проверит тот же слот.");
+      } finally {
+        setLoadingPay(false);
+      }
+      return;
+    }
 
     const paymentResult = await apiPayMasterService({
       date: fromDate,
@@ -11696,6 +11746,8 @@ export default function GamesPage({
     setPayError(paymentResult.error?.message ?? "Не удалось сформировать ссылку на оплату");
     setLoadingPay(false);
   }, [
+    clubBookingOnly,
+    setActiveGameRecordStore,
     studioId,
     studioMasterServiceId,
     studioName,
@@ -12603,6 +12655,10 @@ export default function GamesPage({
     }
 
     const nextMatchResult = normalizeMatchResultFromActionResponse(response);
+    if (CLUB_ON_SITE_BOOKING && nextMatchResult) {
+      nextMatchResult.canConfirm = response.canConfirm === true;
+      nextMatchResult.canDispute = response.canDispute === true;
+    }
     if (!nextMatchResult) return Boolean(response.game?.id);
 
     const nextMetadata: Record<string, unknown> = {
@@ -13826,7 +13882,7 @@ export default function GamesPage({
     autoConfirmed?: boolean;
     persistErrorMessage?: string;
   }) => {
-    if (!gameRecordId) return false;
+    if (!gameRecordId || (CLUB_ON_SITE_BOOKING && options?.autoConfirmed)) return false;
     if (!isMatchResultPendingReview) return false;
 
     setUpdatingGameMeta(true);
@@ -15030,6 +15086,24 @@ export default function GamesPage({
       return;
     }
 
+    if (CLUB_ON_SITE_BOOKING) {
+      setUpdatingGameRoster(true);
+      setGameRosterError(null);
+      try {
+        const joined = await apiJoinClubGame(gameRecordId);
+        if (!joined.data || joined.error) {
+          setGameRosterError(joined.error?.message || "Не удалось присоединиться к игре");
+          return;
+        }
+        setParticipants(joined.data.participants || []);
+        upsertGameRecordInStores(joined.data, { communityMode: "if_exists" });
+        setActiveGameRecordStore(joined.data);
+      } finally {
+        setUpdatingGameRoster(false);
+      }
+      return;
+    }
+
     if (LEGACY_ROSTER_BRIDGE_ENABLED) {
       setUpdatingGameRoster(true);
       setGameRosterError(null);
@@ -15867,7 +15941,7 @@ export default function GamesPage({
       );
     }
 
-    const paymentStatusLabel = isGamePaid === true ? "Оплачено" : "Не оплачено";
+    const paymentStatusLabel = isClubOnSiteGame ? "Оплата на месте" : isGamePaid === true ? "Оплачено" : "Не оплачено";
     const paymentStatusClass = isGamePaid === true ? "paid" : "unpaid";
     const paymentStatusIcon = (
       <svg className="details-payment-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -17478,7 +17552,7 @@ export default function GamesPage({
             </div>
           )}
 
-          {isGamePaid !== true && (
+          {!isClubOnSiteGame && isGamePaid !== true && (
             <>
               <button
                 className="section-cta"
@@ -18252,7 +18326,7 @@ export default function GamesPage({
                   ? subscriptionUsageShadow.busy
                     ? "Проверяем ограничения..."
                     : "Проверить создание без бронирования"
-                  : usePublicCreateWizard ? publicCreateFinalSubmitTitle : paymentSubmitTitle}
+                  : CLUB_ON_SITE_BOOKING || usePublicCreateWizard ? publicCreateFinalSubmitTitle : paymentSubmitTitle}
               </span>
               <span className="game-submit-meta">{paymentStationCourt}</span>
               <span className="game-submit-meta">{paymentTimeRange}</span>

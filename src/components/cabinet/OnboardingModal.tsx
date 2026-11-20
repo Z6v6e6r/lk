@@ -551,20 +551,23 @@ export function OnboardingModal({
         levelNumeric: numericScore,
       });
       if (!res.error && (res.status === 200 || res.status === 204)) {
+        const savedGrade = res.data?.grade || letterScore;
+        const savedLevel = typeof res.data?.level === "number" ? formatNumericField(res.data.level) : numericScore;
+        setDoneScore(savedGrade);
         identifyAnalyticsUser({
           clientId: profile.id,
           phone: profile.phone,
           onboardingCompleted: true,
-          levelLetter: letterScore,
-          levelNumeric: numericScore,
+          levelLetter: savedGrade,
+          levelNumeric: savedLevel,
         });
         trackAnalyticsEvent("onboarding_submit_success", {
           clientId: profile.id,
           status: res.status,
-          finalLevelLetter: letterScore,
-          finalLevelNumeric: numericScore,
+          finalLevelLetter: savedGrade,
+          finalLevelNumeric: savedLevel,
         });
-        onProfileUpdated({ levelLetter: letterScore, levelNumeric: numericScore });
+        onProfileUpdated({ levelLetter: savedGrade, levelNumeric: savedLevel });
       } else {
         trackClientError(
           "onboarding.save_failed",

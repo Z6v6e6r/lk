@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
@@ -10,6 +10,7 @@ const here = new URL("./", import.meta.url);
 const repo = fileURLToPath(new URL("../../", here));
 const club = JSON.parse(await readFile(new URL("club.json", here), "utf8"));
 const routes = {
+  lk: "Личный кабинет",
   finde_game: "Найти игру",
   game_create: "Создать игру",
   community_join: "Вступить в сообщество",
@@ -50,7 +51,7 @@ if (mode === "--preview") {
   keycloakBase = `${pageOrigin}/keycloak`;
   assetBase = `${pageOrigin}/assets`;
   backendBase = `${pageOrigin}/novokuznetsk`;
-  cabinetUrl = pageOrigin;
+  cabinetUrl = `${pageOrigin}/lk`;
   gamesMasterServiceId = "00000000-0000-4000-8000-000000000042";
   consentVersion = "preview";
   offerUrl = `${pageOrigin}/fixture-offer`;
@@ -92,6 +93,8 @@ const env = {
   VITE_PUBLIC_GAME_CREATE_PATH: "/game_create",
   VITE_PUBLIC_COMMUNITY_JOIN_PATH: "/community_join",
   VITE_PUBLIC_CLUB_NAME: club.stationName,
+  VITE_CLUB_ON_SITE_BOOKING: "true",
+  VITE_ONBOARDING_IMAGE_BASE: `${assetBase}/onboarding`,
   VITE_PUBLIC_GAME_STATION_ID: club.stationId,
   VITE_PUBLIC_GAME_STATION_NAME: club.stationName,
   VITE_GAME_BOOKING_UTC_OFFSET: club.utcOffset,
@@ -114,8 +117,11 @@ for (const name of Object.keys(process.env).filter((name) => name.startsWith("VI
 Object.assign(process.env, env);
 
 for (const [entry, outputFile] of [
-  ["main", "padel-prime-lk.js"],
-  ["games", "games.js"],
+  ["tenants/padel-prime/main", "padel-prime-lk.js"],
+  ["tenants/padel-prime/games", "games.js"],
+  ["communities", "communities.js"],
+  ["onboarding", "onboarding.js"],
+  ["levels-info", "levels-info.js"],
 ]) {
   await build({
     root: repo,
@@ -137,11 +143,17 @@ for (const [entry, outputFile] of [
       lib: {
         name: "PadelPrimeLK",
         formats: ["iife"],
-        entry: join(repo, "src", "tenants", "padel-prime", `${entry}.tsx`),
+        entry: join(repo, "src", `${entry}.tsx`),
         fileName: () => outputFile,
       },
     },
   });
+}
+
+await mkdir(join(assetsDir, "onboarding"));
+for (let number = 1; number <= 9; number++) {
+  const filename = `${number}.webp`;
+  await copyFile(join(repo, "фото онбординг", filename), join(assetsDir, "onboarding", filename));
 }
 
 execFileSync(process.execPath, [join(repo, "scripts/write-release.mjs"), assetsDir, "release.json"],

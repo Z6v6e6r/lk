@@ -1,0 +1,21 @@
+[Unit]
+Description=Novokuznetsk LK1 club MongoDB
+After=network.target
+
+[Service]
+User=lk1-nvk-db
+Group=lk1-nvk-db
+StateDirectory=lk1-novokuznetsk-mongo
+StateDirectoryMode=0700
+ExecStart=/opt/lk1-novokuznetsk/runtime/mongod --dbpath /var/lib/lk1-novokuznetsk-mongo --bind_ip 127.0.0.1 --nounixsocket --port 27039 --replSet lk1Nvk89 --keyFile /etc/lk1-novokuznetsk/mongo-keyfile --wiredTigerCacheSizeGB 0.25
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+MemoryHigh=175M
+MemoryMax=225M
+Restart=on-failure
+RestartSec=4s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,4 +1,5 @@
 import { bookingEndIso, moscowBookingEndIso } from "./bookingEndTime";
+import { CUSTOM_FIELD_IDS } from "./customFields";
 import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
@@ -14,6 +15,7 @@ import {
   FAIL_URL,
   GAMES_MASTER_SERVICE_ID,
   GAME_BOOKING_UTC_OFFSET,
+  CLUB_ON_SITE_BOOKING,
   PUBLIC_GAME_TIME_ZONE,
   IS_DEV_RELEASE_CHANNEL,
   ALLOW_LOCAL_PRODUCTION_HISTORY_API,
@@ -4718,12 +4720,26 @@ async function withRetry<T>(
 
 export async function apiFetchProfile(signal?: AbortSignal) {
   signal?.throwIfAborted();
-  return request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
+  const profile = await request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
     method: "GET",
     auth: true,
     retries: 1,
     signal,
   });
+  if (!CLUB_ON_SITE_BOOKING || !profile.data || profile.error) return profile;
+  const levels = await request<{ level: number | null; grade: string | null }>("/lk/onboarding/level", {
+    method: "GET", baseUrl: getServ2Origin(), auth: true, retries: 0, signal,
+  });
+  if (levels.error) return { data: null, error: levels.error, status: levels.status };
+  const customFields = (profile.data.customFields || []).filter(({ id }) =>
+    id !== CUSTOM_FIELD_IDS.lkPadelLevel && id !== CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
+  if (levels.data?.grade && typeof levels.data.level === "number") {
+    customFields.push(
+      { id: CUSTOM_FIELD_IDS.lkPadelLevel, name: "Уровень клуба", value: [levels.data.grade] },
+      { id: CUSTOM_FIELD_IDS.lkPadelLevelNumeric, name: "Уровень клуба", value: [String(levels.data.level)] },
+    );
+  }
+  return { ...profile, data: { ...profile.data, customFields } };
 }
 
 export async function apiUpdateProfile(data: UpdateProfileData) {
@@ -4758,7 +4774,7 @@ export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
     ? `${serv2Origin.replace(/\/+$/, "")}/lk/onboarding/level`
     : "/lk/onboarding/level";
 
-  const result = await request<{ ok?: boolean; success?: boolean; message?: string; error?: string }>(onboardingUrl, {
+  const result = await request<{ ok?: boolean; success?: boolean; message?: string; error?: string; level?: number; grade?: string }>(onboardingUrl, {
     method: "POST",
     auth: true,
     retries: 1,
@@ -7127,6 +7143,7 @@ export async function apiFetchPadelGamesByPhone(
   for (const endpoint of endpoints) {
     const response = await request<unknown>(endpoint, {
       method: "GET",
+      auth: CLUB_ON_SITE_BOOKING,
       baseUrl,
       retries: 1,
       ...(IS_DEV_RELEASE_CHANNEL
@@ -7269,6 +7286,7 @@ export async function apiFetchPadelGameRecord(
   for (const endpoint of endpoints) {
     const response = await request<unknown>(endpoint, {
       method: "GET",
+      auth: CLUB_ON_SITE_BOOKING,
       baseUrl,
       retries: 1,
       ...options,
@@ -8226,6 +8244,31 @@ export async function apiConfirmPadelGameRosterPayment(
     },
   );
   return parsePadelGameRosterCommandResult(response, gameId);
+}
+
+export async function apiReserveClubCourt(params: {
+  studioId: string;
+  roomId: string;
+  timeFrom: string;
+  timeTo: string;
+  publishGame: boolean;
+  ratingGame: boolean;
+  isPrivate: boolean;
+  title?: string;
+}) {
+  const response = await request<{ bookingId: string; game?: unknown }>("/lk/venue-bookings", {
+    method: "POST", baseUrl: getServ2Origin(), auth: true, retries: 0,
+    body: JSON.stringify(params),
+  });
+  return { ...response, game: normalizePadelGameRecord(response.data?.game) };
+}
+
+export async function apiJoinClubGame(gameId: string) {
+  const response = await request<{ game?: unknown }>(`/lk/games/${encodeURIComponent(gameId)}/join`, {
+    method: "POST", baseUrl: getServ2Origin(), auth: true, retries: 0,
+    body: "{}",
+  });
+  return { ...response, data: normalizePadelGameRecord(response.data?.game) };
 }
 
 export async function apiCreatePadelGameRecord(

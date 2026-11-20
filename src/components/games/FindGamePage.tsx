@@ -10,6 +10,7 @@ import {
 } from "../../utils/apiClient";
 import {
   CABINET_URL,
+  CLUB_ON_SITE_BOOKING,
   GAME_BOOKING_UTC_OFFSET,
   PUBLIC_GAME_TIME_ZONE,
   IS_DEV_RELEASE_CHANNEL,
@@ -368,7 +369,8 @@ function isGameCancelled(game: PadelGameRecord): boolean {
 
 function isGamePendingPayment(game: PadelGameRecord): boolean {
   const status = String(game.status || "").trim().toUpperCase();
-  return status.includes("PAYMENT_PENDING") || status.includes("DRAFT") || game.payment?.paid === false;
+  const confirmedOnSite = CLUB_ON_SITE_BOOKING && game.metadata?.source === "novokuznetsk_on_place";
+  return status.includes("PAYMENT_PENDING") || status.includes("DRAFT") || (!confirmedOnSite && game.payment?.paid === false);
 }
 
 function isInactiveMembershipStatus(value: string | null | undefined): boolean {

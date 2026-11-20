@@ -82,6 +82,8 @@ import {
   IS_DEV_RELEASE_CHANNEL,
   PUBLIC_COMMUNITY_JOIN_PATH,
   PUBLIC_GAME_FIND_PATH,
+  PUBLIC_GAME_CREATE_PATH,
+  CLUB_ON_SITE_BOOKING,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
@@ -122,7 +124,11 @@ type QuickAction = {
   href: string;
 };
 
-const QUICK_ACTIONS: QuickAction[] = [
+const QUICK_ACTIONS: QuickAction[] = CLUB_ON_SITE_BOOKING ? [
+  { icon: "🎾", label: "Найти игру", href: GAME_FIND_PATH },
+  { icon: "🎾", label: "Создать игру", href: PUBLIC_GAME_CREATE_PATH },
+  { icon: "📅", label: "Забронировать корт", href: `${PUBLIC_GAME_CREATE_PATH}?booking=1` },
+] : [
   { icon: "🎾", label: "Играть", href: GAME_FIND_PATH },
   { icon: "👥", label: "Групповые тренировки", href: GROUP_TRAININGS_URL },
   { icon: "🏆", label: "Турниры", href: "https://padlhub.ru/tournaments" },
