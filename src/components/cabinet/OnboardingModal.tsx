@@ -32,12 +32,13 @@ type Question = {
   options: Option[];
 };
 
-const ONBOARDING_IMAGE_BASE =
-  (import.meta.env.VITE_ONBOARDING_IMAGE_BASE as string | undefined)?.replace(/\/$/, "")
-  || "https://padlhub.su/lk/assets";
+const ONBOARDING_IMAGE_BASE = import.meta.env.VITE_ONBOARDING_IMAGE_BASE?.replace(/\/$/, "");
 
-const onboardingImage = (num: number) =>
-  resolvePreferredLkAssetUrl(`${ONBOARDING_IMAGE_BASE}/${num}.webp`) ?? `${ONBOARDING_IMAGE_BASE}/${num}.webp`;
+function onboardingImage(num: number) {
+  if (ONBOARDING_IMAGE_BASE) return `${ONBOARDING_IMAGE_BASE}/${num}.webp`;
+  const fallback = `https://padlhub.su/lk/assets/${num}.webp`;
+  return resolvePreferredLkAssetUrl(fallback) ?? fallback;
+}
 
 const BASE_QUESTION: Question = {
   id: "q1_1",
