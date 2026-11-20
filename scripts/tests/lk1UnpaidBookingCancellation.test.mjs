@@ -735,3 +735,13 @@ test('cancelled release requires modifiedCount=1 and a stop after backup prevent
   assert.equal((await releaseAlreadyCancelledLk1Allowance({...args,shouldStop:()=>stopped,
     backup:async()=>{stopped=true;}})).state,'STOPPED');
 });
+
+test('composite payment (participation + residency lines) is never classified as due for unpaid cancellation', () => {
+  const { op, transaction } = fixture();
+  const participation = { id: 'service', count: 1, cost: 550000, discount: 275000, bookingIds: ['booking'] };
+  const residency = { id: '4037a3a3-e551-4f9a-a9db-1410e46b8635', type: 'SUBSCRIPTION', count: 1, cost: 79000, discount: 0 };
+  assert.equal(classifyLk1Transaction(op, { ...transaction, products: [participation] }, instant).reason, 'DUE');
+  for (const products of [[participation, residency], [residency, participation], [residency]]) {
+    assert.equal(classifyLk1Transaction(op, { ...transaction, products }, instant).reason, 'TRANSACTION_BINDING_INVALID');
+  }
+});

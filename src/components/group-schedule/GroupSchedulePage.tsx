@@ -18,7 +18,25 @@ import {
   type GroupTrainingScope,
   type GroupTrainingSummary,
 } from "../../utils/groupScheduleApi";
-import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
+import {
+  buildGroupScheduleReturnUrl,
+  normalizeGroupScheduleDate,
+  syncGroupScheduleSelectionHref, readGroupSchedulePaymentReturnHint } from "../../utils/groupScheduleEntry";
+import { COMPOSITE_RESIDENCY_ENABLED } from "../../residency/residencyConfig";
+import { CompositeResidencyOffer, ResidencyPurchaseQuoteOffer, type ResidencyPurchaseQuoteView } from "../../residency/CompositeResidencyOffer";
+import { apiFetchResidencyPurchaseQuote } from "../../residency/residencyPurchaseQuoteApi";
+import {
+  isResidencyPurchaseQuoteUsable,
+  parseResidencyPurchaseQuote,
+  RESIDENCY_PURCHASE_QUOTE_AUTO_REFRESH_LIMIT,
+  residencyQuoteExerciseIdFor,
+  type ResidencyPurchaseQuote,
+} from "../../residency/residencyPurchaseQuote";
+import { planCompositeResidencyOrder } from "../../residency/compositeResidencyOrder";
+import { buildGroupScheduleCompositeInput } from "../../residency/groupScheduleCompositeOffer";
+import { apiReadOwnedResidencyRows, type OwnedResidencyRawRead } from "../../residency/ownedResidencyApi";
+import { classifyOwnedResidency } from "../../residency/ownedResidencyRead";
+import { resolveGroupScheduleOrderStatus } from "../../utils/groupScheduleOrderStatus";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isTrialGroupTraining } from "../../utils/trialGroupTraining";
 import { resolveTrialGroupEligibilityCheck, type TrialGroupEligibilityDecision } from "../../utils/trialGroupEligibilityCheck";
@@ -381,6 +399,22 @@ export default function GroupSchedulePage({
   const [detailRosterError, setDetailRosterError] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<TournamentVivaCheckout | null>(null);
   const [checkoutLoadError, setCheckoutLoadError] = useState<string | null>(null);
+  const [checkoutObservedAtMs, setCheckoutObservedAtMs] = useState(0);
+  const [compositeConsent, setCompositeConsent] = useState(false);
+  const [compositeNowMs, setCompositeNowMs] = useState(0);
+  const [ownedResidencyRead, setOwnedResidencyRead] = useState<(OwnedResidencyRawRead & { key: string }) | null>(null);
+  const [ownedResidencyReadNonce, setOwnedResidencyReadNonce] = useState(0);
+  const [registrationReadFailed, setRegistrationReadFailed] = useState(false);
+  const orderAllowsNewPaymentRef = useRef(false);
+  const [residencyQuote, setResidencyQuote] = useState<{
+    key: string;
+    status: "loading" | "refreshing" | "ready" | "expired" | "unavailable";
+    quote: ResidencyPurchaseQuote | null;
+  } | null>(null);
+  const [residencyQuoteNonce, setResidencyQuoteNonce] = useState(0);
+  const [residencyQuoteNowMs, setResidencyQuoteNowMs] = useState(0);
+  const [residencyQuoteConsentFor, setResidencyQuoteConsentFor] = useState<string | null>(null);
+  const residencyQuoteAutoRefreshRef = useRef(0);
   const [trialEligibility, setTrialEligibility] = useState<(TrialGroupEligibilityDecision & { key: string }) | null>(null);
   const [trialEligibilityRetry, setTrialEligibilityRetry] = useState(0);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
@@ -481,6 +515,23 @@ export default function GroupSchedulePage({
     };
   }, [isTypeFilterOpen]);
 
+  // The opened training lives in the URL: a refresh or a payment return reopens the same id.
+  const selectedDetailDate = selectedDetail?.id === selectedId ? selectedDetail?.date ?? null : null;
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const next = syncGroupScheduleSelectionHref(window.location.href, { exerciseId: selectedId, date: selectedDetailDate });
+    if (!next) return;
+    try {
+      window.history.replaceState(window.history.state, "", next);
+    } catch {
+      // A sandboxed embed may forbid history writes; payment return URLs still carry the id.
+    }
+  }, [selectedId, selectedDetailDate]);
+
+  useEffect(() => {
+    setCompositeConsent(false);
+  }, [selectedId]);
+
   useEffect(() => {
     if (!selectedId) {
       setSelectedDetail(null);
@@ -553,6 +604,7 @@ export default function GroupSchedulePage({
     setCheckout(null);
     setCheckoutLoadError(null);
     setRegistrationLoading(true);
+    setRegistrationReadFailed(false);
     setDetailError(null);
     const [registrationResult, checkoutResult] = await Promise.all([
       apiFetchTournamentVivaMyRegistration(training.id).catch((error) => ({
@@ -568,12 +620,17 @@ export default function GroupSchedulePage({
     ]);
 
     if (registrationRequestIdRef.current !== requestId) return;
-    setRegistration(registrationResult.data ?? null);
+    // A failed read is UNKNOWN, never "not registered": it must not reopen a new payment.
+    setRegistration(registrationResult.error ? null : registrationResult.data ?? null);
+    setRegistrationReadFailed(Boolean(registrationResult.error) || !registrationResult.data);
     if (checkoutResult.error || !checkoutResult.data) {
       setCheckout(null);
       setCheckoutLoadError(getErrorMessage(checkoutResult.error, "Не удалось получить способы записи."));
     } else {
       setCheckout(checkoutResult.data);
+      const observedAtMs = Date.now();
+      setCheckoutObservedAtMs(observedAtMs);
+      setCompositeNowMs(observedAtMs);
     }
     setRegistrationLoading(false);
   }, [isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled]);
@@ -611,6 +668,16 @@ export default function GroupSchedulePage({
     subscriptionUsageShadowEnabled,
     phone,
   ]);
+
+  // Lost network: once the browser is back online, re-read the order of the same training.
+  useEffect(() => {
+    if (typeof window === "undefined" || !selectedDetail || !isAuthenticated || isRestoringSession
+      || subscriptionUsageShadowEnabled) return;
+    const training = selectedDetail;
+    const onOnline = () => { void loadRegistrationState(training); };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [isAuthenticated, isRestoringSession, loadRegistrationState, selectedDetail, subscriptionUsageShadowEnabled]);
 
   useEffect(() => {
     setDiscountQuotes([]);
@@ -756,6 +823,16 @@ export default function GroupSchedulePage({
     && (discountLoading || discountResolvedFor !== discountContextKey));
   const currentDiscountQuotes = !spanishTrainingSelected && !kidsAcademyTrainingSelected && discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
+  // #459: the order status after refresh, payment return or lost network comes from the server
+  // read of the player's own booking; the return flag in the URL is only a hint.
+  const orderStatus = resolveGroupScheduleOrderStatus({
+    read: registrationReadFailed ? { state: "failed" }
+      : registration && !registrationLoading ? { state: "ok", registration } : { state: "loading" },
+    returnHint: typeof window === "undefined" ? null : readGroupSchedulePaymentReturnHint(window.location.href, selectedId),
+  });
+  useEffect(() => {
+    orderAllowsNewPaymentRef.current = orderStatus.allowNewPayment;
+  }, [orderStatus.allowNewPayment]);
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const ownedOneTimes = checkout?.purchasedProducts.filter(product => product.source === "client-one-time") ?? [];
   const requiresTrialEligibility = TRIAL_GROUP_CHECKOUT_ENABLED && isTrialGroupTraining(selectedTraining);
@@ -779,6 +856,127 @@ export default function GroupSchedulePage({
     return () => { cancelled = true; };
   }, [isAuthenticated, isRestoringSession, selectedId, subscriptionUsageShadowEnabled, trialEligibilityKey, trialEligibilityRetry]);
   // PRO offers one-time monetary quotes and existing owned Energy visit packs.
+  // #459: participation + residency offer from #441, behind its default-off flag. It stays
+  // fail closed until the CUP policy (lk#457) is wired (owned residency: ownedResidencyRead), and it
+  // never starts a payment here: the single composite Viva transaction is server-side (lk#458).
+  const compositeEligible = Boolean(COMPOSITE_RESIDENCY_ENABLED && checkout && selectedTraining
+    && checkout.exercise.id === selectedTraining.id && !isRegistered && !registrationLoading
+    && orderStatus.allowNewPayment);
+  const ownedResidencyKey = compositeEligible && checkout?.profile?.id && selectedTraining
+    ? `${checkout.profile.id}:${selectedTraining.id}` : null;
+  // Read only: one fresh GET of the client's own subscriptions; NONE expires after 60 s and is
+  // re-read when the player gives consent. A failed, partial or stale read stays UNKNOWN.
+  useEffect(() => {
+    if (!ownedResidencyKey) return;
+    const controller = new AbortController();
+    setOwnedResidencyRead(null);
+    void apiReadOwnedResidencyRows(controller.signal).then((read) => {
+      if (controller.signal.aborted) return;
+      setOwnedResidencyRead({ ...read, key: ownedResidencyKey });
+      setCompositeNowMs(Date.now());
+    });
+    return () => controller.abort();
+  }, [ownedResidencyKey, ownedResidencyReadNonce]);
+  const ownedResidency = ownedResidencyKey && ownedResidencyRead?.key === ownedResidencyKey
+    ? classifyOwnedResidency({
+      payload: ownedResidencyRead.payload,
+      readFailed: ownedResidencyRead.readFailed,
+      actorId: checkout?.profile?.id ?? null,
+      observedAtMs: ownedResidencyRead.observedAtMs,
+      nowMs: compositeNowMs,
+    })
+    : null;
+  const compositeInput = compositeEligible && checkout && selectedTraining
+    ? buildGroupScheduleCompositeInput({
+      isTournament: patriotsTournamentSelected,
+      checkout: { ...checkout, exerciseId: selectedTraining.id },
+      checkoutObservedAtMs,
+      existingResidency: ownedResidency?.state ?? "UNKNOWN",
+      nowMs: compositeNowMs,
+    })
+    : null;
+  const compositePlan = compositeInput
+    ? planCompositeResidencyOrder({ ...compositeInput, consentAccepted: compositeConsent })
+    : null;
+
+  // First residency purchase with a group training: the server quote (lk#463 / ph-admin#134).
+  // Keyed by player and training: a change of training aborts the request in flight and the
+  // render check below drops any answer that is not for the training now open.
+  // Only a confirmed NONE asks for the quote; an in-flight, ACTIVE or UNKNOWN read shows none.
+  const residencyQuoteExerciseId = residencyQuoteExerciseIdFor({
+    compositeEligible,
+    isTournament: patriotsTournamentSelected,
+    selectedExerciseId: selectedTraining?.id ?? null,
+    ownedResidencyState: ownedResidency?.state ?? null,
+  });
+  const residencyQuoteKey = residencyQuoteExerciseId && checkout?.profile?.id
+    ? `${checkout.profile.id}:${residencyQuoteExerciseId}` : null;
+  useEffect(() => {
+    residencyQuoteAutoRefreshRef.current = 0;
+    setResidencyQuoteConsentFor(null);
+  }, [residencyQuoteKey]);
+  useEffect(() => {
+    if (!residencyQuoteKey || !residencyQuoteExerciseId) {
+      setResidencyQuote(null);
+      return;
+    }
+    const key = residencyQuoteKey;
+    const exerciseId = residencyQuoteExerciseId;
+    const controller = new AbortController();
+    setResidencyQuoteConsentFor(null);
+    setResidencyQuote((previous) => ({
+      key, quote: null, status: previous?.key === key && previous.status !== "loading" ? "refreshing" : "loading",
+    }));
+    void apiFetchResidencyPurchaseQuote(exerciseId, controller.signal).then((read) => {
+      if (controller.signal.aborted) return;
+      const nowMs = Date.now();
+      setResidencyQuoteNowMs(nowMs);
+      if (read.failed) {
+        setResidencyQuote({ key, quote: null, status: "unavailable" });
+        return;
+      }
+      const parsed = parseResidencyPurchaseQuote(read.body, { exerciseId, requestedAtMs: read.requestedAtMs, nowMs });
+      setResidencyQuote(parsed.ok
+        ? { key, quote: parsed.quote, status: "ready" }
+        : { key, quote: null, status: parsed.reason === "QUOTE_EXPIRED" ? "expired" : "unavailable" });
+    });
+    return () => controller.abort();
+  }, [residencyQuoteExerciseId, residencyQuoteKey, residencyQuoteNonce]);
+  // On expiry the price and any consent to it are dropped; a fresh quote is requested before
+  // the player can agree again (a few times automatically, then by the player's button).
+  useEffect(() => {
+    if (residencyQuote?.status !== "ready" || !residencyQuote.quote) return;
+    const timer = window.setTimeout(() => {
+      setResidencyQuoteNowMs(Date.now());
+      setResidencyQuoteConsentFor(null);
+      if (residencyQuoteAutoRefreshRef.current < RESIDENCY_PURCHASE_QUOTE_AUTO_REFRESH_LIMIT) {
+        residencyQuoteAutoRefreshRef.current += 1;
+        setResidencyQuoteNonce((value) => value + 1);
+      } else {
+        setResidencyQuote((previous) => previous && { ...previous, quote: null, status: "expired" });
+      }
+    }, Math.max(0, residencyQuote.quote.localExpiresAtMs - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [residencyQuote]);
+  const currentResidencyQuote = residencyQuote && residencyQuote.key === residencyQuoteKey ? residencyQuote : null;
+  const usableResidencyQuote = currentResidencyQuote?.quote
+    && isResidencyPurchaseQuoteUsable(currentResidencyQuote.quote, selectedId, residencyQuoteNowMs)
+    ? currentResidencyQuote.quote : null;
+  const residencyQuoteIdentity = (quote: ResidencyPurchaseQuote) =>
+    `${quote.exerciseId}:${quote.expiresAt}:${quote.policyDigest}:${quote.totalMinor}`;
+  const residencyQuoteConsent = Boolean(usableResidencyQuote
+    && residencyQuoteConsentFor === residencyQuoteIdentity(usableResidencyQuote));
+  const residencyQuoteView: ResidencyPurchaseQuoteView | null = !currentResidencyQuote ? null
+    : usableResidencyQuote ? { state: "READY", quote: usableResidencyQuote }
+      : currentResidencyQuote.status === "loading" ? { state: "LOADING" }
+        : currentResidencyQuote.status === "refreshing" ? { state: "REFRESHING" }
+          : currentResidencyQuote.status === "unavailable" ? { state: "UNAVAILABLE" }
+            : { state: "EXPIRED" };
+  const requestFreshResidencyQuote = () => {
+    setResidencyQuoteConsentFor(null);
+    setResidencyQuoteNonce((value) => value + 1);
+  };
+
   const purchasableProducts = !checkout
     ? []
     : spanishTrainingSelected || proTrainingSelected || topokratyExcluded ? checkout.oneTimes : [...checkout.oneTimes, ...checkout.subscriptions];
@@ -916,6 +1114,11 @@ export default function GroupSchedulePage({
     }
     if (training.id !== selectedId || activeCheckout.exercise.id !== training.id) {
       setDetailError("Тренировка изменилась. Дождитесь обновления вариантов записи.");
+      return;
+    }
+    if (!orderAllowsNewPaymentRef.current) {
+      // Unknown, pending or processing order: never start a second payment for it.
+      setDetailError("Сначала проверьте статус текущего заказа.");
       return;
     }
     if (TRIAL_GROUP_CHECKOUT_ENABLED && isTrialGroupTraining(training)
@@ -1397,9 +1600,27 @@ export default function GroupSchedulePage({
                     )}
 
                     {!subscriptionUsageShadowEnabled
+                      && (orderStatus.kind === "UNKNOWN" || orderStatus.kind === "PROCESSING" || orderStatus.kind === "PAYMENT_FAILED") && (
+                      <div className="tournament-signup-payment-hold" role="status" aria-live="polite"
+                        data-order-status={orderStatus.kind} data-exercise-id={selectedTraining.id}>
+                        <span>{orderStatus.message}</span>
+                        {orderStatus.allowRecheck && (
+                          <button
+                            type="button"
+                            className="section-cta"
+                            onClick={() => void loadRegistrationState(selectedTraining)}
+                            disabled={actionLoading || registrationLoading}
+                          >
+                            Проверить статус
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {!subscriptionUsageShadowEnabled
                       && !registrationLoading
                       && !isRegistered
                       && !trialBookingBlocked
+                      && orderStatus.allowNewPayment
                       && checkout && (
                       <div className="tournament-signup-payment-options">
                         {ownedOneTimes.length > 0 && (
@@ -1443,6 +1664,67 @@ export default function GroupSchedulePage({
                         )}
                         {discountPending && <div className="tournament-signup-muted" role="status">Проверяем скидку по подписке…</div>}
                         {discountError && <div className="tournament-signup-muted" role="status">{discountError}</div>}
+                        {residencyQuoteView && (
+                          <div className="tournament-signup-payment-group" data-exercise-id={selectedTraining.id}>
+                            <ResidencyPurchaseQuoteOffer
+                              view={residencyQuoteView}
+                              consentAccepted={residencyQuoteConsent}
+                              onRefresh={requestFreshResidencyQuote}
+                              onConsentChange={(accepted) => {
+                                const nowMs = Date.now();
+                                setResidencyQuoteNowMs(nowMs);
+                                if (!accepted) {
+                                  setResidencyQuoteConsentFor(null);
+                                  return;
+                                }
+                                // Consent binds to this exact fresh quote of the open training.
+                                const quote = currentResidencyQuote?.quote ?? null;
+                                if (!isResidencyPurchaseQuoteUsable(quote, selectedId, nowMs)) {
+                                  requestFreshResidencyQuote();
+                                  return;
+                                }
+                                setResidencyQuoteConsentFor(residencyQuoteIdentity(quote));
+                              }}
+                            />
+                            {residencyQuoteConsent && usableResidencyQuote && (
+                              <>
+                                <button className="tournament-signup-payment-option" type="button" disabled>
+                                  <span>Занятие и резидентство</span>
+                                  <strong>{formatMoneyMinor(usableResidencyQuote.totalMinor)}</strong>
+                                </button>
+                                <div className="tournament-signup-muted" role="status">
+                                  Оплата одной суммой пока недоступна. Можно записаться без резидентства.
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {compositeInput && !residencyQuoteView && (
+                          <div className="tournament-signup-payment-group" data-exercise-id={selectedTraining.id}>
+                            <CompositeResidencyOffer
+                              input={compositeInput}
+                              consentAccepted={compositeConsent}
+                              onConsentChange={(accepted) => {
+                                // Re-check the residency price age at the moment of consent.
+                                setCompositeNowMs(Date.now());
+                                setCompositeConsent(accepted);
+                                // NONE is only as fresh as its read: re-read owned residency on consent.
+                                if (accepted) setOwnedResidencyReadNonce((value) => value + 1);
+                              }}
+                            />
+                            {compositePlan?.ok && (
+                              <>
+                                <button className="tournament-signup-payment-option" type="button" disabled>
+                                  <span>Участие и резидентство</span>
+                                  <strong>{formatMoneyMinor(compositePlan.breakdown.totalMinor)}</strong>
+                                </button>
+                                <div className="tournament-signup-muted" role="status">
+                                  Оплата одной суммой пока недоступна. Можно записаться без резидентства.
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                         {purchasableProducts.length > 0 && (
                           <div className="tournament-signup-payment-group">
                             <div className="tournament-signup-payment-purchase-list">

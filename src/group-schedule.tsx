@@ -13,7 +13,7 @@ import {
 } from "./utils/analytics";
 import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
 import { ensureFreshRelease } from "./utils/releaseGuard";
-import { readGroupScheduleEntryDataFromHref } from "./utils/groupScheduleEntry";
+import { readGroupScheduleEntryDataFromHref, resolveGroupScheduleInitialSelection } from "./utils/groupScheduleEntry";
 import type { GroupTrainingScope } from "./utils/groupScheduleModel";
 
 type GroupScheduleMountData = {
@@ -59,6 +59,12 @@ function readGroupScheduleDataFromLocation(): GroupScheduleMountData {
 function GroupScheduleContent({ data, onClose }: { data?: GroupScheduleMountData; onClose?: () => void }) {
   const [ready, setReady] = useState(false);
   const locationData = readGroupScheduleDataFromLocation();
+  // A widget-written `groupExerciseId` (explicit choice, payment return) beats the host's
+  // entry `data.exerciseId`, so refresh and return reopen B, not the entry link's A.
+  const initialSelection = resolveGroupScheduleInitialSelection(
+    typeof window === "undefined" ? "" : window.location.href,
+    { exerciseId: data?.exerciseId ?? null, date: data?.date ?? null },
+  );
 
   useEffect(() => {
     setReady(true);
@@ -71,8 +77,8 @@ function GroupScheduleContent({ data, onClose }: { data?: GroupScheduleMountData
   return (
     <GroupSchedulePage
       onBack={() => onClose?.()}
-      initialExerciseId={data?.exerciseId ?? locationData.exerciseId ?? null}
-      initialDate={data?.date ?? locationData.date ?? null}
+      initialExerciseId={initialSelection.exerciseId}
+      initialDate={initialSelection.date}
       initialStudioId={data?.studioId ?? locationData.studioId ?? null}
       initialDirectionIds={data?.directionIds ?? locationData.directionIds ?? null}
       initialDirectionLabel={data?.directionLabel ?? locationData.directionLabel ?? null}

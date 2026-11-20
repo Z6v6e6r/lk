@@ -8,6 +8,7 @@ import TournamentSignupPage from "./components/tournament-signup/TournamentSignu
 import { AuthProvider } from "./context/AuthContext";
 import { appendCurrentAuthModeToNavigableUrl } from "./utils/authMode";
 import { appendSubscriptionUsageShadowToSameOriginUrl } from "./components/subscriptions/subscriptionUsageShadow";
+import { readGroupScheduleEntryDataFromHref } from "./utils/groupScheduleEntry";
 
 function returnToCabinet() {
   const current = new URL(window.location.href);
@@ -24,12 +25,14 @@ function SubscriptionShadowDevApp() {
   }
   const current = new URL(window.location.href);
   if (current.searchParams.get("screen") === "group") {
+    // Same entry reader as the group-schedule widget, so refresh and payment return match it.
+    const entry = readGroupScheduleEntryDataFromHref(current.href);
     return (
       <GroupSchedulePage
         onBack={returnToCabinet}
-        initialExerciseId={current.searchParams.get("exerciseId")}
-        initialDate={current.searchParams.get("date")}
-        initialStudioId={current.searchParams.get("studioId")}
+        initialExerciseId={entry.exerciseId}
+        initialDate={entry.date}
+        initialStudioId={entry.studioId}
       />
     );
   }

@@ -88,3 +88,11 @@ test('expired promo invoices require their own exact frozen discount and amount'
  promo.products[0].discount = 1000000; promo.discount = 1000000; promo.toPay = 980000;
  assert.equal(tools.dcrFacts(promo,tools.dcrOwner(promo),frozen,config.cutoff,Date.now()),false);
 });
+test('composite payment (product + residency line) never proves direct checkout closure',()=>{
+ const residency={id:'4037a3a3-e551-4f9a-a9db-1410e46b8635',type:'SUBSCRIPTION',count:1,cost:79000,discount:0};
+ for(const mutate of [t=>{t.products.push(residency)},t=>{t.products.unshift(residency)}]){
+  const t=structuredClone(transaction);mutate(t);
+  assert.equal(tools.dcrFacts(t,tools.dcrOwner(t),proof,config.cutoff,Date.now()),false);
+  const result=run('router',reply(throughToken(),t));assert.equal(result[0],null);assert.equal(result[2].payload.directCheckoutClosure,undefined);
+ }
+});
