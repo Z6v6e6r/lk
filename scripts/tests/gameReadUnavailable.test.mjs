@@ -147,3 +147,22 @@ test('invite loader clears the stale record on terminal 404 and displays the rea
     apiFetchPadelGameRecord:async()=>({status:404,data:null,error:{message:'Игра недоступна'}})},join);
   await load();assert.deepEqual(records,[null]);assert.equal(errors.at(-1),'Игра недоступна');
 });
+
+test('club game lists perform one authorized read without sending legacy identity query fields', async () => {
+  const node = api.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'apiFetchPadelGamesByPhone');
+  assert.ok(node);
+  const calls = [];
+  const handler = new Function(
+    'CLUB_ON_SITE_BOOKING', 'IS_DEV_RELEASE_CHANNEL', 'getServ2Origin', 'request',
+    compile(node.getText(api).replace(/^export\s+/, '') + '\nreturn apiFetchPadelGamesByPhone;'),
+  )(true, false, () => 'https://club.invalid/novokuznetsk', async (endpoint, options) => {
+    calls.push({endpoint, options});
+    return {status:401,data:null,error:{status:401,message:'Provider denied fixture'}};
+  });
+  const result = await handler('70000000042', 'fixture-id', true, {limit:20});
+  assert.equal(result.status,401);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].endpoint,'/lk/games');
+  assert.equal(calls[0].options.auth,true);
+  assert.deepEqual(calls[0].options.nonRetryableStatuses,[401,403]);
+});

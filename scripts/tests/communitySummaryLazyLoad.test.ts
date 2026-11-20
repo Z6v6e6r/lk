@@ -168,3 +168,11 @@ test("only explicit forceFresh keeps cache busting for post-mutation refreshes",
   assert.doesNotMatch(autopublishRefreshSource, /forceFresh: true/);
   assert.match(autopublishRefreshSource, /refreshCommunityFeedPage\(communityId\)/);
 });
+
+test("club community list requires auth and omits identity fields from the request URL", () => {
+  const source = sourceSlice(apiSource, "export async function apiFetchCommunities", "export async function apiFetchCommunity(");
+  assert.match(source, /if \(phone && !CLUB_ON_SITE_BOOKING\)/);
+  assert.match(source, /if \(clientId && !CLUB_ON_SITE_BOOKING\)/);
+  assert.match(source, /CLUB_ON_SITE_BOOKING \? \{ auth: true, nonRetryableStatuses: \[401, 403\] \}/);
+  assert.match(source, /if \(CLUB_ON_SITE_BOOKING\) return load\(\)/);
+});

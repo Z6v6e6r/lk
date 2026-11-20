@@ -19,6 +19,23 @@ test("only verified club courts and UTC+7 time can reach the booking adapter", (
   ]) assert.throws(() => validateBookingSlot(club, { ...input, ...invalid }), { code: "INVALID_SLOT" });
 });
 
+test("club profile distinguishes missing credentials from an explicit Viva denial", async () => {
+  let requests = 0;
+  const viva = createVivaClient(club, { fetcher: async (url, request) => {
+    requests++;
+    assert.equal(url.href, "https://api.vivacrm.ru/end-user/api/v1/fJzpsf/profile");
+    assert.equal(request.headers.get("authorization"), "Bearer synthetic");
+    assert.equal(request.headers.get("content-type"), "application/json");
+    assert.equal(request.headers.get("user-agent"), "PadlHub-LK/1.0");
+    return Response.json({ error: "fixture denial" }, { status: 403 });
+  } });
+  await assert.rejects(viva.profile(undefined), { status: 401, code: "AUTH_REQUIRED" });
+  await assert.rejects(viva.profile("Malformed"), { status: 401, code: "AUTH_REQUIRED" });
+  assert.equal(requests, 0);
+  await assert.rejects(viva.profile("Bearer synthetic"), { status: 401, code: "VIVA_SESSION_REJECTED" });
+  assert.equal(requests, 1);
+});
+
 test("Viva booking writes ON_PLACE only and readback rejects explicit other owner, charges and wrong venue", async () => {
   const actor = randomUUID(), correlationId = randomUUID(), bookingId = randomUUID(), exerciseId = randomUUID();
   const slot = validateBookingSlot(club, input);
@@ -27,7 +44,7 @@ test("Viva booking writes ON_PLACE only and readback rejects explicit other owne
   const viva = createVivaClient(club, { fetcher: async (url, request) => {
     assert.equal(url.origin, "https://api.vivacrm.ru");
     assert.match(url.pathname, /^\/end-user\/api\/v[12]\/fJzpsf\//);
-    assert.equal(request.headers.authorization, "Bearer synthetic");
+    assert.equal(request.headers.get("authorization"), "Bearer synthetic");
     assert.equal(request.redirect, "error");
     intercepted.push([url.pathname, request.method]);
     let payload;

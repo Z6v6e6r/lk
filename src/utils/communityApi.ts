@@ -12,6 +12,7 @@ import {
 } from "./apiClient";
 import {
   IS_DEV_RELEASE_CHANNEL,
+  CLUB_ON_SITE_BOOKING,
   ALLOW_LOCAL_PRODUCTION_HISTORY_API,
   PUBLIC_COMMUNITY_JOIN_PATH,
   PUBLIC_INVITE_ORIGIN,
@@ -1441,18 +1442,18 @@ export async function apiFetchCommunities(params: {
   const query = new URLSearchParams();
   const phone = normalizePhone(params.phone);
   const clientId = params.clientId?.trim() || null;
-  if (phone) query.set("phone", phone);
-  if (clientId) query.set("clientId", clientId);
+  if (phone && !CLUB_ON_SITE_BOOKING) query.set("phone", phone);
+  if (clientId && !CLUB_ON_SITE_BOOKING) query.set("clientId", clientId);
   query.set("view", "summary");
   if (params.forceFresh) {
     appendForceFreshCacheBuster(query);
   }
 
-  const cacheKey = [buildBaseUrl(), phone ?? "", clientId ?? "", "summary"].join("\u0000");
-  return communityListReads.run(cacheKey, async () => {
+  const load = async () => {
     const response = await request<unknown>(`/lk/communities?${query.toString()}`, {
       method: "GET",
       ...buildForceFreshCommunityGetOptions(),
+      ...(CLUB_ON_SITE_BOOKING ? { auth: true, nonRetryableStatuses: [401, 403] } : {}),
     });
 
     if (response.error) {
@@ -1468,7 +1469,12 @@ export async function apiFetchCommunities(params: {
       error: null,
       status: response.status,
     };
-  }, { forceFresh: params.forceFresh });
+  };
+  // Club membership is authorized by the active session. A cache keyed only
+  // by the supplied phone and client ID cannot establish that identity.
+  if (CLUB_ON_SITE_BOOKING) return load();
+  const cacheKey = [buildBaseUrl(), phone ?? "", clientId ?? "", "summary"].join("\u0000");
+  return communityListReads.run(cacheKey, load, { forceFresh: params.forceFresh });
 }
 
 export async function apiFetchCommunity(
