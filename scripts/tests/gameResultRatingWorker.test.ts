@@ -425,6 +425,9 @@ test("worker apply, crash retry, and dispute revert remain idempotent end to end
   });
   db.collections.set(GAME_RESULT_COLLECTIONS.results, new MemoryCollection([queuedResult]));
   db.collections.set("player_rating_state", new MemoryCollection(ratingRows()));
+  db.collections.set("rating_events", new MemoryCollection(ratingRows().map(row => buildGameResultBaselineEvent({
+    resultId: "historical-import", occurredAt: "2026-07-30T10:00:00.000Z", player: { id: row.clientId }, ratingNumeric: row.ratingNumeric,
+  }))));
   db.collections.set(GAME_RESULT_COLLECTIONS.games, new MemoryCollection([{
     _id: "game-1",
     id: "game-1",

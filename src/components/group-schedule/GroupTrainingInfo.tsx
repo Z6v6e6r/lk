@@ -1,8 +1,10 @@
+import { getEventAllowedLevelLabel } from "../../utils/levelAdmission";
 import { AvatarImage } from "../UI/AvatarImage";
 import { GameDateIcon, GameLevelIcon, GameLocationIcon, MembersCountIcon } from "../cabinet/community-feed/CommunityIcons";
 import type { GroupTrainingSummary } from "../../utils/groupScheduleModel";
 
 export function GroupTrainingInfo({ training }: { training: GroupTrainingSummary }) {
+  const allowedLevel = getEventAllowedLevelLabel(training);
   const date = training.date ? new Date(`${training.date}T00:00:00`) : null;
   const validDate = date && !Number.isNaN(date.getTime()) ? date : null;
   const dateLabel = validDate?.toLocaleDateString("ru-RU", { day: "numeric", month: "long" }) ?? "Дата уточняется";
@@ -29,7 +31,7 @@ export function GroupTrainingInfo({ training }: { training: GroupTrainingSummary
           </div>
           <div className="group-schedule-trainer-info-row">
             <GameLevelIcon />
-            <span>{training.levelLabel || "Уровень уточняется"}</span>
+            <span>{allowedLevel ? `Допустимый уровень: ${allowedLevel}` : "Уровень уточняется"}</span>
           </div>
           <div className="group-schedule-trainer-info-row">
             <MembersCountIcon />

@@ -185,7 +185,7 @@ test("tournament canonical reconciliation establishes a new baseline after ratin
       player: { key: "client:1", clientId: "1", phoneNorm: null, name: "Player" },
       actor: {},
       source: { domain: "TOURNAMENT" },
-      change: { before: 1, delta: -0.5, after: 1, gradeBefore: "D", gradeAfter: "D" },
+      change: { before: 1, delta: -0.5, after: 1, gradeBefore: "D+", gradeAfter: "D" },
       formula: null,
       projectionIntent: { viva: "NONE" },
     },
@@ -200,7 +200,7 @@ test("tournament canonical reconciliation establishes a new baseline after ratin
       player: { key: "client:1", clientId: "1", phoneNorm: null, name: "Player" },
       actor: {},
       source: { domain: "RATING_REPAIR", repairVersion: "tournament-canonical-reconciliation-v1.0.8" },
-      change: { before: 1, delta: 0.1, after: 1.1, gradeBefore: "D", gradeAfter: "D" },
+      change: { before: 1, delta: 0.1, after: 1.1, gradeBefore: "D+", gradeAfter: "D" },
       formula: null,
       projectionIntent: { viva: "REQUIRED" },
     },
@@ -231,7 +231,7 @@ test("tournament event targets ratingAfter when tournament before differs from c
     before: 2.15778,
     delta: 1.4386,
     after: 3.59638,
-    gradeBefore: "D",
+    gradeBefore: "D+",
     gradeAfter: "C+",
   });
   assert.deepEqual(event.source.tournamentRatingSnapshot, {
@@ -288,7 +288,7 @@ test("tournament start override becomes canonical before the final tournament de
     before: 2.15778,
     delta: 1.20022,
     after: 3.358,
-    gradeBefore: "D",
+    gradeBefore: "D+",
     gradeAfter: "C",
   });
   assert.deepEqual(startOverride.actor, {

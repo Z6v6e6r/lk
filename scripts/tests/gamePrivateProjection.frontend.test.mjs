@@ -36,6 +36,8 @@ function scenario({ getFailure = 0, changedBinding = false, conflictPatch = 0, f
   canonical.updatedAt = '2099-11-15T10:01:00.000Z';
   canonical.invite.maxPlayers = capacity;
   const scope = {
+    // The extracted post-payment continuation inherits the prior admission snapshot.
+    admittedLevel: { rating: 'D', ratingNumeric: 2 },
     gameRecordId: canonical.id, activeGameRecord: stale,
     detailsParticipants: stale.participants, detailsWaitlist: stale.waitlist, detailsMetadata: stale.metadata,
     detailsOrganizerPayload: stale.organizer, detailsOrganizerInMatch: true, detailsTeamSlots: [],

@@ -8,7 +8,6 @@ import { MongoClient } from "mongodb";
 import {
   PLAYER_RATING_COLLECTIONS,
   PLAYER_RATING_LEDGER_SCHEMA_VERSION,
-  buildGameResultBaselineEvent,
   ratingGradeFromNumeric,
   replayPlayerRatingEvents,
 } from "../src/services/player-rating/ledger.ts";
@@ -193,41 +192,8 @@ export async function loadIdentityEvents(db, identity) {
     .toArray();
 }
 
-function buildProjectionOutboxDocument({ state, event, nowIso }) {
-  if (!state.clientId || !event) return null;
-  const outboxId = `rating_projection:${event.id}`;
-  return {
-    _id: outboxId,
-    id: outboxId,
-    ratingEventId: event.id,
-    playerKey: state.playerKey,
-    clientId: state.clientId,
-    phoneNorm: state.phoneNorm,
-    payload: {
-      clientId: state.clientId,
-      phone: state.phoneNorm,
-      playerName: state.name,
-      levelLetter: state.rating,
-      levelNumeric: state.ratingNumeric.toFixed(5),
-      source: "game_result_rating_worker",
-      gameId: event.source?.gameId || event.source?.sourceId || null,
-      previousRating: event.change?.before ?? null,
-      nextRating: state.ratingNumeric,
-      confirmedAt: event.occurredAt,
-      changedById: event.actor?.id || "system:game-result-rating-worker",
-      changedByName: event.actor?.name || "Game result rating worker",
-      changedByPhone: event.actor?.phoneNorm || null,
-      eventId: event.id,
-    },
-    status: "PENDING",
-    attempts: 0,
-    createdAt: nowIso,
-    updatedAt: nowIso,
-    nextAttemptAt: nowIso,
-  };
-}
 
-async function ensureIdentityBaseline(db, { identity, ratingRow, result, plan, nowIso }) {
+async function ensureIdentityBaseline(db, { identity }) {
   const events = await loadIdentityEvents(db, identity);
   if (replayPlayerRatingEvents(events)) return events;
   if (events.length > 0) {
@@ -237,32 +203,7 @@ async function ensureIdentityBaseline(db, { identity, ratingRow, result, plan, n
       { playerKey: identity.playerKey, eventCount: events.length },
     );
   }
-  const ratingNumeric = ratingRow?.ratingNumeric ?? ratingRow?.rating;
-  const firstOccurredAt = [...asArray(plan.compensationEvents), ...asArray(plan.applyEvents)]
-    .map((event) => Date.parse(event.occurredAt))
-    .filter(Number.isFinite)
-    .sort((left, right) => left - right)[0] || Date.parse(nowIso);
-  const baseline = buildGameResultBaselineEvent({
-    resultId: result.id,
-    occurredAt: new Date(firstOccurredAt - 1).toISOString(),
-    player: { ...identity, id: identity.clientId },
-    ratingNumeric,
-    createdAt: nowIso,
-  });
-  if (!baseline) {
-    throw new GameResultRatingError(
-      "RATING_BASELINE_MISSING",
-      `Cannot establish canonical rating baseline for ${identity.playerKey}`,
-      identity,
-      true,
-    );
-  }
-  await db.collection(PLAYER_RATING_COLLECTIONS.events).updateOne(
-    { _id: baseline.id },
-    { $setOnInsert: baseline },
-    { upsert: true },
-  );
-  return [...events, baseline];
+  throw new GameResultRatingError("RATING_LEDGER_BASELINE_MISSING", "Initial level must be assigned through onboarding or CUP", identity, true);
 }
 
 async function projectIdentity(db, { identity, current, result, nowIso }) {
@@ -320,14 +261,6 @@ async function projectIdentity(db, { identity, current, result, nowIso }) {
     },
     { upsert: true },
   );
-  const outbox = buildProjectionOutboxDocument({ state, event: lastEvent, nowIso });
-  if (outbox) {
-    await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).updateOne(
-      { _id: outbox.id },
-      { $setOnInsert: outbox },
-      { upsert: true },
-    );
-  }
   return { state, lastEvent };
 }
 

@@ -187,12 +187,10 @@ test("real worker dry-run writes nothing; apply and retries never reapply the ex
   assert.equal(db.rows.player_rating_state.find((s) => s.clientId === "p1").ratingNumeric, 3.11827);
   assert.deepEqual(db.rows.player_rating_state.find((s) => s.clientId === "p2"), before.player_rating_state[1]);
   assert.deepEqual(db.rows.tournaments, before.tournaments);
-  assert.equal(db.rows.rating_projection_outbox.length, 1);
-  assert.equal(db.rows.rating_projection_outbox[0].clientId, "p1");
-  assert.equal(db.rows.rating_projection_outbox[0].payload.levelNumeric, "3.11827");
+  assert.equal((db.rows.rating_projection_outbox || []).length, 0, 'CUP-only changes enqueue no Viva projection');
   const retry = await processTournamentLedger(db, { ...workerOptions, nowIso: "2026-10-26T14:45:00.000Z", dryRun: false });
   assert.equal(retry.eventsPlanned, 0);
-  assert.equal(db.rows.rating_projection_outbox.length, 1);
+  assert.equal((db.rows.rating_projection_outbox || []).length, 0, 'CUP-only changes enqueue no Viva projection');
   assert.equal(db.rows.rating_events.length, before.rating_events.length + 1);
 });
 
@@ -203,7 +201,7 @@ test("worker recovers a crash after event insert and before state/outbox project
   assert.equal(recovered.eventsPlanned, 0);
   assert.equal(recovered.statesChanged, 1);
   assert.equal(db.rows.player_rating_state.find((s) => s.clientId === "p1").ratingNumeric, 3.11827);
-  assert.equal(db.rows.rating_projection_outbox.length, 1);
+  assert.equal((db.rows.rating_projection_outbox || []).length, 0, 'CUP-only changes enqueue no Viva projection');
 });
 
 test("public tournament save cannot submit rating exclusions", () => {

@@ -1,8 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
@@ -24,16 +22,9 @@ test("onboarding level validation rejects empty and invalid values", () => {
   assert.equal(invalid[1].payload.code, "LEVEL_NUMERIC_INVALID");
 });
 
-test("Viva projection writes only the supported numeric rating field", () => {
-  const out = runNodeRedFunction("scripts/nodered_onboarding_nodes/fn_onboarding_level_build_updates.js", {
-    levelLetter: "C+",
-    levelNumeric: "3.50000",
-  }) as any;
-
-  assert.deepEqual(out.payload, [{
-    fieldId: "eabfe27b-3f72-4496-9185-1a2ec6e6465e",
-    value: ["3.50000"],
-  }]);
+test("retired Viva level writer cannot emit provider updates", () => {
+  const out = runNodeRedFunction("scripts/nodered_onboarding_nodes/fn_onboarding_level_build_updates.js", { levelNumeric: "3.50000" });
+  assert.equal(out, null);
 });
 
 test("Viva PUT capture keeps an explicit result for every requested field", () => {
@@ -74,79 +65,6 @@ test("onboarding level response is 502 when either Viva field update fails", () 
   assert.equal(out[0].payload.projectionStatus, "FAILED");
 });
 
-test("onboarding rating patch inserts capture between Viva PUT and join", (t) => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "onboarding-rating-flow-"));
-  const tempSource = path.join(tempDir, "source.flow.json");
-  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
-  fs.writeFileSync(tempSource, `${JSON.stringify([
-    { id: "onboarding-tab", type: "tab", label: "LK Onboarding" },
-    {
-      id: "validate",
-      type: "function",
-      z: "onboarding-tab",
-      name: "Validate + normalize",
-      func: "return msg;",
-      wires: [["updates"]],
-    },
-    {
-      id: "updates",
-      type: "function",
-      z: "onboarding-tab",
-      name: "Build updates array",
-      func: "return msg;",
-      wires: [["build-put"]],
-    },
-    {
-      id: "build-put",
-      type: "function",
-      z: "onboarding-tab",
-      name: "Build PUT custom field",
-      func: "return msg;",
-      wires: [["put"]],
-    },
-    {
-      id: "put",
-      type: "http request",
-      z: "onboarding-tab",
-      name: "PUT custom field",
-      x: 1690,
-      y: 160,
-      wires: [["join"]],
-    },
-    {
-      id: "join",
-      type: "join",
-      z: "onboarding-tab",
-      name: "Join results",
-      wires: [["response"]],
-    },
-    {
-      id: "response",
-      type: "function",
-      z: "onboarding-tab",
-      name: "Build response + log",
-      func: "return msg;",
-      wires: [],
-    },
-  ], null, 2)}\n`, "utf8");
-
-  execFileSync(process.execPath, ["scripts/patch_nodered_onboarding_rating_flow.mjs"], {
-    cwd: process.cwd(),
-    env: { ...process.env, NODERED_SOURCE_PATH: tempSource },
-    stdio: "pipe",
-  });
-
-  const flow = JSON.parse(fs.readFileSync(tempSource, "utf8"));
-  const put = flow.find((node: any) => node.name === "PUT custom field");
-  const updates = flow.find((node: any) => node.name === "Build updates array");
-  const capture = flow.find((node: any) => node.name === "Capture Viva level PUT result");
-  const join = flow.find((node: any) => node.name === "Join results");
-  const response = flow.find((node: any) => node.name === "Build response + log");
-
-  assert.deepEqual(put.wires[0], [capture.id]);
-  assert.deepEqual(capture.wires[0], [join.id]);
-  assert.match(updates.func, /NUM_FIELD_ID/);
-  assert.doesNotMatch(updates.func, /f9790818/);
-  assert.match(response.func, /projectionStatus/);
-  assert.match(response.func, /statusCode: ok \? 200 : 502/);
+test("old Viva projection builder refuses regeneration", () => {
+  assert.throws(() => execFileSync(process.execPath, ["scripts/patch_nodered_onboarding_rating_flow.mjs"], { stdio: "pipe" }), /Viva level.*retired/);
 });

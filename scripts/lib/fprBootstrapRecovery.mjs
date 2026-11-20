@@ -1,6 +1,6 @@
 import { replayPlayerRatingEvents, ratingGradeFromNumeric } from '../../src/services/player-rating/ledger.ts';
 import { validateFprState, fprStandings } from '../../src/components/tournaments/fpr6x25.ts';
-import { buildFprProjectionOutbox, fprLevelHash } from './fprLevelLedger.mjs';
+import { fprLevelHash } from './fprLevelLedger.mjs';
 
 const fail = () => { throw Error('FPR_BOOTSTRAP_RECOVERY_PRECONDITION'); };
 const version = value => {
@@ -54,7 +54,7 @@ export function planFprBootstrapRecovery({ clientId, operationId, recordedAt, to
       effectiveTimeReason: 'Restore the evidenced level already valid before the frozen tournament snapshot; creation time records the actual repair.' },
     change: { before: 1, delta: Number((targetLevel - 1).toFixed(5)), after: targetLevel,
       gradeBefore: ratingGradeFromNumeric(1), gradeAfter: ratingGradeFromNumeric(targetLevel) },
-    formula: null, projectionIntent: { viva: 'REQUIRED_DURING_MIGRATION' } };
+    formula: null, projectionIntent: { viva: 'NONE_CUP_ONLY' } };
   const replay = replayPlayerRatingEvents([...events, event]);
   if (replay.ratingNumeric !== targetLevel) fail();
   const next = { ...state, ratingNumeric: replay.ratingNumeric, rating: replay.rating,
@@ -80,5 +80,5 @@ export function planFprBootstrapRecovery({ clientId, operationId, recordedAt, to
   validateFprState(repaired.params.fpr6x25);
   if (fprLevelHash(fprStandings(protocol)) !== fprLevelHash(fprStandings(repaired.params.fpr6x25))) fail();
   return { event, next, nextCompatibility, tournament: repaired,
-    outbox: buildFprProjectionOutbox(next, recordedAt) };
+    outbox: null };
 }

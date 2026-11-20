@@ -19,14 +19,14 @@ const totalPlayers = Math.max(asArray(batch.tasks).length, rows.length);
 const syncedRows = rows.filter((item) => item && item.ok);
 const syncedPlayers = syncedRows.length;
 const failures = rows
-  .filter((item) => item && !item.ok)
+  .filter((item) => item && !item.ok && !item.retired)
   .map((item) => ({
     id: toStr(item?.player?.id),
     phone: toStr(item?.player?.phoneNorm),
     name: toStr(item?.player?.name),
     reason: toStr(item?.error) || 'Unknown Viva sync error',
   }));
-const status = totalPlayers === 0
+const status = rows.length > 0 && rows.every(item => item?.retired === true) ? 'NOT_REQUIRED' : totalPlayers === 0
   ? 'SUCCESS'
   : syncedPlayers === totalPlayers
     ? 'SUCCESS'
