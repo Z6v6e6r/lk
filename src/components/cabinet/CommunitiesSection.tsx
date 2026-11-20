@@ -257,7 +257,7 @@ const EMPTY_FORM: CommunityFormState = {
   name: "",
   visibility: "OPEN",
   description: "",
-  city: "Москва",
+  city: CLUB_ON_SITE_BOOKING ? "Новокузнецк" : "Москва",
   focusTags: "",
   minimumLevel: "C",
   joinRule: "INSTANT",
@@ -5245,30 +5245,34 @@ export function CommunitiesSection({
 
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Создать сообщество">
         <form className="community-form" onSubmit={(event) => void handleCreateCommunity(event)}>
-          <div className="community-form-intro">
-            При создании сообщество и рейтинг сразу сохраняются в базе, а лента стартует пустой.
-          </div>
+          {!CLUB_ON_SITE_BOOKING && (
+            <div className="community-form-intro">
+              При создании сообщество и рейтинг сразу сохраняются в базе, а лента стартует пустой.
+            </div>
+          )}
 
           {formError && <div className="community-form-error">{formError}</div>}
 
-          <div className="community-form-logo-row">
-            <div className="community-form-logo-preview">
-              {getCommunityFormLogoPreview(formState)
-                ? <img src={getCommunityFormLogoPreview(formState) ?? undefined} alt="Логотип сообщества" className="community-form-logo-image" />
-                : <span>Лого</span>}
+          {!CLUB_ON_SITE_BOOKING && (
+            <div className="community-form-logo-row">
+              <div className="community-form-logo-preview">
+                {getCommunityFormLogoPreview(formState)
+                  ? <img src={getCommunityFormLogoPreview(formState) ?? undefined} alt="Логотип сообщества" className="community-form-logo-image" />
+                  : <span>Лого</span>}
+              </div>
+              <div className="community-form-logo-copy">
+                <label className="form-label" htmlFor="community-logo">Логотип сообщества</label>
+                <input
+                  id="community-logo"
+                  className="img-form-input"
+                  type="file"
+                  accept={COMMUNITY_LOGO_FILE_ACCEPT}
+                  onChange={(event) => void handleCreateLogoChange(event)}
+                />
+                <label htmlFor="community-logo" className="section-link section-link--bold">Загрузить файл</label>
+              </div>
             </div>
-            <div className="community-form-logo-copy">
-              <label className="form-label" htmlFor="community-logo">Логотип сообщества</label>
-              <input
-                id="community-logo"
-                className="img-form-input"
-                type="file"
-                accept={COMMUNITY_LOGO_FILE_ACCEPT}
-                onChange={(event) => void handleCreateLogoChange(event)}
-              />
-              <label htmlFor="community-logo" className="section-link section-link--bold">Загрузить файл</label>
-            </div>
-          </div>
+          )}
 
           <div className="form-group">
             <label className="form-label">Название</label>
@@ -5302,6 +5306,7 @@ export function CommunitiesSection({
               <input
                 className="form-input"
                 value={formState.city}
+                readOnly={CLUB_ON_SITE_BOOKING}
                 onChange={(event) => setFormState((current) => ({ ...current, city: event.target.value }))}
               />
             </div>
