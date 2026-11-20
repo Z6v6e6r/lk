@@ -66,7 +66,6 @@ import {
   normalizeTournamentSignupListSnapshotState,
   type TournamentSignupListSnapshotState,
 } from "./tournamentSignupListSnapshot";
-import { pollSubscriptionBookingConfirmation } from "./subscriptionBookingConfirmation";
 
 import { isGroupSubscriptionDiscountQuote, type GroupSubscriptionQuote } from "./groupSubscriptionDiscount";
 import { isChildTournamentExercise, isTournamentSubscriptionDiscountQuote, type TournamentSubscriptionDiscountQuote } from "./tournamentSubscriptionDiscount";
@@ -618,7 +617,7 @@ function normalizeRegistration(value: unknown): TournamentRegistrationState | nu
     canRegister: value.canRegister !== false && status !== "PAYMENT_PENDING",
     canCancel: value.canCancel !== false && status !== "NONE",
     message: status === "PAYMENT_PENDING"
-      ? "Запись создана в Viva, ожидается оплата."
+      ? "Ожидается оплата."
       : pickString(value, ["message", "reason", "note"]),
     paymentUrl,
     paymentExpiresAt: pickString(value, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "expiresAt"]),
@@ -2456,7 +2455,7 @@ export async function apiRegisterForTournament(
       auth: true,
       headers: phabHeaders(),
       body: JSON.stringify({ authProvider: "lk-keycloak", tenantKey: TENANT_KEY }),
-      retries: 1,
+      retries: 0,
     },
   );
   return {
@@ -2775,6 +2774,7 @@ export async function apiFetchTournamentVivaPublicCheckout(
 
 type CreateTournamentVivaTransactionParams = {
   exerciseId: string;
+  checkoutContext?: "tournament";
   studioId: string | null;
   clientPhone: string;
   clientId?: string | null;
@@ -2934,7 +2934,7 @@ async function apiCreateTournamentCustomEnergyTransaction(
       method: "POST",
       auth: true,
       headers: phabHeaders(),
-      retries: 1,
+      retries: 0,
       body: JSON.stringify(buildTournamentCustomEnergyCheckoutPayload(params, pricing, successUrl, failUrl)),
     },
   );
@@ -3065,7 +3065,8 @@ async function apiCreateTournamentVivaBookingFromSubscription(
   };
   const baseIdempotencyKey = `lk-subscription-${hashPart(idempotencySeed)}${hashPart([...idempotencySeed].reverse().join(""))}`;
   const idempotencyKey = getTournamentSubscriptionRejoinTracker().resolve(baseIdempotencyKey);
-  const bookingRequest = () => request<unknown>(
+  // This route can create a booking, even when replayed with the same operation ID.
+  const response = await request<unknown>(
     `/lk/subscription-bookings?operationId=${encodeURIComponent(idempotencyKey)}`,
     {
       method: "POST",
@@ -3094,9 +3095,8 @@ async function apiCreateTournamentVivaBookingFromSubscription(
       }),
     },
   );
-  const response = await pollSubscriptionBookingConfirmation(bookingRequest);
   if (response.error) {
-    // Keep this submission/poll on its original ID. Only a later explicit
+    // Keep this submission on its original ID. Only a later explicit
     // submission may use the server-proved successor.
     getTournamentSubscriptionRejoinTracker().rememberReleased(idempotencyKey, response.status, response.error.raw);
     return { data: null, error: response.error, status: response.status };
@@ -3108,7 +3108,7 @@ async function apiCreateTournamentVivaBookingFromSubscription(
       data: null,
       error: {
         status: response.status,
-        message: pickString(response.data, ["message"]) || "Запись ожидает подтверждения Viva. Повторите проверку.",
+        message: "Подтверждение записи от Viva пока не получено.",
         raw: response.data,
       },
       status: response.status,
@@ -3284,7 +3284,8 @@ export async function apiCreateTournamentVivaTransaction(
     return { data: null, error: { status: 409,
       message: "На детские тренировки действуют разовая оплата и абонемент «Падел.Дети»." }, status: 409 };
   }
-  const trialGroupTarget = TRIAL_GROUP_CHECKOUT_ENABLED
+  const tournamentCheckout = params.checkoutContext === "tournament";
+  const trialGroupTarget = !tournamentCheckout && TRIAL_GROUP_CHECKOUT_ENABLED
     && (isTrialGroupTraining(params.exercise) || isTrialGroupTraining(params.tournament));
   if (trialGroupTarget && !["client-subscription", "one-time", "client-one-time"].includes(params.product.source)) {
     return { data: null, error: { status: 409,
@@ -3308,7 +3309,7 @@ export async function apiCreateTournamentVivaTransaction(
       return { data: null, error: { status: 409, message: "Условия скидки изменились. Обновите варианты записи." }, status: 409 };
     }
     // Freshness is checked when shown; the gateway recomputes before a first write
-    // and replays the same operation after a pending booking even when its quote expires.
+    // and recognizes a later explicit submission of the same operation after the quote expires.
     if (!isTournamentSubscriptionDiscountQuote(displayed, params.exerciseId, actorId, displayed.evaluatedAt)) {
       return { data: null, error: { status: 409, message: "Не удалось подтвердить скидку. Обновите варианты записи." }, status: 409 };
     }
@@ -3357,7 +3358,7 @@ export async function apiCreateTournamentVivaTransaction(
     return apiCreateTournamentVivaBookingFromSubscription(params);
   }
 
-  const tournamentOwnerTarget = resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.exercise)
+  const tournamentOwnerTarget = tournamentCheckout || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.exercise)
     === "tournament" || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.tournament) === "tournament";
   const paymentWatcher = tournamentOwnerTarget ? null : await createVivaPaymentWatcher(params.clientId);
   const transactionStartedAtMs = Date.now();
