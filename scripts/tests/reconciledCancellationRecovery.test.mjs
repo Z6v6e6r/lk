@@ -155,3 +155,11 @@ test('three-function composition rejects drift/reapply and preserves complete gr
   assert.throws(()=>composeReconciledCancellationRecovery(bytes,{...opts,expectedSourceSha256:'0'.repeat(64)}));
   assert.throws(()=>composeReconciledCancellationRecovery(built.candidateBytes,{...opts,expectedSourceSha256:reconciledSha(built.candidateBytes)}));
 });
+
+test('composite payment lines are never released by the reconciled cancellation path', () => {
+  const f = moneyFixture();
+  assert.ok(lk1ReconciledReadback(f.op, f.b, f.tx, f.subscriptions, now));
+  const residency = { id: '4037a3a3-e551-4f9a-a9db-1410e46b8635', type: 'SUBSCRIPTION', count: 1, cost: 79000, discount: 0 };
+  const composite = moneyFixture(); composite.tx.products = [...composite.tx.products, residency];
+  assert.equal(lk1ReconciledReadback(composite.op, composite.b, composite.tx, composite.subscriptions, now), null);
+});

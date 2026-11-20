@@ -1,7 +1,7 @@
 name: Residency booking safety
 on:
   pull_request:
-    paths: ['scripts/lib/residencyBooking*', 'scripts/nodered_residency_booking_nodes/**', 'scripts/patch_nodered_residency*.mjs', 'scripts/tests/residencyBooking*', 'scripts/tests/fixtures/residency-booking-context.mjs', 'scripts/tests/lk1PlanRulesPreview.test.mjs', '.github/workflows/residency-booking.yml']
+    paths: ['scripts/lib/residencyBooking*', 'scripts/lib/compositeResidencyCheckout.mjs', 'src/residency/compositeResidencyOrder.ts', 'scripts/tests/compositeResidencyCheckout.test.mjs', 'scripts/nodered_residency_booking_nodes/**', 'scripts/patch_nodered_residency*.mjs', 'scripts/tests/residencyBooking*', 'scripts/tests/fixtures/residency-booking-context.mjs', 'scripts/tests/lk1PlanRulesPreview.test.mjs', '.github/workflows/residency-booking.yml']
 permissions:
   contents: read
 jobs:
@@ -16,3 +16,4 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: node --test scripts/tests/residencyBooking.test.mjs scripts/tests/lk1PlanRulesPreview.test.mjs scripts/tests/lk1PlanRulesResolver.test.mjs scripts/tests/lk1PatriotsFriendship.test.mjs scripts/tests/eventPaymentReadback.test.mjs
+      - run: node --experimental-strip-types --test scripts/tests/compositeResidencyCheckout.test.mjs scripts/tests/compositeResidencyOrder.test.ts
