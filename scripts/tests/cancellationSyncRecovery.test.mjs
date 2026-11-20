@@ -68,11 +68,12 @@ test('private frozen baseline yields only the reviewed delta; inverse and tamper
 }, () => {
   const liveBytes = fs.readFileSync(input), result = composeCancellationSyncRecovery(liveBytes);
   const before = JSON.parse(liveBytes), after = JSON.parse(result.candidateBytes);
-  // This rehearsal reconstructs the cancellation-sync release that preceded PATCH #426.
-  assert.equal(result.candidateSha256, 'da92d76f5b679034f70be9b36d6ac8ff60b3f203a3ebafafdca102e425c7a405');
+  // The November 14 preimage is fixed. The composer reads the maintained
+  // cancellation and organizer PATCH sources, which have since changed.
+  assert.equal(result.candidateSha256, 'be4289d9c6ce71c62a91a443d79cdee4736a408d82011780c7713ca38c1e4059');
   const router = after.find(n => n.id === 'lk_subscription_booking_router_20260804');
   assert.equal(crypto.createHash('sha256').update(router.func).digest('hex'),
-    '4c004bd49a37ef75f4751e9d82d7d2554c8ca0aba4916b284c5d6161a4bbae13');
+    'da8007b86e1810b7a070e41c8076d789c82db8c601fc87cc52f33201f09a8652');
   assert.equal(after.length - before.length, 54); assert.equal(result.allowedChanges.length, 20);
   assert.ok(after.some(n => n.url === '/lk/games/:gameId/cancellation/status'));
   assert.ok(after.some(n => n.url === '/lk/games/:gameId/organizer/transfer'));
