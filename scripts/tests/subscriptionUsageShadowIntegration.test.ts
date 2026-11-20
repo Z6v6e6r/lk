@@ -165,7 +165,7 @@ test("group training DEV-shadow checks the exact event before every Viva mutatio
   assert.match(groupScheduleSource, /if \(subscriptionUsageShadowEnabled\)[\s\S]*DEV-shadow не изменяет существующие записи/);
 });
 
-test("tournament DEV-shadow replaces checkout actions and stops automatic payment continuation", () => {
+test("tournament DEV-shadow replaces checkout actions and keeps booking behind a click", () => {
   const registration = sliceBetween(
     tournamentSignupSource,
     "const completeVivaRegistration = useCallback",
@@ -177,7 +177,7 @@ test("tournament DEV-shadow replaces checkout actions and stops automatic paymen
   assert.match(tournamentSignupSource, /Проверить скидку 50% без записи и оплаты/);
   assert.match(
     tournamentSignupSource,
-    /if \(subscriptionUsageShadowEnabled\) return;[\s\S]*pendingPaymentProduct/,
+    /onClick=\{\(\) => void completeVivaRegistration\(checkout, bookingProduct\)\}/,
   );
   assert.match(
     tournamentSignupSource,
