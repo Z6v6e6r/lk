@@ -1,0 +1,43 @@
+{
+  "siteOrigin": "https://padelprime42.ru",
+  "tenantKey": "fJzpsf",
+  "stationId": "9d43f278-a38d-4df1-ae20-5bd6d8a85261",
+  "stationName": "Падел Прайм Новокузнецк",
+  "utcOffset": "+07:00",
+  "timeZone": "Asia/Novokuznetsk",
+  "masterServiceId": "0d67fbfc-0997-4e4c-a62f-fad29ec182b1",
+  "preferredSubServiceId": "cb2e6f6d-7b7b-4fa9-b09c-fb4f2765a899",
+  "subServiceIds": [
+    "cb2e6f6d-7b7b-4fa9-b09c-fb4f2765a899",
+    "9d549c8c-b1a0-465d-a9e8-18206c3fd015"
+  ],
+  "courts": [
+    {
+      "id": "fc1c44f2-b5aa-482f-8d6a-a7d0d4d6ac6c",
+      "name": "1 Корт",
+      "subServiceId": "cb2e6f6d-7b7b-4fa9-b09c-fb4f2765a899"
+    },
+    {
+      "id": "312c949f-901b-4580-a7ca-7758d3e99d91",
+      "name": "2 Корт",
+      "subServiceId": "cb2e6f6d-7b7b-4fa9-b09c-fb4f2765a899"
+    },
+    {
+      "id": "b5ea3526-c04d-4b3e-bee7-13a97bc0bcc5",
+      "name": "3 Корт",
+      "subServiceId": "cb2e6f6d-7b7b-4fa9-b09c-fb4f2765a899"
+    },
+    {
+      "id": "a459cd9e-fce6-47a6-a822-d76168cb7f09",
+      "name": "4 Корт",
+      "subServiceId": "cb2e6f6d-7b7b-4fa9-b09c-fb4f2765a899"
+    },
+    {
+      "id": "74a79466-4e53-4fe6-950b-350b24af7c55",
+      "name": "5 Сингл-корт",
+      "subServiceId": "9d549c8c-b1a0-465d-a9e8-18206c3fd015"
+    }
+  ],
+  "firstBookingDate": "2026-11-21",
+  "bookingDays": 14
+}

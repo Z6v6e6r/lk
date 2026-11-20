@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import ts from 'typescript';
+import { bookingEndIso, moscowBookingEndIso } from '../../src/utils/bookingEndTime.ts';
 import { isRequestTimeoutError, runWithAbortTimeout } from '../../src/utils/requestTimeout.ts';
 
 const source = fs.readFileSync('src/components/games/GamesPage.tsx', 'utf8');
@@ -31,6 +32,7 @@ function harness(stage) {
     cardPayloads: [], completed: [], step: null };
   const context = {
     AbortController, Promise, Date, Math, Set, isRequestTimeoutError, runWithAbortTimeout,
+    CLUB_ON_SITE_BOOKING: false, clubBookingOnly: false,
     subscriptionUsageShadowEnabled: false, studioId: 'studio', selectedDate: new Date('2030-01-01'),
     courtId: 'court', time: '20:00', duration: 60, selectedSlotId: 'slot', studioMasterServiceId: 'master',
     studioName: 'Station', selectedCourtName: 'Court', resolvedSelectedSubServiceIds: ['service'],
@@ -67,7 +69,7 @@ function harness(stage) {
     publicCreateSurchargeMinor: null, selectedSplitSubscriptionId: 'subscription', formatPrice: String,
     participants: [], waitlistPlayers: [], profileName: 'Synthetic player', profileGrade: null, profileRatingNumeric: null,
     profilePhoto: null, SPLIT_PAYMENT_DEADLINE_MINUTES: 25, normalizePhoneForGame: value => value,
-    buildGameAllRelatedPhones: () => [], moscowBookingEndIso: () => '2030-01-01T21:00:00+03:00',
+    buildGameAllRelatedPhones: () => [], bookingEndIso, moscowBookingEndIso, GAME_BOOKING_UTC_OFFSET: '+03:00',
     effectiveRatingGame: false, isPrivate: false, gameTitleDraft: 'Synthetic game', gameParticipantCommentDraft: 'Synthetic comment',
     gameJoinPriceDraft: '', publicCreatePreciseRatingMetadata: {}, buildCommunityAutopublishMetadata: () => ({}),
     buildCommunityAutopublishMetadataFields: () => ({}), buildGameOptionalMetadataFields: value => value,

@@ -1,0 +1,22 @@
+[Unit]
+Description=Novokuznetsk LK1 club API
+Requires=lk1-novokuznetsk-mongo.service
+After=network-online.target lk1-novokuznetsk-mongo.service
+
+[Service]
+User=lk1-nvk-api
+Group=lk1-nvk-api
+EnvironmentFile=/etc/lk1-novokuznetsk/api.env
+WorkingDirectory=/opt/lk1-novokuznetsk/current/app
+ExecStart=/opt/lk1-novokuznetsk/runtime/node --max-old-space-size=64 --experimental-strip-types deploy/novokuznetsk/api.mjs
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+MemoryHigh=80M
+MemoryMax=110M
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

@@ -82,6 +82,8 @@ import {
   IS_DEV_RELEASE_CHANNEL,
   PUBLIC_COMMUNITY_JOIN_PATH,
   PUBLIC_GAME_FIND_PATH,
+  PUBLIC_GAME_CREATE_PATH,
+  CLUB_ON_SITE_BOOKING,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
@@ -122,7 +124,11 @@ type QuickAction = {
   href: string;
 };
 
-const QUICK_ACTIONS: QuickAction[] = [
+const QUICK_ACTIONS: QuickAction[] = CLUB_ON_SITE_BOOKING ? [
+  { icon: "🎾", label: "Найти игру", href: GAME_FIND_PATH },
+  { icon: "🎾", label: "Создать игру", href: PUBLIC_GAME_CREATE_PATH },
+  { icon: "📅", label: "Забронировать корт", href: `${PUBLIC_GAME_CREATE_PATH}?booking=1` },
+] : [
   { icon: "🎾", label: "Играть", href: GAME_FIND_PATH },
   { icon: "👥", label: "Групповые тренировки", href: GROUP_TRAININGS_URL },
   { icon: "🏆", label: "Турниры", href: "https://padlhub.ru/tournaments" },
@@ -4050,7 +4056,7 @@ export function Cabinet({
         onLoadMoreActiveRecords={loadAllActiveRecords}
         gameRecords={createdGames}
         onCreateTeamGame={handleCreateTeamGameFromBooking}
-        canCreateTeamGame={canCreateTeamGameFromBooking}
+        canCreateTeamGame={CLUB_ON_SITE_BOOKING ? () => false : canCreateTeamGameFromBooking}
         hasTeamGameForBooking={hasTeamGameForBooking}
         renderGameCard={renderGameCard}
         loadingGameRecords={loadingCreatedGames}
@@ -4065,20 +4071,22 @@ export function Cabinet({
       />
 
       {/* Реклама */}
-      <Advertisement profile={profile} />
+      {!CLUB_ON_SITE_BOOKING && <Advertisement profile={profile} />}
 
       {/* Абонементы */}
-      <SubscriptionsContainer
-        UserSubscriptions={userSubscriptions}
-        phone={profile.phone}
-        openSubInfo={openSubInfo}
-      />
+      {!CLUB_ON_SITE_BOOKING && (
+        <SubscriptionsContainer
+          UserSubscriptions={userSubscriptions}
+          phone={profile.phone}
+          openSubInfo={openSubInfo}
+        />
+      )}
 
       {/* Резидентство: пропуск резидента (одноразовый QR) */}
-      <ResidencySection subscriptions={userSubscriptions} />
+      {!CLUB_ON_SITE_BOOKING && <ResidencySection subscriptions={userSubscriptions} />}
 
       {/* Турниры */}
-      {canOpenTournamentsBlock && (
+      {!CLUB_ON_SITE_BOOKING && canOpenTournamentsBlock && (
         <div className="section">
           <div className="section-header">
             <span className="section-title">Турниры</span>
@@ -4093,7 +4101,9 @@ export function Cabinet({
       )}
 
       {/* Соцсети */}
-      <ButtonModule />
+      {CLUB_ON_SITE_BOOKING
+        ? <button type="button" className="section-cta section-cta-secondary" onClick={() => void logout()}>Выйти</button>
+        : <ButtonModule />}
 
       {/* Модалки */}
       <ProfileEditForm
@@ -4180,7 +4190,7 @@ export function Cabinet({
         sub={currenSub}
         subName={currenSubName}
       />
-      <SupportChatWidget profile={profile} />
+      {!CLUB_ON_SITE_BOOKING && <SupportChatWidget profile={profile} />}
     </div>
   );
 }

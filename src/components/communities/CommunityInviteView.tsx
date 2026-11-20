@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import logo from "../../assets/logo-hab-compact.svg";
+import { PUBLIC_CLUB_NAME } from "../../consts/api_config";
 import { buildCommunityLogoCandidates, type CommunityRecord } from "../../utils/communityApi";
 import "./community-invite.css";
 
@@ -34,7 +35,12 @@ export function CommunityInviteView({ state, community, busy = false, busyLabel,
   const status = state === "checking" ? "Проверяем приглашение…" : state === "unverified" ? "Условия вступления проверит сервер." : state === "member" ? "Вы уже в сообществе" : state === "pending" ? "Заявка отправлена. Ожидаем подтверждения." : state === "blocked" ? reason || "Приглашение недоступно." : "";
   const participants = formatCommunityParticipants(community?.memberCount);
   return <section className="ph-community-invite" lang="ru" aria-labelledby={titleId} aria-busy={busy || state === "checking"}>
-    <header className="ph-community-invite__header"><img className="ph-community-invite__logo" src={logo} alt="ПадлхАБ" /><span className="ph-community-invite__header-label">Сообщества</span></header>
+    <header className="ph-community-invite__header">
+      {PUBLIC_CLUB_NAME
+        ? <strong>{PUBLIC_CLUB_NAME}</strong>
+        : <img className="ph-community-invite__logo" src={logo} alt="ПадлхАБ" />}
+      <span className="ph-community-invite__header-label">Сообщества</span>
+    </header>
     <div className="ph-community-invite__main">
       <p className="ph-community-invite__eyebrow">{state === "member" ? "Сообщество" : "Приглашение в сообщество"}</p>
       <div className="ph-community-invite__identity">

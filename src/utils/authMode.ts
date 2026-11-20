@@ -44,6 +44,8 @@ export function readAuthModeWindowDefault(): AuthMode | null {
 }
 
 export function resolveConfiguredAuthMode(): AuthMode {
+  const pinned = normalizeAuthMode(import.meta.env?.VITE_LK_PINNED_AUTH_MODE);
+  if (pinned) return pinned;
   return (
     readExplicitAuthModeFromLocation()
     || readAuthModeWindowDefault()

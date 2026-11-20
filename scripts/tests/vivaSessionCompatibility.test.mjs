@@ -8,7 +8,7 @@ import ts from 'typescript';
 const config = { AUTH_RUNTIME_KEYCLOAK_BASE: 'https://identity.example.test', AUTH_RUNTIME_TENANT_KEY: 'fixture-tenant' };
 const jwt = (claims = {}) => 'header.' + Buffer.from(JSON.stringify({ sub: 'fixture-subject', iss: config.AUTH_RUNTIME_KEYCLOAK_BASE + '/realms/clients', azp: 'widget', scope: 'openid profile', phone_number: 'fixture-phone', exp: Date.now() / 1000 + 10, ...claims })).toString('base64url') + '.signature';
 
-function harness({ token = jwt(), refresh = 'fixture-refresh', response = { access_token: jwt(), refresh_token: 'rotated' }, ok = true, pending = null, location = '', beforeReply, consentsSynced = true } = {}) {
+function harness({ token = jwt(), refresh = 'fixture-refresh', response = { access_token: jwt(), refresh_token: 'rotated' }, ok = true, pending = null, location = '', beforeReply, consentsSynced = true, viteEnv = {} } = {}) {
   const continuations = [];
   const state = [], effects = [], listeners = new Map(), timers = new Map(), requests = [], persisted = [], cache = new Map();
   let clears = 0, sessionClears = 0, consentClears = 0, consentSyncs = 0, nextTimer = 1;
@@ -21,11 +21,12 @@ function harness({ token = jwt(), refresh = 'fixture-refresh', response = { acce
     filename = path.resolve(filename);
     if (cache.has(filename)) return cache.get(filename);
     const exports = {}; cache.set(filename, exports);
-    const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
+    const source = fs.readFileSync(filename, 'utf8').replaceAll('import.meta.env', 'viteEnv');
+    const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
     const require = id => {
       if (id === 'react') return { useMemo: fn => fn(), useCallback: fn => fn, useRef: value => ({ current: value }), useState: initial => { const i = state.length; state.push(initial); return [initial, v => { state[i] = v; }]; }, useEffect: fn => effects.push(fn) };
       if (id === 'react/jsx-runtime') return { jsx: (type, props) => ({ type, props }) };
-      if (id.includes('authRuntime')) return config;
+      if (id.includes('authRuntime')) return { ...config, VIVA_SELF_REGISTRATION: viteEnv.VITE_VIVA_SELF_REGISTRATION === 'true' };
       if (id.endsWith('/authShared')) return { AuthContext: { Provider: 'provider' } };
       if (id.endsWith('/analytics') || id.endsWith('/pushNotifications')) return new Proxy({}, { get: () => () => {} });
       if (id.endsWith('/authConsents')) return { syncPendingAuthConsents: async () => { consentSyncs++; return consentsSynced; }, hasRetryablePendingAuthConsents: () => true, clearPendingAuthConsents: () => { consentClears++; }, stageAuthConsents: async () => true };
@@ -35,7 +36,7 @@ function harness({ token = jwt(), refresh = 'fixture-refresh', response = { acce
       const base = path.resolve(path.dirname(filename), id);
       return load(fs.existsSync(base) ? base : base + '.ts');
     };
-    const context = { exports, require, Buffer, atob, Date, URL, URLSearchParams,
+    const context = { exports, require, Buffer, atob, Date, URL, URLSearchParams, viteEnv,
       window: { location: { search: location, href: 'https://cabinet.example.test/' + location, origin: 'https://cabinet.example.test', pathname: '/', replace: () => {} }, setTimeout: cb => { const n = nextTimer++; timers.set(n, cb); return n; }, clearTimeout: n => timers.delete(n), addEventListener: (k, fn) => listeners.set('window:' + k, fn), removeEventListener: () => {} },
       document: { visibilityState: 'visible', addEventListener: (k, fn) => listeners.set('document:' + k, fn), removeEventListener: () => {} },
       fetch: async (url, options) => { requests.push({ url, options }); await beforeReply?.({ setTokens: (a, r) => { token = a; refresh = r; } }); return { ok, status: ok ? 200 : 400, json: async () => response }; } };
@@ -44,10 +45,16 @@ function harness({ token = jwt(), refresh = 'fixture-refresh', response = { acce
   };
   const helpers = load('src/utils/vivaSessionCompatibility.ts');
   const component = load('src/context/VivaAuthProvider.tsx').VivaAuthProvider({ children: null });
-  return { continuations, helpers, state, requests, persisted, timers, runEffects: () => effects.forEach(fn => fn()), refresh: () => listeners.get('document:visibilitychange')(), login: component.props.value.login,
+  return { continuations, helpers, state, requests, persisted, timers, authMode: load('src/utils/authMode.ts').resolveConfiguredAuthMode(), runEffects: () => effects.forEach(fn => fn()), refresh: () => listeners.get('document:visibilitychange')(), login: component.props.value.login,
     counts: () => ({ clears, sessionClears, consentClears, consentSyncs }), token: () => token, setTokens: (a, r) => { token = a; refresh = r; } };
 }
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)); };
+
+test('a club build pinned to Viva ignores a legacy auth mode in the link', () => {
+  const location = '?authMode=legacy';
+  assert.equal(harness({ location }).authMode, 'legacy');
+  assert.equal(harness({ location, viteEnv: { VITE_LK_PINNED_AUTH_MODE: 'viva' } }).authMode, 'viva');
+});
 
 test('compatibility hints reject explicit scope/issuer/client/tenant changes without authorizing unknown claims', () => {
   const h = harness(); const check = h.helpers.vivaSessionProblem;
@@ -130,4 +137,26 @@ test('OAuth continuation signal is emitted only after matching state, successful
     assert.equal(h.continuations.length, Object.keys(change).length === 0 ? 1 : 0);
   }
   const restored = harness(); restored.runEffects(); await settle(); assert.equal(restored.continuations.length, 0);
+});
+
+test('new-club OAuth and refresh both pass the configured tenant without changing the granted scope', async () => {
+  const pending = { state: 'fixture-state', provider: 'yandex', codeVerifier: 'fixture-verifier', redirectUri: 'https://cabinet.example.test', returnTo: '' };
+  for (const enabled of [false, true]) {
+    const viteEnv = { VITE_VIVA_SELF_REGISTRATION: String(enabled) };
+    const oauth = harness({ pending, location: '?code=fixture-code&state=fixture-state', viteEnv });
+    oauth.runEffects();
+    await settle();
+    const exchange = new URLSearchParams(oauth.requests[0].options.body);
+    assert.equal(exchange.get('grant_type'), 'authorization_code');
+    assert.equal(exchange.get('tenant_key'), enabled ? config.AUTH_RUNTIME_TENANT_KEY : null);
+
+    const session = harness({ viteEnv });
+    session.runEffects();
+    session.refresh();
+    await settle();
+    const refresh = new URLSearchParams(session.requests[0].options.body);
+    assert.equal(refresh.get('grant_type'), 'refresh_token');
+    assert.equal(refresh.get('tenant_key'), enabled ? config.AUTH_RUNTIME_TENANT_KEY : null);
+    assert.equal(refresh.has('scope'), false);
+  }
 });

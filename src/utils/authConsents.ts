@@ -5,19 +5,19 @@ import { buildProjectUrlCandidates } from "./lkApiBaseUrls";
 import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { extractJwtStringClaim } from "./vivaAuthJwt";
 
-export const AUTH_CONSENT_DOCUMENT_SET_VERSION = "2026-07-14";
+export const AUTH_CONSENT_DOCUMENT_SET_VERSION = import.meta.env?.VITE_AUTH_CONSENT_VERSION || "2026-07-14";
 export const AUTH_CONSENT_DOCUMENTS = [
   {
     id: "public-offer",
     title: "Публичная оферта",
-    version: "2026-07-14",
-    url: "https://padlhub.ru/docs",
+    version: AUTH_CONSENT_DOCUMENT_SET_VERSION,
+    url: import.meta.env?.VITE_AUTH_CONSENT_OFFER_URL || "https://padlhub.ru/docs",
   },
   {
     id: "personal-data-policy",
     title: "Политика обработки персональных данных",
-    version: "2026-07-14",
-    url: "https://padlhub.ru/politica",
+    version: AUTH_CONSENT_DOCUMENT_SET_VERSION,
+    url: import.meta.env?.VITE_AUTH_CONSENT_PRIVACY_URL || "https://padlhub.ru/politica",
   },
 ] as const;
 

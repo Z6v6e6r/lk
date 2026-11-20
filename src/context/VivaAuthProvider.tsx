@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AUTH_RUNTIME_KEYCLOAK_BASE,
   AUTH_RUNTIME_TENANT_KEY,
+  VIVA_SELF_REGISTRATION,
 } from "../consts/authRuntime";
 import { AuthContext } from "./authShared";
 import type { VivaOAuthProvider } from "./authShared";
@@ -47,6 +48,7 @@ import { isLkIdleRequestPausedError } from "../utils/lkIdleDataGuard";
 import { assertVivaSessionCompatible, vivaSessionProblem, VivaSessionCompatibilityError, VIVA_REAUTH_MESSAGE } from "../utils/vivaSessionCompatibility";
 
 const VIVA_REALM = "clients";
+const clubTokenParams = VIVA_SELF_REGISTRATION ? { tenant_key: AUTH_RUNTIME_TENANT_KEY } : undefined;
 const REFRESH_LEEWAY_MS = 60_000;
 const MIN_REFRESH_DELAY_MS = 10_000;
 
@@ -165,6 +167,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet", oaut
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
+          ...clubTokenParams,
           grant_type: "refresh_token",
           client_id: "widget",
           refresh_token: refreshToken,
@@ -378,6 +381,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet", oaut
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
+            ...clubTokenParams,
             grant_type: "authorization_code",
             client_id: "widget",
             code,

@@ -8,6 +8,8 @@ import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
 import { RemoteWidgetHost } from "./components/UI/RemoteWidgetHost";
 import { Cabinet } from "./components/cabinet/Cabinet";
+import { VivaRegistrationGate } from "./components/cabinet/VivaRegistrationProfile";
+import { VIVA_SELF_REGISTRATION } from "./consts/authRuntime";
 import CommunityJoinPage from "./components/communities/CommunityJoinPage";
 import FindGamePage from "./components/games/FindGamePage";
 import GamesPage from "./components/games/GamesPage";
@@ -27,6 +29,8 @@ import {
   ONBOARDING_BUNDLE_URL,
   PUBLIC_GAME_CREATE_PATH,
   PUBLIC_GAME_FIND_PATH,
+  PUBLIC_GAME_STATION_ID,
+  PUBLIC_GAME_STATION_NAME,
   PUBLIC_INVITE_PATH,
   TOURNAMENTS_BUNDLE_URL,
 } from "./consts/api_config";
@@ -146,6 +150,17 @@ function showOverlayError(container: HTMLElement, message: string) {
 function normalizeInviteCabinetUrl(value: string | null | undefined): string {
   const fallback = (DEFAULT_CABINET_URL || "").trim();
   const raw = (value || "").trim();
+  if (PUBLIC_GAME_STATION_ID && fallback) {
+    const defaultUrl = new URL(fallback);
+    try {
+      const target = new URL(raw || fallback, defaultUrl);
+      return appendCurrentAuthModeToNavigableUrl(
+        target.origin === defaultUrl.origin && !target.username && !target.password ? target : defaultUrl,
+      ).toString();
+    } catch {
+      return appendCurrentAuthModeToNavigableUrl(defaultUrl).toString();
+    }
+  }
   if (!raw) return fallback ? appendCurrentAuthModeToNavigableUrl(fallback).toString() : fallback;
 
   try {
@@ -295,7 +310,8 @@ function AppContent() {
         };
       }).__PADLHUB_CREATE_CONFIG__ ?? null;
     const studioId = (
-      current.searchParams.get("stationId")
+      PUBLIC_GAME_STATION_ID
+      || current.searchParams.get("stationId")
       || hashParams.get("stationId")
       || current.searchParams.get("studioId")
       || hashParams.get("studioId")
@@ -304,7 +320,8 @@ function AppContent() {
       || ""
     ).trim();
     const studioName = (
-      current.searchParams.get("station")
+      PUBLIC_GAME_STATION_NAME
+      || current.searchParams.get("station")
       || hashParams.get("station")
       || current.searchParams.get("stationName")
       || hashParams.get("stationName")
@@ -328,7 +345,7 @@ function AppContent() {
       enabled: byPath,
       studioId: studioId || null,
       studioName: studioName || null,
-      cabinetUrl,
+      cabinetUrl: PUBLIC_GAME_STATION_ID ? normalizeInviteCabinetUrl(cabinetUrl) : cabinetUrl,
     };
   }, []);
 
@@ -420,7 +437,8 @@ function AppContent() {
         };
       }).__PADLHUB_FIND_GAME_CONFIG__ ?? null;
     const studioId = (
-      current.searchParams.get("stationId")
+      PUBLIC_GAME_STATION_ID
+      || current.searchParams.get("stationId")
       || hashParams.get("stationId")
       || current.searchParams.get("studioId")
       || hashParams.get("studioId")
@@ -429,7 +447,8 @@ function AppContent() {
       || ""
     ).trim();
     const studioName = (
-      current.searchParams.get("station")
+      PUBLIC_GAME_STATION_NAME
+      || current.searchParams.get("station")
       || hashParams.get("station")
       || current.searchParams.get("stationName")
       || hashParams.get("stationName")
@@ -463,8 +482,8 @@ function AppContent() {
       enabled: byPath,
       studioId: studioId || null,
       studioName: studioName || null,
-      cabinetUrl,
-      includeGamePlusTrainer,
+      cabinetUrl: PUBLIC_GAME_STATION_ID ? normalizeInviteCabinetUrl(cabinetUrl) : cabinetUrl,
+      includeGamePlusTrainer: !PUBLIC_GAME_STATION_ID && includeGamePlusTrainer,
     };
   }, []);
 
@@ -488,12 +507,15 @@ function AppContent() {
       }
     ).__PADLHUB_COMMUNITY_JOIN_CONFIG__ ?? null;
 
-    return resolveCommunityJoinRouteData({
+    const route = resolveCommunityJoinRouteData({
       href: window.location.href,
       defaultCabinetUrl: DEFAULT_CABINET_URL,
       defaultCommunityJoinPath: DEFAULT_COMMUNITY_JOIN_PATH,
       config: communityJoinConfig,
     });
+    return PUBLIC_GAME_STATION_ID
+      ? { ...route, cabinetUrl: normalizeInviteCabinetUrl(route.cabinetUrl) }
+      : route;
   }, []);
 
   useEffect(() => {
@@ -1018,17 +1040,17 @@ function AppContent() {
 }
 
 export default function App() {
-  if (typeof window !== "undefined" && isResidencyPurchaseRoute(window.location.search)) {
+  if (!PUBLIC_GAME_STATION_ID && typeof window !== "undefined" && isResidencyPurchaseRoute(window.location.search)) {
     return <ResidencyPurchasePage />;
   }
-  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("jumpExhibition") === "1" && new URLSearchParams(window.location.search).get("padelJumpLive") === "1") {
+  if (!PUBLIC_GAME_STATION_ID && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("jumpExhibition") === "1" && new URLSearchParams(window.location.search).get("padelJumpLive") === "1") {
     return <PadelJumpHost mode="live" />;
   }
-  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJumpRace") === "1") {
+  if (!PUBLIC_GAME_STATION_ID && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJumpRace") === "1") {
     return <PadelJumpHost mode="race" />;
   }
 
-  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJump") === "1") {
+  if (!PUBLIC_GAME_STATION_ID && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJump") === "1") {
     return <PadelJumpHost mode="practice" />;
   }
 
@@ -1060,7 +1082,9 @@ export default function App() {
     <AuthProvider
       authMode={Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android" ? "viva" : "auto"}
     >
-      <AppContent />
+      {VIVA_SELF_REGISTRATION ? (
+        <VivaRegistrationGate><AppContent /></VivaRegistrationGate>
+      ) : <AppContent />}
     </AuthProvider>
   );
 }

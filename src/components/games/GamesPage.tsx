@@ -1,6 +1,6 @@
 import { recordSplitLeaveConfirmation } from "../../utils/splitLeaveDiagnostics";
 import { mergeRosterMetadata } from "./rosterMetadata";
-import { moscowBookingEndIso } from "../../utils/bookingEndTime";
+import { bookingEndIso, moscowBookingEndIso } from "../../utils/bookingEndTime";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isRequestTimeoutError, runWithAbortTimeout } from "../../utils/requestTimeout";
 import { BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence } from "./bookingConversionEvidence";
@@ -67,6 +67,8 @@ import {
   apiFetchProfile,
   apiAcceptPadelGameResultCorrection,
   apiConfirmPadelGameResult,
+  apiReserveClubCourt,
+  apiJoinClubGame,
   apiDisputePadelGameResult,
   apiExpirePadelGameResult,
   apiFetchPadelGameResultState,
@@ -125,6 +127,9 @@ import {
 import {
   CABINET_URL,
   GAMES_BUNDLE_URL,
+  GAME_BOOKING_UTC_OFFSET,
+  CLUB_ON_SITE_BOOKING,
+  PUBLIC_GAME_STATION_ID,
   IS_DEV_RELEASE_CHANNEL,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
@@ -283,8 +288,8 @@ const MATCH_RESULT_RATING_DEFAULT_PARAMS = {
   maxRating: 7,
   round: 5,
 };
-const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = true;
-const ENABLE_SPLIT_GAME_PAYMENT = true;
+const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = !CLUB_ON_SITE_BOOKING;
+const ENABLE_SPLIT_GAME_PAYMENT = import.meta.env.VITE_GAME_SPLIT_PAYMENT_ENABLED !== "false";
 const SPLIT_PAYMENT_DEADLINE_MINUTES = 25;
 const SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES = 10;
 const SPLIT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
@@ -4947,7 +4952,7 @@ export default function GamesPage({
   const [detailsSplitSubscriptions, setDetailsSplitSubscriptions] = useState<Subscription[]>([]);
   const [detailsSplitSubscriptionNamesById, setDetailsSplitSubscriptionNamesById] = useState<Record<string, string>>({});
   const [applyingPromo, setApplyingPromo] = useState(false);
-  const [ratingGame, setRatingGame] = useState(true);
+  const [ratingGame, setRatingGame] = useState(!CLUB_ON_SITE_BOOKING);
   const [minRating, setMinRating] = useState(1);
   const [maxRating, setMaxRating] = useState(4);
   const [publicCreatePreciseRatingRange, setPublicCreatePreciseRatingRange] = useState<PublicCreatePreciseRatingRange>(
@@ -5265,7 +5270,10 @@ export default function GamesPage({
     apiFetchOnboardingStations()
       .then((res) => {
         if (!alive) return;
-        const nextStudios = Array.isArray(res.data) ? res.data : [];
+        const allStudios = Array.isArray(res.data) ? res.data : [];
+        const nextStudios = publicCreateEntry && PUBLIC_GAME_STATION_ID
+          ? allStudios.filter((station) => station.id === PUBLIC_GAME_STATION_ID)
+          : allStudios;
         setStudios(nextStudios);
         setStudio((prev) =>
           prev && nextStudios.some((station) => station.id === prev.id) ? prev : null,
@@ -5286,7 +5294,7 @@ export default function GamesPage({
     return () => {
       alive = false;
     };
-  }, [step]);
+  }, [step, publicCreateEntry]);
 
   useEffect(() => {
     if (!publicCreateEntry || publicCreatePresetHandledRef.current) return;
@@ -5302,7 +5310,7 @@ export default function GamesPage({
     if (step !== "place" || loadingStudios) return;
 
     if (studios.length === 0) {
-      publicCreatePresetHandledRef.current = true;
+      if (!PUBLIC_GAME_STATION_ID) publicCreatePresetHandledRef.current = true;
       if (presetStudioName) {
         setStudiosQuery((prev) => prev || presetStudioName);
       }
@@ -7150,8 +7158,12 @@ export default function GamesPage({
     ? `Вы оплачиваете только своё участие. Будет создана игра, к которой ${publicCreateJoinersSentenceLabel}, оплатив свою часть.`
     : "Вы оплачиваете только своё участие.";
   const publicCreateFullCourtDescription = "Вы оплачиваете весь корт сами. После создания игру можно открыть для всех или оставить приватной.";
-  const publicCreateVisibilityOpenDescription = "К игре может присоединиться любой игрок подходящего уровня";
-  const publicCreateVisibilityPrivateDescription = "Присоединиться можно по ссылке или в сообществе, где игра опубликована";
+  const publicCreateVisibilityOpenDescription = CLUB_ON_SITE_BOOKING
+    ? "Игра появится в поиске клуба"
+    : "К игре может присоединиться любой игрок подходящего уровня";
+  const publicCreateVisibilityPrivateDescription = CLUB_ON_SITE_BOOKING
+    ? "Присоединиться можно по ссылке"
+    : "Присоединиться можно по ссылке или в сообществе, где игра опубликована";
   const publicCreateVisibilityOpenPillLabel = "Быстрее собрать";
   const publicCreateVisibilityPrivatePillLabel = "Для своих";
   const publicCreateGeneralListCardLabel = "Общий список игр";
@@ -7287,7 +7299,11 @@ export default function GamesPage({
   const publicCreateSubscriptionSubmitTitle = publicCreateSurchargeMinor != null
     ? `Создать игру по подписке с доплатой ${formatPrice(publicCreateSurchargeMinor / 100)} ₽`
     : "Создать игру по подписке";
-  const publicCreateFinalSubmitTitle = loadingPay
+  const clubBookingOnly = CLUB_ON_SITE_BOOKING && publicCreateEntry
+    && new URLSearchParams(window.location.search).get("booking") === "1";
+  const publicCreateFinalSubmitTitle = CLUB_ON_SITE_BOOKING
+    ? loadingPay ? "Проверяем бронь…" : "Оплачу на месте"
+    : loadingPay
     ? gamePreparationStage === "profile"
       ? "Проверяем профиль…"
       : gamePreparationStage === "slot"
@@ -7660,7 +7676,8 @@ export default function GamesPage({
     () => isCurrentUserOrganizerOfGame(activeGameRecord),
     [activeGameRecord, isCurrentUserOrganizerOfGame],
   );
-  const canCurrentUserInviteInDetails = isGamePaid !== false
+  const isClubOnSiteGame = CLUB_ON_SITE_BOOKING && activeGameRecord?.metadata?.source === "novokuznetsk_on_place";
+  const canCurrentUserInviteInDetails = (isClubOnSiteGame || isGamePaid !== false)
     && !isGameCancelledStatus(gameRecordStatus)
     && Boolean(inviteLink);
   const detailsMaxPlayers = useMemo(
@@ -9493,6 +9510,7 @@ export default function GamesPage({
     return Math.max(0, detailsMatchResultDisputeDeadlineTs - matchResultNowTs);
   }, [detailsMatchResultDisputeDeadlineTs, matchResultNowTs]);
   const canEditMatchResult = isDetailsMatchStarted
+    && (!CLUB_ON_SITE_BOOKING || detailsMaxPlayers === 4)
     && isCurrentUserResultParticipant
     && !isMatchResultPendingReview
     && !isMatchResultAgreed
@@ -9508,13 +9526,16 @@ export default function GamesPage({
     && detailsCompletedMatchResultSets.length > 0
     && !detailsMatchResultValidationError
     && !updatingGameMeta;
+  const clubResultPermissions = isRecordObject(detailsMetadata.matchResult) ? detailsMetadata.matchResult : null;
   const canDisputeMatchResult = isDetailsMatchStarted
+    && (!CLUB_ON_SITE_BOOKING || clubResultPermissions?.canDispute === true)
     && isCurrentUserResultParticipant
     && isMatchResultPendingReview
     && !isMatchResultSubmittedByCurrentUser
     && (detailsMatchResultDisputeTimeLeftMs == null || detailsMatchResultDisputeTimeLeftMs > 0)
     && !updatingGameMeta;
   const canConfirmMatchResult = isDetailsMatchStarted
+    && (!CLUB_ON_SITE_BOOKING || clubResultPermissions?.canConfirm === true)
     && isCurrentUserResultParticipant
     && isMatchResultPendingReview
     && !isMatchResultSubmittedByCurrentUser
@@ -9623,7 +9644,7 @@ export default function GamesPage({
   }, []);
 
   useEffect(() => {
-    if (step !== "details" || detailsActiveTab !== "result" || !gameRecordId || !profilePhoneNorm || !canEditMatchResult) {
+    if (CLUB_ON_SITE_BOOKING || step !== "details" || detailsActiveTab !== "result" || !gameRecordId || !profilePhoneNorm || !canEditMatchResult) {
       return;
     }
     const openKey = `${gameRecordId}:${profilePhoneNorm}`;
@@ -11173,8 +11194,8 @@ export default function GamesPage({
         date: fromDate,
         timeFrom: fromTime,
         timeTo: toTime,
-        timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-        timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
+        timeFromIso: `${fromDate}T${fromTime}:00${GAME_BOOKING_UTC_OFFSET}`,
+        timeToIso: bookingEndIso(fromDate, fromTime, toTime, GAME_BOOKING_UTC_OFFSET),
         durationMinutes: duration,
         slotId: selectedSlotId,
         bookingIds: resolvedBookingIds,
@@ -11378,7 +11399,7 @@ export default function GamesPage({
       return;
     }
     if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
-    if (!validateGamePublicationFields()) return;
+    if (!clubBookingOnly && !validateGamePublicationFields()) return;
 
     setLoadingPay(true);
     setPayError(null);
@@ -11400,6 +11421,44 @@ export default function GamesPage({
     }
     const clientId = profile.clientId;
     const clientPhone = profile.clientPhone;
+
+    if (CLUB_ON_SITE_BOOKING) {
+      try {
+        const result = await apiReserveClubCourt({
+          studioId, roomId: courtId,
+          timeFrom: `${fromDate}T${fromTime}:00${GAME_BOOKING_UTC_OFFSET}`,
+          timeTo: bookingEndIso(fromDate, fromTime, toTime, GAME_BOOKING_UTC_OFFSET),
+          publishGame: !clubBookingOnly, ratingGame: effectiveRatingGame, isPrivate, title: gameTitleDraft,
+        });
+        if (result.error || !result.data?.bookingId || (!clubBookingOnly && !result.game)) {
+          setPayError(result.error?.message || "Не удалось подтвердить бронь.");
+          return;
+        }
+        if (clubBookingOnly) {
+          window.location.assign(CABINET_URL);
+          return;
+        }
+        const record = result.game;
+        if (!record) return;
+        upsertGameRecordInStores(record, { communityMode: "upsert" });
+        setActiveGameRecordStore(record);
+        setParticipants(record.participants || []);
+        setWaitlistPlayers([]);
+        setGameRecordId(record.id);
+        setGameRecordStatus(record.status ?? "OPEN");
+        setInviteLink(resolveGameInviteUrl(record) ?? buildInviteFallbackUrl(record.id));
+        setGamePaymentUrl(null);
+        setGamePaid(false);
+        setGameSnapshot(buildMatchSnapshotFromRecord(record));
+        setConfirmCancelUnpaidGame(false);
+        setStep("details");
+      } catch {
+        setPayError("Не удалось проверить бронь. Повторная попытка проверит тот же слот.");
+      } finally {
+        setLoadingPay(false);
+      }
+      return;
+    }
 
     const paymentResult = await apiPayMasterService({
       date: fromDate,
@@ -11504,8 +11563,8 @@ export default function GamesPage({
           date: fromDate,
           timeFrom: fromTime,
           timeTo: toTime,
-          timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-          timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
+          timeFromIso: `${fromDate}T${fromTime}:00${GAME_BOOKING_UTC_OFFSET}`,
+          timeToIso: bookingEndIso(fromDate, fromTime, toTime, GAME_BOOKING_UTC_OFFSET),
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,
@@ -11628,8 +11687,8 @@ export default function GamesPage({
           date: fromDate,
           timeFrom: fromTime,
           timeTo: toTime,
-          timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
-          timeToIso: moscowBookingEndIso(fromDate, fromTime, toTime),
+          timeFromIso: `${fromDate}T${fromTime}:00${GAME_BOOKING_UTC_OFFSET}`,
+          timeToIso: bookingEndIso(fromDate, fromTime, toTime, GAME_BOOKING_UTC_OFFSET),
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,
@@ -11691,6 +11750,8 @@ export default function GamesPage({
     setPayError(paymentResult.error?.message ?? "Не удалось сформировать ссылку на оплату");
     setLoadingPay(false);
   }, [
+    clubBookingOnly,
+    setActiveGameRecordStore,
     studioId,
     studioMasterServiceId,
     studioName,
@@ -12598,6 +12659,10 @@ export default function GamesPage({
     }
 
     const nextMatchResult = normalizeMatchResultFromActionResponse(response);
+    if (CLUB_ON_SITE_BOOKING && nextMatchResult) {
+      nextMatchResult.canConfirm = response.canConfirm === true;
+      nextMatchResult.canDispute = response.canDispute === true;
+    }
     if (!nextMatchResult) return Boolean(response.game?.id);
 
     const nextMetadata: Record<string, unknown> = {
@@ -13821,7 +13886,7 @@ export default function GamesPage({
     autoConfirmed?: boolean;
     persistErrorMessage?: string;
   }) => {
-    if (!gameRecordId) return false;
+    if (!gameRecordId || (CLUB_ON_SITE_BOOKING && options?.autoConfirmed)) return false;
     if (!isMatchResultPendingReview) return false;
 
     setUpdatingGameMeta(true);
@@ -15025,6 +15090,24 @@ export default function GamesPage({
       return;
     }
 
+    if (CLUB_ON_SITE_BOOKING) {
+      setUpdatingGameRoster(true);
+      setGameRosterError(null);
+      try {
+        const joined = await apiJoinClubGame(gameRecordId);
+        if (!joined.data || joined.error) {
+          setGameRosterError(joined.error?.message || "Не удалось присоединиться к игре");
+          return;
+        }
+        setParticipants(joined.data.participants || []);
+        upsertGameRecordInStores(joined.data, { communityMode: "if_exists" });
+        setActiveGameRecordStore(joined.data);
+      } finally {
+        setUpdatingGameRoster(false);
+      }
+      return;
+    }
+
     if (LEGACY_ROSTER_BRIDGE_ENABLED) {
       setUpdatingGameRoster(true);
       setGameRosterError(null);
@@ -15508,7 +15591,7 @@ export default function GamesPage({
           </div>
         </div>
 
-        {usePublicCreateWizard && canProceedToPayment && (
+        {!CLUB_ON_SITE_BOOKING && usePublicCreateWizard && canProceedToPayment && (
           <>
             <div className="game-section">
               <div className="team-card game-create-payment-card">
@@ -15862,7 +15945,7 @@ export default function GamesPage({
       );
     }
 
-    const paymentStatusLabel = isGamePaid === true ? "Оплачено" : "Не оплачено";
+    const paymentStatusLabel = isClubOnSiteGame ? "Оплата на месте" : isGamePaid === true ? "Оплачено" : "Не оплачено";
     const paymentStatusClass = isGamePaid === true ? "paid" : "unpaid";
     const paymentStatusIcon = (
       <svg className="details-payment-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -17473,7 +17556,7 @@ export default function GamesPage({
             </div>
           )}
 
-          {isGamePaid !== true && (
+          {!isClubOnSiteGame && isGamePaid !== true && (
             <>
               <button
                 className="section-cta"
@@ -17605,7 +17688,7 @@ export default function GamesPage({
         <button data-lk-leave-action="GAME_BACK" className="page-back" onClick={onBack} type="button">
           Закрыть
         </button>
-        <div className="page-title">Создание игры</div>
+        <div className="page-title">{clubBookingOnly ? "Бронирование корта" : "Создание игры"}</div>
       </div>
 
       <div className="game-stack">
@@ -17657,7 +17740,7 @@ export default function GamesPage({
                     <span className="game-create-summary-meta-icon" aria-hidden="true">
                       {renderPublicCreateSummaryIcon("players")}
                     </span>
-                    <span>{publicCreateSummaryPaymentLine}</span>
+                    <span>{CLUB_ON_SITE_BOOKING ? "Оплата в клубе" : publicCreateSummaryPaymentLine}</span>
                   </span>
                 </div>
               </div>
@@ -17732,8 +17815,8 @@ export default function GamesPage({
           </>
         )}
 
-        {!isSinglesGame && (
-          usePublicCreateWizard ? (
+        {!clubBookingOnly && !isSinglesGame && (
+          usePublicCreateWizard && !CLUB_ON_SITE_BOOKING ? (
             <div className="team-card game-create-level-card">
               <div className="game-create-level-heading">
                 <div className="game-card-title">Уровень игроков</div>
@@ -17781,7 +17864,7 @@ export default function GamesPage({
                 </button>
               </div>
 
-              {effectiveRatingGame && (
+              {effectiveRatingGame && !CLUB_ON_SITE_BOOKING && (
                 <div className="rating-card">
                   <div className="game-card-title">Допустимый уровень соперников</div>
                   <div className="rating-slider">
@@ -17900,7 +17983,7 @@ export default function GamesPage({
           </div>
         )}
 
-        {usePublicCreateWizard ? (
+        {!clubBookingOnly && (usePublicCreateWizard ? (
           <div className="team-card game-create-visibility-card">
             <div className="game-card-title">Доступность игры</div>
             <div className="game-create-visibility-options">
@@ -17966,7 +18049,7 @@ export default function GamesPage({
               <span />
             </button>
           </div>
-        )}
+        ))}
         {!isBookingPresetMode && !usePublicCreateWizard && (
           <div className="game-toggle-row">
             <div>
@@ -18048,7 +18131,7 @@ export default function GamesPage({
           </div>
         )}
 
-        {showPublicationFields && (
+        {!clubBookingOnly && showPublicationFields && (
           <div className="team-card game-publish-fields">
             {!usePublicCreateWizard && (
               <div className="game-publish-fields-note">
@@ -18071,17 +18154,19 @@ export default function GamesPage({
                   required
                 />
               </label>
-              <label className="game-publish-field">
-                <span className="game-publish-field-label">Комментарий для участников</span>
-                <textarea
-                  className="game-input game-textarea"
-                  placeholder="Что важно знать участникам перед матчем"
-                  value={gameParticipantCommentDraft}
-                  onChange={(event) => setGameParticipantCommentDraft(event.target.value)}
-                  maxLength={280}
-                  rows={4}
-                />
-              </label>
+              {!CLUB_ON_SITE_BOOKING && (
+                <label className="game-publish-field">
+                  <span className="game-publish-field-label">Комментарий для участников</span>
+                  <textarea
+                    className="game-input game-textarea"
+                    placeholder="Что важно знать участникам перед матчем"
+                    value={gameParticipantCommentDraft}
+                    onChange={(event) => setGameParticipantCommentDraft(event.target.value)}
+                    maxLength={280}
+                    rows={4}
+                  />
+                </label>
+              )}
               {shouldShowPublicationJoinPriceField && (
                 <label className="game-publish-field">
                   <span className="game-publish-field-label">Стоимость присоединения к игре</span>
@@ -18247,7 +18332,7 @@ export default function GamesPage({
                   ? subscriptionUsageShadow.busy
                     ? "Проверяем ограничения..."
                     : "Проверить создание без бронирования"
-                  : usePublicCreateWizard ? publicCreateFinalSubmitTitle : paymentSubmitTitle}
+                  : CLUB_ON_SITE_BOOKING || usePublicCreateWizard ? publicCreateFinalSubmitTitle : paymentSubmitTitle}
               </span>
               <span className="game-submit-meta">{paymentStationCourt}</span>
               <span className="game-submit-meta">{paymentTimeRange}</span>
@@ -18264,7 +18349,7 @@ export default function GamesPage({
                 timeRange={paymentTimeRange}
               />
             )}
-            {!subscriptionUsageShadowEnabled && !splitPaymentSelected && (
+            {!CLUB_ON_SITE_BOOKING && !subscriptionUsageShadowEnabled && !splitPaymentSelected && (
               <>
                 <button
                   className={`game-promo-trigger ${promoCodeApplied ? "applied" : ""}`}

@@ -12,11 +12,11 @@ test("Viva auth requires offer and personal data consents before login", () => {
   assert.match(source, /if \(!allowPhoneLogin \|\| !hasRequiredConsents\) return;[\s\S]*setStep\("phone"\)/);
 });
 
-test("Viva auth consent links use the official PadlHub documents", () => {
+test("Viva auth consent links use configured club documents and default to the official PadlHub documents", () => {
   assert.match(source, /href=\{AUTH_CONSENT_DOCUMENTS\[0\]\.url\}[\s\S]*публичной оферты/);
   assert.match(source, /href=\{AUTH_CONSENT_DOCUMENTS\[1\]\.url\}[\s\S]*обработку персональных данных/);
-  assert.match(consentSource, /url: "https:\/\/padlhub\.ru\/docs"/);
-  assert.match(consentSource, /url: "https:\/\/padlhub\.ru\/politica"/);
+  assert.match(consentSource, /url: import\.meta\.env\?\.VITE_AUTH_CONSENT_OFFER_URL \|\| "https:\/\/padlhub\.ru\/docs"/);
+  assert.match(consentSource, /url: import\.meta\.env\?\.VITE_AUTH_CONSENT_PRIVACY_URL \|\| "https:\/\/padlhub\.ru\/politica"/);
   assert.equal((source.match(/target="_blank"/g) || []).length, 2);
   assert.equal((source.match(/rel="noopener noreferrer"/g) || []).length, 2);
 });
