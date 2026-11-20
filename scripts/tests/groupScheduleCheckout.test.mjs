@@ -264,6 +264,7 @@ test("booking callback forwards the promo unchanged and cannot bypass trial elig
   for (const blocked of [false, true]) {
     const calls = [];
     const complete = callback("completeRegistration", {
+      checkLevel: async () => true, registrationRequestIdRef: { current: 1 },
       subscriptionUsageShadowEnabled: false, selectedId: training.id,
       TRIAL_GROUP_CHECKOUT_ENABLED: true, isTrialGroupTraining: () => true,
       trialBookingBlocked: blocked, trialEligibilityKey: `${profile.id}:${training.id}`,
@@ -288,6 +289,7 @@ test("actual trial transaction preserves the promo and owned visit source throug
     const calls = [];
     const create = evaluate(node.getText(api).replace(/^export /, ""), {
       isSpanishTrainingExercise: () => false, isKidsAcademyTraining, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+      resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
       createVivaPaymentWatcher: async () => ({ close() {} }),
       buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
       buildTournamentVivaTransactionPayload: () => ({}),
@@ -313,6 +315,78 @@ test("actual trial transaction preserves the promo and owned visit source throug
   }
 });
 
+
+test("tournament checkout uses only the durable CUP route, carries promo, and never falls back after unknown", async () => {
+  const node = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
+  for (const source of ["one-time", "client-one-time", "subscription"]) {
+    const calls = [];
+    const create = evaluate(node.getText(api).replace(/^export /, ""), {
+      isSpanishTrainingExercise: () => false, isTrialGroupTraining: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+      isChildTournamentExercise, isKidsAcademyTraining, tournamentCheckoutRetryKeys: new Map(),
+      resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "tournament",
+      createVivaPaymentWatcher: () => { throw Error("unbound payment watcher forbidden"); },
+      buildTournamentPaymentReturnUrls: () => ({ successUrl: "https://padlhub.ru/ok", failUrl: "https://padlhub.ru/fail" }),
+      buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
+      pickString: (row, keys) => keys.map(key => row?.[key]).find(Boolean),
+      request: async (url, options) => {
+        calls.push({ url, options });
+        return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+      },
+    });
+    const params = { exerciseId: "tournament", clientId: "actor", exercise: {}, product: product(source), promoCode: "PROMO" };
+    await create(params); await create(params);
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.equal(call.url, "https://cup.example/api/tournaments/tournament/checkout");
+      assert.equal(call.options.retries, 0);
+      assert.equal(call.options.headers["Idempotency-Key"], "tournament:tournament:actor");
+      assert.deepEqual(JSON.parse(call.options.body), { productId: params.product.id, source, promoCode: "PROMO",
+        successUrl: "https://padlhub.ru/ok", failUrl: "https://padlhub.ru/fail" });
+    }
+  }
+});
+
+test("only a durable CUP refusal rotates the key for a new explicit action", async () => {
+  const names = ["tournamentCheckoutRetryKeys", "tournamentCheckoutRefusalMessages"];
+  const declarations = names.map(name =>
+    find(api, node => ts.isVariableDeclaration(node) && node.name.getText(api) === name).getText(api));
+  const entry = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
+  const remember = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "rememberTournamentCheckoutSuccessor");
+  const calls = [];
+  const operationId = "tournament-owner:11111111-1111-4111-8111-111111111111";
+  const responses = [
+    { data: null, error: { message: "lost" }, status: null },
+    { data: { state: "REJECTED", code: "LEVEL_NOT_ALLOWED", operationId }, error: null, status: 201 },
+    { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 },
+    { data: null, error: { message: "lost" }, status: null },
+  ];
+  const saved = new Map();
+  const load = () => evaluate(`(() => { const ${declarations.join("; const ")}; ${remember.getText(api)}; ${entry.getText(api).replace(/^export /, "")}; return apiCreateTournamentVivaTransaction; })()`, {
+    isSpanishTrainingExercise: () => false, isTrialGroupTraining: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+    isChildTournamentExercise, isKidsAcademyTraining, resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "tournament",
+    createVivaPaymentWatcher: () => { throw Error("unbound payment watcher forbidden"); },
+    buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
+    buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
+    globalThis: { sessionStorage: { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) } },
+    pickString: (row, keys) => keys.map(key => row?.[key]).find(Boolean),
+    request: async (url, options) => {
+      assert.match(url, /\/tournaments\/tournament\/checkout$/);
+      calls.push(options.headers["Idempotency-Key"]);
+      return responses.shift();
+    },
+  });
+  const create = load();
+  const params = { exerciseId: "tournament", clientId: "actor", exercise: {}, product: product() };
+  await create(params);
+  const refusal = await create(params);
+  assert.equal(refusal.status, 403);
+  assert.match(refusal.error.message, /уровень/);
+  assert.equal(calls.length, 2);
+  await create(params);
+  await load()(params);
+  assert.deepEqual(calls, ["tournament:tournament:actor", "tournament:tournament:actor",
+    `tournament-retry:${operationId}`, `tournament-retry:${operationId}`]);
+});
 // Use the actual checkout normalizer/filter, rather than the identity stub above.
 // The provider remains responsible for populating availableClientSubscriptions.
 function subscriptionCheckoutReader(availableClientSubscriptions, exerciseOverrides = {}) {
@@ -510,6 +584,7 @@ test("kids training transaction rejects stale adult discounts and keeps the orig
   const writes = [];
   const create = evaluate(node.getText(api).replace(/^export /, ""), {
     isKidsAcademyTraining, isPadelKidsProduct, isChildTournamentExercise,
+    resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
     isSpanishTrainingExercise: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: false,
     API_BASE: "https://fixture.invalid", TENANT_KEY: "fixture",
     createVivaPaymentWatcher: async () => ({ close() {} }),

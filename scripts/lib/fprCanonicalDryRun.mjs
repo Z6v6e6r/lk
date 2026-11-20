@@ -12,7 +12,7 @@ const source = d => d.params?.fpr6x25?.communityRating?.sourceExerciseId || d.pa
 const start = d => Date.parse(d.params?.fpr6x25?.leagueSnapshotAt);
 const eventAt = e => Date.parse(e.occurredAt || e.createdAt);
 const targetAt=e=>e.source?.fprProtocolId?Date.parse(e.source.fprFinishedAt):eventAt(e);
-const isBaseline=e=>['RATING_INITIAL_IMPORTED','RATING_BOOTSTRAPPED_FROM_VIVA','RATING_BOOTSTRAPPED_FROM_TOURNAMENT','RATING_BOOTSTRAPPED_FROM_GAME_RESULT','RATING_TOURNAMENT_CANONICAL_RECONCILED'].includes(e.eventType);
+const isBaseline=e=>['RATING_INITIAL_ASSIGNED','RATING_INITIAL_IMPORTED','RATING_BOOTSTRAPPED_FROM_VIVA','RATING_BOOTSTRAPPED_FROM_TOURNAMENT','RATING_BOOTSTRAPPED_FROM_GAME_RESULT','RATING_TOURNAMENT_CANONICAL_RECONCILED'].includes(e.eventType);
 export const dryRunError = e => /^FPR_(?:DRY_RUN|LEVEL)_[A-Z_]+$/.test(String(e?.message)) ? e.message : 'FPR_DRY_RUN_READ_FAILED';
 const activeAwards = events => {
   const compensated = new Set(events.map(e => e.source?.compensatesEventId).filter(Boolean));

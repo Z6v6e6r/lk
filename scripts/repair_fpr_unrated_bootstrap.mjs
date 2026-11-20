@@ -119,7 +119,7 @@ try {
           const result = await db.collection(collection).replaceOne(exact(before), after, { session });
           requireThat(result.modifiedCount === 1, 'CAS');
         }
-        await db.collection('rating_projection_outbox').insertOne(plan.outbox, { session });
+        if (plan.outbox) await db.collection('rating_projection_outbox').insertOne(plan.outbox, { session });
         if (mode === 'rehearse') await session.abortTransaction(); else await session.commitTransaction();
       } catch (error) { if (session.inTransaction()) await session.abortTransaction(); throw error; }
       finally { await session.endSession(); }

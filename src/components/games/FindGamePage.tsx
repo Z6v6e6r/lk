@@ -1,3 +1,4 @@
+import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { AvatarImage } from "../UI/AvatarImage";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -23,8 +24,6 @@ import {
 import { isSpanishTrainingExercise } from "../../utils/spanishTrainingExclusion";
 import { isProTraining } from "../../utils/proTrainingExclusion";
 import {
-  CUSTOM_FIELD_IDS,
-  getCustomFieldValue,
   getLetterGrade,
   normalizeLevelGradeLabel,
   parseNumericLevel,
@@ -457,15 +456,15 @@ function resolveViewerState(
 
 function getViewerLevel(profile: UserProfileType | null): string | null {
   if (!profile) return null;
-  const explicitGrade = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel);
+  const explicitGrade = getProfileLevelGrade(profile);
   if (explicitGrade) return explicitGrade;
-  const numeric = parseNumericLevel(getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric));
+  const numeric = parseNumericLevel(getProfileLevelNumericText(profile));
   return numeric !== null ? getLetterGrade(numeric) : null;
 }
 
 function getViewerLevelNumeric(profile: UserProfileType | null): number | null {
   if (!profile) return null;
-  return parseNumericLevel(getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric));
+  return parseNumericLevel(getProfileLevelNumericText(profile));
 }
 
 function getRatingTag(game: PadelGameRecord): string {

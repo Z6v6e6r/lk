@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runRatingTransaction } from "./lib/ratingTransaction.mjs";
 import { recoverStationMessageOutbox } from './lib/stationMessageOwner.mjs';
 import { processCommunityPolicies } from './lib/communityPolicyProjection.mjs';
 import { readFprLevelActivation, loadFprLevelContext, processFprLevelLedger, processFprProjectionOutbox } from './lib/fprLevelLedger.mjs';
@@ -31,7 +32,6 @@ import {
   buildTournamentStartOverrideEvent,
   eventAppliesToCanonicalState,
   normalizeRatingPhone,
-  ratingGradeFromNumeric,
   replayPlayerRatingEvents,
   toFiniteRating,
 } from "../src/services/player-rating/ledger.ts";
@@ -108,42 +108,6 @@ function resolveTournamentId(tournament) {
   return toStr(tournament?.tournamentId || tournament?.id || tournament?.exerciseId || tournament?.sourceTournamentId);
 }
 
-function buildBootstrapEvent({ event, createdAt }) {
-  const baselineRating = toFiniteRating(event?.change?.before);
-  if (baselineRating == null) return null;
-  const occurredAtTs = Date.parse(event.occurredAt);
-  const occurredAt = new Date((Number.isFinite(occurredAtTs) ? occurredAtTs : Date.now()) - 1).toISOString();
-  const eventId = `rating_evt:tournament_bootstrap:${event.source.sourceId}:${event.player.key}`;
-  return {
-    _id: eventId,
-    id: eventId,
-    idempotencyKey: eventId,
-    schemaVersion: PLAYER_RATING_LEDGER_SCHEMA_VERSION,
-    eventType: "RATING_BOOTSTRAPPED_FROM_TOURNAMENT",
-    occurredAt,
-    createdAt,
-    player: event.player,
-    actor: {
-      type: "SYSTEM",
-      id: "system:rating-worker",
-      name: "Rating worker",
-    },
-    source: {
-      domain: "TOURNAMENT_BOOTSTRAP",
-      sourceId: event.source.sourceId,
-      tournamentId: event.source.sourceId,
-    },
-    change: {
-      before: null,
-      delta: null,
-      after: baselineRating,
-      gradeBefore: null,
-      gradeAfter: ratingGradeFromNumeric(baselineRating),
-    },
-    formula: null,
-    projectionIntent: { viva: "NONE_BOOTSTRAP" },
-  };
-}
 
 function eventMatchesIdentity(event, identity) {
   return Boolean(
@@ -221,24 +185,24 @@ async function ensureWorkerIndexes(db) {
     .createIndex({ runId: 1 }, { name: "rating_job_runs_id_uq", unique: true });
 }
 
-async function loadStateForIdentity(db, identity) {
+async function loadStateForIdentity(db, identity, session) {
   const clauses = [
     { playerKey: identity.playerKey },
     ...(identity.clientId ? [{ clientId: identity.clientId }, { "identityAliases.clientIds": identity.clientId }] : []),
     ...(identity.phoneNorm ? [{ phoneNorm: identity.phoneNorm }, { "identityAliases.phoneNorms": identity.phoneNorm }] : []),
   ];
-  return db.collection(PLAYER_RATING_COLLECTIONS.state).findOne({ $or: clauses });
+  return db.collection(PLAYER_RATING_COLLECTIONS.state).findOne({ $or: clauses }, { session });
 }
 
-export async function loadEventsForIdentity(db, identity) {
-  const current = await loadStateForIdentity(db, identity);
-  if (current?.fprLevelFrontier) return (await readFprLevelIdentityHistory(db, current.clientId)).events;
+export async function loadEventsForIdentity(db, identity, session) {
+  const current = await loadStateForIdentity(db, identity, session);
+  if (current?.fprLevelFrontier) return (await readFprLevelIdentityHistory(db, current.clientId, session)).events;
   const clauses = [
     { "player.key": identity.playerKey },
     ...(identity.clientId ? [{ "player.clientId": identity.clientId }] : []),
     ...(identity.phoneNorm ? [{ "player.phoneNorm": identity.phoneNorm }] : []),
   ];
-  return db.collection(PLAYER_RATING_COLLECTIONS.events).find({ $or: clauses }).toArray();
+  return db.collection(PLAYER_RATING_COLLECTIONS.events).find({ $or: clauses }, { session }).toArray();
 }
 
 async function resolveCanonicalRatingBefore(db, identity, occurredAt, pendingEvents = []) {
@@ -307,7 +271,7 @@ export function compatibilityProjectionNeedsReconciliation(canonical, compatibil
     || (canonical.lastEventId || null) !== (compatibility.lastEventId || null);
 }
 
-async function resolveCompatibilityProjectionTarget(db, identity) {
+async function resolveCompatibilityProjectionTarget(db, identity, session) {
   const clauses = [
     ...(identity.clientId ? [{ clientId: identity.clientId }] : []),
     ...(identity.phoneNorm ? [{ phoneNorm: identity.phoneNorm }] : []),
@@ -315,21 +279,27 @@ async function resolveCompatibilityProjectionTarget(db, identity) {
   ];
   const query = clauses.length === 1 ? clauses[0] : { $or: clauses };
   const candidates = await db.collection(PLAYER_RATING_COLLECTIONS.compatibilityState)
-    .find(query)
+    .find(query, { session })
     .limit(4)
     .toArray();
   return selectCompatibilityProjectionTarget(candidates, identity);
 }
 
 export async function projectIdentityState(db, identity, nowIso, dryRun, pendingEvents = []) {
-  const current = await loadStateForIdentity(db, identity);
+  return dryRun
+    ? writeIdentityProjection(db, identity, nowIso, true, pendingEvents)
+    : runRatingTransaction(db, session => writeIdentityProjection(db, identity, nowIso, false, pendingEvents, session));
+}
+
+async function writeIdentityProjection(db, identity, nowIso, dryRun, pendingEvents, session) {
+  const current = await loadStateForIdentity(db, identity, session);
   const mergedIdentity = {
     playerKey: identity.clientId ? `client:${identity.clientId}` : (current?.playerKey || identity.playerKey),
     clientId: identity.clientId || current?.clientId || null,
     phoneNorm: identity.phoneNorm || current?.phoneNorm || null,
     name: identity.name || current?.name || "Игрок",
   };
-  const persistedEvents = await loadEventsForIdentity(db, mergedIdentity);
+  const persistedEvents = await loadEventsForIdentity(db, mergedIdentity, session);
   const events = [...new Map([
     ...persistedEvents,
     ...pendingEvents.filter((event) => eventMatchesIdentity(event, mergedIdentity)),
@@ -337,6 +307,7 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
   if (current?.fprLevelFrontier) Object.assign(mergedIdentity, { playerKey: current.playerKey, clientId: current.clientId, phoneNorm: current.phoneNorm });
   const replay = replayPlayerRatingEvents(events);
   if (!replay) return { changed: false, reason: "NO_BASELINE", identity: mergedIdentity };
+  const lastEvent = events.find(event => event.id === replay.lastEventId);
 
   const next = {
     schemaVersion: PLAYER_RATING_LEDGER_SCHEMA_VERSION,
@@ -366,6 +337,9 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
     lastEventId: replay.lastEventId,
     lastEventType: replay.lastEventType,
     lastEventAt: replay.lastEventAt,
+    lastSource: lastEvent?.source?.kind ?? lastEvent?.source?.domain ?? null,
+    lastChangedBy: lastEvent?.actor ?? null,
+    lastDelta: lastEvent?.change?.delta ?? null,
     projectedBy: PLAYER_RATING_WORKER_VERSION,
     projectedAt: nowIso,
     updatedAt: nowIso,
@@ -379,9 +353,9 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
     await db.collection(PLAYER_RATING_COLLECTIONS.state).updateOne(
       stateFilter,
       { $set: next, $setOnInsert: { createdAt: nowIso } },
-      { upsert: true },
+      { upsert: true, session },
     );
-    const { filter: compatibilityFilter } = await resolveCompatibilityProjectionTarget(db, mergedIdentity);
+    const { filter: compatibilityFilter } = await resolveCompatibilityProjectionTarget(db, mergedIdentity, session);
     await db.collection(PLAYER_RATING_COLLECTIONS.compatibilityState).updateOne(
       compatibilityFilter,
       {
@@ -393,7 +367,7 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
         },
         $setOnInsert: { createdAt: nowIso },
       },
-      { upsert: true },
+      { upsert: true, session },
     );
   }
   return { changed, identity: mergedIdentity, state: next, events: events.length };
@@ -402,89 +376,50 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
 async function reconcileCompatibilityProjection(db, nowIso, dryRun) {
   const states = await db.collection(PLAYER_RATING_COLLECTIONS.state).find({}).toArray();
   let changed = 0;
-  for (const state of states) {
-    const { filter, existing } = await resolveCompatibilityProjectionTarget(db, state);
-    if (!compatibilityProjectionNeedsReconciliation(state, existing)) continue;
-    changed += 1;
-    if (dryRun) continue;
-    await db.collection(PLAYER_RATING_COLLECTIONS.compatibilityState).updateOne(
-      filter,
-      {
-        $set: {
-          schemaVersion: state.schemaVersion,
-          ownership: state.ownership,
-          playerKey: state.playerKey,
-          clientId: state.clientId || null,
-          phoneNorm: state.phoneNorm || null,
-          name: state.name,
-          ratingNumeric: state.ratingNumeric,
-          rating: state.rating,
-          baseline: state.baseline,
-          identityAliases: state.identityAliases,
-          lastEventId: state.lastEventId,
-          lastEventType: state.lastEventType,
-          lastEventAt: state.lastEventAt,
-          projectedBy: PLAYER_RATING_WORKER_VERSION,
-          projectedAt: nowIso,
-          updatedAt: nowIso,
-          compatibilityProjection: true,
-          canonicalCollection: PLAYER_RATING_COLLECTIONS.state,
-          compatibilityUpdatedAt: nowIso,
+  for (const snapshot of states) {
+    const reconcile = async session => {
+      const state = await loadStateForIdentity(db, snapshot, session);
+      if (!state) return false;
+      const { filter, existing } = await resolveCompatibilityProjectionTarget(db, state, session);
+      if (!compatibilityProjectionNeedsReconciliation(state, existing)) return false;
+      if (dryRun) return true;
+      await db.collection(PLAYER_RATING_COLLECTIONS.compatibilityState).updateOne(
+        filter,
+        {
+          $set: {
+            schemaVersion: state.schemaVersion,
+            ownership: state.ownership,
+            playerKey: state.playerKey,
+            clientId: state.clientId || null,
+            phoneNorm: state.phoneNorm || null,
+            name: state.name,
+            ratingNumeric: state.ratingNumeric,
+            rating: state.rating,
+            baseline: state.baseline,
+            identityAliases: state.identityAliases,
+            lastEventId: state.lastEventId,
+            lastEventType: state.lastEventType,
+            lastEventAt: state.lastEventAt,
+            projectedBy: PLAYER_RATING_WORKER_VERSION,
+            projectedAt: nowIso,
+            updatedAt: nowIso,
+            compatibilityProjection: true,
+            canonicalCollection: PLAYER_RATING_COLLECTIONS.state,
+            compatibilityUpdatedAt: nowIso,
+          },
+          $setOnInsert: { createdAt: state.createdAt || nowIso },
         },
-        $setOnInsert: { createdAt: state.createdAt || nowIso },
-      },
-      { upsert: true },
-    );
+        { upsert: true, session },
+      );
+      return true;
+    };
+    if (dryRun ? await reconcile() : await runRatingTransaction(db, reconcile)) changed += 1;
   }
   return { scanned: states.length, changed };
 }
 
-async function enqueueProjection(db, projection, nowIso, dryRun) {
-  if (!projection?.state?.clientId) return false;
-  const lastEvent = await db.collection(PLAYER_RATING_COLLECTIONS.events)
-    .findOne({ _id: projection.state.lastEventId });
-  if (!["TOURNAMENT", "TOURNAMENT_START"].includes(lastEvent?.source?.domain)) return false;
-  const isStartOverride = lastEvent.source.domain === "TOURNAMENT_START";
-  const outboxId = `rating_projection:${lastEvent.id}`;
-  if (!dryRun) {
-    await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).updateOne(
-      { _id: outboxId },
-      {
-        $setOnInsert: {
-          _id: outboxId,
-          id: outboxId,
-          ratingEventId: lastEvent.id,
-          playerKey: projection.state.playerKey,
-          clientId: projection.state.clientId,
-          phoneNorm: projection.state.phoneNorm,
-          payload: {
-            clientId: projection.state.clientId,
-            phone: projection.state.phoneNorm,
-            playerName: projection.state.name,
-            levelLetter: projection.state.rating,
-            levelNumeric: projection.state.ratingNumeric.toFixed(5),
-            source: isStartOverride ? "tournament_start" : "tournament_rating_worker",
-            gameId: lastEvent.source.sourceId,
-            tournamentId: lastEvent.source.sourceId,
-            previousRating: lastEvent.change.before,
-            nextRating: projection.state.ratingNumeric,
-            confirmedAt: lastEvent.occurredAt,
-            changedById: lastEvent.actor?.id || "system:rating-worker",
-            changedByName: lastEvent.actor?.name || "Rating worker",
-            changedByPhone: lastEvent.actor?.phoneNorm || null,
-            eventId: lastEvent.id,
-          },
-          status: "PENDING",
-          attempts: 0,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-          nextAttemptAt: nowIso,
-        },
-      },
-      { upsert: true },
-    );
-  }
-  return true;
+async function enqueueProjection() {
+  return false; // CUP-only: provider projection is retired; preserve historical rows.
 }
 
 export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowIso, dryRun, excludedTournamentIds = new Set() }) {
@@ -508,6 +443,11 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
     .map((event) => String(event._id)));
   const newEvents = [];
   const identities = new Map();
+  const preimages = new Map();
+  async function readPreimage(identity) {
+    if (!preimages.has(identity.playerKey)) preimages.set(identity.playerKey, await loadStateForIdentity(db, identity));
+    return preimages.get(identity.playerKey);
+  }
   let finalized = 0;
   let reopened = 0;
   let startOverrides = 0;
@@ -535,6 +475,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
       const playerKey = buildPlayerRatingKey({ clientId, phoneNorm, fallback: player.participantId });
       if (!playerKey) continue;
       const identity = { playerKey, clientId, phoneNorm, name: toStr(player.name) || "Игрок" };
+      const currentState = await readPreimage(identity);
       const canonicalBefore = await resolveCanonicalRatingBefore(db, identity, occurredAt, newEvents);
       const event = buildTournamentStartOverrideEvent({
         tournamentId,
@@ -548,11 +489,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
         identities.set(playerKey, identity);
         continue;
       }
-      const currentState = await loadStateForIdentity(db, identity);
-      if (!currentState) {
-        const bootstrap = buildBootstrapEvent({ event, createdAt: nowIso });
-        if (bootstrap) newEvents.push(bootstrap);
-      }
+      if (!currentState) continue; // First level requires onboarding/admin; never infer it from standings.
       newEvents.push(event);
       existingStartEventIds.add(event.id);
       identities.set(playerKey, identity);
@@ -564,6 +501,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
       const playerKey = buildPlayerRatingKey({ clientId, phoneNorm });
       if (!playerKey) continue;
       const identity = { playerKey, clientId, phoneNorm, name: toStr(standing?.name) || "Игрок" };
+      const currentState = await readPreimage(identity);
       if (getTournamentRatingExclusion(tournament, clientId, "level")) {
         const events = [
           ...await loadEventsForIdentity(db, identity),
@@ -638,11 +576,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
           allTournamentEvents.push(compensation);
         }
       }
-      const currentState = await loadStateForIdentity(db, identity);
-      if (!currentState) {
-        const bootstrap = buildBootstrapEvent({ event, createdAt: nowIso });
-        if (bootstrap) newEvents.push(bootstrap);
-      }
+      if (!currentState) continue; // First level requires onboarding/admin; never infer it from standings.
       newEvents.push(event);
       allTournamentEvents.push(event);
       identities.set(playerKey, identity);
@@ -650,21 +584,27 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
     }
   }
 
-  if (!dryRun && newEvents.length > 0) {
-    await db.collection(PLAYER_RATING_COLLECTIONS.events).bulkWrite(
-      newEvents.map((event) => ({
-        updateOne: {
-          filter: { _id: event.id },
-          update: { $setOnInsert: event },
-          upsert: true,
-        },
-      })),
-      { ordered: true },
-    );
-  }
   const projections = [];
   for (const identity of identities.values()) {
-    const projected = await projectIdentityState(db, identity, nowIso, dryRun, dryRun ? newEvents : []);
+    const eventsForPlayer = newEvents.filter(event => eventMatchesIdentity(event, identity));
+    const projected = dryRun ? await projectIdentityState(db, identity, nowIso, true, eventsForPlayer)
+      : await runRatingTransaction(db, async session => {
+        const planned = preimages.get(identity.playerKey);
+        const current = await loadStateForIdentity(db, identity, session);
+        if (planned?.lastEventId !== current?.lastEventId || planned?.ratingNumeric !== current?.ratingNumeric
+          || planned?.playerKey !== current?.playerKey || planned?.clientId !== current?.clientId) {
+          throw new Error('TOURNAMENT_RATING_PLAN_STALE');
+        }
+        if (eventsForPlayer.length) {
+          await db.collection(PLAYER_RATING_COLLECTIONS.events).bulkWrite(
+            eventsForPlayer.map(event => ({
+              updateOne: { filter: { _id: event.id }, update: { $setOnInsert: event }, upsert: true }
+            })),
+            { ordered: true, session }
+          );
+        }
+        return writeIdentityProjection(db, identity, nowIso, false, [], session);
+      });
     projections.push(projected);
     await enqueueProjection(db, projected, nowIso, dryRun);
   }
@@ -1128,45 +1068,8 @@ async function recalculateCommunities(db, communityIds, nowIso, dryRun) {
   };
 }
 
-async function processProjectionOutbox(db, projectionUrl, nowIso, dryRun, withRowLock = work => work()) {
-  const rows = await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).find({
-    fprProjection: { $ne: true },
-    status: { $in: ["PENDING", "FAILED_RETRYABLE"] },
-    nextAttemptAt: { $lte: nowIso },
-    attempts: { $lt: 30 },
-  }).sort({ createdAt: 1 }).limit(100).toArray();
-  const result = { scanned: rows.length, synced: 0, failed: 0 };
-  if (dryRun) return result;
-  for (const candidate of rows) await withRowLock(async () => {
-    // A roster bootstrap may have superseded this row while another was sent.
-    const row = await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).findOne({
-      _id: candidate._id, status: { $in: ["PENDING", "FAILED_RETRYABLE"] },
-    });
-    if (!row) return;
-    const attemptAt = new Date().toISOString();
-    try {
-      const response = await fetch(projectionUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(row.payload),
-      });
-      const raw = await response.text();
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${raw.slice(0, 200)}`);
-      await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).updateOne(
-        { _id: row._id },
-        { $set: { status: "SYNCED", syncedAt: attemptAt, updatedAt: attemptAt, lastHttpStatus: response.status }, $inc: { attempts: 1 } },
-      );
-      result.synced += 1;
-    } catch (error) {
-      const nextAttemptAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-      await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).updateOne(
-        { _id: row._id },
-        { $set: { status: "FAILED_RETRYABLE", lastError: String(error?.message || error).slice(0, 500), lastAttemptAt: attemptAt, nextAttemptAt, updatedAt: attemptAt }, $inc: { attempts: 1 } },
-      );
-      result.failed += 1;
-    }
-  });
-  return result;
+async function processProjectionOutbox() {
+  return { enabled: false, reason: "CUP_ONLY", scanned: 0, synced: 0, failed: 0 };
 }
 
 async function acquireLease(db, jobKey, owner, nowIso) {

@@ -185,7 +185,7 @@ test("tournament canonical reconciliation establishes a new baseline after ratin
       player: { key: "client:1", clientId: "1", phoneNorm: null, name: "Player" },
       actor: {},
       source: { domain: "TOURNAMENT" },
-      change: { before: 1, delta: -0.5, after: 1, gradeBefore: "D", gradeAfter: "D" },
+      change: { before: 1, delta: -0.5, after: 1, gradeBefore: "D+", gradeAfter: "D" },
       formula: null,
       projectionIntent: { viva: "NONE" },
     },
@@ -200,7 +200,7 @@ test("tournament canonical reconciliation establishes a new baseline after ratin
       player: { key: "client:1", clientId: "1", phoneNorm: null, name: "Player" },
       actor: {},
       source: { domain: "RATING_REPAIR", repairVersion: "tournament-canonical-reconciliation-v1.0.8" },
-      change: { before: 1, delta: 0.1, after: 1.1, gradeBefore: "D", gradeAfter: "D" },
+      change: { before: 1, delta: 0.1, after: 1.1, gradeBefore: "D+", gradeAfter: "D" },
       formula: null,
       projectionIntent: { viva: "REQUIRED" },
     },
@@ -231,9 +231,12 @@ test("tournament event targets ratingAfter when tournament before differs from c
     before: 2.15778,
     delta: 1.4386,
     after: 3.59638,
-    gradeBefore: "D",
+    gradeBefore: "D+",
     gradeAfter: "C+",
   });
+  assert.equal(event.source.kind, "TOURNAMENT");
+  assert.equal(event.source.eventId, event.source.tournamentId);
+  assert.deepEqual(event.source.resultRef, { id: event.source.tournamentId, revision: event.source.sourceRevision });
   assert.deepEqual(event.source.tournamentRatingSnapshot, {
     before: 3.358,
     delta: 0.23838,
@@ -288,7 +291,7 @@ test("tournament start override becomes canonical before the final tournament de
     before: 2.15778,
     delta: 1.20022,
     after: 3.358,
-    gradeBefore: "D",
+    gradeBefore: "D+",
     gradeAfter: "C",
   });
   assert.deepEqual(startOverride.actor, {
@@ -393,4 +396,27 @@ test("reapplying a prior tournament standings revision after a correction has a 
   assert.ok(restored);
   assert.notEqual(restored?.id, first?.id);
   assert.equal(restored?.source.sourceRevision, first?.source.sourceRevision);
+});
+
+
+test("CUP manual target resets any underlying clamp drift and later game deltas still apply", () => {
+  const player = { key: "client:synthetic", clientId: "synthetic", name: "Synthetic", phoneNorm: null };
+  const start = {
+    _id: "synthetic-baseline", id: "synthetic-baseline", idempotencyKey: "synthetic-baseline",
+    schemaVersion: 1, eventType: "RATING_INITIAL_ASSIGNED",
+    occurredAt: "2026-11-19T00:00:00.000Z", createdAt: "2026-11-19T00:00:00.000Z",
+    player, actor: {}, source: { domain: "ONBOARDING" },
+    change: { before: null, delta: null, after: 7, gradeBefore: null, gradeAfter: "A" },
+    formula: null, projectionIntent: { viva: "NONE_CUP_ONLY" },
+  };
+  const previousGame = { ...start, id: "first-game", eventType: "GAME_RESULT_SUBMITTED_APPLIED",
+    occurredAt: "2026-11-19T00:00:01.000Z", change: { ...start.change, delta: 0.4 } };
+  const manual = { ...start, id: "cup-change", eventType: "RATING_MANUALLY_CHANGED",
+    occurredAt: "2026-11-19T00:00:02.000Z", source: { domain: "ADMIN_MANUAL", kind: "ADMIN_MANUAL" },
+    change: { before: 7, delta: -1, after: 6, gradeBefore: "A", gradeAfter: "A" } };
+  const laterGame = { ...previousGame, id: "later-game", occurredAt: "2026-11-19T00:00:03.000Z",
+    change: { ...previousGame.change, delta: 0.1 } };
+  assert.equal(replayPlayerRatingEvents([start, previousGame, manual])?.ratingNumeric, 6);
+  assert.equal(replayPlayerRatingEvents([laterGame, manual, previousGame, start])?.ratingNumeric, 6.1);
+  assert.equal(replayPlayerRatingEvents([start, previousGame, { ...manual, source: { domain: "CUP_ADMIN" } }])?.ratingNumeric, 6.4);
 });

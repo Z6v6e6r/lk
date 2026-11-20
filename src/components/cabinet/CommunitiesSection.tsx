@@ -1,3 +1,4 @@
+import { getProfileLevelNumericText } from "../../utils/playerLevel";
 import { EventRegistrationForm } from './EventRegistrationForm';
 import { EXHIBITION_COMMUNITY_ID } from '../padel-jump/exhibition';
 import { parseEventNotice, type EventNotice } from '../../utils/communityApi';
@@ -74,9 +75,7 @@ import type { OpenGamesOptions } from "../../types/gamesOverlay";
 import type { OpenLevelsInfoOptions } from "../../types/levelsInfoOverlay";
 import type { OpenTournamentsOptions } from "../../types/tournamentsOverlay";
 import {
-  CUSTOM_FIELD_IDS,
   formatScoreDisplay,
-  getCustomFieldValue,
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
@@ -686,18 +685,8 @@ function getNodePalette(seed: string) {
   };
 }
 
-function getLevelScoreFromProfile(profile: UserProfileType) {
-  const numeric = parseNumericLevel(getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric));
-  if (numeric !== null) {
-    return clamp(1.5, numeric, 6);
-  }
-
-  const labelRaw = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel) ?? "C";
-  const matchedIndex = LEVEL_OPTIONS.findIndex((item) => item === labelRaw.trim().toUpperCase());
-  if (matchedIndex >= 0) {
-    return matchedIndex + 1.5;
-  }
-  return 3.2;
+function getLevelScoreFromProfile(profile: UserProfileType): number | null {
+  return parseNumericLevel(getProfileLevelNumericText(profile));
 }
 
 function buildCommunityActor(profile: UserProfileType, role: CommunityRole = "MEMBER") {
@@ -711,7 +700,7 @@ function buildCommunityActor(profile: UserProfileType, role: CommunityRole = "ME
     avatar: profile.photo,
     role,
     levelScore,
-    levelLabel: getLetterGrade(levelScore),
+    levelLabel: (levelScore === null ? null : getLetterGrade(levelScore)),
   };
 }
 
@@ -786,13 +775,13 @@ function buildConnectionsFromMembers(communities: CommunityRecord[]): CommunityC
 }
 
 function normalizeRankingLevelLabel(value: string | null | undefined, levelScore: number) {
-  if (Number.isFinite(levelScore)) {
-    return getLetterGrade(clamp(1, levelScore, 6));
+  if (Number.isFinite(levelScore) && levelScore >= 1) {
+    return getLetterGrade(levelScore);
   }
   const normalized = String(value || "").trim().toUpperCase();
   return LEVEL_OPTIONS.includes(normalized as CommunityLevelFilter)
     ? normalized
-    : getLetterGrade(levelScore);
+    : "—";
 }
 
 interface CommunityRankingStatsRow extends CommunityRankingRowModel {

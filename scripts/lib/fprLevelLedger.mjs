@@ -155,7 +155,8 @@ export function buildFprPlayerEvents({ clientId, events, context, nowIso }) {
       && e.source.fprProtocolId === source.document.tournamentId && !e.source.compensatesEventId)
       .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || eventId(a).localeCompare(eventId(b))).at(-1);
     const event = buildTournamentRatingEvent({ tournamentId: sourceId, finishedAt, standing: row, canonicalBefore: before,
-      occurredAt: finishedAt, createdAt: nowIso, previousEventId: predecessor?.id });
+      occurredAt: finishedAt, createdAt: nowIso, previousEventId: predecessor?.id,
+      protocolId: source.document.tournamentId });
     if (!event) throw new Error('FPR_LEVEL_EVENT_INVALID');
     Object.assign(event.source, { fprProtocolId: source.document.tournamentId, fprFinishedAt: finishedAt,
       fprLevelPolicy: FPR_LEVEL_POLICY, fprFormulaVersion: FPR_LEVEL_FORMULA_VERSION,
@@ -167,7 +168,8 @@ export function buildFprPlayerEvents({ clientId, events, context, nowIso }) {
       const id = `rating_evt:fpr_bootstrap:${fprLevelHash(clientId)}`;
       pending.push({ _id: id, id, idempotencyKey: id, schemaVersion: 1, eventType: 'RATING_BOOTSTRAPPED_FROM_TOURNAMENT',
         occurredAt: new Date(Date.parse(finishedAt) - 1).toISOString(), createdAt: nowIso, player: event.player, actor,
-        source: { domain: 'TOURNAMENT_BOOTSTRAP', sourceId, fprBootstrap: true },
+        source: { domain: 'TOURNAMENT_BOOTSTRAP', sourceId, kind: 'TOURNAMENT', eventId: sourceId,
+          resultRef: event.source.resultRef, reason: 'PROTOCOL_BASELINE', fprBootstrap: true },
         change: { before: null, delta: null, after: row.ratingBefore, gradeBefore: null, gradeAfter: ratingGradeFromNumeric(row.ratingBefore) },
         formula: null, projectionIntent: { viva: 'NONE_BOOTSTRAP' } });
     }
@@ -197,7 +199,7 @@ export function buildFprPlayerEvents({ clientId, events, context, nowIso }) {
         baselineEventId: correction.baselineEventId, rawLedgerBefore: correction.rawBefore, rawLedgerAfter: correction.rawAfter },
       change: { before: correction.before, after: correction.after, delta: correction.delta,
         gradeBefore: ratingGradeFromNumeric(correction.before), gradeAfter: ratingGradeFromNumeric(correction.after) },
-      formula: { version: FPR_LEVEL_POLICY, applicationVersion: 'source-aware-additive-frontier-v1' }, projectionIntent: { viva: 'REQUIRED_DURING_MIGRATION' } });
+      formula: { version: FPR_LEVEL_POLICY, applicationVersion: 'source-aware-additive-frontier-v1' }, projectionIntent: { viva: 'NONE_CUP_ONLY' } });
   }
   const replay = replayPlayerRatingEvents([...events, ...pending]);
   if (planFprRatingReconciliation([...events, ...pending])) throw new Error('FPR_LEVEL_RECONCILIATION_NOT_STABLE');
@@ -226,9 +228,8 @@ export async function buildFprPlayerPlan(db, clientId, context, nowIso, session)
   }
   const compatible = await db.collection('player_ratings').find({ $or: [{ clientId: { $in: aliases } }, { playerKey: current?.playerKey || `client:${clientId}` }] }, options).limit(3).toArray();
   if (compatible.length > 1) throw new Error('FPR_LEVEL_COMPATIBILITY_CONFLICT');
-  const outboxes = await db.collection('rating_projection_outbox').find({ $or: [{ clientId: { $in: aliases } }, { 'payload.clientId': { $in: aliases } }],
-    status: { $in: ['PENDING', 'FAILED_RETRYABLE', 'SENDING'] } }, options).limit(1001).toArray();
-  if (outboxes.length > 1000 || outboxes.some(r => r.status === 'SENDING')) throw new Error('FPR_LEVEL_PROJECTION_IN_FLIGHT');
+  const outboxes = []; // Historical provider tasks no longer gate canonical computation.
+  if (!current && existingEvents.length === 0) throw new Error('FPR_LEVEL_INITIAL_LEVEL_REQUIRED');
   const calculated = buildFprPlayerEvents({ clientId, events: existingEvents, context, nowIso });
   if (!calculated.events.length) return { clientId, events: [], current, existingEvents, compatibility: compatible[0] || null, outboxes,
     sourceDocuments: calculated.sourceDocuments, fingerprint: fprLevelHash([current, [...existingEvents].sort((a, b) => eventId(a).localeCompare(eventId(b))), compatible,
@@ -245,9 +246,8 @@ export async function buildFprPlayerPlan(db, clientId, context, nowIso, session)
     lastEventId: replay.lastEventId, lastEventType: replay.lastEventType, lastEventAt: replay.lastEventAt,
     fprLevelFrontier: fprLevelHash([...existingEvents, ...calculated.events].map(e => eventId(e)).sort()),
     projectedBy: FPR_LEVEL_POLICY, projectedAt: nowIso, updatedAt: nowIso, createdAt: current?.createdAt || nowIso };
-  const projectionRequired = !current || canonicalFingerprint(current) !== canonicalFingerprint(next);
   return { clientId, ...calculated, current, existingEvents, compatibility: compatible[0] || null, outboxes, next,
-    outbox: projectionRequired ? buildFprProjectionOutbox(next, nowIso) : null,
+    outbox: null,
     fingerprint: fprLevelHash([current, [...existingEvents].sort((a, b) => eventId(a).localeCompare(eventId(b))), compatible,
       [...outboxes].sort((a, b) => String(a._id).localeCompare(String(b._id)))]) };
 }
@@ -375,67 +375,6 @@ export async function processFprLevelLedger(db, client, { context, config, nowIs
 }
 
 /** FPR projections are isolated from the legacy blind dispatcher and always use current canonical values. */
-export async function processFprProjectionOutbox(db, projectionUrl, nowIso, dryRun, withRowLock = work => work()) {
-  const rows = await db.collection('rating_projection_outbox').find({ fprProjection: true, attempts: { $lt: 30 }, $or: [
-    { status: { $in: ['PENDING', 'FAILED_RETRYABLE'] }, nextAttemptAt: { $lte: nowIso } },
-    { status: 'SENDING', projectionLeaseUntil: { $lte: nowIso } },
-  ] })
-    .sort({ createdAt: 1 }).limit(200).toArray();
-  const result = { scanned: rows.length, synced: 0, superseded: 0, failed: 0 };
-  if (dryRun) return result;
-  for (const candidate of rows) await withRowLock(async () => {
-    // The previous row's send may have allowed a roster initialization to supersede this one.
-    const row = await db.collection('rating_projection_outbox').findOne({ _id: candidate._id, $or: [
-      { status: { $in: ['PENDING', 'FAILED_RETRYABLE'] }, nextAttemptAt: { $lte: nowIso } },
-      { status: 'SENDING', projectionLeaseUntil: { $lte: nowIso } },
-    ] });
-    if (!row) return;
-    const states = await db.collection('player_rating_state').find({ clientId: row.clientId }).limit(3).toArray();
-    if (states.length !== 1) throw new Error('FPR_LEVEL_PROJECTION_IDENTITY_CONFLICT');
-    const state = states[0];
-    if (canonicalFingerprint(state) !== row.canonicalFingerprint) {
-      const next = buildFprProjectionOutbox(state, nowIso);
-      await db.collection('rating_projection_outbox').updateOne({ _id: row._id, status: row.status }, { $set: { status: 'SUPERSEDED', supersededBy: next.id, updatedAt: nowIso } });
-      await db.collection('rating_projection_outbox').updateOne({ _id: next.id }, { $setOnInsert: next }, { upsert: true });
-      result.superseded++; return;
-    }
-    const leaseOwner = crypto.randomUUID();
-    const claim = await db.collection('rating_projection_outbox').updateOne({ _id: row._id, status: row.status,
-      ...(row.status === 'SENDING' ? { projectionLeaseOwner: row.projectionLeaseOwner, projectionLeaseUntil: row.projectionLeaseUntil } : {}) },
-    { $set: { status: 'SENDING', projectionLeaseOwner: leaseOwner, projectionLeaseUntil: new Date(Date.now() + 60000).toISOString() }, $inc: { attempts: 1 } });
-    if (claim.modifiedCount !== 1) return;
-    const owned = { _id: row._id, status: 'SENDING', projectionLeaseOwner: leaseOwner };
-    try {
-      const beforeSend = await db.collection('player_rating_state').findOne({ _id: state._id });
-      if (!beforeSend || canonicalFingerprint(beforeSend) !== row.canonicalFingerprint) {
-        const next = buildFprProjectionOutbox(beforeSend, nowIso);
-        await db.collection('rating_projection_outbox').updateOne({ _id: next.id }, { $setOnInsert: next }, { upsert: true });
-        await db.collection('rating_projection_outbox').updateOne(owned, { $set: { status: 'SUPERSEDED', supersededBy: next.id, updatedAt: nowIso },
-          $unset: { projectionLeaseOwner: '', projectionLeaseUntil: '' } });
-        result.superseded++; return;
-      }
-      const response = await fetch(projectionUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(row.payload), signal: AbortSignal.timeout(20000) });
-      const body = await response.json();
-      if (!response.ok || body?.ok !== true || body?.projectionStatus !== 'SYNCED' || body?.clientId !== state.clientId
-        || !Number.isFinite(Number(body.levelNumeric)) || Math.abs(Number(body.levelNumeric) - state.ratingNumeric) > 0.000001) {
-        throw new Error(`FPR_LEVEL_PROJECTION_UNCONFIRMED_${response.status}`);
-      }
-      const latest = await db.collection('player_rating_state').findOne({ _id: state._id });
-      if (!latest || canonicalFingerprint(latest) !== row.canonicalFingerprint) {
-        const next = buildFprProjectionOutbox(latest, nowIso);
-        await db.collection('rating_projection_outbox').updateOne({ _id: next.id }, { $setOnInsert: next }, { upsert: true });
-        await db.collection('rating_projection_outbox').updateOne(owned, { $set: { status: 'SUPERSEDED', supersededBy: next.id, updatedAt: nowIso },
-          $unset: { projectionLeaseOwner: '', projectionLeaseUntil: '' } });
-        result.superseded++; return;
-      }
-      await db.collection('rating_projection_outbox').updateOne(owned, { $set: { status: 'SYNCED', syncedAt: nowIso, updatedAt: nowIso },
-        $unset: { projectionLeaseOwner: '', projectionLeaseUntil: '' } });
-      result.synced++;
-    } catch (error) {
-      await db.collection('rating_projection_outbox').updateOne(owned, { $set: { status: 'FAILED_RETRYABLE', lastError: String(error.message).slice(0, 100),
-        nextAttemptAt: new Date(Date.parse(nowIso) + 600000).toISOString(), updatedAt: nowIso }, $unset: { projectionLeaseOwner: '', projectionLeaseUntil: '' } });
-      result.failed++;
-    }
-  });
-  return result;
+export async function processFprProjectionOutbox() {
+  return { enabled: false, reason: 'CUP_ONLY', scanned: 0, synced: 0, superseded: 0, failed: 0 };
 }

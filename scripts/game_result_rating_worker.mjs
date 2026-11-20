@@ -5,10 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
+import { runRatingTransaction } from "./lib/ratingTransaction.mjs";
 import {
   PLAYER_RATING_COLLECTIONS,
   PLAYER_RATING_LEDGER_SCHEMA_VERSION,
-  buildGameResultBaselineEvent,
   ratingGradeFromNumeric,
   replayPlayerRatingEvents,
 } from "../src/services/player-rating/ledger.ts";
@@ -144,20 +144,20 @@ export async function ensureGameResultRatingIndexes(db) {
   }
 }
 
-async function loadRatingRows(db, identities) {
+async function loadRatingRows(db, identities, session) {
   if (identities.length === 0) return [];
   return db.collection(PLAYER_RATING_COLLECTIONS.state).find({
     $or: identities.flatMap((identity) => asArray(identityQuery(identity).$or || [identityQuery(identity)])),
-  }).toArray();
+  }, { session }).toArray();
 }
 
-async function loadResultEventPartition(db, resultId) {
+async function loadResultEventPartition(db, resultId, session) {
   const normalizedResultId = toStr(resultId);
   if (!normalizedResultId) return { applyEvents: [], compensationEvents: [] };
   const events = await db.collection(PLAYER_RATING_COLLECTIONS.events).find({
     "source.domain": "GAME_RESULT",
     "source.resultId": normalizedResultId,
-  }).toArray();
+  }, { session }).toArray();
   const compensationEvents = events.filter((event) => (
     Boolean(event?.source?.compensatesEventId)
     || String(event?.source?.mode || "").toLowerCase() === "revert"
@@ -175,60 +175,27 @@ async function loadResultEventPartition(db, resultId) {
   return { applyEvents, compensationEvents };
 }
 
-async function loadPreviousResultEvents(db, result) {
-  return loadResultEventPartition(db, result?.supersedesResultId);
+async function loadPreviousResultEvents(db, result, session) {
+  return loadResultEventPartition(db, result?.supersedesResultId, session);
 }
 
-async function loadPredecessorResult(db, result) {
+async function loadPredecessorResult(db, result, session) {
   const predecessorId = toStr(result?.supersedesResultId);
   if (!predecessorId) return null;
-  return db.collection(GAME_RESULT_COLLECTIONS.results).findOne({ id: predecessorId });
+  return db.collection(GAME_RESULT_COLLECTIONS.results).findOne({ id: predecessorId }, { session });
 }
 
-export async function loadIdentityEvents(db, identity) {
-  const current = await db.collection(PLAYER_RATING_COLLECTIONS.state).findOne(identityQuery(identity));
-  if (current?.fprLevelFrontier) return (await readFprLevelIdentityHistory(db, current.clientId)).events;
+export async function loadIdentityEvents(db, identity, session) {
+  const current = await db.collection(PLAYER_RATING_COLLECTIONS.state).findOne(identityQuery(identity), { session });
+  if (current?.fprLevelFrontier) return (await readFprLevelIdentityHistory(db, current.clientId, session)).events;
   return db.collection(PLAYER_RATING_COLLECTIONS.events)
-    .find(eventIdentityQuery(identity))
+    .find(eventIdentityQuery(identity), { session })
     .toArray();
 }
 
-function buildProjectionOutboxDocument({ state, event, nowIso }) {
-  if (!state.clientId || !event) return null;
-  const outboxId = `rating_projection:${event.id}`;
-  return {
-    _id: outboxId,
-    id: outboxId,
-    ratingEventId: event.id,
-    playerKey: state.playerKey,
-    clientId: state.clientId,
-    phoneNorm: state.phoneNorm,
-    payload: {
-      clientId: state.clientId,
-      phone: state.phoneNorm,
-      playerName: state.name,
-      levelLetter: state.rating,
-      levelNumeric: state.ratingNumeric.toFixed(5),
-      source: "game_result_rating_worker",
-      gameId: event.source?.gameId || event.source?.sourceId || null,
-      previousRating: event.change?.before ?? null,
-      nextRating: state.ratingNumeric,
-      confirmedAt: event.occurredAt,
-      changedById: event.actor?.id || "system:game-result-rating-worker",
-      changedByName: event.actor?.name || "Game result rating worker",
-      changedByPhone: event.actor?.phoneNorm || null,
-      eventId: event.id,
-    },
-    status: "PENDING",
-    attempts: 0,
-    createdAt: nowIso,
-    updatedAt: nowIso,
-    nextAttemptAt: nowIso,
-  };
-}
 
-async function ensureIdentityBaseline(db, { identity, ratingRow, result, plan, nowIso }) {
-  const events = await loadIdentityEvents(db, identity);
+async function ensureIdentityBaseline(db, { identity, session }) {
+  const events = await loadIdentityEvents(db, identity, session);
   if (replayPlayerRatingEvents(events)) return events;
   if (events.length > 0) {
     throw new GameResultRatingError(
@@ -237,36 +204,11 @@ async function ensureIdentityBaseline(db, { identity, ratingRow, result, plan, n
       { playerKey: identity.playerKey, eventCount: events.length },
     );
   }
-  const ratingNumeric = ratingRow?.ratingNumeric ?? ratingRow?.rating;
-  const firstOccurredAt = [...asArray(plan.compensationEvents), ...asArray(plan.applyEvents)]
-    .map((event) => Date.parse(event.occurredAt))
-    .filter(Number.isFinite)
-    .sort((left, right) => left - right)[0] || Date.parse(nowIso);
-  const baseline = buildGameResultBaselineEvent({
-    resultId: result.id,
-    occurredAt: new Date(firstOccurredAt - 1).toISOString(),
-    player: { ...identity, id: identity.clientId },
-    ratingNumeric,
-    createdAt: nowIso,
-  });
-  if (!baseline) {
-    throw new GameResultRatingError(
-      "RATING_BASELINE_MISSING",
-      `Cannot establish canonical rating baseline for ${identity.playerKey}`,
-      identity,
-      true,
-    );
-  }
-  await db.collection(PLAYER_RATING_COLLECTIONS.events).updateOne(
-    { _id: baseline.id },
-    { $setOnInsert: baseline },
-    { upsert: true },
-  );
-  return [...events, baseline];
+  throw new GameResultRatingError("RATING_LEDGER_BASELINE_MISSING", "Initial level must be assigned through onboarding or CUP", identity, true);
 }
 
-async function projectIdentity(db, { identity, current, result, nowIso }) {
-  const events = await loadIdentityEvents(db, identity);
+async function projectIdentity(db, { identity, current, result, nowIso, session }) {
+  const events = await loadIdentityEvents(db, identity, session);
   const replay = replayPlayerRatingEvents(events);
   if (!replay) {
     throw new GameResultRatingError("RATING_REPLAY_FAILED", `No replay baseline for ${identity.playerKey}`, identity, true);
@@ -294,6 +236,9 @@ async function projectIdentity(db, { identity, current, result, nowIso }) {
     lastEventId: replay.lastEventId,
     lastEventType: replay.lastEventType,
     lastEventAt: replay.lastEventAt,
+    lastSource: lastEvent?.source?.kind ?? lastEvent?.source?.domain ?? null,
+    lastChangedBy: lastEvent?.actor ?? null,
+    lastDelta: lastEvent?.change?.delta ?? null,
     lastGameId: result.gameId,
     lastResultId: result.id,
     lastResultRevision: result.scoreRevision || 1,
@@ -305,7 +250,7 @@ async function projectIdentity(db, { identity, current, result, nowIso }) {
   await db.collection(PLAYER_RATING_COLLECTIONS.state).updateOne(
     filter,
     { $set: state, $setOnInsert: { createdAt: nowIso } },
-    { upsert: true },
+    { upsert: true, session },
   );
   await db.collection(PLAYER_RATING_COLLECTIONS.compatibilityState).updateOne(
     identityQuery(identity),
@@ -318,16 +263,8 @@ async function projectIdentity(db, { identity, current, result, nowIso }) {
       },
       $setOnInsert: { createdAt: nowIso },
     },
-    { upsert: true },
+    { upsert: true, session },
   );
-  const outbox = buildProjectionOutboxDocument({ state, event: lastEvent, nowIso });
-  if (outbox) {
-    await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).updateOne(
-      { _id: outbox.id },
-      { $setOnInsert: outbox },
-      { upsert: true },
-    );
-  }
   return { state, lastEvent };
 }
 
@@ -353,7 +290,7 @@ export function applyRatingImpactToGameRoster(players, ratingImpact) {
   });
 }
 
-async function persistPreparedPlan(db, { result, owner, plan, nowIso }) {
+async function persistPreparedPlan(db, { result, owner, plan, nowIso, session }) {
   const preparedSet = {
     "ratingWork.status": "PREPARED",
     "ratingWork.preparedPlan": plan,
@@ -376,13 +313,14 @@ async function persistPreparedPlan(db, { result, owner, plan, nowIso }) {
     {
       $set: preparedSet,
     },
+    { session },
   );
   if (Number(response?.matchedCount || 0) !== 1) {
     throw new GameResultRatingError("JOB_LEASE_LOST", "Rating job lease was lost before plan persistence", null, true);
   }
 }
 
-async function assertJobLease(db, { result, owner, desiredState }) {
+async function assertJobLease(db, { result, owner, desiredState, session }) {
   const current = await db.collection(GAME_RESULT_COLLECTIONS.results).findOne(
     {
       _id: result._id,
@@ -391,7 +329,7 @@ async function assertJobLease(db, { result, owner, desiredState }) {
       "ratingWork.desiredState": desiredState,
       "ratingWork.status": { $in: ["RUNNING", "PREPARED"] },
     },
-    { projection: { _id: 1 } },
+    { projection: { _id: 1 }, session },
   );
   if (!current) {
     throw new GameResultRatingError("JOB_LEASE_LOST", "Rating job lease was lost before event persistence", null, true);
@@ -435,7 +373,7 @@ async function markJobFailure(db, { result, owner, error, nowIso, maxAttempts })
 }
 
 export async function processClaimedGameResultJob(db, { result, owner, nowIso, maxAttempts = DEFAULT_MAX_ATTEMPTS }) {
-  try {
+  const apply = async session => {
     const identities = collectResultPlayers(result);
     if (identities.length !== 4) {
       throw new GameResultRatingError(
@@ -444,9 +382,9 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
         { count: identities.length },
       );
     }
-    const ratingRows = await loadRatingRows(db, identities);
+    const ratingRows = await loadRatingRows(db, identities, session);
     const desiredState = String(result?.ratingWork?.desiredState || "APPLIED").toUpperCase();
-    const predecessor = desiredState === "APPLIED" ? await loadPredecessorResult(db, result) : null;
+    const predecessor = desiredState === "APPLIED" ? await loadPredecessorResult(db, result, session) : null;
     if (
       predecessor
       && String(predecessor?.ratingWork?.desiredState || "").toUpperCase() === "REVERTED"
@@ -460,8 +398,8 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
       );
     }
     const previous = desiredState === "APPLIED"
-      ? await loadPreviousResultEvents(db, result)
-      : await loadResultEventPartition(db, result.id);
+      ? await loadPreviousResultEvents(db, result, session)
+      : await loadResultEventPartition(db, result.id, session);
     let plan = result?.ratingWork?.preparedPlan || null;
     if (
       plan
@@ -476,13 +414,15 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
       );
     }
     if (!plan) {
+      const eventTime = new Date(ratingRows.reduce((latest, row) =>
+        Math.max(latest, (Date.parse(row.lastEventAt) || 0) + 1), Date.parse(nowIso))).toISOString();
       plan = desiredState === "REVERTED"
         ? buildGameResultRevertPlan({
             result,
             ratingRows,
             appliedEvents: previous.applyEvents,
             existingCompensationEvents: previous.compensationEvents,
-            nowIso,
+            nowIso: eventTime,
           })
         : buildGameResultRatingPlan({
             result,
@@ -490,12 +430,12 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
             previousEvents: previous.applyEvents,
             previousCompensationEvents: previous.compensationEvents,
             predecessorReverted: String(predecessor?.ratingWork?.status || "").toUpperCase() === "REVERTED",
-            nowIso,
+            nowIso: eventTime,
           });
-      await persistPreparedPlan(db, { result, owner, plan, nowIso });
+      await persistPreparedPlan(db, { result, owner, plan, nowIso, session });
     }
 
-    await assertJobLease(db, { result, owner, desiredState });
+    await assertJobLease(db, { result, owner, desiredState, session });
 
     const rowByKey = new Map(ratingRows.map((row) => [buildGameResultIdentity(row)?.playerKey, row]));
     if (asArray(plan.eventIds).length > 0) {
@@ -506,6 +446,7 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
           result,
           plan,
           nowIso,
+          session,
         });
       }
     }
@@ -517,7 +458,7 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
       },
     }));
     if (eventOperations.length > 0) {
-      await db.collection(PLAYER_RATING_COLLECTIONS.events).bulkWrite(eventOperations, { ordered: true });
+      await db.collection(PLAYER_RATING_COLLECTIONS.events).bulkWrite(eventOperations, { ordered: true, session });
     }
 
     const projections = [];
@@ -528,6 +469,7 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
           current: rowByKey.get(identity.playerKey) || null,
           result,
           nowIso,
+          session,
         }));
       }
     }
@@ -554,9 +496,9 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
     await db.collection(GAME_RESULT_COLLECTIONS.lifecycleEvents).updateOne(
       { _id: result?.ratingEvent?.id || `rate_${result.id}` },
       { $set: lifecycleSet },
-      { upsert: true },
+      { upsert: true, session },
     );
-    const game = await db.collection(GAME_RESULT_COLLECTIONS.games).findOne({ id: result.gameId });
+    const game = await db.collection(GAME_RESULT_COLLECTIONS.games).findOne({ id: result.gameId }, { session });
     if (game) {
       await db.collection(GAME_RESULT_COLLECTIONS.games).updateOne(
         { _id: game._id },
@@ -572,6 +514,7 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
             updatedAt: nowIso,
           },
         },
+        { session },
       );
     }
     if (result.supersedesResultId) {
@@ -585,6 +528,7 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
             updatedAt: nowIso,
           },
         },
+        { session },
       );
     }
     const appliedEventIds = asArray(plan.applyEvents).map((event) => event.id);
@@ -633,6 +577,7 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
           updatedAt: nowIso,
         },
       },
+      { session },
     );
     if (Number(resultUpdate?.matchedCount || 0) !== 1) {
       throw new GameResultRatingError("JOB_LEASE_LOST", "Rating job lease was lost before completion", null, true);
@@ -645,6 +590,9 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
       eventIds: plan.eventIds,
       players: projections.length,
     };
+  };
+  try {
+    return await runRatingTransaction(db, apply);
   } catch (error) {
     const failure = await markJobFailure(db, { result, owner, error, nowIso, maxAttempts });
     return {

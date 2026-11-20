@@ -1,0 +1,36 @@
+name: CUP-only player level
+on:
+  pull_request:
+    paths:
+      - 'src/utils/apiClient.ts'
+      - 'src/utils/playerLevel.ts'
+      - 'src/utils/levelAdmission.ts'
+      - 'src/components/onboarding/**'
+      - 'src/components/cabinet/OnboardingModal.tsx'
+      - 'src/components/UI/EventAllowedLevel.tsx'
+      - 'src/components/group-schedule/GroupTrainingInfo.tsx'
+      - 'src/components/games/GameJoinPage.tsx'
+      - 'src/components/games/GamesPage.tsx'
+      - 'src/components/group-schedule/GroupSchedulePage.tsx'
+      - 'src/components/tournament-signup/TournamentSignupPage.tsx'
+      - 'src/services/player-rating/**'
+      - 'scripts/*cup*level*'
+      - 'scripts/lib/cup*.mjs'
+      - 'scripts/nodered_player_level_nodes/**'
+      - 'scripts/tests/cupPlayerLevel*'
+      - 'scripts/tests/levelOnboardingGate*'
+      - 'package.json'
+      - '.github/workflows/cup-only-player-level.yml'
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.13.1'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx tsc -b
+      - run: npm run test:cup-only-level

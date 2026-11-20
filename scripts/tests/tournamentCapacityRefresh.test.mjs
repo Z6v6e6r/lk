@@ -48,6 +48,7 @@ test('capacity refresh updates roster and cards without repeating the booking or
   const changes = [];
   let bookings = 0;
   const deps = { selectedId: 'fixture-tournament', selectedExerciseId: 'fixture-event', actionLoading: false,
+    checkLevel: async () => true,
     subscriptionUsageShadowEnabled: false, isAuthenticated: true, isRestoringSession: false,
     checkout, discountPending: false, discountError: null, currentDiscountQuotes: [],
     checkoutRequestIdRef: { current: 1 }, readAuthToken: () => 'fixture-session',

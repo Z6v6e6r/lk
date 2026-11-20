@@ -1,3 +1,4 @@
+if (msg.payload?.retired === true) return [null, msg, null];
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();

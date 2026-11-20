@@ -1,3 +1,5 @@
+import { EventAllowedLevel } from "../UI/EventAllowedLevel";
+import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isTournamentCapacityError } from "../../utils/tournamentCapacityError";
 import { isSubscriptionBookingReleased } from "../../utils/subscriptionRejoin";
@@ -37,6 +39,8 @@ import {
   apiFetchTournamentVivaMyRegistration,
   apiFetchTournamentVivaPublicCheckout,
   apiResolveTournamentVivaRegistrationBookingId,
+  apiReconcileTournamentOwner,
+  apiRegisterForTournament,
   type TournamentRegistrationState,
   type TournamentSignupDetail,
   type TournamentSignupSummary,
@@ -750,37 +754,9 @@ function normalizeLevelLabel(value: string | null | undefined, numeric: number |
   return `${token[1]}${token[3] || ""}${token[2] ? formatSuperscript(token[2]) : ""}`;
 }
 
-function getLiveRatingKey(clientId: string | null | undefined, phone: string | null | undefined, name: string | null | undefined) {
-  const safeClientId = String(clientId || "").trim();
-  if (safeClientId) return `id:${safeClientId}`;
-  const phoneNorm = normalizePhone(phone);
-  if (phoneNorm) return `phone:${phoneNorm}`;
-  const safeName = String(name || "").trim().toLowerCase();
-  return safeName ? `name:${safeName}` : "";
-}
-
-function getPlayerLiveRating(
-  participant: TournamentSignupParticipant,
-  liveRatings: Map<string, PadelLiveRatingItem>,
-) {
-  const keys = [
-    getLiveRatingKey(participant.id, null, null),
-    getLiveRatingKey(null, participant.phone, null),
-    getLiveRatingKey(null, null, participant.name),
-  ].filter(Boolean);
-  for (const key of keys) {
-    const item = liveRatings.get(key);
-    if (item) return item;
-  }
-  return null;
-}
-
-function getPlayerLevelMeta(
-  participant: TournamentSignupParticipant,
-  liveRating: PadelLiveRatingItem | null,
-) {
-  const numeric = liveRating?.ratingNumeric ?? participant.ratingNumeric;
-  const rawLevel = liveRating?.rating || participant.level;
+function getPlayerLevelMeta(liveRating: PadelLiveRatingItem | null) {
+  const numeric = liveRating?.ratingNumeric ?? null;
+  const rawLevel = liveRating?.rating ?? null;
   const label = normalizeLevelLabel(rawLevel, numeric);
   const numericGrade = numeric != null ? getLetterGrade(numeric) : null;
   const gradeKey = numericGrade && isLevelGrade(numericGrade)
@@ -1003,6 +979,7 @@ export default function TournamentSignupPage({
   const [dateIndex, setDateIndex] = useState(initialDateIndex >= 0 ? initialDateIndex : DAYS_BEFORE_TODAY);
   const [items, setItems] = useState<TournamentSignupSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(targetTournamentId);
+  const { checkLevel, levelOnboardingDialog } = useLevelOnboardingGate(selectedId);
   const [detail, setDetail] = useState<TournamentSignupDetail | null>(null);
   const [registration, setRegistration] = useState<TournamentRegistrationState | null>(null);
   const [registrationSessionIdentity, setRegistrationSessionIdentity] = useState<string | null>(null);
@@ -1286,6 +1263,11 @@ export default function TournamentSignupPage({
         ])
       : [null, null];
 
+    if (vivaRegistrationResult?.data?.status === "REGISTERED"
+      && tournamentPaymentSessionIdentity(requestToken) === tournamentPaymentSessionIdentity(readAuthToken())) {
+      await apiReconcileTournamentOwner(exerciseId);
+    }
+
     if (detailResult.error) {
       setError(detailResult.error.message || "Не удалось открыть турнир");
       setDetail(null);
@@ -1518,6 +1500,9 @@ export default function TournamentSignupPage({
 
     const requestId = checkoutRequestIdRef.current;
     const paymentToken = readAuthToken();
+    if (!await checkLevel(detail ?? selectedTournament, nextCheckout.profile.id)) return;
+    if (checkoutRequestIdRef.current !== requestId || paymentToken !== readAuthToken()) return;
+
     const profile = nextCheckout.profile;
     const subscriptionProductKey = product.source === "client-subscription"
       ? `${product.source}:${product.id}`
@@ -1599,6 +1584,7 @@ export default function TournamentSignupPage({
       }
     }
   }, [
+    checkLevel,
     actionLoading,
     checkout,
     currentDiscountQuotes,
@@ -1616,6 +1602,30 @@ export default function TournamentSignupPage({
     selectedTournament,
     subscriptionUsageShadowEnabled,
   ]);
+
+  const registerFree = async () => {
+    if (!selectedId || !selectedExerciseId || !checkout?.profile || actionLoading || isRestoringSession) return;
+    const requestId = checkoutRequestIdRef.current;
+    const token = readAuthToken();
+    if (!await checkLevel(detail ?? selectedTournament, checkout.profile.id)
+      || checkoutRequestIdRef.current !== requestId || token !== readAuthToken()) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      const result = await apiRegisterForTournament(selectedId);
+      if (checkoutRequestIdRef.current !== requestId || token !== readAuthToken()) return;
+      if (result.error || !result.data || !["REGISTERED", "WAITLIST"].includes(result.data.status)) {
+        setError(result.error?.message ?? result.data?.message ?? "Не удалось подтвердить бесплатную запись.");
+        return;
+      }
+      setCheckout(null);
+      await loadPublicRoster(selectedExerciseId, { force: true });
+      await loadDetail(selectedId);
+      await loadList();
+    } finally {
+      if (checkoutRequestIdRef.current === requestId) setActionLoading(false);
+    }
+  };
 
   const loadCheckout = useCallback(async (mode: "auth" | "public") => {
     if (!selectedId || !selectedExerciseId || actionLoading) return;
@@ -1649,7 +1659,8 @@ export default function TournamentSignupPage({
       ...result.data.clientSubscriptions,
     ];
     if (availableProducts.length === 0) {
-      if (mode === "public") {
+      if (mode === "public" || (result.data.profile?.id && !result.data.customPricing && result.data.purchasedProducts.length === 0
+        && !result.data.tariffErrors?.length)) {
         setCheckout(result.data);
         setCheckoutResolvedFor(checkoutContextKey);
         return;
@@ -1888,10 +1899,6 @@ export default function TournamentSignupPage({
     let cancelled = false;
     const players = detailParticipants.map((participant) => ({
       clientId: participant.id,
-      phone: participant.phone,
-      name: participant.name,
-      rating: participant.level,
-      ratingNumeric: participant.ratingNumeric,
     }));
 
     void apiFetchPadelLiveRatings(players).then((result) => {
@@ -1902,12 +1909,7 @@ export default function TournamentSignupPage({
       }
       const next = new Map<string, PadelLiveRatingItem>();
       result.data.forEach((item) => {
-        const keys = [
-          getLiveRatingKey(item.clientId, null, null),
-          getLiveRatingKey(null, item.phoneNorm, null),
-          getLiveRatingKey(null, null, item.name),
-        ].filter(Boolean);
-        keys.forEach((key) => next.set(key, item));
+        if (item.clientId) next.set(item.clientId, item);
       });
       setLiveRatings(next);
     });
@@ -1919,6 +1921,7 @@ export default function TournamentSignupPage({
 
   return (
     <div className="tournament-signup-page">
+      {levelOnboardingDialog}
       <header className="tournament-signup-header">
         <button className="page-back" onClick={selectedId ? () => setSelectedId(null) : onBack} type="button">
           ← Назад
@@ -2097,6 +2100,7 @@ export default function TournamentSignupPage({
                       {
                         placeNumber: registration?.placeNumber ?? null,
                         refundMethod: action.refundMethod,
+                        cupTournament: true,
                       },
                     );
                     return {
@@ -2122,6 +2126,7 @@ export default function TournamentSignupPage({
                     </div>
                     <div className="details-time details-time-strong">{selectedTournament.title}</div>
                     <div className="details-time">{detailTournamentTypeLabel}</div>
+                    <EventAllowedLevel event={detail ?? selectedTournament} />
                   </div>
                   <CalendarDateBadge
                     monthLabel={detailDateParts.month}
@@ -2192,8 +2197,7 @@ export default function TournamentSignupPage({
                         <div className="game-empty">Стань первым участником</div>
                       ) : (
                         detailParticipants.map((participant, index) => {
-                          const liveRating = getPlayerLiveRating(participant, liveRatings);
-                          const levelMeta = getPlayerLevelMeta(participant, liveRating);
+                          const levelMeta = getPlayerLevelMeta(liveRatings.get(participant.id) ?? null);
 
                           return (
                             <div className="details-roster-row" key={`${participant.id}-${index}`}>
@@ -2275,6 +2279,13 @@ export default function TournamentSignupPage({
                         </div>
                         {checkout ? (
                           <div className="tournament-signup-payment-options">
+                            {checkout.profile && !checkout.customPricing && !checkout.tariffErrors?.length
+                              && [checkout.clientSubscriptions, checkout.oneTimes, checkout.subscriptions, checkout.purchasedProducts]
+                                .every(products => products.length === 0) && (
+                              <button type="button" className="section-cta" onClick={() => void registerFree()} disabled={actionLoading}>
+                                {actionLoading ? "Подтверждаем запись…" : "Записаться без оплаты"}
+                              </button>
+                            )}
                             {checkout.clientSubscriptions.length > 0 && (
                               <div className="tournament-signup-payment-group">
                                 {checkout.clientSubscriptions.map((product) => {
@@ -2465,7 +2476,7 @@ export default function TournamentSignupPage({
                     )}
                     {selectedTournament.address && <div><span>Адрес</span><strong>{selectedTournament.address}</strong></div>}
                     {selectedTournament.format && <div><span>Формат</span><strong>{selectedTournament.format}</strong></div>}
-                    {selectedTournament.levelLabel && <div><span>Уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
+                    {selectedTournament.levelLabel && <div><span>Допустимый уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
                     {selectedTournament.priceLabel && <div><span>Стоимость</span><strong>{selectedTournament.priceLabel}</strong></div>}
                   </div>
                   {detail?.description && <p className="tournament-signup-copy">{detail.description}</p>}

@@ -1,8 +1,7 @@
+import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetchProfile, type UserProfileType } from "../../utils/apiClient";
 import {
-  CUSTOM_FIELD_IDS,
-  getCustomFieldValue,
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
@@ -190,11 +189,11 @@ export default function LevelsInfoPage({
 
   const levelData = useMemo(() => {
     const rawNumeric = profile
-      ? getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric)
+      ? getProfileLevelNumericText(profile)
       : null;
     const numeric = parseNumericLevel(rawNumeric ?? undefined);
     const fallbackLetter = profile
-      ? (getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel) || "").trim().toUpperCase()
+      ? (getProfileLevelGrade(profile) || "").trim().toUpperCase()
       : "";
     const grade = numeric != null ? getLetterGrade(numeric) : (fallbackLetter || null);
     const band = findBandByGrade(grade);

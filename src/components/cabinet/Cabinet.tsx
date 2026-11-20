@@ -1,3 +1,4 @@
+import { getProfileLevelNumericText, getProfileLevelGrade } from "../../utils/playerLevel";
 import { tournamentIdentityKeys } from "../../utils/tournamentEventIdentity";
 import { canCreateGameAfterLookup } from "./bookingGameCreationGuard";
 import { AvatarImage } from "../UI/AvatarImage";
@@ -64,8 +65,6 @@ import { TournamentDetailsModal } from "./TournamentDetailsModal";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
 import { Modal } from "../UI/Modal";
 import {
-  CUSTOM_FIELD_IDS,
-  getCustomFieldValue,
   hasTournamentHostingAccess,
   normalizeLevelGradeLabel,
 } from "../../utils/customFields";
@@ -201,26 +200,9 @@ function applyOnboardingLevels(
   source: UserProfileType,
   detail: ProfileUpdatedEventDetail,
 ): UserProfileType {
-  const nextCustomFields = [...(source.customFields || [])];
-
-  const upsertField = (fieldId: string, value: string | undefined) => {
-    if (!value) return;
-    const index = nextCustomFields.findIndex((field) => field.id === fieldId);
-    if (index >= 0) {
-      nextCustomFields[index] = { ...nextCustomFields[index], value: [value] };
-      return;
-    }
-    nextCustomFields.push({
-      id: fieldId,
-      name: "",
-      value: [value],
-    });
-  };
-
-  upsertField(CUSTOM_FIELD_IDS.lkPadelLevel, detail.levelLetter);
-  upsertField(CUSTOM_FIELD_IDS.lkPadelLevelNumeric, detail.levelNumeric);
-
-  return { ...source, customFields: nextCustomFields };
+  // Event details are hints; refresh the authenticated canonical state before showing it.
+  void detail;
+  return source;
 }
 
 function getPlayerInitials(name: string | null | undefined): string {
@@ -1954,8 +1936,8 @@ export function Cabinet({
   useEffect(() => {
     if (!profile) return;
 
-    const numericLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
-    const letterLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel);
+    const numericLevelValue = getProfileLevelNumericText(profile);
+    const letterLevelValue = getProfileLevelGrade(profile);
     const onboardingCompleted = Boolean(numericLevelValue);
 
     identifyAnalyticsUser({
@@ -3062,7 +3044,7 @@ export function Cabinet({
     );
   }
   if (!profile) return <div className="load-error">{CABINET_LOAD_ERROR_TEXT}</div>;
-  const numericLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
+  const numericLevelValue = getProfileLevelNumericText(profile);
   const hasLevel = numericLevelValue !== undefined && numericLevelValue !== null && numericLevelValue !== "";
   const onboardingLabel = "Определи свой уровень";
   const canHostTournaments = hasTournamentHostingAccess(profile);

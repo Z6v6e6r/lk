@@ -1,11 +1,11 @@
+import { getProfileLevelNumericText } from "../../utils/playerLevel";
+import { parseDeclaredLevel } from "../../utils/levelAdmission";
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { Modal } from "../UI/Modal";
 import { apiSaveOnboardingLevel } from "../../utils/apiClient";
 import type { UserProfileType } from "../../utils/apiClient";
 import {
-  CUSTOM_FIELD_IDS,
   formatNumericField,
-  getCustomFieldValue,
   getLetterGrade,
 } from "../../utils/customFields";
 import { resolvePreferredLkAssetUrl } from "../../utils/lkAssetBaseUrls";
@@ -312,6 +312,7 @@ interface OnboardingModalProps {
   trainingLink: string;
   tournamentsLink: string;
   onProfileUpdated: (payload: { levelLetter: string; levelNumeric: string }) => void;
+  returnToEvent?: boolean;
 }
 
 export function OnboardingModal({
@@ -322,8 +323,9 @@ export function OnboardingModal({
   trainingLink,
   tournamentsLink,
   onProfileUpdated,
+  returnToEvent = false,
 }: OnboardingModalProps) {
-  const existingRating = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
+  const existingRating = getProfileLevelNumericText(profile);
   const hasRating = existingRating !== undefined && existingRating !== null && existingRating !== "";
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
@@ -331,6 +333,10 @@ export function OnboardingModal({
   const [doneScore, setDoneScore] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [readyQuestionId, setReadyQuestionId] = useState<string | null>(null);
+  const [method, setMethod] = useState<"known" | "questionnaire" | null>(null);
+  const [knownLevel, setKnownLevel] = useState("");
+  const declaredLevel = parseDeclaredLevel(knownLevel);
+  const declaredLevelValid = declaredLevel !== null;
 
   const experienceAnswer = answers.q1_1?.[0];
   const branchKey = experienceAnswer ? BRANCH_BY_EXPERIENCE[experienceAnswer] : null;
@@ -379,6 +385,8 @@ export function OnboardingModal({
       setDoneScore(null);
       setError(null);
       setReadyQuestionId(null);
+      setMethod(null);
+      setKnownLevel("");
     }
   }, [isOpen]);
 
@@ -408,7 +416,7 @@ export function OnboardingModal({
   const isQuestionReady = !!currentQuestion && readyQuestionId === currentQuestion.id;
 
   useEffect(() => {
-    if (!isOpen || !currentQuestion || hasRating || doneScore) return;
+    if (!isOpen || method !== "questionnaire" || !currentQuestion || hasRating || doneScore) return;
     trackAnalyticsEvent("onboarding_question_viewed", {
       clientId: profile.id,
       questionId: currentQuestion.id,
@@ -425,6 +433,7 @@ export function OnboardingModal({
     isOpen,
     profile.id,
     questions.length,
+    method,
   ]);
 
   useEffect(() => {
@@ -494,7 +503,8 @@ export function OnboardingModal({
       questionId: currentQuestion?.id ?? null,
       questionIndex: currentIndex + 1,
     });
-    setCurrentIndex((prev) => Math.max(prev - 1, 0));
+    if (currentIndex === 0) setMethod(null);
+    else setCurrentIndex((prev) => Math.max(prev - 1, 0));
   };
 
   const handleNext = () => {
@@ -528,8 +538,14 @@ export function OnboardingModal({
     return score;
   };
 
+  const levelUnavailable = profile.level?.status === "UNAVAILABLE" || profile.level?.status === "CONFLICT";
+  const levelUnavailableMessage = profile.level?.status === "CONFLICT"
+    ? "Требуется сверка уровня в ЦУП. Обратитесь в поддержку."
+    : "Не удалось загрузить уровень ЦУП. Обновите страницу.";
+
   const handleFinish = async () => {
-    const finalScore = computeScore();
+    if (saving || hasRating || (method === "known" ? !declaredLevelValid : !questions.every(q => answers[q.id]?.length))) return;
+    const finalScore = method === "known" ? declaredLevel! : computeScore();
     const letterScore = getLetterGrade(finalScore);
     const numericScore = formatNumericField(finalScore);
     trackAnalyticsEvent("onboarding_submit_started", {
@@ -539,18 +555,20 @@ export function OnboardingModal({
       finalLevelLetter: letterScore,
       finalLevelNumeric: numericScore,
     });
-    setDoneScore(letterScore);
     setSaving(true);
     setError(null);
 
     try {
+      if (levelUnavailable) throw new Error(levelUnavailableMessage);
       const res = await apiSaveOnboardingLevel({
         clientId: profile.id,
         phone: profile.phone,
         levelLetter: letterScore,
         levelNumeric: numericScore,
       });
-      if (!res.error && (res.status === 200 || res.status === 204)) {
+      const assigned = res.data?.items?.[0];
+      if (!res.error && res.status === 200 && assigned?.status === "RATED" && assigned.source === "CUP_CANONICAL" && assigned.clientId === profile.id && assigned.ratingNumeric !== null && assigned.rating) {
+        setDoneScore(assigned.rating);
         identifyAnalyticsUser({
           clientId: profile.id,
           phone: profile.phone,
@@ -564,7 +582,7 @@ export function OnboardingModal({
           finalLevelLetter: letterScore,
           finalLevelNumeric: numericScore,
         });
-        onProfileUpdated({ levelLetter: letterScore, levelNumeric: numericScore });
+        onProfileUpdated({ levelLetter: assigned.rating, levelNumeric: String(assigned.ratingNumeric) });
       } else {
         trackClientError(
           "onboarding.save_failed",
@@ -602,7 +620,7 @@ export function OnboardingModal({
 
   const titleText = hasRating ? "Верифицируй свой уровень" : "Определи свой уровень";
 
-  if (hasRating) {
+  if (hasRating && !doneScore) {
     return (
       <Modal isOpen={isOpen} onClose={handleClose} title={titleText}>
         <div className="onboarding-body">
@@ -611,7 +629,7 @@ export function OnboardingModal({
             Повторное прохождение недоступно. Рейтинг можно верифицировать у администратора
             или участвуя в групповых тренировках и турнирах.
           </p>
-          <div className="onboarding-links">
+          {!returnToEvent && <div className="onboarding-links">
             <a
               className="onboarding-link"
               href={trainingLink}
@@ -632,7 +650,7 @@ export function OnboardingModal({
             >
               Турниры
             </a>
-          </div>
+          </div>}
         </div>
       </Modal>
     );
@@ -647,7 +665,7 @@ export function OnboardingModal({
           <p className="onboarding-text">
             Если вы не согласны, вы можете верифицировать его на тренировке или при участии в турнире.
           </p>
-          <div className="onboarding-links">
+          {!returnToEvent && <div className="onboarding-links">
             <a
               className="onboarding-link"
               href={trainingLink}
@@ -668,11 +686,37 @@ export function OnboardingModal({
             >
               Перейти к турнирам
             </a>
-          </div>
+          </div>}
           <div className="onboarding-actions">
-            <button className="btn-primary" onClick={handleClose}>Закрыть</button>
+            <button className="btn-primary" onClick={handleClose}>{returnToEvent ? "Вернуться к записи" : "Закрыть"}</button>
           </div>
-          {error && <div className="onboarding-error">{error}</div>}
+          {(error || levelUnavailable) && <div className="onboarding-error" role="alert">{error || levelUnavailableMessage}</div>}
+        </div>
+      </Modal>
+    );
+  }
+
+  if (method !== "questionnaire") {
+    return (
+      <Modal isOpen={isOpen} onClose={handleClose} title={titleText}>
+        <div className="onboarding-body">
+          <div className="onboarding-title">Знаете свой уровень?</div>
+          <p className="onboarding-text">Укажите его сразу или определите по нашей анкете.</p>
+          <div className="onboarding-options">
+            <button type="button" className={`onboarding-option ${method === "known" ? "selected" : ""}`} onClick={() => setMethod("known")} disabled={saving}>Знаю свой уровень</button>
+            <button type="button" className="onboarding-option" onClick={() => setMethod("questionnaire")} disabled={saving}>Определить по анкете</button>
+          </div>
+          {method === "known" && (
+            <>
+              <label className="onboarding-question" htmlFor="onboarding-known-level">Ваш числовой уровень от 1 до 7</label>
+              <input id="onboarding-known-level" className="form-input" inputMode="decimal" value={knownLevel} placeholder="Например, 3,25" onChange={event => setKnownLevel(event.target.value)} disabled={saving} aria-describedby="onboarding-known-level-hint" />
+              <p id="onboarding-known-level-hint" className="onboarding-text">{declaredLevel !== null ? `Уровень ${getLetterGrade(declaredLevel)} · ${formatNumericField(declaredLevel)}` : "Если знаете только букву или сомневаетесь, пройдите анкету."}</p>
+              <div className="onboarding-actions">
+                <button type="button" className="btn-primary" onClick={handleFinish} disabled={!declaredLevelValid || saving || levelUnavailable}>{saving ? "Сохранение..." : "Сохранить уровень"}</button>
+              </div>
+            </>
+          )}
+          {(error || levelUnavailable) && <div className="onboarding-error" role="alert">{error || levelUnavailableMessage}</div>}
         </div>
       </Modal>
     );
@@ -723,12 +767,12 @@ export function OnboardingModal({
               <button
                 className="btn-secondary"
                 onClick={handleBack}
-                disabled={currentIndex === 0}
+                disabled={saving}
               >
                 Назад
               </button>
               {isLast ? (
-                <button className="btn-primary" onClick={handleFinish} disabled={!canNext || saving}>
+                <button className="btn-primary" onClick={handleFinish} disabled={!canNext || saving || levelUnavailable}>
                   {saving ? "Сохранение..." : "Получить рейтинг"}
                 </button>
               ) : (
@@ -745,7 +789,7 @@ export function OnboardingModal({
         ) : (
           <div className="onboarding-question-loading">Загрузка вопроса...</div>
         )}
-        {error && <div className="onboarding-error">{error}</div>}
+        {(error || levelUnavailable) && <div className="onboarding-error" role="alert">{error || levelUnavailableMessage}</div>}
       </div>
     </Modal>
   );

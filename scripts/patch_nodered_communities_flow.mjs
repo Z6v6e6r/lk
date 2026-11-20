@@ -240,18 +240,18 @@ const extractTags = (value) => {
   return [];
 };
 const buildLevelLabel = (score) => {
-  const normalized = Number.isFinite(score) ? score : 3.2;
-  if (normalized >= 5.75) return 'A';
-  if (normalized >= 5.25) return 'B+';
-  if (normalized >= 4.75) return 'B';
-  if (normalized >= 4.25) return 'C+';
-  if (normalized >= 3.75) return 'C';
-  if (normalized >= 3.25) return 'D+';
+  if (!Number.isFinite(score) || score < 1 || score > 7) return null; const normalized = score;
+  if (normalized >= 5.5) return 'A';
+  if (normalized >= 4.7) return 'B+';
+  if (normalized >= 4) return 'B';
+  if (normalized >= 3.5) return 'C+';
+  if (normalized >= 3) return 'C';
+  if (normalized >= 2) return 'D+';
   return 'D';
 };
 const buildMember = (value, fallbackRole = 'MEMBER') => {
   const member = isObj(value) ? value : {};
-  const levelScore = toNum(member.levelScore ?? member.ratingNumeric ?? member.levelNumeric) ?? 3.2;
+  const levelScore = toNum(member.levelScore ?? member.ratingNumeric ?? member.levelNumeric) ?? null;
   return {
     id: toStr(member.id || member.clientId || member.userId || member.uuid),
     phone: normPhone(member.phone || member.phoneNorm || member.phoneNumber || member.mobile),
@@ -684,8 +684,8 @@ const buildFallbackSlotMember = (raw) => ({
   avatar: null,
   role: 'MEMBER',
   status: 'ACTIVE',
-  levelScore: 3.2,
-  levelLabel: buildLevelLabel(3.2),
+  levelScore: null,
+  levelLabel: null,
   joinedAt: nowIso,
 });
 const resolveGameSlotMembers = (game, rawSlots) => {
@@ -3202,8 +3202,8 @@ const commentDoc = {
     name: ctx.member?.name || 'Игрок',
     avatar: ctx.member?.avatar || null,
     role: ctx.member?.role || 'MEMBER',
-    levelScore: Number.isFinite(Number(ctx.member?.levelScore)) ? Number(ctx.member.levelScore) : 3.2,
-    levelLabel: ctx.member?.levelLabel || 'C',
+    levelScore: Number.isFinite(Number(ctx.member?.levelScore)) ? Number(ctx.member.levelScore) : null,
+    levelLabel: ctx.member?.levelLabel || null,
   },
   archived: false,
 };
@@ -3610,8 +3610,8 @@ const messageDoc = {
     name: communityMember.name || 'Игрок',
     avatar: communityMember.avatar || null,
     role: communityMember.role || 'MEMBER',
-    levelScore: Number.isFinite(Number(communityMember.levelScore)) ? Number(communityMember.levelScore) : 3.2,
-    levelLabel: communityMember.levelLabel || 'C',
+    levelScore: Number.isFinite(Number(communityMember.levelScore)) ? Number(communityMember.levelScore) : null,
+    levelLabel: communityMember.levelLabel || null,
   },
   archived: false,
 };

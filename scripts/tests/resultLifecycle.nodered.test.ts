@@ -1586,15 +1586,8 @@ test("state response returns sanitized vivaSync summary for latest result", () =
   assert.equal(out[0].payload.latestResult.vivaSync.failures[0].reason, "Missing clientId for Viva sync");
 });
 
-test("retry query selects failed retryable outbox rows below 30 attempts", () => {
-  const out = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_retry_query.js", {
-    payload: {},
-  }) as any[];
-
-  assert.equal(out[0].payload.kind, "VIVA_ONBOARDING_LEVEL");
-  assert.equal(out[0].payload.status, "FAILED");
-  assert.deepEqual(out[0].payload.retryable, { $ne: false });
-  assert.deepEqual(out[0].payload.attempts, { $lt: 30 });
+test("retired Viva queue is never selected for automatic retry", () => {
+  assert.deepEqual(runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_retry_query.js", { payload: {} }), [null, null]);
 });
 
 test("retry prepare maps stored outbox row into sync task and skips exhausted rows", () => {
@@ -1642,15 +1635,7 @@ test("viva sync response increments attempts and summary rebuild reflects recove
       payload: { clientId: "p1" },
     },
   }) as any;
-  assert.deepEqual(prepared.payload[0], {
-    _id: "result_viva_sync:tenant-1:out-1",
-    id: "result_viva_sync:tenant-1:out-1",
-    tenantKey: "tenant-1",
-    resultId: "res-1",
-    resultRevision: 2,
-  });
-  assert.equal(prepared.payload[1].$setOnInsert.resultId, "res-1");
-  assert.equal(prepared.payload[1].$setOnInsert.resultRevision, 2);
+  assert.equal(prepared, null, 'retired provider tasks are not inserted');
 
   const handled = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_handle_response.js", {
     statusCode: 200,
