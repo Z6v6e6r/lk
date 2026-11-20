@@ -318,12 +318,18 @@ test("actual trial transaction preserves the promo and owned visit source throug
 
 test("tournament checkout uses only the durable CUP route, carries promo, and never falls back after unknown", async () => {
   const node = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
-  for (const source of ["one-time", "client-one-time", "subscription"]) {
+  const cases = [
+    ...["one-time", "client-one-time", "subscription"].map(source => ({ source, exercise: {} })),
+    ...["one-time", "client-one-time"].map(source => ({
+      source, exercise: { direction: { id: 7108 } }, checkoutContext: "tournament",
+    })),
+  ];
+  for (const { source, exercise, checkoutContext } of cases) {
     const calls = [];
     const create = evaluate(node.getText(api).replace(/^export /, ""), {
       isSpanishTrainingExercise: () => false, isTrialGroupTraining: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: true,
       isChildTournamentExercise, isKidsAcademyTraining, tournamentCheckoutRetryKeys: new Map(),
-      resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "tournament",
+      resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => checkoutContext ? null : "tournament",
       createVivaPaymentWatcher: () => { throw Error("unbound payment watcher forbidden"); },
       buildTournamentPaymentReturnUrls: () => ({ successUrl: "https://padlhub.ru/ok", failUrl: "https://padlhub.ru/fail" }),
       buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
@@ -333,7 +339,7 @@ test("tournament checkout uses only the durable CUP route, carries promo, and ne
         return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
       },
     });
-    const params = { exerciseId: "tournament", clientId: "actor", exercise: {}, product: product(source), promoCode: "PROMO" };
+    const params = { checkoutContext, exerciseId: "tournament", clientId: "actor", exercise, product: product(source), promoCode: "PROMO" };
     await create(params); await create(params);
     assert.equal(calls.length, 2);
     for (const call of calls) {
