@@ -88,7 +88,7 @@ export function claimFastResume(id: string): boolean {
 /** Same trusted card click can replace a server-closed checkout at the exact displayed price. */
 export function claimFastRestart(id: string, quote: ZeroOfferQuote): boolean {
   const value = readFastIntent(id);
-  if (!value?.resume || !['friendship', 'friendship-two-hours'].includes(value.key) || value.phase !== 'claimed'
+  if (!value?.resume || !['friendship', 'friendship-two-hours', 'ra'].includes(value.key) || value.phase !== 'claimed'
     || value.key === 'friendship-two-hours' && quote.activationDays !== 1
     || value.priceMinor <= 0 || quote.priceMinor !== value.priceMinor || isCheckoutReturn()) return false;
   write({ ...value, resume: false, activationDays: quote.activationDays ?? null });

@@ -1,5 +1,5 @@
 import { checkoutSessionToken } from './zeroCheckoutSession';
-import { DIRECT_RECOVERY_PRODUCT, readClosedDirectCheckout } from './directCheckoutRecovery';
+import { isDirectRecoveryProduct, readClosedDirectCheckout } from './directCheckoutRecovery';
 import { parseZeroAttempt } from './zeroCheckoutCustody';
 import { legacyZeroOffersForProduct } from './zeroCheckoutProducts';
 import { apiConfirmTournamentSubscriptionPurchase } from '../../utils/apiClient';
@@ -18,7 +18,7 @@ export async function subscriptionPromoAttemptKey(productId: string, phone: stri
 export async function hasSubscriptionPromoAttempt(productId: string, phone: string, allowClosedRelease = false): Promise<boolean> {
   try {
     const actor = readAuthToken();
-    const checkoutActor = productId === DIRECT_RECOVERY_PRODUCT ? checkoutSessionToken() : null;
+    const checkoutActor = isDirectRecoveryProduct(productId) ? checkoutSessionToken() : null;
     const key = await subscriptionPromoAttemptKey(productId, phone);
     const raw = window.localStorage.getItem(key);
     let record: Record<string, unknown> | null = null;
@@ -66,7 +66,7 @@ export async function hasSubscriptionPromoAttempt(productId: string, phone: stri
       // A completed prior purchase no longer blocks a later renewal.
       return !await releaseProvenPaid();
     }
-    if (allowClosedRelease && navigator.locks && checkoutActor && !locallyPaid && productId === DIRECT_RECOVERY_PRODUCT
+    if (allowClosedRelease && navigator.locks && checkoutActor && !locallyPaid && isDirectRecoveryProduct(productId)
       && record?.kind === 'ordinary' && record.paid !== true && typeof transactionId === 'string') {
       // The caller holds the account/product lock. Never adopt an explicit different transaction.
       if (represented.some(row => { const zero = parseZeroAttempt(row.raw, row.key.replace('padlhub_zero_checkout_attempt_v1:', '')); return zero?.transactionId && zero.transactionId !== transactionId; })) return true;

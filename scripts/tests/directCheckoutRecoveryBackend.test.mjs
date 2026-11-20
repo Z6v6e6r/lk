@@ -4,14 +4,14 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { directRecoveryPrefix, patchDirectRecoveryBody, verifyDirectTopology } from '../patch_direct_checkout_recovery.mjs';
 const common=fs.readFileSync(new URL('../nodered_direct_checkout_recovery_nodes/common.js',import.meta.url),'utf8');
-const tools=new Function('Buffer',common+'; return { dcrSha,dcrFacts,dcrOwner,DCR_DOMAIN,DCR_PRODUCT };')(Buffer);
+const tools=new Function('Buffer',common+'; return { dcrSha,dcrFacts,dcrOwner,dcrDomain,DCR_PRODUCT,DCR_RA_PRODUCT };')(Buffer);
 const id='00000000-0000-4000-8000-000000000001',client='00000000-0000-4000-8000-000000000002',operationId='00000000-0000-4000-8000-000000000003';
 const phone='+'+'7'+'9000000000';
 const transaction={id,status:'UNPAID',client:{id:client,phone},products:[{id:tools.DCR_PRODUCT,type:'SUBSCRIPTION',count:1,cost:1980000,discount:0,used:false,refunded:false}],sum:1980000,discount:0,toPay:1980000,deposit:0,createDate:'2026-10-31T00:00:00Z',paymentDueDate:'2026-10-31T00:20:00Z',processingStatus:null,possibleDoublePayment:false,receiptPending:false,acquiringAuthCode:null,acquiringRrnCode:null,paymentMethod:'WIDGET',paymentLegs:[{source:'CARD',amountKopecks:1980000}],purchasedServices:[],receipts:[],executedSurcharges:[],paidByOtherSaleBookingIds:[],transactionRefunds:[],cardPaymentInfo:{paymentId:'fixture-payment-1',paymentUrl:'https://pay.vivacrm.ru/SYNTHETICcheckout000000000',status:'REJECTED',declineOutcome:'EXPIRED',declineReason:'OTHER',declineMessage:null}};
-const sha=s=>crypto.createHash('sha256').update(s).digest('hex'),domain=tools.DCR_DOMAIN;
+const sha=s=>crypto.createHash('sha256').update(s).digest('hex'),domain=tools.dcrDomain(tools.DCR_PRODUCT);
 const proof={ownerBinding:sha(domain+id+'\0'+client+'\0'+tools.dcrOwner(transaction).phone),paymentBinding:sha(domain+id+'\0'+transaction.cardPaymentInfo.paymentId+'\0'+transaction.cardPaymentInfo.paymentUrl),legsBinding:sha(domain+id+'\0'+JSON.stringify({paymentMethod:transaction.paymentMethod,paymentLegs:transaction.paymentLegs,discountMinor:transaction.discount,toPayMinor:transaction.toPay})),createdAt:transaction.createDate,expiresAt:transaction.paymentDueDate};
 const config={schemaVersion:1,productId:tools.DCR_PRODUCT,cutoff:'2026-11-01T12:00:00.000Z',observedAt:'2026-11-01T12:26:00.000Z',operationId,proofs:{[sha(domain+id)]:proof}};
-const run=(kind,msg,settings={})=>new Function('msg','env','Buffer',directRecoveryPrefix(kind,config)+'; return "legacy";')(msg,{get:key=>settings[key]??({VIVA_SERVICE_USERNAME:'fixture-user',VIVA_SERVICE_PASSWORD:'fixture-password',VIVA_SERVICE_CLIENT_ID:'fixture-client'})[key]},Buffer);
+const run=(kind,msg,settings={},configs=[config])=>new Function('msg','env','Buffer',directRecoveryPrefix(kind,...configs)+'; return "legacy";')(msg,{get:key=>settings[key]??({VIVA_SERVICE_USERNAME:'fixture-user',VIVA_SERVICE_PASSWORD:'fixture-password',VIVA_SERVICE_CLIENT_ID:'fixture-client'})[key]},Buffer);
 const incoming=body=>({_msgid:'fixture',req:{headers:{authorization:'Bearer '+'u'.repeat(32)}},res:{fixture:true},payload:body});
 function start(){const prepared=run('prepare',incoming({directCheckoutRecoveryVersion:1,transactionId:id}))[0];assert.deepEqual(prepared.payload,[{_id:{$in:[]}}]);assert.deepEqual(prepared.query,{_id:{$in:[]}});prepared.payload=[];return run('resolve',prepared)[0];}
 function reply(request,payload,status=200){return {...request,payload,statusCode:status,responseUrl:request.url};}
@@ -87,4 +87,46 @@ test('expired promo invoices require their own exact frozen discount and amount'
  assert.equal(tools.dcrFacts(promo,tools.dcrOwner(promo),frozen,config.cutoff,Date.now()),true);
  promo.products[0].discount = 1000000; promo.discount = 1000000; promo.toPay = 980000;
  assert.equal(tools.dcrFacts(promo,tools.dcrOwner(promo),frozen,config.cutoff,Date.now()),false);
+});
+
+test('RA uses its own frozen proof and preserves Friendship 2.0 on the same endpoint', () => {
+ const raTransaction = structuredClone(transaction);
+ const raId = '00000000-0000-4000-8000-000000000004';
+ const productId = tools.DCR_RA_PRODUCT;
+ Object.assign(raTransaction, {
+  id: raId, products: [{...transaction.products[0], id: productId, cost: 2380000}],
+  sum: 2380000, toPay: 2380000, paymentLegs: [{source: 'CARD_ONLINE', amountKopecks: 2380000}],
+ });
+ const raDomain = tools.dcrDomain(productId);
+ const raProof = {
+  ...proof,
+  ownerBinding: sha(raDomain+raId+'\0'+client+'\0'+tools.dcrOwner(raTransaction).phone),
+  paymentBinding: sha(raDomain+raId+'\0'+raTransaction.cardPaymentInfo.paymentId+'\0'+raTransaction.cardPaymentInfo.paymentUrl),
+  legsBinding: sha(raDomain+raId+'\0'+JSON.stringify({paymentMethod: raTransaction.paymentMethod,
+   paymentLegs: raTransaction.paymentLegs, discountMinor: 0, toPayMinor: raTransaction.toPay})),
+ };
+ const raConfig = {...config, productId, proofs: {[sha(raDomain+raId)]: raProof}};
+ const route = (transactionId, providerTx) => {
+  const prepared = run('prepare', incoming({directCheckoutRecoveryVersion: 1, transactionId}))[0];
+  const profile = run('resolve', prepared, {}, [config, raConfig])[0];
+  const token = run('router', reply(profile, {id: client, phone}))[0];
+  const read = run('router', reply(token, {access_token: 's'.repeat(32)}))[0];
+  return run('router', reply(read, providerTx))[2];
+ };
+ assert.equal(route(id, transaction).payload.directCheckoutClosure.productId, tools.DCR_PRODUCT);
+ assert.equal(route(raId, raTransaction).payload.directCheckoutClosure.productId, productId);
+ for (const mutate of [
+  t => { t.products[0].id = tools.DCR_PRODUCT; },
+  t => { t.products[0].id = '3b4806f1-6f9a-46df-a7d7-45075b4e7274'; },
+  t => { t.paymentMethod = 'SMS'; },
+  t => { t.paymentLegs[0].amountKopecks--; },
+  t => { t.status = 'PAID'; },
+  t => { t.cardPaymentInfo.declineOutcome = 'DECLINED'; },
+ ]) {
+  const changed = structuredClone(raTransaction);
+  mutate(changed);
+  assert.equal(route(raId, changed).statusCode, 409);
+ }
+ const candidate = run('prepare', incoming({directCheckoutRecoveryVersion: 1, transactionId: raId}))[0];
+ assert.equal(run('resolve', candidate, {}, [config])[1].statusCode, 404);
 });

@@ -245,7 +245,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   f.globals.window.localStorage.setItem = (key, value) => { if (storageFails) throw new Error('storage disabled'); setItem(key, value); };
   const adapter = loadModule<typeof import('../../src/components/subscription-storefront/zeroCheckoutPayment')>('components/subscription-storefront/zeroCheckoutPayment.ts', {
     hasVerifiedCheckoutReset, parseZeroAttempt, parseZeroOperationLink,
-    DIRECT_RECOVERY_PRODUCT: '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e', readClosedDirectCheckout: async () => false,
+    isDirectRecoveryProduct: (id: string) => ['6b98e7e3-5bd3-4e94-9dc3-7723ea52513e', 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759'].includes(id), readClosedDirectCheckout: async () => false,
     subscriptionPromoAttemptKey: async (id: string, phone: string) => 'fixture:' + (phone === fixturePhone ? 'a' : 'b').repeat(64),
     ...regularPayment, ...promo, ...f.adapter,
     withSubscriptionPromoLock: async (_id: string, _phone: string, create: () => Promise<unknown>) => create(),
@@ -1055,14 +1055,14 @@ test('page reconciliation checks only supported visible offers and never consume
     const f = reconciliationFixture({ resumeZeroPayment: async (key: string) => {
       called.push(key); return { status, message: 'fixture result', paymentUrl: 'https://bank.example/should-not-open' };
     } });
-    const stop = f.start(['friendship', 'academy']);
-    assert.deepEqual(f.state(), ['friendship']);
+    const stop = f.start(['friendship', 'ra', 'academy', 'ra-promo']);
+    assert.deepEqual(f.state(), ['friendship', 'ra']);
     await flushReconciliation();
-    assert.deepEqual(called, ['friendship']);
+    assert.deepEqual(called, ['friendship', 'ra']);
     assert.deepEqual(f.state(), []);
-    assert.equal(f.notices.length, ['restart', 'paid'].includes(status) ? 1 : 0);
-    f.fire('focus'); await flushReconciliation(); assert.equal(called.length, 1);
-    f.advance(); f.fire('focus'); await flushReconciliation(); assert.equal(called.length, 2);
+    assert.equal(f.notices.length, ['restart', 'paid'].includes(status) ? 2 : 0);
+    f.fire('focus'); await flushReconciliation(); assert.equal(called.length, 2);
+    f.advance(); f.fire('focus'); await flushReconciliation(); assert.equal(called.length, 4);
     stop?.(); assert.equal(f.listeners.size, 0);
   }
 });
@@ -1161,4 +1161,30 @@ test('StrictMode cleanup invalidates the first profile response before a remount
   const secondStop = page.start(['friendship']);
   finish[0](); finish[1](); await flushReconciliation();
   assert.deepEqual(page.resumes, ['friendship']); secondStop?.();
+});
+
+test('RA page reconciliation matches the exact owned invoice before enabling an explicit retry', async () => {
+  const raProduct = 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759';
+  const transactionId = '00000000-0000-4000-8000-000000000002';
+  let probes = 0;
+  const payment = zeroFixture({ readClosedDirectCheckout: async (productId: string, id: string, current: () => boolean) => {
+    probes++;
+    assert.equal(productId, raProduct);
+    assert.equal(id, transactionId);
+    return current();
+  } });
+  const marker = 'padlhub_zero_checkout_attempt_v1:ra';
+  payment.setPrice(2380000);
+  payment.setResult({ data: { paymentUrl: 'https://bank.example/ra', toPay: 2380000, transactionId } });
+  await payment.adapter.createZeroPayment('ra', fixturePhone, 2380000, () => true);
+  const page = reconciliationFixture({ ...payment.adapter });
+  const stop = page.start(['ra', 'ra-promo']);
+  await flushReconciliation();
+  assert.equal(probes, 1);
+  assert.equal(payment.stored.has(marker), false);
+  assert.equal(payment.writes.length, 1);
+  assert.equal(page.notices.length, 1);
+  stop?.();
+  await payment.adapter.createZeroPayment('ra', fixturePhone, 2380000, () => true);
+  assert.equal(payment.writes.length, 2);
 });

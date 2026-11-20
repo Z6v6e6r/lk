@@ -32,3 +32,33 @@ wiring, preserves legacy bodies, and rejects catches covering any recovery node.
 private proof input and full flow remain outside Git. Use the existing reviewed
 function-only contract, retained backups, clean pushed source, and public API/UI
 postchecks. Do not erase browser storage to bypass an unknown payment.
+
+## Standard RA on /sub_hab
+
+RA uses the same direct confirmation request with the regular Viva product
+`b91e14d1-fe6e-4d0b-be39-3e45ad86b759`. The server selects the proof set by
+transaction-bound fingerprint. RA proofs require a single 23,800 ₽ WIDGET card
+payment and a fresh Viva response confirming that it expired unpaid. Each proof
+also binds the owner, amount, bank payment and deadline. The same endpoint
+continues to accept the installed Friendship 2.0 proof set.
+
+The storefront can reconcile an exact saved RA transaction on page load. A
+fresh trusted click can retry once at the displayed price after a closure.
+The separate RA regional offer uses a different Viva product. Missing IDs,
+other declines, separate payment methods and transactions outside the approved
+proof set retain their existing custody.
+
+Prepare the extension with the verified current production flow and the
+private reviewed RA proofs:
+
+```sh
+node scripts/patch_direct_checkout_recovery.mjs --extend-ra \
+  /absolute/fresh-live-workspace /absolute/private-ra-proofs.json /absolute/new-candidate.json
+```
+
+The extension verifies the installed prefix of all three functions and the
+existing route topology. It replaces only the resolver and router function
+prefixes and carries forward the frozen Friendship 2.0 configuration. Compare
+the two-function delta, rehearse the confirmation route and its inverse, then
+follow the reviewed release contract. Publish the storefront after backend
+confirmation readback.

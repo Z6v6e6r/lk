@@ -6,7 +6,7 @@ import { isCheckoutOpen } from './zeroCheckoutMount';
 import { isCheckoutReturn } from './zeroCheckoutOffers';
 
 // These offers have an existing backend proof of a closed, unpaid checkout.
-const RECOVERABLE_KEYS = ['friendship', 'friendship-two-hours'];
+const RECOVERABLE_KEYS = ['friendship', 'friendship-two-hours', 'ra'];
 const RETRY_INTERVAL_MS = 30_000;
 const CHECK_DEADLINE_MS = 20_000;
 
