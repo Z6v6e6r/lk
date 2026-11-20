@@ -288,7 +288,7 @@ const MATCH_RESULT_RATING_DEFAULT_PARAMS = {
   maxRating: 7,
   round: 5,
 };
-const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = true;
+const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = !CLUB_ON_SITE_BOOKING;
 const ENABLE_SPLIT_GAME_PAYMENT = import.meta.env.VITE_GAME_SPLIT_PAYMENT_ENABLED !== "false";
 const SPLIT_PAYMENT_DEADLINE_MINUTES = 25;
 const SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES = 10;
@@ -7158,8 +7158,12 @@ export default function GamesPage({
     ? `Вы оплачиваете только своё участие. Будет создана игра, к которой ${publicCreateJoinersSentenceLabel}, оплатив свою часть.`
     : "Вы оплачиваете только своё участие.";
   const publicCreateFullCourtDescription = "Вы оплачиваете весь корт сами. После создания игру можно открыть для всех или оставить приватной.";
-  const publicCreateVisibilityOpenDescription = "К игре может присоединиться любой игрок подходящего уровня";
-  const publicCreateVisibilityPrivateDescription = "Присоединиться можно по ссылке или в сообществе, где игра опубликована";
+  const publicCreateVisibilityOpenDescription = CLUB_ON_SITE_BOOKING
+    ? "Игра появится в поиске клуба"
+    : "К игре может присоединиться любой игрок подходящего уровня";
+  const publicCreateVisibilityPrivateDescription = CLUB_ON_SITE_BOOKING
+    ? "Присоединиться можно по ссылке"
+    : "Присоединиться можно по ссылке или в сообществе, где игра опубликована";
   const publicCreateVisibilityOpenPillLabel = "Быстрее собрать";
   const publicCreateVisibilityPrivatePillLabel = "Для своих";
   const publicCreateGeneralListCardLabel = "Общий список игр";
@@ -17684,7 +17688,7 @@ export default function GamesPage({
         <button data-lk-leave-action="GAME_BACK" className="page-back" onClick={onBack} type="button">
           Закрыть
         </button>
-        <div className="page-title">Создание игры</div>
+        <div className="page-title">{clubBookingOnly ? "Бронирование корта" : "Создание игры"}</div>
       </div>
 
       <div className="game-stack">
@@ -17736,7 +17740,7 @@ export default function GamesPage({
                     <span className="game-create-summary-meta-icon" aria-hidden="true">
                       {renderPublicCreateSummaryIcon("players")}
                     </span>
-                    <span>{publicCreateSummaryPaymentLine}</span>
+                    <span>{CLUB_ON_SITE_BOOKING ? "Оплата в клубе" : publicCreateSummaryPaymentLine}</span>
                   </span>
                 </div>
               </div>
@@ -17811,8 +17815,8 @@ export default function GamesPage({
           </>
         )}
 
-        {!isSinglesGame && (
-          usePublicCreateWizard ? (
+        {!clubBookingOnly && !isSinglesGame && (
+          usePublicCreateWizard && !CLUB_ON_SITE_BOOKING ? (
             <div className="team-card game-create-level-card">
               <div className="game-create-level-heading">
                 <div className="game-card-title">Уровень игроков</div>
@@ -17860,7 +17864,7 @@ export default function GamesPage({
                 </button>
               </div>
 
-              {effectiveRatingGame && (
+              {effectiveRatingGame && !CLUB_ON_SITE_BOOKING && (
                 <div className="rating-card">
                   <div className="game-card-title">Допустимый уровень соперников</div>
                   <div className="rating-slider">
@@ -17979,7 +17983,7 @@ export default function GamesPage({
           </div>
         )}
 
-        {usePublicCreateWizard ? (
+        {!clubBookingOnly && (usePublicCreateWizard ? (
           <div className="team-card game-create-visibility-card">
             <div className="game-card-title">Доступность игры</div>
             <div className="game-create-visibility-options">
@@ -18045,7 +18049,7 @@ export default function GamesPage({
               <span />
             </button>
           </div>
-        )}
+        ))}
         {!isBookingPresetMode && !usePublicCreateWizard && (
           <div className="game-toggle-row">
             <div>
@@ -18127,7 +18131,7 @@ export default function GamesPage({
           </div>
         )}
 
-        {showPublicationFields && (
+        {!clubBookingOnly && showPublicationFields && (
           <div className="team-card game-publish-fields">
             {!usePublicCreateWizard && (
               <div className="game-publish-fields-note">
@@ -18150,17 +18154,19 @@ export default function GamesPage({
                   required
                 />
               </label>
-              <label className="game-publish-field">
-                <span className="game-publish-field-label">Комментарий для участников</span>
-                <textarea
-                  className="game-input game-textarea"
-                  placeholder="Что важно знать участникам перед матчем"
-                  value={gameParticipantCommentDraft}
-                  onChange={(event) => setGameParticipantCommentDraft(event.target.value)}
-                  maxLength={280}
-                  rows={4}
-                />
-              </label>
+              {!CLUB_ON_SITE_BOOKING && (
+                <label className="game-publish-field">
+                  <span className="game-publish-field-label">Комментарий для участников</span>
+                  <textarea
+                    className="game-input game-textarea"
+                    placeholder="Что важно знать участникам перед матчем"
+                    value={gameParticipantCommentDraft}
+                    onChange={(event) => setGameParticipantCommentDraft(event.target.value)}
+                    maxLength={280}
+                    rows={4}
+                  />
+                </label>
+              )}
               {shouldShowPublicationJoinPriceField && (
                 <label className="game-publish-field">
                   <span className="game-publish-field-label">Стоимость присоединения к игре</span>
@@ -18343,7 +18349,7 @@ export default function GamesPage({
                 timeRange={paymentTimeRange}
               />
             )}
-            {!subscriptionUsageShadowEnabled && !splitPaymentSelected && (
+            {!CLUB_ON_SITE_BOOKING && !subscriptionUsageShadowEnabled && !splitPaymentSelected && (
               <>
                 <button
                   className={`game-promo-trigger ${promoCodeApplied ? "applied" : ""}`}
