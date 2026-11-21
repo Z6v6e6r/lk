@@ -32,6 +32,14 @@ test('unknown surviving provider field reference blocks candidate instead of hid
   const flow = [...fixture(), { id: 'unmanaged', type: 'function', func: 'const id = "eabfe27b"; return msg;', wires: [] }];
   const bytes = Buffer.from(JSON.stringify(flow)); assert.throws(() => patchCupOnlyPlayerLevel(bytes, hash(bytes)), /PROVIDER_FIELD_REMAINS/);
 });
+test('an unreviewed FPR readback body or a partial installed branch blocks composition', () => {
+  const flow = [...fixture(), {
+    id: 'fpr_start_level_readback_prepare_001', type: 'function', z: 'tab',
+    func: 'const id = "eabfe27b"; return msg;', wires: [],
+  }];
+  const bytes = Buffer.from(JSON.stringify(flow));
+  assert.throws(() => patchCupOnlyPlayerLevel(bytes, hash(bytes)), /FPR_MIRROR_PREIMAGE/);
+});
 test('compatibility normalization preserves absence and uses the CUP grade scale', () => {
   const source = `const buildLevelLabel = (score) => { const normalized = Number.isFinite(score) ? score : 3.2;
     if (normalized >= 5.75) return 'A'; if (normalized >= 5.25) return 'B+'; if (normalized >= 4.75) return 'B';

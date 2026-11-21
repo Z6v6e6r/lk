@@ -6,4 +6,9 @@ msg._cupLevel = { operation: msg._cupLevelOperation, body };
 delete msg._cupLevelOperation;
 msg.method = 'GET'; msg.url = 'https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile';
 msg.headers = { Authorization: auth, Accept: 'application/json' }; msg.payload = undefined;
+if (msg._cupLevel.operation === 'fprMirror') {
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
+  msg.requestTimeout = 2500;
+}
 return [msg, null];

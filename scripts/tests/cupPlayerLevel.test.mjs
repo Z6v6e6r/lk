@@ -96,6 +96,38 @@ test('node authorization binds the authenticated client, refuses spoofing and ig
   const prepare = new Function('msg', fs.readFileSync('scripts/nodered_player_level_nodes/prepare.js', 'utf8'));
   assert.equal(prepare({ payload: {}, req: { headers: {} } })[1].statusCode, 401);
 });
+test('the FPR Viva mirror requires an authoritative organizer and exact player and level', () => {
+  const authorize = new Function('msg', fs.readFileSync('scripts/nodered_player_level_nodes/authorize.js', 'utf8'));
+  const access = {
+    id: 'e17a32f3-65f7-47c5-bda1-33d79932c884',
+    value: ['host'],
+    attributes: { options: [{ id: 'host', name: 'проводит турниры' }] },
+  };
+  const input = (fields, overrides = {}) => ({
+    statusCode: 200,
+    responseUrl: 'https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile',
+    payload: { id: 'verified-host', firstName: 'Test organizer', customFields: fields },
+    _cupLevel: { operation: 'fprMirror', body: {
+      clientId: 'player-a', source: 'tournament_start', levelNumeric: '3,25', ...overrides,
+    } },
+  });
+  for (const fields of [[], [access, access], [{ ...access, value: ['host', 'other'] }]]) {
+    assert.equal(authorize(input(fields))[1].statusCode, 403);
+  }
+  assert.equal(authorize(input([access], { changedById: 'claimed-host' }))[1].statusCode, 403);
+  for (const body of [{ clientId: 'player/a' }, { levelNumeric: '3.000001' }, { levelNumeric: 8 }, { source: 'onboarding' }]) {
+    assert.equal(authorize(input([access], body))[1].statusCode, 400);
+  }
+  assert.equal(authorize({ ...input([access]), responseUrl: 'https://synthetic.invalid' })[1].statusCode, 503);
+  const [canonical, error, mirror] = authorize(input([access], { changedByName: 'Claimed organizer' }));
+  assert.equal(canonical, null);
+  assert.equal(error, null);
+  assert.deepEqual(mirror.payload, {
+    clientId: 'player-a', source: 'tournament_start', levelNumeric: '3.25000', changedById: 'verified-host',
+    changedByName: 'Test organizer', changedByPhone: null,
+  });
+  assert.equal('_cupLevel' in mirror, false);
+});
 test('profile hydration ignores stale Viva fields, distinguishes no level from error and filters outgoing fields', async () => {
   const source = fs.readFileSync('src/utils/apiClient.ts', 'utf8');
   const block = source.slice(source.indexOf('const RETIRED_LEVEL_FIELDS'), source.indexOf('export interface OnboardingLevelPayload')).replace(/\bexport\s+/g, '');

@@ -70,7 +70,11 @@ import {
   type TournamentSignupParticipant,
   type TournamentSignupPublicRoster,
 } from "../../utils/tournamentSignupRoster";
-import { canOfferTournamentRegistration } from "../../utils/tournamentSignupAvailability";
+import {
+  canOfferTournamentRegistration,
+  getTournamentBookingLevelDenial,
+  preserveTournamentLevelDenial,
+} from "../../utils/tournamentSignupAvailability";
 import {
   pickSubscriptionValidityDate,
   resolveSubscriptionUsageDisplay,
@@ -1275,8 +1279,11 @@ export default function TournamentSignupPage({
 
     const resolvedRegistration = await mergeTournamentPendingPayment(
       requestToken, exerciseId,
-      (ownsCopay ? ownerRegistration : vivaRegistrationResult?.data ?? ownerRegistration)
-        ?? detailResult.data?.registration ?? null,
+      preserveTournamentLevelDenial(
+        ownerRegistration,
+        (ownsCopay ? ownerRegistration : vivaRegistrationResult?.data ?? ownerRegistration)
+          ?? detailResult.data?.registration ?? null,
+      ),
     );
     if (checkOnly && checkoutRequestIdRef.current !== requestId) return;
     if (tournamentPaymentSessionIdentity(requestToken) !== tournamentPaymentSessionIdentity(readAuthToken())) {
@@ -1532,6 +1539,14 @@ export default function TournamentSignupPage({
       });
       if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
       if (result.error || !result.data) {
+        const levelDenial = subscriptionProductKey && getTournamentBookingLevelDenial(result.error);
+        if (levelDenial) {
+          setCheckout(null);
+          setDiscountQuotes([]);
+          setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(paymentToken));
+          setRegistration(current => preserveTournamentLevelDenial(levelDenial, current));
+          return;
+        }
         if (result.status === 409 && isSubscriptionBookingReleased(result.error?.raw)) {
           setError(result.error?.message || "Предыдущая запись отменена. Выберите вариант записи снова.");
           setCheckout(null);
@@ -1782,7 +1797,10 @@ export default function TournamentSignupPage({
   const canPayPending = isAuthenticated && !isRestoringSession && Boolean(registrationSessionIdentity)
     && registrationSessionIdentity === tournamentPaymentSessionIdentity(readAuthToken()) && canPayTournamentPending(registration);
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
-  const canRegister = !subscriptionConfirmationNotice
+  const hasCurrentRegistration = registrationResolvedFor === `${selectedId}:${selectedExerciseId}`
+    && registrationSessionIdentity === tournamentPaymentSessionIdentity(readAuthToken());
+  const levelDenialReason = isAuthenticated && hasCurrentRegistration ? registration?.levelDenialReason : null;
+  const canRegister = !subscriptionConfirmationNotice && (!isAuthenticated || hasCurrentRegistration)
     && canOfferTournamentRegistration(detail?.status, registration);
   const detailDateParts = getDateParts(selectedTournament?.date ?? null);
   const detailStartTime = formatClock(selectedTournament?.startsAt ?? null);
@@ -2040,6 +2058,9 @@ export default function TournamentSignupPage({
           )}
           {loadingDetail && <div className="tournament-signup-muted">Загрузка турнира...</div>}
           {!loadingDetail && error && <div className="tournament-signup-error">{error}</div>}
+          {!loadingDetail && levelDenialReason && (
+            <div className="tournament-signup-error" role="status">{levelDenialReason}</div>
+          )}
           {!loadingDetail && subscriptionConfirmationNotice && (
             <>
               <div className="tournament-signup-notice" role="status" aria-live="polite">

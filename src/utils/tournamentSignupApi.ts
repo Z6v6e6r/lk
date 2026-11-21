@@ -137,6 +137,7 @@ export interface TournamentRegistrationState {
   canRegister: boolean;
   canCancel: boolean;
   message: string | null;
+  levelDenialReason?: string;
   paymentUrl?: string | null;
   paymentExpiresAt?: string | null;
 }
@@ -2240,10 +2241,14 @@ export async function apiFetchTournamentMyRegistration(
       cache: "no-store",
     },
   );
-  return {
-    ...result,
-    data: normalizeRegistration(result.data),
-  };
+  const registration = normalizeRegistration(result.data);
+  const decision = isRecord(result.data) ? result.data.levelDecision : null;
+  if (registration?.status === "NONE" && isRecord(decision)
+    && decision.enforced === true && decision.allowed === false) {
+    registration.levelDenialReason = pickString(decision, ["message"])
+      ?? registration.message ?? "Запись недоступна по условиям допуска к турниру.";
+  }
+  return { ...result, data: registration };
 }
 
 export async function apiFetchTournamentVivaMyRegistration(

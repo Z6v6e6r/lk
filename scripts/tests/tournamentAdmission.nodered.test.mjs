@@ -4,7 +4,7 @@ import test from 'node:test';
 import crypto from 'node:crypto';
 import * as url from 'node:url';
 import { composeTournamentAdmissionCandidate } from '../prepare_tournament_admission_candidate.mjs';
-import { patchTournamentAdmissionSource } from '../lib/tournamentAdmissionSource.mjs';
+import { patchTournamentAdmissionFinalizeSource, patchTournamentAdmissionSource } from '../lib/tournamentAdmissionSource.mjs';
 const base = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
 const source = patchTournamentAdmissionSource(base);
 const run = new Function('msg', 'env', 'global', 'node', 'tournamentOwnerUrl', source);
@@ -21,13 +21,18 @@ function response(ctx, status, payload) {
   return step(ctx, payload, { statusCode: status, url: ctx.tournamentAdmissionRequestedUrl,
     responseUrl: ctx.tournamentAdmissionRequestedUrl, method: 'POST', followRedirects: false, maxRedirects: 0 });
 }
-function refused() {
-  const ctx = context();
+function refused(extra = {}) {
+  const ctx = context(extra);
   step(ctx, { acknowledged: true, insertedId: 'op-key' });
   assert.equal(ctx.step, 'tournament_admission');
   const result = response(ctx, 403, { code: 'LEVEL_NOT_ALLOWED' });
   return { ctx, ...result };
 }
+
+const managedFinalizeSource = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/finalize.js', import.meta.url), 'utf8');
+const finalize = new Function('msg', 'global', 'node',
+  'const ctx = msg._subscriptionBooking; const payload = msg.payload; const responseStatus = Number(msg.statusCode);\n'
+  + patchTournamentAdmissionFinalizeSource(managedFinalizeSource));
 test('actual booking router requests durable owner admission before preaccept, not GET preview', () => {
   const ctx = context(); const { msg } = step(ctx, { acknowledged: true, insertedId: 'op-key' });
   assert.equal(msg.method, 'POST'); assert.match(msg.url, /\/subscription-admission$/);
@@ -50,6 +55,33 @@ test('definitive refusal fences exact predispatch operation and reads back after
   const release = step(ctx, [guard]).msg.payload;
   assert.equal(release[0].ownerOperationId, 'op-id');
   assert.deepEqual(release[1].$set.admissionRelease, { operationKey: 'op-key', operationId: 'op-id' });
+});
+
+test('a durable level refusal remains terminal through the managed HTTP finalizer', () => {
+  const { ctx, msg } = refused({ caller: 'http', managedAction: 'BOOK_TOURNAMENT' });
+  const row = { ...context(), _id: 'op-key', ...msg.payload[1].$set };
+  step(ctx, null, { error: Error('lost ACK') });
+  step(ctx, [row]);
+  ctx.lk1 = { fingerprint: 'original-quote' };
+  const denial = step(ctx, []).msg;
+  const [split, result] = finalize(denial);
+  assert.equal(split, null);
+  assert.equal(result.statusCode, 403);
+  assert.deepEqual(result.payload, {
+    error: 'Ваш игровой уровень не подходит для этого турнира.',
+    details: { code: 'LEVEL_NOT_ALLOWED' },
+  });
+  for (const changes of [
+    { tournamentLevelRefusal: undefined },
+    { operationId: 'foreign' },
+    { lk1: { fingerprint: 'changed' } },
+    { tournamentDispatchGranted: true },
+  ]) {
+    const stale = { ...denial, _subscriptionBooking: { ...ctx, ...changes } };
+    assert.equal(finalize(stale)[1].statusCode, 202);
+  }
+  const contradictory = { ...denial, payload: { ...denial.payload, details: { code: 'PLAYER_LEVEL_UNKNOWN' } } };
+  assert.equal(finalize(contradictory)[1].statusCode, 202);
 });
 test('timeout is unknown and releases nothing; forged owner actor never authorizes preaccept', () => {
   for (const kind of ['timeout', 'wrong-actor']) {
@@ -96,8 +128,11 @@ test('candidate preserves the live provider-version overlay, existing libraries 
     + '    || (lk1EventMoneyBooking(ctx) && payload.paymentType === "ON_PLACE") ? "v1" : "v2";';
   const func = withDailyGuard(base.replace('  const adminVersion = ctx.caller === "split" ? "v1" : "v2";', liveAdminVersion));
   const nodes = [{ id: 'untouched', type: 'comment', name: 'fixture' },
-    { id: 'lk_subscription_booking_router_20260804', type: 'function', outputs: 5, wires: [['fixture'], [], [], [], []],
-      libs: [{ var: 'fixtureCrypto', module: 'crypto' }], func }];
+    { id: 'lk_subscription_booking_router_20260804', type: 'function', outputs: 5,
+      wires: [['fixture'], [], [], [], ['lk_subscription_booking_finalize_20260804']],
+      libs: [{ var: 'fixtureCrypto', module: 'crypto' }], func },
+    { id: 'lk_subscription_booking_finalize_20260804', type: 'function', outputs: 2,
+      wires: [[], ['fixture']], func: managedFinalizeSource }];
   const raw = Buffer.from(JSON.stringify(nodes));
   const digest = crypto.createHash('sha256').update(raw).digest('hex');
   const candidate = composeTournamentAdmissionCandidate(raw, digest);
@@ -107,6 +142,10 @@ test('candidate preserves the live provider-version overlay, existing libraries 
   assert.ok(candidate[1].func.includes(liveAdminVersion));
   assert.throws(() => composeTournamentAdmissionCandidate(raw, '0'.repeat(64)), /preimage mismatch/);
   assert.match(candidate[1].func, /tournamentAdmissionGate/);
+  assert.deepEqual({ ...candidate[2], func: '' }, { ...nodes[2], func: '' });
+  assert.match(candidate[2].func, /ctx.tournamentLevelRefusal/);
+  assert.throws(() => patchTournamentAdmissionFinalizeSource(candidate[2].func), /already installed/);
+  assert.throws(() => patchTournamentAdmissionFinalizeSource('return [null, msg];'), /source drift/);
 });
 
 test('owner URL is resolved through the Function library and malformed bases fail closed', () => {
