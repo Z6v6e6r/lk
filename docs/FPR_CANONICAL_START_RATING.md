@@ -28,6 +28,20 @@ canonical states and verifies both level and source version. A stale snapshot
 returns 409; the client refreshes the roster snapshot. Ordinary tournament create
 keeps its existing path and request authentication behavior.
 
+When staff saves a missing level from tournament setup, `POST /lk/onboarding/level`
+can recover an empty Viva numeric-field PUT response with status 200. After
+verifying the caller's tournament-host permission, it issues one bounded GET for
+the same Viva client. The existing response and audit nodes
+mark the operation successful only if the requested and read-back numeric fields
+match. A mismatch or unavailable readback leaves the save in the existing error
+state with a redacted readback outcome in the audit. On confirmed save the open FPR
+form refreshes the canonical roster snapshot before enabling protocol creation.
+
+The offline `scripts/patch_fpr_start_level_readback.mjs INPUT SOURCE_SHA256 NEW_OUTPUT`
+candidate rewires the existing PUT capture downstream through the readback
+nodes and returns both paths to the existing result join. Use a private verified
+flow preimage and a new private output. The patcher has no live apply operation.
+
 ## Offline Node-RED candidate
 
 `scripts/patch_fpr_canonical_start.mjs` only creates a local candidate and report:
