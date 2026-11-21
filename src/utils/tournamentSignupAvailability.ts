@@ -5,6 +5,16 @@ import type {
 
 const PHONE_LOOKUP_UNAVAILABLE_PATTERN = /(?:номер )?телефон|\bphone\b/i;
 
+export function preserveTournamentLevelDenial(
+  ownerRegistration: TournamentRegistrationState | null | undefined,
+  registration: TournamentRegistrationState | null,
+): TournamentRegistrationState | null {
+  if (ownerRegistration?.levelDenialReason && (!registration || registration.status === "NONE")) {
+    return ownerRegistration;
+  }
+  return registration;
+}
+
 export function isTournamentRegistrationLookupUnavailable(
   registration: TournamentRegistrationState | null | undefined,
 ) {
@@ -23,7 +33,7 @@ export function canOfferTournamentRegistration(
   registration: TournamentRegistrationState | null | undefined,
 ) {
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
-  if (canCancel || tournamentStatus === "CANCELLED" || tournamentStatus === "CLOSED") {
+  if (registration?.levelDenialReason || canCancel || tournamentStatus === "CANCELLED" || tournamentStatus === "CLOSED") {
     return false;
   }
 

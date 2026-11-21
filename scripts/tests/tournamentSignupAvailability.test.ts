@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   canOfferTournamentRegistration,
   isTournamentRegistrationLookupUnavailable,
+  preserveTournamentLevelDenial,
 } from "../../src/utils/tournamentSignupAvailability.ts";
 import type { TournamentRegistrationState } from "../../src/utils/tournamentSignupApi.ts";
 
@@ -68,6 +69,23 @@ test("empty lookup denial keeps signup available", () => {
 
   assert.equal(isTournamentRegistrationLookupUnavailable(unavailableLookup), true);
   assert.equal(canOfferTournamentRegistration("AVAILABLE", unavailableLookup), true);
+});
+
+test("enforced CUP level denial takes precedence over an available Viva booking state", () => {
+  const denied = registration({ levelDenialReason: "Ваш уровень вне допустимого диапазона." });
+  const available = registration({ canRegister: true });
+
+  assert.equal(preserveTournamentLevelDenial(denied, available), denied);
+  assert.equal(canOfferTournamentRegistration("AVAILABLE", denied), false);
+  assert.equal(preserveTournamentLevelDenial(available, denied), denied);
+});
+
+test("a CUP level denial preserves existing bookings, pending payments and waitlist entries", () => {
+  const denied = registration({ levelDenialReason: "Ваш уровень вне допустимого диапазона." });
+  for (const status of ["REGISTERED", "PAYMENT_PENDING", "WAITLIST"] as const) {
+    const existing = registration({ status, bookingId: "synthetic-existing", canCancel: true });
+    assert.equal(preserveTournamentLevelDenial(denied, existing), existing);
+  }
 });
 
 test("personal registration lookup bypasses browser cache", () => {
