@@ -33,3 +33,31 @@ curl -fsS http://127.0.0.1:24641/lk/subscriptions/game-price-preview \
 the exercise dates and the fixture publication. Quote expiry is the earliest of
 the time specified by CUP, 30 seconds from the start of the CUP call and 60 seconds
 from the residency card read.
+
+## Checkout and recovery
+
+From the same workspace, with the stand running:
+
+```sh
+node lk/scripts/tests/fixtures/residency-wave1/verify.mjs
+```
+
+For each run the verifier chooses a new `operationId`. It checks the three
+quote scenarios, then sends the full HTTP `residencyPurchaseQuote` as
+`acceptedQuote`, with `exerciseId`, `operationId` and `consentAccepted: true`,
+to the stand-only `POST /__stand/residency-checkout`. Use the same bearer for
+the quote and checkout. The server re-prices the authenticated actor and
+exercise through the LK1 HTTP preview before reserving an operation.
+
+The adapter persists the two-line order in its own collection and deliberately
+closes the HTTP socket without a response. The checkout returns 202
+`PENDING_CONFIRMATION`. A repeated checkout with identical terms and
+`operationId` looks up the original reference and returns 200 `CREATED` with
+the original provider order ID. The verifier reads one journal row and one
+provider order, with one create attempt, one lost response and one lookup.
+A further replay returns the existing receipt. Altered terms and another actor
+cannot change or read the original journal entry.
+
+The adapter supports only synthetic orders. For a UI running on a different
+origin, use a same-origin development proxy for the LK1 preview path. The
+stand does not simulate the payment widget, activation or booking.

@@ -6,6 +6,7 @@ const http = require('node:http');
 const { createRequire } = require('node:module');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { checkoutPath, installCheckout } = require('./checkout.cjs');
 
 const lk = path.resolve(__dirname, '../../../..');
 const [cup, runtime, userDir, mongoPort = '24643', lkPort = '24641', cupPort = '24642'] = process.argv.slice(2);
@@ -215,6 +216,9 @@ async function main() {
   fs.writeFileSync(path.join(userDir, 'flows.json'), JSON.stringify(await previewFlow()), { mode: 0o600 });
   const app = express();
   const server = http.createServer(app);
+  const { createCompositeResidencyCheckout } = await loadLk('scripts/lib/compositeResidencyCheckout.mjs');
+  app.use('/__stand', express.json({ limit: '16kb' }));
+  installCheckout({ app, db, origin: lkOrigin, quotePath, actors, tenantId: actor.tenantId, createCompositeResidencyCheckout });
   app.use(quotePath, (req, res, next) => {
     const key = req.headers['x-stand-trace'];
     if (key && typeof key === 'string' && key.length <= 80 && traces.size < 128) traces.set(key, []);
@@ -230,12 +234,19 @@ async function main() {
     credentialSecret: false, externalModules: { palette: { denyList: ['*'] } },
     functionGlobalContext: { ...settings, dispatchStandRead: dispatch }, logging: { console: { level: 'warn' } } });
   app.use('/', RED.httpNode);
+  app.use((error, _req, res, _next) => {
+    const status = error.status === 400 || error.status === 413 ? error.status : 500;
+    if (status === 500) console.error(error);
+    res.status(status).json({ error: { code: 'STAND_REQUEST_FAILED' } });
+  });
   await RED.start();
   await new Promise((resolve, reject) => server.once('error', reject).listen(Number(lkPort), '127.0.0.1', resolve));
-  console.log(JSON.stringify({ event: 'STAND_READY', lkOrigin, cupOrigin, target, policy }));
+  console.log(JSON.stringify({ event: 'STAND_READY', lkOrigin, cupOrigin, quotePath, checkoutPath, target, policy }));
   async function stop() {
+    const closed = new Promise(resolve => server.close(resolve));
+    server.closeAllConnections();
     await RED.stop();
-    await new Promise(resolve => server.close(resolve));
+    await closed;
     await cupApp.close();
     await repository.onModuleDestroy();
     await mongo.close();
