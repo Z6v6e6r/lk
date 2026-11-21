@@ -234,7 +234,8 @@ async function main() {
     credentialSecret: false, externalModules: { palette: { denyList: ['*'] } },
     functionGlobalContext: { ...settings, dispatchStandRead: dispatch }, logging: { console: { level: 'warn' } } });
   app.use('/', RED.httpNode);
-  app.use((error, _req, res, _next) => {
+  app.use((error, _req, res, next) => {
+    if (res.headersSent) return next(error);
     const status = error.status === 400 || error.status === 413 ? error.status : 500;
     if (status === 500) console.error(error);
     res.status(status).json({ error: { code: 'STAND_REQUEST_FAILED' } });
