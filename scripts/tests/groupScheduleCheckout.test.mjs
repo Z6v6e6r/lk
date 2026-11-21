@@ -16,7 +16,7 @@ import { isTrialGroupTraining, trialGroupCheckoutOperationId } from "../../src/u
 import { getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
 import { hasGroupTrainingSubscriptionEvidence } from "../../src/utils/groupScheduleSubscriptionOffer.ts";
 import { resolveSubscriptionUsageDisplay } from "../../src/utils/subscriptionValidity.ts";
-import { preserveTournamentLevelDenial } from "../../src/utils/tournamentSignupAvailability.ts";
+import { getTournamentBookingLevelDenial, preserveTournamentLevelDenial } from "../../src/utils/tournamentSignupAvailability.ts";
 
 const require = createRequire(import.meta.url);
 const parse = path => ts.createSourceFile(path, fs.readFileSync(path, "utf8"),
@@ -421,6 +421,7 @@ test("LK1 tournament booking checks an ambiguous 202 with reads and clears the n
     checkLevel: async () => true, detail: null, selectedTournament: null, normalizePhone: value => value,
     setError: noOp, setActionLoading: noOp, setConfirmingSubscriptionProductKey: noOp, setCheckout: noOp,
     setSubscriptionConfirmationNotice: value => { notice = value; },
+    getTournamentBookingLevelDenial,
     isTournamentCapacityError: () => false, items: [],
     setLoadingDetail: noOp, setRegistrationResolvedFor: noOp, setRegistrationSessionIdentity: noOp,
     setDetail: noOp, setRegistration: noOp, publicRosterDetailAbortRef: { current: null },
