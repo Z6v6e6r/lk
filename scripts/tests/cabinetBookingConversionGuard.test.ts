@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import ts from "typescript";
+import {
+  BOOKING_CONVERSION_UNVERIFIED,
+  evaluateBookingConversionEvidence,
+} from "../../src/components/games/bookingConversionEvidence.ts";
+import { moscowBookingEndIso } from "../../src/utils/bookingEndTime.ts";
+import type { PadelGameRecordPayload } from "../../src/utils/apiClient.ts";
 
 const bookingsContainerSource = fs.readFileSync("src/components/cabinet/BookingsContainer.tsx", "utf8");
 const bookingHistorySource = fs.readFileSync("src/components/cabinet/BookingHistory.tsx", "utf8");
@@ -57,4 +64,120 @@ test("conversion checks direct Viva evidence before publication and stops on any
   const repairCall = gamesPageSource.indexOf('runPaidGameCommunityMembershipAndPublication(activeGameRecord, "existing_open")');
   const repairEffect = gamesPageSource.slice(gamesPageSource.lastIndexOf("useEffect(() => {", repairCall), repairCall);
   assert.match(repairEffect, /useEffect\(\(\) => \{\s*if \(isBookingPresetMode\) return;/);
+});
+
+const pageAst = ts.createSourceFile("GamesPage.tsx", gamesPageSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const reconcileAst = ts.createSourceFile(
+  "rosterSyncReconcile.ts",
+  fs.readFileSync("src/components/games/rosterSyncReconcile.ts", "utf8"),
+  ts.ScriptTarget.Latest,
+  true,
+);
+
+function extractFunctions(file: ts.SourceFile, names: string[]) {
+  return names.map((name) => {
+    const fn = file.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
+    assert.ok(fn, `Missing ${name}`);
+    return fn.getText(file).replace(/^export /, "");
+  }).join("\n");
+}
+
+function extractConversionCallback(node: ts.Node): string | undefined {
+  if (
+    ts.isVariableDeclaration(node)
+    && ts.isIdentifier(node.name)
+    && node.name.text === "handleCreateGameFromBooking"
+    && node.initializer
+    && ts.isCallExpression(node.initializer)
+  ) {
+    return node.initializer.arguments[0].getText(pageAst);
+  }
+  return ts.forEachChild(node, extractConversionCallback);
+}
+
+const conversionCallback = extractConversionCallback(pageAst);
+assert.ok(conversionCallback);
+const conversionCode = ts.transpileModule(`
+  ${extractFunctions(pageAst, [
+    "isRecordObject", "normalizeBookingId", "normalizeComparableId", "normalizeComparableName",
+    "isGenericComparableName", "normalizePhoneForGame", "normalizeVivaBookingParticipant",
+    "dedupePlayersByIdentity", "extractVivaBookingId", "extractVivaBookingPaymentTypes",
+    "hasVivaSubscriptionBookingSignal",
+  ])}
+  ${extractFunctions(reconcileAst, ["normalizePhone", "playersShareRosterIdentity"])}
+  return (${conversionCallback});
+`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+const organizerBooking = { id: "booking-1", isCancelled: false, visitConfirmed: false, paymentType: "ONE_TIME" };
+const organizerProfile = { id: "actor-1", phone: ["7", "999", "0000001"].join(""), name: "Organizer" };
+
+async function publishFromBooking(roster: Record<string, unknown>[], organizerDraftHasId = true) {
+  const bookingPreset = {
+    hasRequiredBookingData: true, canCreateFromPreset: true, exerciseId: "exercise-1",
+    bookingId: organizerBooking.id, studioId: "studio-1", roomId: "room-1",
+    date: "2030-01-01", timeFrom: "18:30", timeTo: "20:00", paid: true, amount: 7500,
+  };
+  const exercise = {
+    id: bookingPreset.exerciseId, studio: { id: bookingPreset.studioId }, room: { id: bookingPreset.roomId },
+    timeFrom: "2030-01-01T18:30:00+03:00", timeTo: "2030-01-01T20:00:00+03:00",
+  };
+  const payloads: PadelGameRecordPayload[] = [];
+  const noop = () => {};
+  const scope = {
+    isBookingPresetMode: true, creatingFromBooking: false, bookingPreset,
+    setCreatingFromBooking: noop, setGameRecordError: noop, setGameRosterError: noop,
+    activeGameRecordStore: null, communityGames: [], createFromBooking: bookingPreset,
+    findGameRecordByBookingData: () => null, profileId: organizerProfile.id, profilePhone: organizerProfile.phone,
+    participants: [{ ...organizerProfile, id: organizerDraftHasId ? organizerProfile.id : null }],
+    profileName: organizerProfile.name, profilePhoto: null, profileGrade: null, profileRatingNumeric: null,
+    apiFetchBookings: async () => ({ data: [{ ...organizerBooking, exercise }] }),
+    apiFetchExerciseBookings: async () => ({ data: roster }),
+    BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence, moscowBookingEndIso,
+    effectiveRatingGame: false, isPrivate: true, waitlistEnabled: true, createMaxPlayers: 4,
+    resolvedGameFormat: "doubles", gameTitleDraft: "", gameParticipantCommentDraft: "", gameJoinPriceDraft: "",
+    buildGameOptionalMetadataFields: noop, publicCreatePreciseRatingMetadata: {},
+    buildCommunityAutopublishMetadataFields: noop, buildCommunityAutopublishMetadata: noop,
+    apiCreatePadelGameRecord: async (payload: PadelGameRecordPayload) => {
+      payloads.push(payload);
+      return { data: { ...payload, id: "game-1" } };
+    },
+    upsertGameRecordInStores: noop, runPaidGameCommunityMembershipAndPublication: noop,
+    setGameRecordId: noop, setGameRecordStatus: noop, setInviteLink: noop, resolveGameInviteUrl: noop,
+    setGamePaymentUrl: noop, setGamePaid: noop, setGameSnapshot: noop,
+    mergeMatchSnapshots: noop, buildMatchSnapshotFromPayload: noop, buildMatchSnapshotFromRecord: noop,
+    setConfirmCancelUnpaidGame: noop, setStep: noop,
+  };
+  const publish = new Function(...Object.keys(scope), conversionCode)(...Object.values(scope));
+  await publish();
+  assert.equal(payloads.length, 1);
+  return payloads[0];
+}
+
+test("publishing the organizer's booking with no client data uses only one place", async () => {
+  const payload = await publishFromBooking([{ ...organizerBooking, client: null }], false);
+  assert.deepEqual(payload.participants?.map(({ id, name, status, source, vivaBookingId }) => (
+    { id, name, status, source, vivaBookingId }
+  )), [{ id: "actor-1", name: "Organizer", status: "CONFIRMED", source: "ORGANIZER", vivaBookingId: "booking-1" }]);
+  assert.deepEqual(payload.booking.bookingIds, ["booking-1"]);
+  assert.equal(payload.payment.paid, true);
+});
+
+test("publishing a full roster preserves identifiable participants and linked bookings", async () => {
+  const payload = await publishFromBooking([
+    organizerBooking,
+    { id: "booking-2", client: { id: "actor-2", firstName: "Second" }, isCancelled: false, visitConfirmed: true },
+    { id: "booking-3", clientId: "actor-3", isCancelled: false, visitConfirmed: false, paymentType: "SUBSCRIPTION" },
+    { id: "booking-4", client: { id: "actor-4", firstName: "Fourth" }, isCancelled: false, visitConfirmed: true },
+    { id: "booking-5", client: { id: "actor-5" }, isCancelled: false, status: "WAITLIST" },
+    { id: "booking-6", client: { id: "actor-6" }, isCancelled: true },
+  ]);
+  assert.deepEqual(payload.participants?.map(({ id, vivaBookingId, status }) => ({ id, vivaBookingId, status })), [
+    { id: "actor-1", vivaBookingId: "booking-1", status: "CONFIRMED" },
+    { id: "actor-2", vivaBookingId: "booking-2", status: "CONFIRMED" },
+    { id: "actor-3", vivaBookingId: "booking-3", status: "PENDING" },
+    { id: "actor-4", vivaBookingId: "booking-4", status: "CONFIRMED" },
+  ]);
+  assert.deepEqual(payload.booking.bookingIds, ["booking-1", "booking-2", "booking-3", "booking-4", "booking-5"]);
+  assert.deepEqual(payload.payment.bookingIds, payload.booking.bookingIds);
+  assert.equal(payload.metadata?.hasSubscriptionBooking, true);
 });
