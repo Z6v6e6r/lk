@@ -95,8 +95,9 @@ export function parseZeroLiveProductQuote(payload: unknown, key: string): ZeroOf
   }
   if (key === 'vsk') {
     const ids = (value: unknown) => Array.isArray(value) ? value.map(row => row && typeof row === 'object' ? row.id : row).sort((a, b) => a - b) : [];
+    const directions = JSON.stringify(ids(product.availableDirections));
     if (product.hasStudioLimitation !== false || product.hasDirectionLimitation !== true || product.hasTypeLimitation !== true
-      || JSON.stringify(ids(product.availableDirections)) !== JSON.stringify([4588, 6975])
+      || (directions !== JSON.stringify([4588, 6975]) && directions !== JSON.stringify([4588, 6975, 6977]))
       || JSON.stringify(ids(product.availableTypes)) !== JSON.stringify([1613, 2349])
       || product.hasDayLimitation !== false || product.hasTimeRangeLimitation !== false || product.hasDayTimeLimitation !== false) {
       throw new Error('VSK product coverage mismatch');
