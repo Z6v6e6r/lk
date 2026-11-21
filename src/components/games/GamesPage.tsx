@@ -11906,14 +11906,18 @@ export default function GamesPage({
         return;
       }
       const rosterRows = conversionEvidence.roster;
+      // The verified organizer booking can omit its client identity in the Viva roster.
       const rosterParticipants = rosterRows
-        .map((item) => normalizeVivaBookingParticipant(item))
+        .map((item) => normalizeVivaBookingParticipant(
+          extractVivaBookingId(item) === bookingPreset.bookingId ? { ...item, clientId } : item,
+        ))
         .filter((item): item is PadelGamePlayer => item !== null)
         .filter((item) => item.status !== "WAITLIST");
       if (rosterParticipants.length > 0) {
         const fallbackOrganizerParticipant = organizerPlayer
           ? {
               ...organizerPlayer,
+              id: clientId,
               source: "ORGANIZER" as const,
               status: "CONFIRMED" as const,
             }
