@@ -15,7 +15,7 @@ test('VSK Tilda sells only the fixed monthly offer and never an annual or arbitr
   assert.equal(c.subscription.annual, undefined);
   assert.equal(c.subscription.activeBookingsLimit, 8);
   assert.equal(c.schedule.booking, 'lk');
-  assert.deepEqual(JSON.parse(JSON.stringify(c.schedule.categories.map(x => [x.directionId, x.typeId]))), [[6975,2349],[6975,1613],[5278,839]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(c.schedule.categories.map(x => [x.directionId, x.typeId]))), [[6975,2349],[6975,1613],[6977,2349],[5278,839]]);
   assert.equal(c.schedule.viva.enabled, false);
   new Function(script(controller));
 });
