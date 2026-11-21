@@ -361,6 +361,149 @@ test('Viva PUT rejection is observer-independent and diagnostics contain no resp
   assert.equal(result.msg.payload.ok, false);
   assert(!JSON.stringify(events).includes('fixture-sensitive'));
 });
+
+const onboardingCaptureSource = read('scripts/nodered_onboarding_nodes/fn_onboarding_level_capture_viva_result.js');
+const onboardingPriorSource = onboardingCaptureSource.replace(
+  /\/\/ BEGIN bounded onboarding refusal diagnostic[^\n]*\n[\s\S]*?\/\/ END bounded onboarding refusal diagnostic\.\n\n/, '');
+const onboardingCapture = new Function('msg', 'global', 'node', 'context', 'Date', onboardingCaptureSource);
+const onboardingPrior = new Function('msg', 'global', 'node', 'context', 'Date', onboardingPriorSource);
+function onboardingHarness() {
+  const state = new Map(), logs = [];
+  let now = 100000;
+  const context = { get: key => state.get(key), set: (key, value) => state.set(key, value) };
+  const node = { log: value => logs.push(JSON.parse(value)) };
+  const clock = { now: () => now };
+  function execute(input, overrides = {}, prior = false) {
+    const msg = structuredClone(input);
+    const result = (prior ? onboardingPrior : onboardingCapture)(msg,
+      { get: () => overrides.observer },
+      Object.hasOwn(overrides, 'node') ? overrides.node : node,
+      Object.hasOwn(overrides, 'context') ? overrides.context : context, clock);
+    return { msg, result };
+  }
+  return { execute, logs, state, context, setNow: value => { now = value; } };
+}
+test('onboarding refusal diagnostic preserves the exact reviewed guard and business outputs', () => {
+  // Removing only the new diagnostic restores the exact installed #351 capture.
+  assert.equal(sha(onboardingPriorSource), '06449997aab20b1d380df4c25bb03113754feab03029bfa4f4871d4ee3df3ef9');
+  const h = onboardingHarness();
+  for (const statusCode of [undefined, 0, 99, 200, '200', 201, 202, 204, 206, 400, 401, 403, 429, 500, 502, 599, 600]) {
+    for (const payload of [undefined, null, '', '<html>fixture-sensitive</html>', '{broken', '{}', 'null', 'false', '7', 1, true, {}, [], {error:'fixture-sensitive'}, {message:'fixture-sensitive'}, new Uint8Array([1])]) {
+      for (const error of [undefined, {code:'ETIMEDOUT',message:'fixture-sensitive'}]) {
+        const input = {statusCode, payload, error,
+          _vivaFieldUpdate:{fieldId:'fixture-field',requestedValue:['fixture-value']}};
+        assert.deepEqual(h.execute(input), h.execute(input, {}, true));
+      }
+    }
+  }
+});
+test('onboarding refusal records same-message status and shape without exporting provider data', () => {
+  for (const [payload, statusCode, contentType, responseKind, bodyClass, reason, parseOk] of [
+    ['<html>fixture-sensitive</html>',200,'Text/HTML; private=fixture-sensitive','text','invalid_json','acknowledgement_invalid',false],
+    ['',200,'application/json','text','empty','acknowledgement_invalid',false],
+    ['{broken',502,'application/json','text','invalid_json','upstream_status',false],
+    ['fixture-sensitive',401,'text/plain','text','invalid_json','upstream_status',false],
+    ['{}',200,'application/problem+json','text','json_object','acknowledgement_invalid',true],
+    [false,200,'application/json','boolean','json_scalar','acknowledgement_invalid',null],
+    [{error:'fixture-sensitive'},200,'application/json','object','json_object','provider_error',null],
+    [{},undefined,undefined,'object','json_object','status_unknown',null],
+  ]) {
+    const h=onboardingHarness();
+    const result=h.execute({payload,statusCode,headers:{'content-type':contentType,Authorization:'fixture-sensitive'},
+      token:'fixture-sensitive',url:'https://example.invalid/fixture-sensitive?secret=fixture-sensitive',
+      clientId:'fixture-sensitive',_msgid:'fixture-sensitive',req:{body:{phone:'fixture-sensitive'}}});
+    assert.equal(result.msg.payload.ok,false);
+    assert.equal(h.logs.length,1);
+    const e=h.logs[0];
+    assert.deepEqual(Object.keys(e).sort(), ['event','schemaVersion','stage','upstreamStatus','contentTypeClass','responseKind',
+      'bodyClass','sizeBucket','parseAttempted','parseOk','refusalReason','projectionStatus','suppressedCount'].sort());
+    assert.equal(e.event,'onboarding_level_projection_refused');
+    assert.equal(e.upstreamStatus,statusCode ?? null);
+    assert.equal(e.responseKind,responseKind); assert.equal(e.bodyClass,bodyClass);
+    assert.equal(e.refusalReason,reason); assert.equal(e.parseOk,parseOk);
+    assert.equal(e.parseAttempted,typeof payload==='string');
+    assert.equal(e.projectionStatus,'FAILED'); assert.equal(e.suppressedCount,0);
+    assert.equal(e.contentTypeClass,contentType?.startsWith('Text/HTML')?'html':contentType?.startsWith('text/')?'text':contentType?'json':'missing');
+    assert(!JSON.stringify(e).includes('fixture-sensitive'));
+    assert(JSON.stringify(e).length<512);
+    const aggregate=run('scripts/nodered_onboarding_nodes/fn_onboarding_level_build_response.js',{payload:[result.msg.payload]}).result[2];
+    assert.equal(aggregate.statusCode,502); assert.equal(aggregate.payload.projectionStatus,'FAILED');
+  }
+});
+test('onboarding acknowledgement diagnostics never upgrade a retained JSON string or log success', () => {
+  const h=onboardingHarness();
+  for (const payload of ['{}','[]','null','true','7','"fixture-sensitive"']) {
+    assert.equal(h.execute({statusCode:200,payload}).msg.payload.ok,false);
+  }
+  assert(h.logs.every(e=>e.parseOk===true && e.responseKind==='text'));
+  const before=h.logs.length;
+  for (const [statusCode,payload] of [[200,{}],[201,[]],[202,{result:true}],[204,undefined],[204,null],[204,''],[204,{}]]) {
+    assert.equal(h.execute({statusCode,payload}).msg.payload.ok,true);
+  }
+  assert.equal(h.logs.length,before);
+  const transport=onboardingHarness();
+  transport.execute({statusCode:200,payload:{},error:{code:'ETIMEDOUT',message:'fixture-sensitive'}});
+  assert.equal(transport.logs[0].refusalReason,'transport_error');
+  assert.equal(transport.logs[0].upstreamStatus,200);
+});
+test('onboarding diagnostic input work and fields are bounded and MIME is classified only', () => {
+  for (const [payload, bucket, bodyClass, attempted] of [
+    ['x'.repeat(1023),'lt1k','invalid_json',true],['x'.repeat(1024),'lt64k','invalid_json',true],
+    ['x'.repeat(65536),'lt64k','invalid_json',true],['x'.repeat(65537),'large','oversize',false],
+  ]) {
+    const h=onboardingHarness();h.execute({statusCode:200,payload});
+    assert.equal(h.logs[0].sizeBucket,bucket);assert.equal(h.logs[0].bodyClass,bodyClass);
+    assert.equal(h.logs[0].parseAttempted,attempted);
+    assert.equal(h.logs[0].parseOk,attempted?false:null);
+  }
+  for (const [ct,want] of [[undefined,'missing'],['','missing'],['TEXT/HTML; charset=utf-8','html'],
+    ['application/xhtml+xml','html'],['Application/Problem+JSON; charset=utf-8','json'],
+    ['text/plain','text'],['application/json-fixture-sensitive','other'],['fixture-sensitive'.repeat(40),'other'],
+    [{private:'fixture-sensitive'},'other']]) {
+    const h=onboardingHarness();h.execute({statusCode:503,payload:'fixture-sensitive',headers:{'content-type':ct}});
+    assert.equal(h.logs[0].contentTypeClass,want);
+    assert(!JSON.stringify(h.logs).includes('fixture-sensitive'));
+  }
+  for (const statusCode of [0,99,600,Infinity,NaN,'fixture-sensitive']) {
+    const h=onboardingHarness();h.execute({statusCode,payload:'fixture-sensitive'});
+    assert.equal(h.logs[0].upstreamStatus,null);assert.equal(h.logs[0].refusalReason,'status_unknown');
+  }
+});
+test('onboarding refusal logging is limited per node/window, reports suppression and tolerates clock rollback', () => {
+  const h=onboardingHarness(), input={statusCode:502,payload:'fixture-sensitive'};
+  for(let i=0;i<25;i++) h.execute(input);
+  assert.equal(h.logs.length,20);
+  assert.deepEqual([...h.state.values()][0],{startedAt:100000,emitted:20,suppressed:5});
+  h.setNow(99999);h.execute(input);assert.equal(h.logs.length,20);
+  h.setNow(159999);h.execute(input);assert.equal(h.logs.length,20);
+  h.setNow(160000);h.execute(input);assert.equal(h.logs.length,21);
+  assert.equal(h.logs.at(-1).suppressedCount,7);
+  h.execute(input);assert.equal(h.logs.at(-1).suppressedCount,0);
+  h.state.set('onboardingPutDiagnosticBudgetV1',{startedAt:160000,emitted:20,suppressed:1000000});
+  h.execute(input);assert.equal([...h.state.values()][0].suppressed,1000000);
+  assert(!JSON.stringify([...h.state.values()]).includes('fixture-sensitive'));
+});
+test('onboarding diagnostic state/logger/observer failures do not affect projection or invoke writes', () => {
+  const input={statusCode:200,payload:'fixture-sensitive'};
+  for (const overrides of [
+    {node:undefined},{node:{}},{node:{log(){throw Error('sink');}}},
+    {context:undefined},{context:{}},{context:{get(){throw Error('store');},set(){}}},
+    {context:{get(){return undefined;},set(){throw Error('store');}}},
+    {context:{get(){return {startedAt:'fixture-sensitive',emitted:0,suppressed:0};},set(){throw Error('unexpected');}}},
+    {observer:{upstream(){throw Error('observer');},observe(){throw Error('observer');}}},
+  ]) {
+    const h=onboardingHarness();assert.deepEqual(h.execute(input,overrides),h.execute(input,overrides,true));
+  }
+  const h=onboardingHarness();
+  for(let i=0;i<25;i++)h.execute(input,{node:{log(){throw Error('sink');}}});
+  assert.equal([...h.state.values()][0].emitted,20);
+  assert.equal([...h.state.values()][0].suppressed,5);
+  // One independent refusal event even if the optional observer is present.
+  const active=onboardingHarness();active.execute(input,{observer:createDiagnostics()});
+  assert.equal(active.logs.length,1);
+  assert.doesNotMatch(onboardingCaptureSource.slice(onboardingCaptureSource.indexOf('// BEGIN bounded'),
+    onboardingCaptureSource.indexOf('// END bounded')), /node\.(?:send|warn|error)\(|msg\.[a-zA-Z]+\s*=|fetch\(|https?:\/\//);
+});
 test('membership audit timestamps/admission flags stay separate from HTTP/client counts', async () => {
   const { buildMembershipDiagnosticLogFormat, parseMembershipDiagnostic } = await import('../diagnostics/membership-audit.mjs');
   assert(buildMembershipDiagnosticLogFormat().includes('$msec'));
