@@ -16,6 +16,7 @@ import { isTrialGroupTraining, trialGroupCheckoutOperationId } from "../../src/u
 import { getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
 import { hasGroupTrainingSubscriptionEvidence } from "../../src/utils/groupScheduleSubscriptionOffer.ts";
 import { resolveSubscriptionUsageDisplay } from "../../src/utils/subscriptionValidity.ts";
+import { preserveTournamentLevelDenial } from "../../src/utils/tournamentSignupAvailability.ts";
 
 const require = createRequire(import.meta.url);
 const parse = path => ts.createSourceFile(path, fs.readFileSync(path, "utf8"),
@@ -436,6 +437,7 @@ test("LK1 tournament booking checks an ambiguous 202 with reads and clears the n
       return { data: confirmed ? { status: "REGISTERED", bookingId: "fixture-booking" } : { status: "NONE" } };
     },
     loadPublicRoster: async () => { calls.push("GET roster"); },
+    preserveTournamentLevelDenial,
     mergeTournamentPendingPayment: async (_token, _exercise, registration) => registration,
     apiReconcileTournamentOwner: () => assert.fail("read-only status check attempted a mutation"),
     apiCreateTournamentVivaTransaction: async () => { calls.push("POST booking"); return pending; },
