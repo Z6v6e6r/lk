@@ -1,0 +1,68 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import { transformPreviewFriendlyLabel, transformPreviewPayments } from './previewTransform.ts';
+
+for (const [path, count] of [['games/GamesPage.tsx', 1], ['group-schedule/GroupSchedulePage.tsx', 1], ['tournament-signup/TournamentSignupPage.tsx', 1]] as const) {
+  test(`preview replaces only the checkout regions in ${path}`, () => {
+    const original = readFileSync(new URL(`../../src/components/${path}`, import.meta.url), 'utf8');
+    const transformed = transformPreviewPayments(original, path.split('/').pop()!);
+    assert.equal(transformed?.match(/<MatrixPaymentOptions\b/g)?.length, count);
+    assert.ok(transformed?.includes('import { MatrixPaymentOptions }'));
+    if (path === 'games/GamesPage.tsx') {
+      assert.equal(transformed?.match(/<GamePayerChoice\b/g)?.length, 1);
+      assert.ok(transformed?.includes('gamePaymentScope={paymentMode === "split" ? "quarter" : "court"}'));
+      assert.ok(!transformed?.includes('game-create-payment-method-card'), 'The legacy split checkout must not render beside the new one');
+      assert.ok(!transformed?.includes('На следующем шаге выберите способ записи'));
+      assert.ok(transformed?.includes('date: dateLabel, time: publicCreateSummaryTimeLabel'));
+      assert.ok(transformed?.includes('[studio?.name, studio?.address, selectedCourt?.name]'));
+      assert.ok(transformed?.includes('station: studio?.name'));
+      assert.ok(transformed?.includes('court: selectedCourt?.name'));
+      // The join row stays the wired StorefrontJoinCheckout from src/, not a local mock.
+      assert.ok(transformed?.includes('className="details-action-row details-join-action-row"'));
+      assert.ok(transformed?.includes('<StorefrontJoinCheckout'));
+    } else if (path === 'group-schedule/GroupSchedulePage.tsx') {
+      assert.ok(transformed?.includes('date: selectedTraining.date, time: selectedTraining.timeLabel'));
+      assert.ok(transformed?.includes('selectedTraining.roomName'));
+      assert.ok(transformed?.includes('station: selectedTraining.studioName'));
+    } else {
+      assert.ok(transformed?.includes('date: selectedTournament?.date, time: detailTimeLabel'));
+      assert.ok(transformed?.includes('[detailStationLabel, selectedTournament?.address]'));
+      assert.ok(transformed?.includes('station: detailStationLabel'));
+    }
+    assert.equal(readFileSync(new URL(`../../src/components/${path}`, import.meta.url), 'utf8'), original);
+  });
+}
+test('source drift fails the preview build instead of silently mixing two payment interfaces', () => {
+  assert.throws(() => transformPreviewPayments('<div />', 'GamesPage.tsx'), /checkout regions changed/);
+  assert.equal(transformPreviewPayments('<div />', 'Unrelated.tsx'), null);
+});
+
+test('preview changes only the friendly badge label, preserving source and navigation', () => {
+  const path = new URL('../../src/components/games/FindGamePage.tsx', import.meta.url);
+  const original = readFileSync(path, 'utf8');
+  const result = transformPreviewFriendlyLabel(original, 'FindGamePage.tsx');
+  assert.equal(result, original.replace('const FRIENDLY_TAG_LABEL = "Лето.Падел";', 'const FRIENDLY_TAG_LABEL = "РА";'));
+  assert.equal(transformPreviewFriendlyLabel(result, 'FindGamePage.tsx'), result);
+  assert.equal(readFileSync(path, 'utf8'), original);
+  assert.equal(transformPreviewFriendlyLabel(original, 'Unrelated.tsx'), original);
+});
+
+test('friendly label drift stops the preview build', () => {
+  for (const source of ['const label = "Лето.Падел";', 'const FRIENDLY_TAG_LABEL = "Другой продукт";', 'const FRIENDLY_TAG_LABEL = computeLabel();']) {
+    assert.throws(() => transformPreviewFriendlyLabel(source, 'FindGamePage.tsx'), /friendly label changed/);
+  }
+});
+
+test('preview usability overrides preserve game date on both invite paths and use personal payment by default', async () => {
+  const { transformPreviewUsability } = await import('./previewTransform.ts');
+  const find = readFileSync(new URL('../../src/components/games/FindGamePage.tsx', import.meta.url), 'utf8');
+  const transformed = transformPreviewUsability(find, 'FindGamePage.tsx');
+  assert.ok(transformed.includes('const url = new URL(normalizedInvite); if (game.booking?.date) url.searchParams.set("date", game.booking.date);'));
+  assert.equal(transformed.match(/if \(game.booking\?\.date\) url.searchParams.set\("date", game.booking.date\);/g)?.length, 2);
+  assert.ok(!transformed.includes('.join("/")'));
+  const game = readFileSync(new URL('../../src/components/games/GamesPage.tsx', import.meta.url), 'utf8');
+  assert.ok(transformPreviewUsability(game, 'GamesPage.tsx').includes('useState<GamePaymentMode>("split")'));
+  assert.equal(readFileSync(new URL('../../src/components/games/GamesPage.tsx', import.meta.url), 'utf8'), game);
+  assert.throws(() => transformPreviewUsability('<div/>', 'GamesPage.tsx'), /UI source changed/);
+});

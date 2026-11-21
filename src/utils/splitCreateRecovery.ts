@@ -96,14 +96,25 @@ interface AttemptStorage { getItem(key: string): string | null; setItem(key: str
 export class SplitCreateAttempts {
   private readonly refs = new Map<string, string>();
   private readonly storage: AttemptStorage | null;
-  private readonly key = 'lk_split_create_attempt_refs_v1:';
+  private readonly key: string;
+  private readonly releaseWhenAbsent: boolean;
   private storageWritable = true;
-  constructor(storage: AttemptStorage | null = null) { this.storage = storage; }
+  // A second journal (one-time split JOIN) uses its own key prefix and follows
+  // other windows' releases; the CREATE journal keeps memory over a missing entry.
+  constructor(storage: AttemptStorage | null = null, key = 'lk_split_create_attempt_refs_v1:', options: { releaseWhenAbsent?: boolean } = {}) {
+    this.storage = storage;
+    this.key = key;
+    this.releaseWhenAbsent = options.releaseWhenAbsent === true;
+  }
   private sync(operationId: string): void {
     if (!this.storage || !this.storageWritable) return;
     let raw: string | null;
     try { raw = this.storage.getItem(this.key + operationId); } catch { this.storageWritable = false; return; }
-    if (!raw) return;
+    if (!raw) {
+      // Another window completed the attempt (JOIN journal only).
+      if (this.releaseWhenAbsent) this.refs.delete(operationId);
+      return;
+    }
     if (raw.length > 512) throw new Error('SPLIT_CREATE_JOURNAL_INVALID');
     let value: unknown;
     try { value = JSON.parse(raw); } catch { throw new Error('SPLIT_CREATE_JOURNAL_INVALID'); }
@@ -132,6 +143,18 @@ export class SplitCreateAttempts {
     return { paymentRef, recoveryOnly: false };
   }
   complete(operationId: string): void { this.refs.delete(operationId); this.persist(operationId); }
+  /** Compare-and-delete: release only while the entry still holds this exact paymentRef. */
+  completeIf(operationId: string, paymentRef: string): boolean {
+    this.sync(operationId);
+    if (this.refs.get(operationId) !== paymentRef) return false;
+    this.complete(operationId);
+    return true;
+  }
+  /** True only when durable storage holds exactly this paymentRef for the attempt. */
+  isDurable(operationId: string, paymentRef: string): boolean {
+    if (!this.storage || !this.storageWritable) return false;
+    try { return this.storage.getItem(this.key + operationId) === JSON.stringify(paymentRef); } catch { return false; }
+  }
   adopt(operationId: string, paymentRef: string): void { this.refs.set(operationId, paymentRef); this.persist(operationId); }
   has(operationId: string): boolean { this.sync(operationId); return this.refs.has(operationId); }
   paymentRef(operationId: string): string | undefined { this.sync(operationId); return this.refs.get(operationId); }
