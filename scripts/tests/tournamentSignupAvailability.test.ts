@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 import {
   canOfferTournamentRegistration,
+  getTournamentBookingLevelDenial,
   isTournamentRegistrationLookupUnavailable,
   preserveTournamentLevelDenial,
 } from "../../src/utils/tournamentSignupAvailability.ts";
@@ -86,6 +87,16 @@ test("a CUP level denial preserves existing bookings, pending payments and waitl
     const existing = registration({ status, bookingId: "synthetic-existing", canCancel: true });
     assert.equal(preserveTournamentLevelDenial(denied, existing), existing);
   }
+});
+
+test("only a terminal level refusal closes signup after submitting an old quote", () => {
+  const error = { status: 403, message: "Ваш игровой уровень не подходит для этого турнира.",
+    raw: { details: { code: "LEVEL_NOT_ALLOWED" } } };
+  const denial = getTournamentBookingLevelDenial(error);
+  assert.equal(denial?.levelDenialReason, error.message);
+  assert.equal(canOfferTournamentRegistration("AVAILABLE", denial), false);
+  assert.equal(getTournamentBookingLevelDenial({ ...error, status: 202 }), null);
+  assert.equal(getTournamentBookingLevelDenial({ ...error, raw: { details: { code: "UPSTREAM_UNKNOWN" } } }), null);
 });
 
 test("personal registration lookup bypasses browser cache", () => {

@@ -12,6 +12,11 @@ export function updateTournamentAdmissionCopay(source, previousAdmission) {
   }
   return source.slice(0, start) + read('admission.js') + '\n' + source.slice(end);
 }
+export function patchTournamentAdmissionFinalizeSource(source) {
+  if (source.includes('ctx.tournamentLevelRefusal')) throw Error('Tournament level refusal already installed');
+  const managedFinalizer = 'if (ctx?.lk1) {';
+  return once(source, managedFinalizer, read('level_refusal_finalize.js') + '\n' + managedFinalizer);
+}
 // Apply LAST to a composed booking owner, including the daily guard. Never regenerate a live graph.
 export function patchTournamentAdmissionSource(source) {
   if (source.includes('const tournamentAdmissionGate =')) throw Error('Tournament admission already installed');

@@ -70,7 +70,11 @@ import {
   type TournamentSignupParticipant,
   type TournamentSignupPublicRoster,
 } from "../../utils/tournamentSignupRoster";
-import { canOfferTournamentRegistration, preserveTournamentLevelDenial } from "../../utils/tournamentSignupAvailability";
+import {
+  canOfferTournamentRegistration,
+  getTournamentBookingLevelDenial,
+  preserveTournamentLevelDenial,
+} from "../../utils/tournamentSignupAvailability";
 import {
   pickSubscriptionValidityDate,
   resolveSubscriptionUsageDisplay,
@@ -1535,6 +1539,14 @@ export default function TournamentSignupPage({
       });
       if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
       if (result.error || !result.data) {
+        const levelDenial = subscriptionProductKey && getTournamentBookingLevelDenial(result.error);
+        if (levelDenial) {
+          setCheckout(null);
+          setDiscountQuotes([]);
+          setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(paymentToken));
+          setRegistration(current => preserveTournamentLevelDenial(levelDenial, current));
+          return;
+        }
         if (result.status === 409 && isSubscriptionBookingReleased(result.error?.raw)) {
           setError(result.error?.message || "Предыдущая запись отменена. Выберите вариант записи снова.");
           setCheckout(null);

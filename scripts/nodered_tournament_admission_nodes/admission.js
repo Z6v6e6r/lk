@@ -41,11 +41,26 @@ const tournamentAdmissionFind = (ctx, step, key) => {
 const tournamentAdmissionGuardKey = (ctx) => `lk1-daily-visit:${JSON.stringify([
   ctx.tenantKey, normalizeId(ctx.clientSubscriptionId), ctx.serviceDate,
 ])}`;
+const tournamentLevelRefusalMessages = {
+  LEVEL_NOT_ALLOWED: "Ваш игровой уровень не подходит для этого турнира.",
+  PLAYER_LEVEL_REQUIRED: "Укажите игровой уровень, чтобы записаться на турнир.",
+  PLAYER_LEVEL_UNKNOWN: "Не удалось подтвердить ваш игровой уровень.",
+  ACTIVITY_LEVEL_INVALID: "Не удалось проверить ограничения по уровню для этого турнира.",
+};
 const tournamentAdmissionRefusal = (ctx) => {
   if (ctx.tournamentAbortRecovery && !ctx.tournamentAbortCleanupComplete) {
     return tournamentAdmissionDurableUpdate(ctx, "tournament_abort_cleanup_saved", {
       ...tournamentAdmissionBinding(ctx), state: "FAILED", "tournamentAbort.acknowledged": true,
     }, { $set: { "tournamentAbort.cleanupComplete": true } });
+  }
+  const code = ctx.tournamentAdmissionRefusalCode;
+  if (!ctx.tournamentAbortRecovery && !ctx.tournamentAdmission && !ctx.tournamentDispatchGranted
+    && ctx.step === "tournament_admission_guard_read"
+    && ctx.caller === "http" && ctx.action === "book" && ctx.category === "tournament"
+    && ctx.managedAction === "BOOK_TOURNAMENT" && Object.hasOwn(tournamentLevelRefusalMessages, code)) {
+    ctx.tournamentLevelRefusal = JSON.stringify([ctx.operationKey, ctx.operationId, ctx.tenantKey,
+      ctx.actorClientId, ctx.clientSubscriptionId, ctx.exerciseId, ctx.lk1?.fingerprint, code]);
+    return finishError(ctx, 403, tournamentLevelRefusalMessages[code], { code });
   }
   return finishError(ctx, ctx.tournamentAbortRecovery ? 409 : 403, "Запись не соответствует правилам турнира.", {
     code: ctx.tournamentAdmissionRefusalCode || "TOURNAMENT_ADMISSION_REJECTED",
@@ -55,9 +70,7 @@ const tournamentAdmissionTerminal = (ctx, row) => row?._id === ctx.operationKey 
   && row.actorClientId === ctx.actorClientId && row.exerciseId === ctx.exerciseId
   && row.clientSubscriptionId === ctx.clientSubscriptionId && row.tenantKey === ctx.tenantKey
   && row.state === "FAILED" && row.failure?.rawCode === "TOURNAMENT_ADMISSION_REJECTED"
-  && !row.upstreamAttemptedAt && !row.bookingId && !row.upstreamBookingId
-  && !row.managedEntitlementOperationId && !row.lk1?.createAttemptedAt && !row.lk1?.bookingAttemptedAt
-  && !row.lk1?.transactionAttemptedAt && !row.lk1?.visitJob;
+  && row.upstreamAttemptedAt === undefined && tournamentAdmissionHasNoEffect(row);
 const tournamentAdmissionRestoreCompletion = (ctx, row) => {
   if (row.category !== "tournament" || row.tournamentAdmission === undefined) return null;
   // The ingress lookup already matched the authenticated actor, target, subscription and original operation.
@@ -324,9 +337,7 @@ const tournamentAdmissionRoute = (ctx) => {
     const out = prepareMongoUpdate(ctx, "tournament_admission_refusal_saved", {
       _id: ctx.operationKey, operationId: ctx.operationId, actorClientId: ctx.actorClientId,
       exerciseId: ctx.exerciseId, clientSubscriptionId: ctx.clientSubscriptionId, tenantKey: ctx.tenantKey,
-      state: "PREPARED", upstreamAttemptedAt: { $exists: false }, bookingId: { $exists: false }, upstreamBookingId: { $exists: false },
-      managedEntitlementOperationId: { $exists: false }, "lk1.createAttemptedAt": { $exists: false },
-      "lk1.bookingAttemptedAt": { $exists: false }, "lk1.transactionAttemptedAt": { $exists: false }, "lk1.visitJob": { $exists: false },
+      state: "PREPARED", upstreamAttemptedAt: { $exists: false }, ...tournamentAdmissionUnused,
     }, { $set: { state: "FAILED", failedAt: new Date().toISOString(),
       failure: { rawCode: "TOURNAMENT_ADMISSION_REJECTED", admissionCode: body.code } } });
     msg.payload[2] = { writeConcern: { w: "majority", j: true } };
@@ -338,7 +349,8 @@ const tournamentAdmissionRoute = (ctx) => {
   }
   if (ctx.step === "tournament_admission_refusal_read") {
     if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1
-      || !tournamentAdmissionTerminal(ctx, msg.payload[0])) return tournamentAdmissionPending(ctx);
+      || !tournamentAdmissionTerminal(ctx, msg.payload[0])
+      || msg.payload[0].failure.admissionCode !== ctx.tournamentAdmissionRefusalCode) return tournamentAdmissionPending(ctx);
     return tournamentAdmissionFind(ctx, "tournament_admission_guard_read", tournamentAdmissionGuardKey(ctx));
   }
   if (ctx.step === "tournament_admission_guard_read") {

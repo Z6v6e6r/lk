@@ -2,8 +2,29 @@ import type {
   TournamentRegistrationState,
   TournamentSignupStatus,
 } from "./tournamentSignupApi";
+import type { ApiError } from "./apiClient";
 
 const PHONE_LOOKUP_UNAVAILABLE_PATTERN = /(?:номер )?телефон|\bphone\b/i;
+
+export function getTournamentBookingLevelDenial(
+  error: ApiError | null | undefined,
+): TournamentRegistrationState | null {
+  if (error?.status !== 403 || !error.raw || typeof error.raw !== "object") return null;
+  const { details } = error.raw as { details?: { code?: unknown } };
+  const code = details?.code;
+  if (code !== "LEVEL_NOT_ALLOWED" && code !== "PLAYER_LEVEL_REQUIRED"
+    && code !== "PLAYER_LEVEL_UNKNOWN" && code !== "ACTIVITY_LEVEL_INVALID") return null;
+  const message = error.message || "Не удалось подтвердить допуск по игровому уровню.";
+  return {
+    status: "NONE",
+    placeNumber: null,
+    waitlistNumber: null,
+    canRegister: false,
+    canCancel: false,
+    levelDenialReason: message,
+    message,
+  };
+}
 
 export function preserveTournamentLevelDenial(
   ownerRegistration: TournamentRegistrationState | null | undefined,
