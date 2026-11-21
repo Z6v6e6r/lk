@@ -24,6 +24,25 @@ const readEnv = (key) => {
 };
 
 const failClosed = (code, message, retryAfterSeconds = null) => {
+  // Fixed enums only: never send msg, credentials, context values or exception text to the sink.
+  try {
+    if (typeof node !== "undefined" && node && typeof node.warn === "function") {
+      node.warn(JSON.stringify({
+        code: "LK_LIVE_RATINGS_503",
+        route_key: "games_ratings_live",
+        stage: "token_guard",
+        reason_code: code === "VIVA_SERVICE_TOKEN_REFRESH_IN_PROGRESS"
+          || code === "VIVA_SERVICE_AUTH_NOT_CONFIGURED" ? code : "UNKNOWN",
+        downstream_status: 503,
+        cache_state: !cachedToken ? "missing" : !Number.isFinite(cachedExpiresAt)
+          ? "unknown" : cachedExpiresAt <= now ? "expired" : "within_grace",
+        lock_state: !Number.isFinite(refreshLockUntil) ? "unknown"
+          : refreshLockUntil > now ? "active" : refreshLockUntil > 0 ? "expired" : "absent",
+      }));
+    }
+  } catch (_diagnosticError) {
+    // Diagnostics must not change the fail-closed response or token/lock lifecycle.
+  }
   msg.statusCode = 503;
   msg.headers = {
     "Content-Type": "application/json; charset=utf-8",
