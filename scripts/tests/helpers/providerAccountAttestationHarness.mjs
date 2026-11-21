@@ -12,7 +12,8 @@ const keys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 export const uuid = (n) => '11111111-1111-4111-8111-' + String(n).padStart(12, '0');
 export const requestHash = (body) => hash('provider-account-attestation:v1\0' + JSON.stringify({
   contractVersion: body.contractVersion, operationId: body.operationId,
-  target: body.target ? { exerciseId: body.target.exerciseId } : null }));
+  target: !body.target ? null : body.target.legacyGameId !== undefined
+    ? { legacyGameId: body.target.legacyGameId } : { exerciseId: body.target.exerciseId } }));
 const sources = Object.fromEntries(['verify', 'router', 'response', 'probe']
   .map((k) => [k, providerAccountAttestationSource(k)]));
 
@@ -44,6 +45,10 @@ export class Harness {
       availableClientSubscriptions: [{ subscriptionId: 'synthetic-client-subscription-active', name: 'PRIVATE' }],
     };
     this.statuses = {};
+    this.gameRecords = [{ id: 'pay_79c6fd04-8e68-4ef9-9b63-cb132f83de66', tenantKey: 'iSkq6G',
+      booking: { exerciseId: 'synthetic-exercise-1', vivaExerciseId: 'synthetic-exercise-1' },
+      metadata: { exerciseId: 'synthetic-exercise-1' }, title: 'PRIVATE_GAME_TITLE' }];
+    this.mongoCalls = [];
     this.body = { contractVersion: 1, operationId: uuid(10) };
     this.typ = 'phub-provider-account-attestation+jwt';
   }
@@ -96,6 +101,19 @@ export class Harness {
     for (let i = 0; i < 6; i++) {
       out = this.invoke('router', msg);
       if (out[1]) return this.invoke('response', out[1]);
+      if (out[2]) {
+        msg = out[2];
+        assert.equal(out[0], null);
+        this.mongoCalls.push({ payload: structuredClone(msg.payload), limit: msg.limit, url: msg.url, headers: msg.headers });
+        if (options.mongoError) {
+          // Node-RED catch node: same msg with msg.error, no payload change.
+          msg.error = { message: 'MongoServerSelectionError' };
+        } else {
+          msg.payload = structuredClone(this.gameRecords);
+        }
+        options.mutateGame?.(msg);
+        continue;
+      }
       msg = out[0];
       const step = msg._providerAccountAttestation.step;
       this.calls.push({ step, url: msg.url, method: msg.method, auth: msg.headers.Authorization,

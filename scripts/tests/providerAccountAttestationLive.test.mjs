@@ -7,7 +7,12 @@ import {
   composeProviderAccountAttestationLive,
   ATTESTATION_LIVE_SOURCE_SHA256,
 } from '../prepare_provider_account_attestation_live.mjs';
-import { providerAccountAttestationIds as ids, PROVIDER_ACCOUNT_ROUTE } from '../patch_nodered_provider_account_attestation.mjs';
+import {
+  composeProviderAccountAttestation,
+  providerAccountAttestationGameIds as gameIds,
+  providerAccountAttestationIds as ids,
+  PROVIDER_ACCOUNT_ROUTE,
+} from '../patch_nodered_provider_account_attestation.mjs';
 import { validateReviewedFlowContract } from '../nodered_reviewed_flow_deploy/runtime_contract.mjs';
 
 const sha = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -19,21 +24,47 @@ const syntheticLive = () => [
     method: 'post', wires: [[]] },
   { id: 'gw', type: 'function', z: 'tab_lk1', func: 'const LK1_OVERLAY_HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";', wires: [[]] },
   { id: 'own', type: 'function', z: 'tab_lk1', func: 'const MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01";', wires: [[]] },
+  { id: '4e820638cc39c730', type: 'mongodb4-client', name: '', dbName: 'games' },
 ];
+// The graph as installed by #305: the attestation tab (nine nodes) with the previous bodies.
+const installedLive = (remainder = syntheticLive()) => {
+  const r = composeProviderAccountAttestation(bytesOf(remainder), 'installed');
+  const installed = r.candidate.slice(remainder.length, remainder.length + Object.keys(ids).length);
+  for (const n of installed) if (n.type === 'function') n.func = 'return [null, msg]; // previous ' + n.id;
+  const router = installed.find((n) => n.id === ids.router);
+  router.outputs = 2;
+  router.wires = router.wires.slice(0, 2);
+  return [...remainder, ...installed];
+};
 const bytesOf = (flow) => Buffer.from(JSON.stringify(flow, null, 2) + '\n');
 
-test('synthetic installed graph composes one additive suffix with an exact contract', () => {
-  const flow = syntheticLive();
+test('upgrade replaces only the reviewed fields of the installed nodes and appends the game lookup', () => {
+  const flow = installedLive();
   const bytes = bytesOf(flow);
   const r = composeProviderAccountAttestationLive(bytes, 'provider-account-attestation-synthetic', sha(bytes));
-  assert.deepEqual(r.candidate.slice(0, flow.length), flow);
-  assert.deepEqual(r.candidate.slice(flow.length).map((n) => n.id), Object.values(ids));
-  assert.deepEqual(r.contract.allowedChanges, []);
+  const remainder = syntheticLive();
+  assert.deepEqual(r.candidate.slice(0, remainder.length), remainder);
+  assert.deepEqual(r.candidate.slice(remainder.length).map((n) => n.id), [...Object.values(ids), ...Object.values(gameIds)]);
+  assert.deepEqual(r.contract.allowedChanges.map((c) => [c.id, c.fields]).sort(), [
+    [ids.probe, ['func']], [ids.router, ['func', 'outputs', 'wires']], [ids.sanitize, ['func']], [ids.verify, ['func']]].sort());
+  assert.deepEqual([...r.contract.allowedAdditions.map((a) => a.id)].sort(), Object.values(gameIds).sort());
+});
+
+test('upgrade refuses unexpected installed drift, a missing node or a missing games client', () => {
+  const drift = installedLive();
+  drift.find((n) => n.id === ids.http).requestTimeout = '60000';
+  assert.throws(() => composeProviderAccountAttestationLive(bytesOf(drift), 'provider-account-attestation-x', sha(bytesOf(drift))), /ATTESTATION_LIVE_UNEXPECTED_CHANGE/);
+  const missing = installedLive().filter((n) => n.id !== ids.probe);
+  assert.throws(() => composeProviderAccountAttestationLive(bytesOf(missing), 'provider-account-attestation-x', sha(bytesOf(missing))), /ATTESTATION_LIVE_INSTALLED_SHAPE_INVALID/);
+  const noClient = installedLive(syntheticLive().filter((n) => n.id !== '4e820638cc39c730'));
+  assert.throws(() => composeProviderAccountAttestationLive(bytesOf(noClient), 'provider-account-attestation-x', sha(bytesOf(noClient))), /ATTESTATION_LIVE_GAMES_CLIENT_MISSING/);
+  const otherDb = installedLive(syntheticLive().map((n) => n.id === '4e820638cc39c730' ? { ...n, dbName: 'games_chat' } : n));
+  assert.throws(() => composeProviderAccountAttestationLive(bytesOf(otherDb), 'provider-account-attestation-x', sha(bytesOf(otherDb))), /ATTESTATION_LIVE_GAMES_CLIENT_MISSING/);
 });
 
 test('whole-flow preimage is pinned', () => {
   assert.equal(ATTESTATION_LIVE_SOURCE_SHA256.length, 64);
-  assert.throws(() => composeProviderAccountAttestationLive(bytesOf(syntheticLive()), 'x'), /ATTESTATION_LIVE_PREIMAGE_DRIFT/);
+  assert.throws(() => composeProviderAccountAttestationLive(bytesOf(installedLive()), 'x'), /ATTESTATION_LIVE_PREIMAGE_DRIFT/);
 });
 
 test('receiver boundary must exist and be active', () => {
@@ -79,18 +110,21 @@ const fixture = process.env.LK1_ATTESTATION_LIVE_FLOW_FIXTURE;
 const live = fixture ? fs.readFileSync(fixture) : null;
 const liveTest = (name, fn) => test(name, { skip: live ? false : 'LK1_ATTESTATION_LIVE_FLOW_FIXTURE not set' }, fn);
 
-liveTest('LIVE: installed graph is unchanged and only the reviewed nodes are appended', () => {
+liveTest('LIVE: only the four attestation bodies and the router wiring change; two lookup nodes appended', () => {
   const flow = JSON.parse(live.toString('utf8'));
   const r = composeProviderAccountAttestationLive(live, 'provider-account-attestation-live-test');
-  assert.deepEqual(r.candidate.slice(0, flow.length), flow);
-  assert.equal(r.candidate.length, flow.length + Object.keys(ids).length);
+  const keep = flow.filter((n) => !Object.values(ids).includes(n.id));
+  assert.deepEqual(r.candidate.slice(0, keep.length), keep);
+  assert.equal(r.candidate.length, flow.length + 2);
   validateReviewedFlowContract({ liveBytes: live, candidateBytes: r.candidateBytes, contract: r.contract });
   const routes = (f) => f.filter((n) => n.type === 'http in').map((n) => n.method + ' ' + n.url).sort();
-  assert.deepEqual(routes(r.candidate), [...routes(flow), 'get ' + PROVIDER_ACCOUNT_ROUTE, 'post ' + PROVIDER_ACCOUNT_ROUTE].sort());
+  assert.deepEqual(routes(r.candidate), routes(flow));
+  assert.equal(r.contract.allowedChanges.length, 4);
 });
 
-liveTest('LIVE: no installed node reads or sets the attestation flag or replay key', () => {
-  const text = live.toString('utf8');
+liveTest('LIVE: outside the attestation tab no node reads the attestation flag or replay key', () => {
+  const flow = JSON.parse(live.toString('utf8')).filter((n) => !Object.values(ids).includes(n.id));
+  const text = JSON.stringify(flow);
   assert.ok(!text.includes('LK1_PROVIDER_ACCOUNT_ATTESTATION_ENABLED'));
   assert.ok(!text.includes('providerAccountAttestationSeen'));
 });

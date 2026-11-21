@@ -6,6 +6,7 @@ import { Harness, actor, path, uuid, requestHash, fixture } from './helpers/prov
 import { providerAccountAttestationSource } from '../lib/providerAccountAttestationSource.mjs';
 import {
   composeProviderAccountAttestation,
+  providerAccountAttestationGameIds as gameIds,
   providerAccountAttestationIds as ids,
   PROVIDER_ACCOUNT_ROUTE,
 } from '../patch_nodered_provider_account_attestation.mjs';
@@ -320,6 +321,79 @@ test('eligible: case-insensitive product and id, matching row id, isFrozen false
   assert.deepEqual(r.payload.targetProof.eligibleClientSubscriptionIds, []);
 });
 
+const LEGACY = 'pay_79c6fd04-8e68-4ef9-9b63-cb132f83de66';
+const legacyRun = (setup = (h) => h, options = {}) => {
+  const h = new Harness();
+  h.body = { contractVersion: 1, operationId: uuid(30), target: { legacyGameId: LEGACY } };
+  setup(h);
+  return [h, h.run(options)];
+};
+
+test('legacyGameId: one read-only lk_games find, then the record exercise, proof by legacyGameId only', () => {
+  const [h, r] = legacyRun();
+  assert.equal(r.statusCode, 200, JSON.stringify(r.payload));
+  assertClean(h, r);
+  assert.deepEqual(r.payload.targetProof, { legacyGameId: LEGACY, startsAt: '2035-04-02T09:00:00.000Z', durationMinutes: 90,
+    ownedClientSubscriptionIds: ['synthetic-client-subscription-active'], eligibleClientSubscriptionIds: [] });
+  assert.ok(!JSON.stringify(r.payload).includes('synthetic-exercise-1'), 'the raw Viva exercise id is never returned');
+  assert.ok(!JSON.stringify(r.payload).includes('PRIVATE_GAME_TITLE'));
+  assert.deepEqual(h.mongoCalls, [{ payload: { id: LEGACY, archived: { $ne: true } }, limit: 2, url: undefined, headers: undefined }],
+    'no provider URL or actor token travels to the database node');
+  assert.deepEqual(h.calls.map((c) => c.url.split('/iSkq6G/')[1]), ['profile', 'subscriptions?includeFinished=true&size=1000',
+    'exercises/synthetic-exercise-1']);
+  // Same eligibility rules through the legacy path.
+  const [, ok] = legacyRun((x) => { x.subscriptions = [eligibleRow()];
+    x.exercise.availableClientSubscriptions = [{ subscriptionId: 'synthetic-hub-sub' }]; });
+  assert.deepEqual(ok.payload.targetProof.eligibleClientSubscriptionIds, ['synthetic-hub-sub']);
+  // Aliases that agree (case, dedupeKey) resolve.
+  const [, agree] = legacyRun((x) => { x.gameRecords = [{ id: LEGACY, vivaExerciseId: 'SYNTHETIC-EXERCISE-1',
+    dedupeKey: 'viva:synthetic-exercise-1', metadata: { splitPayment: { exerciseId: 'synthetic-exercise-1' } } }]; });
+  assert.equal(agree.statusCode, 200, JSON.stringify(agree.payload));
+});
+
+test('legacyGameId: game record problems refuse with 409 before any exercise read', () => {
+  const cases = {
+    'no record': [],
+    'two records': [{ id: LEGACY, exerciseId: 'synthetic-exercise-1' }, { id: LEGACY, exerciseId: 'synthetic-exercise-1' }],
+    'other id': [{ id: 'pay_00000000-0000-4000-8000-000000000000', exerciseId: 'synthetic-exercise-1' }],
+    'foreign tenant': [{ id: LEGACY, tenantKey: 'otherTenant', exerciseId: 'synthetic-exercise-1' }],
+    'archived': [{ id: LEGACY, archived: true, exerciseId: 'synthetic-exercise-1' }],
+    'no exercise id': [{ id: LEGACY, booking: {} }],
+    'conflicting aliases': [{ id: LEGACY, booking: { exerciseId: 'synthetic-exercise-1' }, metadata: { vivaExerciseId: 'synthetic-exercise-2' } }],
+    'conflicting dedupeKey': [{ id: LEGACY, exerciseId: 'synthetic-exercise-1', dedupeKey: 'viva:synthetic-exercise-9' }],
+    'non-string alias': [{ id: LEGACY, exerciseId: 12345678 }],
+    'path-like alias': [{ id: LEGACY, exerciseId: '../profile' }],
+  };
+  for (const [label, records] of Object.entries(cases)) {
+    const [h, r] = legacyRun((x) => { x.gameRecords = records; });
+    assert.deepEqual(code(r), [409, 'PROVIDER_ACCOUNT_INVALID'], label);
+    assert.ok(!h.calls.some((c) => c.step === 'exercise'), label);
+  }
+  const [h, r] = legacyRun((x) => x, { mongoError: true });
+  assert.deepEqual(code(r), [503, 'PROVIDER_ACCOUNT_UNAVAILABLE'], 'database failure');
+  assert.ok(!h.calls.some((c) => c.step === 'exercise'));
+  const [, notArray] = legacyRun((x) => x, { mutateGame: (m) => { m.payload = { id: LEGACY }; } });
+  assert.deepEqual(code(notArray), [503, 'PROVIDER_ACCOUNT_UNAVAILABLE']);
+  const [, wrongExercise] = legacyRun((x) => { x.exercise.id = 'synthetic-exercise-2'; });
+  assert.deepEqual(code(wrongExercise), [409, 'PROVIDER_ACCOUNT_INVALID'], 'Viva returned another exercise');
+});
+
+test('legacyGameId request shape: exact pay_<uuid>, one target key, signed hash includes it', () => {
+  for (const target of [{ legacyGameId: 'pay_79C6FD04-8E68-4EF9-9B63-CB132F83DE66' }, { legacyGameId: '79c6fd04-8e68-4ef9-9b63-cb132f83de66' },
+    { legacyGameId: LEGACY, exerciseId: 'synthetic-exercise-1' }, { legacyGameId: LEGACY + 'x' }, { legacyGameId: 1 }]) {
+    const h = new Harness();
+    const body = { contractVersion: 1, operationId: uuid(31), target };
+    assert.deepEqual(code(h.run({ body })), [400, 'PROVIDER_ACCOUNT_REQUEST_INVALID'], JSON.stringify(target));
+    assert.equal(h.calls.length + h.mongoCalls.length, 0);
+  }
+  const h = new Harness();
+  const body = { contractVersion: 1, operationId: uuid(32), target: { legacyGameId: LEGACY } };
+  const signedBody = { contractVersion: 1, operationId: uuid(32), target: { exerciseId: 'synthetic-exercise-1' } };
+  assert.deepEqual(code(h.run({ body, signedBody })), [400, 'PROVIDER_ACCOUNT_REQUEST_INVALID'], 'target kind is signed');
+  assert.equal(requestHash(body), 'sha256:' + crypto.createHash('sha256').update('provider-account-attestation:v1\0'
+    + JSON.stringify({ contractVersion: 1, operationId: uuid(32), target: { legacyGameId: LEGACY } })).digest('hex'));
+});
+
 test('validity follows the LK1 money gate: Moscow wall time, date-only expiry is end of day', () => {
   const h = new Harness();
   h.now = Date.parse('2035-04-01T20:30:00.000Z'); // 23:30 Moscow on 1 April
@@ -392,12 +466,18 @@ test('graph is one additive suffix with an exact contract; collisions refuse', (
   const bytes = Buffer.from(JSON.stringify(live, null, 2) + '\n');
   const r = composeProviderAccountAttestation(bytes, 'provider-account-attestation-synthetic');
   assert.deepEqual(r.candidate.slice(0, live.length), live);
-  assert.deepEqual(r.candidate.slice(live.length).map((n) => n.id), Object.values(ids));
+  assert.deepEqual(r.candidate.slice(live.length).map((n) => n.id), [...Object.values(ids), ...Object.values(gameIds)]);
   validateReviewedFlowContract({ liveBytes: bytes, candidateBytes: r.candidateBytes, contract: r.contract });
   const added = r.candidate.slice(live.length);
   assert.deepEqual(added.filter((n) => n.type === 'http in').map((n) => n.method + ' ' + n.url).sort(),
     ['get ' + PROVIDER_ACCOUNT_ROUTE, 'post ' + PROVIDER_ACCOUNT_ROUTE]);
-  assert.ok(!added.some((n) => /mongodb|link (in|out)|inject|email|file/.test(n.type)));
+  assert.ok(!added.some((n) => /link (in|out)|inject|email|file|exec/.test(n.type)));
+  // Exactly one database node: a read-only find on lk_games, fed only by the router.
+  const mongo = added.filter((n) => /mongodb/.test(n.type));
+  assert.deepEqual(mongo.map((n) => [n.id, n.operation, n.collection, n.clientNode]),
+    [[gameIds.find, 'find', 'lk_games', '4e820638cc39c730']]);
+  assert.deepEqual(r.candidate.filter((n) => (n.wires || []).flat().includes(gameIds.find)).map((n) => n.id), [ids.router]);
+  assert.deepEqual(added.find((n) => n.id === gameIds.catch).scope, [gameIds.find]);
   assert.equal(added.find((n) => n.id === ids.http).senderr, false);
   for (const extra of [{ id: 'x', type: 'http in', url: PROVIDER_ACCOUNT_ROUTE.toUpperCase() + '/', method: 'post' },
     { id: ids.verify, type: 'comment' }, { id: 'y', type: 'link out', links: [ids.router] }]) {
