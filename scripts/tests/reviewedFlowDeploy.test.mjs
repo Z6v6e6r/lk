@@ -1647,6 +1647,38 @@ test("remote preflight fails closed on a malformed protected lease", (t) => {
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
 });
 
+for (const alias of [false, true]) test(`v4 runtime lease and publication alias are untouched by every flow/editor entrypoint (${alias})`, t => {
+  const prepared = prepareEditorRuntime(t);
+  const raw = Buffer.from(JSON.stringify({ formatVersion: 4, kind: "subscription409-runtime", phase: "PREPARED" }));
+  fs.writeFileSync(prepared.deploymentLeasePath, raw, { mode: 0o600 });
+  const temporary = path.join(path.dirname(prepared.deploymentLeasePath), `.${path.basename(prepared.deploymentLeasePath)}.123.synthetic.tmp`);
+  if (alias) fs.linkSync(prepared.deploymentLeasePath, temporary);
+  const before = fs.statSync(prepared.deploymentLeasePath);
+  const common = { deploymentId: prepared.contract.deploymentId, candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath, stamp: "20260820T120001+0300", flowBackup: "/bad", contractBackup: "/bad",
+    candidateBackup: "/bad", expectedLeaseSha256: "a".repeat(64), expectedActiveSha256: "a".repeat(64),
+    expectedFlowBackupSha256: "a".repeat(64), expectedContractBackupSha256: "a".repeat(64) };
+  for (const name of ["preflight", "apply", "rollback", "reconcileCurrent", "finalizeLegacyCandidate",
+    "reserveEditorModified", "confirmEditorModified", "finishEditorModified", "abortEditorModified"]) {
+    assert.throws(() => prepared.runtime[name](common), /deployment lease contract mismatch.*owning operation/, name);
+    assert(fs.readFileSync(prepared.deploymentLeasePath).equals(raw));
+    assert.equal(fs.statSync(prepared.deploymentLeasePath).nlink, before.nlink);
+    if (alias) assert(fs.readFileSync(temporary).equals(raw));
+  }
+  assert.equal(prepared.restarts, 0);
+});
+
+test("lease version admission rejects a symlink or permissive file before reading", t => {
+  const prepared = prepareEditorRuntime(t), target = path.join(prepared.stage, "foreign.json");
+  fs.writeFileSync(target, '{"formatVersion":4}', { mode: 0o600 });
+  fs.symlinkSync(target, prepared.deploymentLeasePath);
+  assert.throws(() => prepared.runtime.preflight({}), /Protected file/);
+  assert.equal(fs.lstatSync(prepared.deploymentLeasePath).isSymbolicLink(), true);
+  fs.unlinkSync(prepared.deploymentLeasePath);
+  fs.writeFileSync(prepared.deploymentLeasePath, '{"formatVersion":4}', { mode: 0o644 });
+  assert.throws(() => prepared.runtime.preflight({}), /Protected file/); assert.equal(prepared.restarts, 0);
+});
+
 test("remote runtime applies and rolls back an exact-graph contract", (t) => {
   const prepared = prepareRuntime(t, { exactGraph: true });
   const common = {
