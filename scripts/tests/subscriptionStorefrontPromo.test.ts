@@ -215,7 +215,7 @@ const liveProductFixture = (key: string, changes: Record<string, unknown> = {}) 
   cost: key === 'vsk' ? 680000 : key === 'residency' ? 79000 : 1980000, validityDays: 30, visits: 30,
   activationDays: key === 'vsk' || key === 'residency' ? 0 : 1, type: 'GROUP', variant: 'BY_VISITS', appliesTo: 'BOOKING',
   hasStudioLimitation: false, hasDirectionLimitation: key !== 'residency',
-  availableDirections: key === 'vsk' ? [4588, 6975].map(id => ({ id })) : key === 'residency' ? [] : [4588, 5278].map(id => ({ id })),
+  availableDirections: key === 'vsk' ? [4588, 6975, 6977].map(id => ({ id })) : key === 'residency' ? [] : [4588, 5278].map(id => ({ id })),
   hasTypeLimitation: true, availableTypes: (key === 'vsk' ? [1613, 2349] : key === 'residency' ? [2572] : [1613, 839]).map(id => ({ id })),
   hasDayLimitation: false, hasTimeRangeLimitation: false, hasDayTimeLimitation: false,
   ...changes,
@@ -790,10 +790,22 @@ test('VSK sells only its exact live monthly product, without annual or arbitrary
   assert.equal(f.writes.length, 1);
 });
 
+test('VSK also accepts the original two directions in a Viva quote', async () => {
+  const f = zeroFixture();
+  f.setLiveProduct('vsk', { availableDirections: [{ id: 6975 }, { id: 4588 }] });
+  const quote = await f.adapter.loadZeroOfferQuote('vsk');
+  assert.equal(quote.priceMinor, 680000);
+  assert.equal(quote.activationDays, 0);
+  assert.equal(f.writes.length, 0);
+});
+
 test('VSK rejects wrong product, changed terms/scope and hidden products before purchase', async () => {
   for (const change of [{ id: 'foreign' }, { validityDays: 365 }, { visits: 31 }, { showToUser: false },
     { hasDirectionLimitation: false }, { availableDirections: [{ id: 4588 }, { id: 6180 }] },
     { availableDirections: [{ id: 4588 }, { id: 6975 }, { id: 5278 }] },
+    { availableDirections: [{ id: 4588 }, { id: 6977 }] },
+    { availableDirections: [{ id: 4588 }, { id: 6975 }, { id: 6977 }, { id: 6977 }] },
+    { availableDirections: [{ id: 4588 }, { id: 6975 }, { id: 6977 }, { id: 5278 }] },
     { availableTypes: [{ id: 839 }, { id: 2349 }] }, { hasDayLimitation: true },
     { hasTimeRangeLimitation: true }, { hasDayTimeLimitation: true }]) {
     const f = zeroFixture(); f.setLiveProduct('vsk', change);
