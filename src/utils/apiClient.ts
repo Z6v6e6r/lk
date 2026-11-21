@@ -4817,7 +4817,7 @@ export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
   const result = await request<{ ok?: boolean; success?: boolean; message?: string; error?: string; level?: number; grade?: string }>(onboardingUrl, {
     method: "POST",
     auth: true,
-    retries: 1,
+    retries: payload.source === "tournament_start" ? 0 : 1,
     body: JSON.stringify(payload),
   });
 
