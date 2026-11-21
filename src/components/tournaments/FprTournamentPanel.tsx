@@ -31,8 +31,10 @@ function download(value: unknown, file: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function FprTournamentSetup({ players, context, onSaved, initialState, onResume }: {
+export function FprTournamentSetup({ players, context, onSaved, initialState, onResume, startRatingsRevision, ratingSaveInProgress }: {
   players: Player[];
+  startRatingsRevision: number;
+  ratingSaveInProgress: boolean;
   initialState?: FprState;
   onResume?: () => void;
   context: {
@@ -56,7 +58,9 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
   const [bindingLoading, setBindingLoading] = useState(Boolean(context.sourceExerciseId));
   const [bindingError, setBindingError] = useState<string | null>(null);
   const [selectedCommunityId, setSelectedCommunityId] = useState(initialState?.communityRating?.communityId ?? "");
-  const [league, setLeague] = useState<FprLoadedLeague | null>(null);
+  const [loadedLeague, setLoadedLeague] = useState<{
+    data: FprLoadedLeague; players: Player[]; startRatingsRevision: number;
+  } | null>(null);
   const [leagueLoading, setLeagueLoading] = useState(false);
   const [leagueError, setLeagueError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
@@ -98,10 +102,13 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
   const fixedCommunity = fixed || Boolean(initialState);
   const communityId = initialState?.communityRating?.communityId ?? selectedId;
   const communityName = initialState?.communityRating?.communityName ?? selectedName;
+  const league = loadedLeague?.players === presentPlayers
+    && loadedLeague.startRatingsRevision === startRatingsRevision
+    && loadedLeague.data.communityId === communityId ? loadedLeague.data : null;
   useEffect(() => { setValues({}); }, [communityId]);
   useEffect(() => {
     let active = true;
-    setLeague(null); setLeagueError(null);
+    setLoadedLeague(null); setLeagueError(null);
     if (initialState || !communityId || bindingLoading || bindingError || selectionError || !presentPlayers.length) { setLeagueLoading(false); return; }
     setLeagueLoading(true);
     void loadFprCommunityLeague({ communityId, communityName, players: presentPlayers,
@@ -116,11 +123,11 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
         if (result.data.period !== period) throw new Error("Получен рейтинг другого периода");
         return { ...result.data, period };
       },
-    }).then(result => { if (active) setLeague(result); })
+    }).then(data => { if (active) setLoadedLeague({ data, players: presentPlayers, startRatingsRevision }); })
       .catch(e => { if (active) setLeagueError(message(e)); })
       .finally(() => { if (active) setLeagueLoading(false); });
     return () => { active = false; };
-  }, [communityId, communityName, presentPlayers, bindingLoading, bindingError, selectionError, organizerId, organizerPhone, reload, initialState]);
+  }, [communityId, communityName, presentPlayers, bindingLoading, bindingError, selectionError, organizerId, organizerPhone, reload, initialState, startRatingsRevision]);
   const frozen = (p: Player): FprLeagueValue | undefined => {
     const saved = initialState?.players.find(player => player.id === p.id);
     return saved ? { level: String(saved.level), points: String(saved.leaguePoints), place: saved.leaguePlace === null ? "" : String(saved.leaguePlace), newcomer: saved.leaguePlace === null } : undefined;
@@ -130,12 +137,12 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
   });
   const change = (p: Player, update: Partial<FprLeagueValue>) => setValues(v => ({ ...v, [p.id]: { ...v[p.id], ...update } }));
   const save = async () => {
-    if (busy) return;
+    if (busy || ratingSaveInProgress) return;
     setError(null);
     try {
       let payload = pending;
       if (!payload) {
-        if (!league || league.communityId !== communityId || leagueLoading || bindingLoading || bindingError || selectionError) throw new Error("Дождитесь загрузки рейтинга сообщества");
+        if (!league || leagueLoading || bindingLoading || bindingError || selectionError) throw new Error("Дождитесь загрузки рейтинга сообщества");
         const now = new Date().toISOString();
         const publication = binding?.publishedCommunities.find(p => p.communityId === communityId);
         const state = createFprState({ tournamentId: id, players: presentPlayers.map(p => ({
@@ -224,7 +231,7 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
     </fieldset>
     {initialState && <p>Настройки сохранённого турнира. Состав и результаты сохранены.</p>}
     {error && <p role="alert" className="fpr-error">{error}</p>}
-    {initialState ? <button className="section-cta" type="button" onClick={onResume}>Вернуться к турниру</button> : <button className="section-cta" type="button" disabled={busy || (!pending && (loading || Boolean(loadError) || !league || league.communityId !== communityId)) || presentPlayers.length < 4 || presentPlayers.length > 28 || !organizerId} onClick={() => void save()}>
+    {initialState ? <button className="section-cta" type="button" onClick={onResume}>Вернуться к турниру</button> : <button className="section-cta" type="button" disabled={busy || ratingSaveInProgress || (!pending && (loading || Boolean(loadError) || !league)) || presentPlayers.length < 4 || presentPlayers.length > 28 || !organizerId} onClick={() => void save()}>
       {busy ? "Сохраняем протокол…" : pending ? "Повторить создание с тем же ID" : "Создать протокол ФПР 6×25"}
     </button>}
   </div>;

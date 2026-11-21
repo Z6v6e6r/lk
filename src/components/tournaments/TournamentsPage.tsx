@@ -1673,6 +1673,7 @@ function TournamentDetailsModal({
   const [savedStartRatingChanges, setSavedStartRatingChanges] =
     useState<Record<string, TournamentSavedRatingChange>>({});
   const [ratingSaveStateById, setRatingSaveStateById] = useState<Record<string, "idle" | "saving">>({});
+  const [fprStartRatingsRevision, setFprStartRatingsRevision] = useState(0);
   const [ratingSaveErrors, setRatingSaveErrors] = useState<Record<string, string>>({});
   const [ratingEditModeById, setRatingEditModeById] = useState<Record<string, boolean>>({});
   const [refreshingRatings, setRefreshingRatings] = useState(false);
@@ -3009,6 +3010,7 @@ function TournamentDetailsModal({
         }),
       );
     }
+    setFprStartRatingsRevision(revision => revision + 1);
     setSavedStartRatingChanges((prev) => ({
       ...prev,
       [participant.id]: {
@@ -4004,6 +4006,8 @@ function TournamentDetailsModal({
           <FprTournamentSetup
             key={String(tournament?.id ?? draftTournamentId ?? "manual-fpr")}
             players={sortedParticipants}
+            startRatingsRevision={fprStartRatingsRevision}
+            ratingSaveInProgress={Object.values(ratingSaveStateById).includes("saving")}
             initialState={initialFprState}
             onResume={initialFprPayload ? () => onSaved(initialFprPayload) : undefined}
             context={{
