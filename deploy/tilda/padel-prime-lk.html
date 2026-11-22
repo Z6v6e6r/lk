@@ -1,0 +1,121 @@
+<!-- Падел Прайм · ЛК (Tilda T123 / HTML-блок)
+     Копия для Tilda по образцу docs/tilda-loader.html, но тенант-специфичная:
+     грузит бандл клуба, версия берётся из padel-prime-release.json,
+     при отсутствии манифеста — cache-bust по времени (как в проде ЛК1).
+
+     Куда вставлять: Tilda → страница кабинета → блок T123 (HTML-код).
+     Что должно быть на странице: ничего кроме этого блока, он сам создаёт #root.
+
+     BASE_URL менять при переезде на домен клуба (тогда же пересобрать бандл
+     с VITE_PUBLIC_INVITE_PATH=/game_join и VITE_CABINET_URL=<домен>).
+-->
+<meta charset="utf-8">
+<div id="root"></div>
+<script>
+  (function () {
+    var BASE_URL = "https://lk-reserve.89-108-64-209.sslip.io/pade-prime-test";
+    var BUNDLE_FILE = "padel-prime-lk.js";
+    var RELEASE_FILE = "padel-prime-release.json";
+    var REQUEST_TIMEOUT_MS = 8000;
+    var SCRIPT_TIMEOUT_MS = 15000;
+    // Аналитика клуба пока не развёрнута в его контуре. Пустая строка = выключено.
+    var ANALYTICS_URL = "";
+
+    var baseUrl = String(BASE_URL || "").replace(/\/+$/, "");
+    var root = document.getElementById("root");
+
+    function report(kind, payload) {
+      if (!ANALYTICS_URL) return;
+      try {
+        fetch(ANALYTICS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          keepalive: true,
+          credentials: "omit",
+          body: JSON.stringify({
+            event: "tilda_bootstrap_error",
+            timestamp: new Date().toISOString(),
+            source: "tilda-loader-pade-prime",
+            kind: kind,
+            payload: payload || {},
+            page: { href: location.href, referrer: document.referrer || null }
+          })
+        }).catch(function () {});
+      } catch (_) {}
+    }
+
+    function showError(reason) {
+      report("bundle.load_failed", { reason: reason, baseUrl: baseUrl });
+      if (!root) return;
+      root.innerHTML =
+        '<div style="padding:24px;font-family:Inter,Arial,sans-serif;color:#171B19">' +
+        '<div style="font-weight:800;letter-spacing:.12em;font-size:12px;color:#69716B">ПАДЕЛ ПРАЙМ</div>' +
+        '<div style="margin-top:8px;font-size:16px;font-weight:700">Не удалось загрузить личный кабинет</div>' +
+        '<div style="margin-top:6px;font-size:14px;color:#69716B">Проверьте интернет и обновите страницу.</div>' +
+        "</div>";
+    }
+
+    function loadBundle(version) {
+      var normalized = String(version || "").trim();
+      var url = baseUrl + "/" + BUNDLE_FILE + "?v=" + encodeURIComponent(normalized || String(Date.now())) + "&charset=utf-8";
+      if (normalized) window.__LK_RELEASE_VERSION__ = normalized;
+      window.__LK_ACTIVE_BASE_URL__ = baseUrl;
+
+      var settled = false;
+      var script = document.createElement("script");
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        if (script.parentNode) script.parentNode.removeChild(script);
+        showError("timeout: " + url);
+      }, SCRIPT_TIMEOUT_MS);
+
+      script.charset = "utf-8";
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.src = url;
+      script.onload = function () {
+        settled = true;
+        clearTimeout(timer);
+      };
+      script.onerror = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        showError("error: " + url);
+      };
+      document.head.appendChild(script);
+    }
+
+    function fetchManifest() {
+      var url = baseUrl + "/" + RELEASE_FILE + "?ts=" + Date.now();
+      var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      var timer = controller
+        ? setTimeout(function () { controller.abort(); }, REQUEST_TIMEOUT_MS)
+        : null;
+
+      fetch(url, { cache: "no-store", signal: controller ? controller.signal : undefined })
+        .then(function (response) {
+          if (!response.ok) throw new Error("manifest " + response.status);
+          return response.json();
+        })
+        .then(function (payload) {
+          loadBundle(payload && payload.version ? String(payload.version) : "");
+        })
+        .catch(function (error) {
+          // Манифеста может не быть — это не ошибка, работаем по времени.
+          report("manifest.unavailable", { url: url, reason: String(error && error.message || error) });
+          loadBundle("");
+        })
+        .finally(function () {
+          if (timer) clearTimeout(timer);
+        });
+    }
+
+    if (!baseUrl) {
+      showError("no base url");
+      return;
+    }
+    fetchManifest();
+  })();
+</script>

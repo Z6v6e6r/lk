@@ -72,6 +72,8 @@
     "nodered:modular:audit-147": "bash ./scripts/prepare_nodered_live_workspace.sh",
     "nodered:modular:build": "node scripts/nodered_modular_flow.mjs build",
     "nodered:modular:validate": "node scripts/nodered_modular_flow.mjs validate",
+    "tenant:clone-flow": "node scripts/tenant_clone_flow.mjs",
+    "test:tenant-clone-flow": "node --test scripts/tests/tenantCloneFlow.test.mjs",
     "nodered:referral-attribution:audit": "node scripts/audit_referral_attribution_release_preimages.mjs",
     "nodered:referral-attribution:candidate": "node scripts/prepare_referral_attribution_release_candidate.mjs",
     "nodered:viva-user-agent:patch": "node scripts/patch_live_viva_user_agent.mjs",
