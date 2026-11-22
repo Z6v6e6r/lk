@@ -29,6 +29,12 @@ test('F5/F6 binding, expiry, logout and unchanged valid recovery', async () => {
     await store('fixture-session-A', 'event', pending());
     const missing = pending({ paymentUrl: null, paymentExpiresAt: null });
     assert.equal((await merge('fixture-session-A', 'event', missing)).paymentUrl, pending().paymentUrl);
+    const verified = { ...missing, paymentStatusVerified: true };
+    assert.equal((await merge('fixture-session-A', 'event', verified)).paymentUrl, null,
+      'authoritative pending with a rejected bill must not revive the cached URL');
+    assert.equal((await merge('fixture-session-A', 'event', { ...verified, ...pending() })).paymentUrl,
+      pending().paymentUrl, 'a newly verified payable checkout survives reopening');
+
     for (const [token, event, reg] of [
       ['fixture-session-B', 'event', missing], ['fixture-session-A', 'other-event', missing],
       ['fixture-session-A', 'event', unbound], ['fixture-session-A', 'event', { ...missing, bookingId: null }],
