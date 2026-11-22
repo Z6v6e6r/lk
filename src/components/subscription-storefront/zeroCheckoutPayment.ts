@@ -292,13 +292,19 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
     if (!canProceed()) throw new StorefrontPaymentError('Оформление закрыто.');
     const attempt: Attempt = { key, paymentRef: `zero-${window.crypto.randomUUID()}`, state: 'pending', ownerBinding };
     const returnUrl = buildZeroReturnUrl(key);
-    try { saveAttempt(attempt); }
-    catch { throw new StorefrontPaymentError('Разрешите сохранение данных сайта, чтобы продолжить оформление.'); }
+    const sharedKey = sharedProductId ? await subscriptionPromoAttemptKey(sharedProductId, phone) : null;
+    const sharedBefore = sharedKey ? window.localStorage.getItem(sharedKey) : null;
+    const sharedEvidence = { paymentRef: attempt.paymentRef, ...(!offer.promo && !offer.liveProductId && !offer.target?.directProductId && offer.target ? { counterKey: offer.target.counterKey, annual: offer.billingOptionId === 'annual' } : {}) };
+    const sharedRaw = JSON.stringify({ kind: 'ordinary', ...sharedEvidence });
+    let dispatched = false;
     try {
-      if (sharedProductId) await recordOrdinarySubscriptionAttempt(sharedProductId, phone, { paymentRef: attempt.paymentRef, ...(!offer.promo && !offer.liveProductId && !offer.target?.directProductId && offer.target ? { counterKey: offer.target.counterKey, annual: offer.billingOptionId === 'annual' } : {}) });
+      if (!canProceed()) throw new Error('Checkout cancelled');
+      saveAttempt(attempt);
+      if (sharedProductId) await recordOrdinarySubscriptionAttempt(sharedProductId, phone, sharedEvidence);
       if (!canProceed()) throw new Error('Checkout cancelled');
       if (offer.promo) {
         // Share the existing promo lock/marker with sub_hab. Only return URL differs.
+        dispatched = true;
         const result = await createStorefrontPromoPayment(key, phone, returnUrl, expectedPrice, canProceed);
         if (result.transactionId) saveAttempt({ ...attempt, transactionId: result.transactionId });
         return result;
@@ -306,6 +312,7 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
       const target = offer.target;
       const directProductId = offer.liveProductId || target?.directProductId;
       if (directProductId) {
+        dispatched = true;
         const result = await apiBuySubscroption(directProductId, phone, {
           baseRedirectUrl: returnUrl, successUrl: returnUrl, failUrl: returnUrl, retries: 0,
         });
@@ -327,6 +334,7 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
         throw new Error('Unknown result');
       }
       if (!target) throw new Error('Missing purchase target');
+      dispatched = true;
       const result = await apiCreateTournamentSubscriptionPurchase({
         clientPhone: phone, counterKey: target.counterKey, planType: target.planType,
         paymentRef: attempt.paymentRef, baseRedirectUrl: returnUrl, successUrl: returnUrl, failUrl: returnUrl,
@@ -340,6 +348,15 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
       const confirmed = await confirmZeroPaymentOwned(key);
       return { status: 'settled' as const, message: confirmed.message };
     } catch {
+      if (!dispatched) {
+        // Both locks are still held. Only this invocation's exact new records
+        // can be removed: no provider call has started, so no payment is in doubt.
+        try {
+          if (sharedKey && sharedBefore === null && window.localStorage.getItem(sharedKey) === sharedRaw) window.localStorage.removeItem(sharedKey);
+          if (window.localStorage.getItem(ATTEMPT_PREFIX + key) === JSON.stringify(attempt)) window.localStorage.removeItem(ATTEMPT_PREFIX + key);
+        } catch { /* Unavailable storage keeps custody closed. */ }
+        throw new StorefrontPaymentError('Покупка не отправлена. Откройте оформление заново. Если ошибка повторится, разрешите сохранение данных сайта.');
+      }
       throw new StorefrontPaymentError('Не удалось подтвердить результат покупки. Не повторяйте оплату: проверьте статус или обратитесь в поддержку.');
     }
   });
