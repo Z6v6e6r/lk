@@ -135,8 +135,10 @@ is changed by this increment.
 
 - `GET /lk/subscriptions/product?subId=<instance>` requires the user's Bearer.
   The existing `apiFetchSubscriptioName` signature remains compatible but ignores
-  phone and returns `{sertName}`. It verifies end-user profile and current owned
-  subscriptions even on a hit. Wrong owner is rejected; phone is never authority.
+  phone and returns `{sertName, productId}`. It verifies end-user profile and current
+  owned subscriptions even on a hit. Wrong owner is rejected. The phone is never authority.
+  For kids training, LK uses this catalogue ID only to identify an instance already
+  present in the exercise's eligible list. The server rechecks eligibility before booking.
 - Collection `lk_subscription_product_identity` uses deterministic unique `_id`
   keys: `[instance, tenant, verified-client, instance]`, `[product, tenant, product]`,
   and `[lock, tenant, verified-client, instance]`. The existing MongoDB client is

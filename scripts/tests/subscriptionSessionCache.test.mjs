@@ -108,6 +108,11 @@ test('persisted subscription contract drops personal/provider fields recursively
   const json = JSON.stringify(result); assert.ok(!json.includes('private')); assert.ok(!json.includes('secret'));
   assert.equal(result.content[0].visitsLeft, 2);
   assert.equal(JSON.stringify(cache.sanitizeSubscriptionName({ sertName: 'Annual', phone: 'private' })), '{"sertName":"Annual"}');
+  const productId = '4d43f97e-c71e-450b-8b99-02db47b4a64f';
+  assert.equal(JSON.stringify(cache.sanitizeSubscriptionName({ sertName: 'Kids', productId: productId.toUpperCase(), owner: 'private' })),
+    JSON.stringify({ sertName: 'Kids', productId }));
+  assert.equal(JSON.stringify(cache.sanitizeSubscriptionName({ sertName: 'Kids', productId: { id: productId } })),
+    '{"sertName":"Kids"}');
   assert.equal(cache.sanitizeSubscriptionName({ sertName: '' }), null);
 });
 
