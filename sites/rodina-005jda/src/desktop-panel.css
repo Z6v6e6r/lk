@@ -1,0 +1,89 @@
+:host { display:block; min-width:0; color:#fff; font-family:Montserrat,Arial,sans-serif; --blue:#00b9ed; --blue-bright:#00c5fa; --cream:#f5fbff; --line:#638c9d40; }
+* { box-sizing:border-box; }
+.pane-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:17px 28px 0; }
+.pane-reset { min-height:30px; padding:4px 0; border:0; background:none; color:#8faebc; font-size:10px; font-weight:600; }
+.pane-reset:hover { color:#00b9ed; }
+.help-button { width:27px; height:27px; font-size:11px; }
+.booking-card { overflow:visible; padding:17px 28px 28px; border:0; border-radius:0; background:none; box-shadow:none; scroll-margin-top:20px; }
+.step-line { margin-bottom:22px; font-size:9px; color:#80a5b7; }
+.step-line div, .step-line i { border-radius:0; height:2px; }
+.step-title { font:400 36px/1.05 Rodina,Impact,sans-serif; text-transform:uppercase; letter-spacing:.005em; margin-bottom:10px; }
+.step-description { margin-bottom:23px; font-size:12px; line-height:1.7; color:#a6c0cd; }
+.card-eyebrow { margin-bottom:10px; font-size:9px; }
+.primary, .secondary { border-radius:2px; min-height:50px; font-size:12px; }
+.primary { background:#00b9ed; color:#001624; box-shadow:none; }
+.primary:not(:disabled):hover { background:#62dcff; }
+.secondary { border-color:#638c9d66; }
+.secondary:hover { border-color:#00b9ed; }
+.arena-list { gap:8px; }
+.arena-option { min-height:64px; border-radius:2px; background:#062b3d66; }
+.arena-option:hover, .arena-option.active { transform:none; background:#00b9ed13; }
+.arena-mark { width:36px; background:#0079a233; border-right:1px solid #638c9d33; }
+.arena-option[data-accent] .arena-mark { background:#0079a233; }
+.arena-mark::after { content:'↗'; left:10px; color:#00b9ed; font:20px Montserrat,Arial,sans-serif; filter:none; }
+.arena-details { padding:12px 10px; }
+.arena-name { font-size:12px; line-height:1.5; }
+.arena-meta { margin-top:3px; font-size:10px; }
+.arrow { padding:10px; font-size:17px; color:#00b9ed; }
+:host([data-step="1"]) .step-line { display:none; }
+:host([data-step="1"]) .booking-card { padding-top:8px; }
+:host([data-step="1"]) .card-eyebrow, :host([data-step="1"]) .step-title, :host([data-step="1"]) .step-description { display:none; }
+:host([data-step="1"]) .arena-list { grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+:host([data-step="1"]) .arena-option:not([hidden]) { position:relative; display:block; min-height:190px; isolation:isolate; overflow:hidden; }
+:host([data-step="1"]) .arena-option::after { content:""; position:absolute; z-index:-1; inset:0; background:linear-gradient(180deg,#00152220 20%,#001522e9 100%); }
+:host([data-step="1"]) .arena-thumbnail { position:absolute; z-index:-2; inset:0; width:100%; height:100%; }
+:host([data-step="1"]) .arena-thumbnail img { width:100%; height:100%; object-fit:cover; }
+:host([data-step="1"]) .arena-details { position:absolute; bottom:0; left:0; right:45px; padding:18px; }
+:host([data-step="1"]) .arena-name { color:#fff; font:400 29px/.98 Rodina,Impact,sans-serif; text-transform:uppercase; }
+:host([data-step="1"]) .arena-meta { margin-top:7px; color:#d5e5ec; font-size:10px; }
+:host([data-step="1"]) .arena-option .arrow { position:absolute; right:14px; bottom:16px; display:grid; place-items:center; width:32px; height:32px; padding:0; border-radius:50%; background:#00b9ed; color:#001522; font-size:25px; line-height:1; }
+.format-grid { gap:10px; }
+.format-option { min-height:149px; padding:17px; border-radius:2px; background:#062b3d66; }
+.format-option > span { font-size:10px; }
+.format-option strong { font-size:13px; line-height:1.4; }
+.format-option small { font-size:10px; line-height:1.65; }
+.format-option.active { background:#00b9ed13; border-color:#00b9ed; box-shadow:none; }
+.config-grid { gap:14px; }
+.field { font-size:9px; letter-spacing:.04em; }
+.field select, .field input, .field textarea { border-radius:2px; background:#001b2b; }
+.field select { font-size:12px; min-height:46px; }
+.game-ticket { border-radius:2px; padding:20px; border-color:#00b9ed55; background:linear-gradient(120deg,#06344b,#001b2b); box-shadow:none; }
+.ticket-main strong { font-family:Montserrat,Arial,sans-serif; font-size:17px; letter-spacing:-.4px; }
+.ticket-bottom strong { font-family:Rodina,Impact,sans-serif; font-weight:400; font-size:32px; }
+.ticket-meta, .game-ticket small { font-size:11px; }
+.ticket-bottom { font-size:11px; }
+.demo-note { color:#83a6b7; font-size:10px; line-height:1.7; }
+.date-option { border-radius:2px; min-height:83px; }
+.date-option b { font-family:Rodina,Impact,sans-serif; font-size:28px; font-weight:400; }
+.date-option.active { color:#001624; }
+.date-option.active small { color:#00334a; }
+.slot, .refresh-slots, .check-card, .extra-option, .plan-rules { border-radius:2px; }
+.slot { font-size:12px; }
+.slot.selected { color:#001624; }
+.check-card { padding:16px; }
+.check-card strong { font-size:12px; }
+.check-card small { font-size:10px; line-height:1.6; }
+.subheading { font:400 29px/1.1 Rodina,Impact,sans-serif; text-transform:uppercase; letter-spacing:.005em; }
+.plan-rules { font-size:11px; line-height:1.7; }
+.timeline-row { padding:14px 0; }
+.quote-popup { width:min(90vw,600px); border-radius:3px; font-family:Montserrat,Arial,sans-serif; }
+.quote-popup h2 { font:400 39px/1.05 Rodina,Impact,sans-serif; text-transform:uppercase; letter-spacing:.005em; }
+.viva-login, .api-response, .payment-url, .quote-notice { border-radius:2px; }
+@media (min-width:1400px) {
+  .arena-name { font-size:11px; }
+  .arena-meta { font-size:9px; }
+  .arena-mark { width:28px; }
+  .arena-mark::after { left:6px; }
+  .arena-details { padding:12px 8px; }
+  .arrow { padding:8px; }
+}
+@media (max-width:1200px) {
+  :host([data-step="1"]) .arena-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:1200px) {
+  .pane-toolbar { padding:16px 22px 0; }
+  .booking-card { padding:17px 22px 24px; }
+  .step-title { font-size:32px; }
+  .format-option { padding:13px; }
+}
+@media (prefers-reduced-motion:reduce) { *, *::before, *::after { transition:none!important; scroll-behavior:auto!important; } }
