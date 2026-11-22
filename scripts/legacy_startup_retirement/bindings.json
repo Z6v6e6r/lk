@@ -1,0 +1,72 @@
+{
+  "telegram_a": {
+    "identityHash": "1c23bb8e895641487074a03150d7e603e308a3ece9b48cf7de80e4ecd45cf308",
+    "nodeSha256": "f2da2f2ec7e7202a94ec02b10276de1e5f0756a9fa67ca33ff82847d4ec8c8bb",
+    "type": "telegram bot"
+  },
+  "telegram_b": {
+    "identityHash": "083aae7c0902b209d6e023c3601d5efbc20c210be56f0650839460460b69debc",
+    "nodeSha256": "6247117d595d63badb6f3d8019098329ec65300c5e60734974f6535f1de5bc8a",
+    "type": "telegram bot"
+  },
+  "telegram_c": {
+    "identityHash": "5cd4cd8834eb7dbc369df2471213717d2d6eebaf2d44cb5875f4f4345f98361b",
+    "nodeSha256": "51737bf29c7e62167b7dd8ecf331c8b7026e1b7194b54266f10bdab980b89ca6",
+    "type": "telegram bot"
+  },
+  "telegram_d": {
+    "identityHash": "36e6a3ad594c968c12e301be2409f7eae9013373ebb97abfc78594060c042653",
+    "nodeSha256": "f564c60718beb6696f68dfc7032879c525ed70b6be9fcb6d45d470c592ab9a70",
+    "type": "telegram bot"
+  },
+  "email_debug": {
+    "identityHash": "8b06e1e0cbcfce73471c97e2f60798a04ecbbc1151aa64a3f6134856ea624927",
+    "nodeSha256": "1488925e530fd9b401d5c96407ad2199c7c0ab0ba75d866b76ffe4ae6f4fc95d",
+    "type": "debug"
+  },
+  "email_trigger": {
+    "identityHash": "f4d6a74810e417766d5a5690d6e24a638b24a8980a1a386c7f7bd4ab3972434a",
+    "nodeSha256": "22652bc28d557a014b157287ac29d4b1abe3938f6543249a43e69a6c84bfef19",
+    "type": "inject"
+  },
+  "email_send": {
+    "identityHash": "dd34044f43a96113fbfa868c4a06017286c1218d0d57f0399e27c0adf496dbd2",
+    "nodeSha256": "e66fe9ef2bc9b595e87cb932af9ddd22dcdf6bfe5f5284cbb85a68c326451930",
+    "type": "email-send"
+  },
+  "email_transport": {
+    "identityHash": "fe2de9fd6300bd212e4f595390a59ec891b5a4aadb65c012572090a5ad7b7a08",
+    "nodeSha256": "aeb9a1f914b8f57ba234c6de46881ccf9fe14190eec0be1ba0408307aeccdb8a",
+    "type": "email-transport"
+  },
+  "counter_write": {
+    "identityHash": "ddcb98592f83a11fac6865346f781e5cd930d10012b4256df9ca9d7989f429a5",
+    "nodeSha256": "a4446810b46e37bc281fa0c488dae1d708e7bdff3ed5e57a28ac0a0a2eb04094",
+    "type": "http request"
+  },
+  "counter_transform": {
+    "identityHash": "7ec02159511b395ddc7635848e2028aab5afb7b1fdb14136d318a357b4bb556c",
+    "nodeSha256": "9f05996348f9b93f58bd785320bb05b98df631403df0f078bfaf786e0ae0a821",
+    "type": "function"
+  },
+  "counter_debug": {
+    "identityHash": "9349e504a33893175af21df802e41c61372dc8647b43f6db77cb01678985901c",
+    "nodeSha256": "41c6ba9dea91edec8042db6086efe281d4351fd5d985ef1d203fafc5a5865adc",
+    "type": "debug"
+  },
+  "counter_trigger": {
+    "identityHash": "60dd5b4fae7a92328817f4d2c18fddcc6d84b24ce1e46637c292750e12aabcd6",
+    "nodeSha256": "d3cfbb8c0f7f67319f4b60bf687c2ab26d0828626f6dc854f46bb3854eef85ad",
+    "type": "inject"
+  },
+  "counter_read": {
+    "identityHash": "d88e3c4c0a26496249868a6272267b39c2747972bdffa54e2e22b329c3eb0935",
+    "nodeSha256": "d37a69ad676e7fa3cad9fc64764492c1dd4595a84ca5419867b110b247e54e84",
+    "type": "http request"
+  },
+  "counter_builder": {
+    "identityHash": "ca858fedc8b89e34f7c6bd7144d534ec24de983fb355459e6e65573f90007bbb",
+    "nodeSha256": "2252996184ba48021ef14b93e91c8ae53a3ce1437acc6ef2ff943cf2271a1c8d",
+    "type": "function"
+  }
+}
