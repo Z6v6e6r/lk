@@ -18,8 +18,8 @@ if (identity?.caller === 'refresh') {
     code: ok ? 'SUBSCRIPTION_PRODUCT_REFRESHED' : msg.payload?.code };
   return [null, null, { payload: msg.payload }];
 }
-// Existing clients consume only sertName; no administrative DTO or owner identity escapes.
-if (ok) msg.payload = { sertName: identity.catalog.name };
+// Return only authenticated catalogue metadata, including for eligibility rows without a product ID.
+if (ok) msg.payload = { sertName: identity.catalog.name, productId: identity.productId };
 msg.headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
   'X-Correlation-ID': identity?.requestId || msg._msgid,
   'Access-Control-Expose-Headers': 'X-Correlation-ID', 'Access-Control-Allow-Origin': '*' };

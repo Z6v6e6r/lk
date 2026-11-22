@@ -1,4 +1,4 @@
-import { isKidsAcademyTraining, isPadelKidsProduct, needsPadelKidsIdentity, PADEL_KIDS_PRODUCT_ID, resolvePadelKidsVisits } from "../../src/utils/kidsTrainingSubscriptions.ts";
+import { isKidsAcademyTraining, isPadelKidsProduct, needsPadelKidsIdentity, PADEL_KIDS_PRODUCT_ID, withPadelKidsIdentity } from "../../src/utils/kidsTrainingSubscriptions.ts";
 import { isChildTournamentExercise } from "../../src/utils/tournamentSubscriptionDiscount.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -74,7 +74,6 @@ function checkoutReader(name, failed, extraExercise = {}, sellable = [product()]
     pickNestedRecord: () => null,
     pickString: () => null,
     resolveTournamentCustomPricing: () => null, isChildTournamentExercise, isKidsAcademyTraining, isPadelKidsProduct,
-    needsPadelKidsIdentity, resolvePadelKidsVisits,
     pickFirstArray: (value, keys) => value[keys[0]] || [],
     normalizeVivaProducts: (items, source) => items.map(item => ({ ...item, source })),
     filterClientSubscriptionsForExercise: items => items,
@@ -315,7 +314,7 @@ test("actual trial transaction preserves the promo and owned visit source throug
 
 // Use the actual checkout normalizer/filter, rather than the identity stub above.
 // The provider remains responsible for populating availableClientSubscriptions.
-function subscriptionCheckoutReader(availableClientSubscriptions, exerciseOverrides = {}) {
+function subscriptionCheckoutReader(availableClientSubscriptions, exerciseOverrides = {}, productLookup = {}) {
   const calls = [];
   const exercise = {
     id: "fixture-new-exercise", type: { id: 847 }, direction: { id: 2680 },
@@ -325,7 +324,7 @@ function subscriptionCheckoutReader(availableClientSubscriptions, exerciseOverri
     "isRecord", "pickString", "pickNumber", "pickNestedRecord", "pickFirstArray", "extractItems",
     "normalizeCost", "normalizeVivaProduct", "normalizeVivaProducts", "collectComparableIds",
     "collectExerciseTypeIds", "isClientSubscriptionActive", "filterClientSubscriptionsForExercise",
-    "apiFetchTournamentVivaCheckout",
+    "pickSubscriptionLookupId", "resolveClientSubscriptionProductNames", "apiFetchTournamentVivaCheckout",
   ].map(name => find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === name)
     .getText(api).replace(/^export /, "")).join("\n");
   const read = evaluate(`(() => { ${declarations}; return apiFetchTournamentVivaCheckout; })()`, {
@@ -338,11 +337,13 @@ function subscriptionCheckoutReader(availableClientSubscriptions, exerciseOverri
       return { data, error: null, status: 200 };
     },
     resolveTournamentCustomPricing: () => null, isChildTournamentExercise, isKidsAcademyTraining, isPadelKidsProduct,
-    needsPadelKidsIdentity, resolvePadelKidsVisits,
+    needsPadelKidsIdentity, withPadelKidsIdentity,
     resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
-    resolveClientSubscriptionProductNames: async items => items.map(item => ({
-      ...item, name: item.raw.product?.name || item.name,
-    })),
+    apiFetchSubscriptioName: async id => {
+      const data = productLookup[id] ?? { sertName: availableClientSubscriptions.find(item =>
+        item.subscriptionId === id)?.product?.name || "" };
+      return { data, error: null, status: 200 };
+    },
   });
   return { read: () => read(exercise.id), calls, exercise };
 }
@@ -493,16 +494,39 @@ test("kids training keeps the one-time price and only the exact Padel Kids plan"
   assert.equal(isKidsAcademyTraining({ directionId: 2975.5 }), false);
   assert.equal(isKidsAcademyTraining({ title: "Детская тренировка" }), false);
   const visit = { id: "kids-instance", source: "client-subscription", raw: { visitsLeft: 5 } };
-  const evidence = { subscriptionId: visit.id, product: { id: family.id } };
   const adultVisit = { ...visit, id: "adult-instance", raw: { productId: adult.id } };
-  assert.equal(needsPadelKidsIdentity([visit]), true);
-  assert.equal(needsPadelKidsIdentity([adultVisit]), false);
-  const recovered = resolvePadelKidsVisits([visit, adultVisit], [evidence]);
-  assert.deepEqual(recovered.map(row => row.id), [visit.id]);
-  assert.equal(recovered[0].raw.visitsLeft, 5);
-  assert.equal(isPadelKidsProduct(recovered[0]), true);
-  assert.deepEqual(resolvePadelKidsVisits([visit], [evidence, evidence]), []);
-  assert.deepEqual(resolvePadelKidsVisits([adultVisit], [{ ...evidence, subscriptionId: adultVisit.id }]), []);
+  assert.equal(needsPadelKidsIdentity(visit), true);
+  assert.equal(needsPadelKidsIdentity(adultVisit), false);
+  const recovered = withPadelKidsIdentity(visit, family.id);
+  assert.equal(recovered.id, visit.id);
+  assert.equal(recovered.raw.visitsLeft, 5);
+  assert.equal(isPadelKidsProduct(recovered), true);
+  assert.equal(withPadelKidsIdentity(adultVisit, family.id), adultVisit);
+  assert.equal(withPadelKidsIdentity(visit, adult.id), visit);
+});
+
+test("eligible new Padel Kids visits missing a catalogue ID are shown only after exact gateway identification", async () => {
+  const kids = { subscriptionId: "fixture-kids-visit", status: "NEW", visitsLeft: 30,
+    activationDate: null, expirationDate: null, availableDirections: [{ id: 2468 }] };
+  const adult = { ...kids, subscriptionId: "fixture-adult-visit" };
+  const unresolved = { ...kids, subscriptionId: "fixture-unknown-visit" };
+  const exhausted = { ...kids, subscriptionId: "fixture-exhausted-visit", visitsLeft: 0 };
+  const known = { ...kids, subscriptionId: "fixture-explicit-adult", productId: "other-product" };
+  const lookup = {
+    [kids.subscriptionId]: { sertName: "Падел.Дети", productId: PADEL_KIDS_PRODUCT_ID.toUpperCase() },
+    [adult.subscriptionId]: { sertName: "Падел.Дети", productId: "other-product" },
+    [unresolved.subscriptionId]: { sertName: { name: "Падел.Дети" } },
+    [exhausted.subscriptionId]: { sertName: "Падел.Дети", productId: PADEL_KIDS_PRODUCT_ID },
+    [known.subscriptionId]: { sertName: "Падел.Дети", productId: PADEL_KIDS_PRODUCT_ID },
+  };
+  const { read } = subscriptionCheckoutReader([kids, adult, unresolved, exhausted, known], {
+    direction: { id: 2468 }, type: { id: 605 },
+  }, lookup);
+  const result = await read();
+  assert.deepEqual(result.data.clientSubscriptions.map(row => [row.id, row.name, row.raw.visitsLeft]),
+    [[kids.subscriptionId, "Падел.Дети", 30]]);
+  assert.equal(isPadelKidsProduct(result.data.clientSubscriptions[0]), true);
+  assert.deepEqual(result.data.purchasedProducts, result.data.clientSubscriptions);
 });
 
 test("kids training transaction rejects stale adult discounts and keeps the original promo and kids visit", async () => {

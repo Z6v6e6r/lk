@@ -39,24 +39,13 @@ export function isPadelKidsProduct(product: SubscriptionProduct): boolean {
     typeof id === "string" && id.trim().toLowerCase() === PADEL_KIDS_PRODUCT_ID);
 }
 
-
-// Some older Viva eligibility rows include only the instance ID. Enrich them only
-// with an exact match from this user's subscription list.
-export function resolvePadelKidsVisits<T extends SubscriptionProduct>(
-  eligible: T[],
-  owned: unknown[],
-): T[] {
-  return eligible.flatMap(product => {
-    if (isPadelKidsProduct(product)) return [product];
-    if (product.source !== "client-subscription" || subscriptionProductIds(product).length) return [];
-    const matches = owned.map(asRecord).filter(row => row?.subscriptionId === product.id);
-    const [match] = matches;
-    return matches.length === 1 && match && isPadelKidsProduct({ ...product, raw: match })
-      ? [{ ...product, raw: { ...asRecord(product.raw), productId: PADEL_KIDS_PRODUCT_ID } }]
-      : [];
-  });
+export function needsPadelKidsIdentity(product: SubscriptionProduct): boolean {
+  return product.source === "client-subscription" && subscriptionProductIds(product).length === 0;
 }
 
-export function needsPadelKidsIdentity(products: SubscriptionProduct[]): boolean {
-  return products.some(product => product.source === "client-subscription" && !subscriptionProductIds(product).length);
+// The caller resolves this catalogue ID for the exact eligible instance via the authenticated gateway.
+export function withPadelKidsIdentity<T extends SubscriptionProduct>(product: T, productId: unknown): T {
+  if (!needsPadelKidsIdentity(product)
+    || typeof productId !== "string" || productId.toLowerCase() !== PADEL_KIDS_PRODUCT_ID) return product;
+  return { ...product, raw: { ...asRecord(product.raw), productId: PADEL_KIDS_PRODUCT_ID } };
 }
