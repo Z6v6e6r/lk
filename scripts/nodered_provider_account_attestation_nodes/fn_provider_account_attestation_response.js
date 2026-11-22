@@ -10,8 +10,10 @@ const ok = status === 200 && paObject(result) && (
   (result.capability === "PROVIDER_ACCOUNT_ATTESTATION" && paKeys(result, "capability,contractVersion,maxSubscriptions,targetProof"))
   || (Object.keys(result).every((k) => allowed.includes(k)) && result.contractVersion === 1
     && Array.isArray(result.subscriptions) && result.subscriptions.length <= PA_MAX_SUBSCRIPTIONS
-    && (result.targetProof === undefined || (paKeys(result.targetProof,
+    && (result.targetProof === undefined || ((paKeys(result.targetProof,
       "durationMinutes,eligibleClientSubscriptionIds,exerciseId,ownedClientSubscriptionIds,startsAt")
+      || paKeys(result.targetProof,
+        "durationMinutes,eligibleClientSubscriptionIds,legacyGameId,ownedClientSubscriptionIds,startsAt"))
       && result.targetProof.eligibleClientSubscriptionIds.every((id) => result.targetProof.ownedClientSubscriptionIds.includes(id))))
     && Buffer.byteLength(JSON.stringify(result), "utf8") <= PA_MAX_BODY_BYTES));
 const codes = { 400: "PROVIDER_ACCOUNT_REQUEST_INVALID", 401: ["PROVIDER_ACCOUNT_DELEGATION_REQUIRED", "PROVIDER_ACCOUNT_DELEGATION_INVALID"],
