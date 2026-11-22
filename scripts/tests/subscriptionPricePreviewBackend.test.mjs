@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import ts from 'typescript';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import { createDiagnostics } from '../diagnostics/runtime.mjs';
@@ -239,6 +240,221 @@ test('bookings activation changes only func and bypasses a silently filtering sc
     const bytes = Buffer.from(JSON.stringify(modified));
     assert.throws(() => composePreviewBookingsRelease(bytes, { ...options,
       expectedSourceSha256: sha(bytes), expectedRouterSha256: sha(modified[1].func) }), /ROUTER_DRIFT|GUARD_DRIFT/);
+  }
+});
+
+const legacyGuardBefore = "    if (!plan || !canonical.PLAN_CATEGORIES[plan]?.includes('open_game')) return stop('PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED');";
+const legacyGuardAfter = `    if (!plan || !canonical.PLAN_CATEGORIES[plan]?.includes('open_game')) {
+      lkLegacyPlanDiagnostic(plan, configured, name);
+      return stop('PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED');
+    }`;
+const legacyHelperStart = bookingsRouterSource.indexOf('// Only called after the existing legacy guard');
+const legacyHelperEnd = bookingsRouterSource.indexOf('// Event identity is checked again', legacyHelperStart);
+assert(legacyHelperStart >= 0 && legacyHelperEnd > legacyHelperStart);
+assert.equal(bookingsRouterSource.split(legacyGuardAfter).length, 2);
+const legacyBaseline = (bookingsRouterSource.slice(0, legacyHelperStart)
+  + bookingsRouterSource.slice(legacyHelperEnd)).replace(legacyGuardAfter, legacyGuardBefore);
+const legacyRoots = ['isObj', 'normalizeId', 'identityOwned', 'collectSubscriptionPurchaseDateEvidence',
+  'resolvePlanKey', 'compatibilityPlanKey', 'PLAN_CATEGORIES', 'resolveLimitMode',
+  'isSubscriptionBooking', 'isInactiveBooking', 'eventDate', 'bookingSubscriptionId', 'resolveCategory',
+  'normalizePurchaseDateMoscow', 'collectExactProductIds', 'LK1_OVERLAY_HUB_PRODUCT_ID', 'managedExternalEventTypeId'];
+const legacySources = ['../nodered_subscription_booking_nodes/fn_subscription_booking_router.js',
+  '../nodered_subscription_product_nodes/gateway.js', '../nodered_lk1_hub_nodes/gateway.js']
+  .map(path => fs.readFileSync(new URL(path, import.meta.url), 'utf8'));
+const legacyDeclarations = new Map();
+for (const root of legacyRoots) {
+  let extracted;
+  for (const source of legacySources) {
+    try { extracted = extractSubscriptionPricePreviewSource({ source, roots: [root] }); break; }
+    catch { /* The composed helper may belong to another node source. */ }
+  }
+  assert(extracted, `Missing source-bound legacy helper ${root}`);
+  const parsed = ts.createSourceFile('helpers.js', extracted.source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  for (const statement of parsed.statements) {
+    if (ts.isFunctionDeclaration(statement)) legacyDeclarations.set(statement.name.text, statement.getText(parsed));
+    else for (const d of statement.declarationList.declarations) legacyDeclarations.set(d.name.text, `const ${d.getText(parsed)};`);
+  }
+}
+const legacyAvailability = ts.transpileModule(fs.readFileSync(new URL('../../src/components/games/splitSubscriptionAvailability.ts', import.meta.url), 'utf8'), {
+  compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
+}).outputText;
+assert.doesNotMatch(legacyAvailability, /\brequire\s*\(/);
+const legacyHelpers = [...legacyDeclarations.values()].join('\n')
+  + `\nconst preflightAvailability = (() => { const exports = {}; ${legacyAvailability}\nreturn exports; })();`;
+const legacyRuleSource = fs.readFileSync(new URL('../lib/lk1PlanRules.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const legacyExecute = new Function('msg', 'canonical', 'global', 'node', 'canonicalUsage', 'Date', bookingsRouterSource);
+const legacyExecuteBaseline = new Function('msg', 'canonical', 'global', 'node', 'canonicalUsage', 'Date', legacyBaseline);
+const legacyFinalize = new Function('msg', 'global', 'Date', fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/final.js', import.meta.url), 'utf8'));
+const legacyUuid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const legacyProduct = legacyUuid(101), legacySub = legacyUuid(102), legacyActor = legacyUuid(103), legacyStation = legacyUuid(104);
+const legacyNow = Date.parse('2026-11-12T14:36:00Z');
+class LegacyDate extends Date {
+  constructor(...args) { super(...(args.length ? args : [legacyNow])); }
+  static now() { return legacyNow; }
+}
+const legacyRule = { productId: legacyProduct, planKey: 'friendship', enforceFrom: '2026-09-01',
+  maxActiveBookings: 8, freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
+  groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 };
+function legacyDiagnostic({ baseline = false, configured, planRules, stationExclusions, name = 'fixture-sensitive',
+  live: extraLive, ctx: extraCtx, msg: extraMsg, loggerThrows = false, observerMode = 'missing',
+  loggerMissing = false, categoryGetterThrows = false, configuredDescriptor, ctxDescriptor } = {}) {
+  const info = [], calls = [];
+  const globals = { get(key) {
+    if (key === 'lkDiagnostics') {
+      if (observerMode === 'throws') throw Error('fixture-sensitive');
+      if (observerMode === 'scoped') return { observe() {} }; // Existing scoped observers can ignore the code.
+    }
+    return undefined;
+  }, set() { assert.fail('No global writes'); } };
+  const raw = new Function('global', `${legacyHelpers}\n${legacyRuleSource}
+    return {${legacyRoots.join(',')}, preflightAvailability, resolveLk1Rule};`)(globals);
+  const canonical = { ...raw, lk1PlanRulesGlobal: () => planRules,
+    lk1ReadStationExclusions: () => stationExclusions, isProTrainingDiscountRule: () => false };
+  if (configured !== undefined) canonical.resolveLk1Rule = () => configured;
+  for (const [key, value] of Object.entries(canonical)) if (typeof value === 'function') {
+    canonical[key] = (...args) => { calls.push(key); return value(...args); };
+  }
+  if (categoryGetterThrows) canonical.PLAN_CATEGORIES = new Proxy({}, { get() { throw Error('fixture-sensitive'); } });
+  const live = { subscriptionId: legacySub, clientSubscriptionId: legacySub, id: legacySub,
+    clientId: legacyActor, productId: legacyProduct, status: 'ACTIVE', activationDate: '2026-01-01',
+    expirationDate: '2099-12-31', variant: 'BY_VISITS', visitsLeft: 100,
+    hasStudioLimitation: false, hasTypeLimitation: true, availableTypes: [{ id: 1613 }],
+    hasDirectionLimitation: false, purchaseDate: '2026-10-01', ...extraLive };
+  const ctx = { step: 'next', startedAt: legacyNow, pending: [legacySub], requestedIds: [legacySub],
+    quotes: [], instanceErrors: {}, subscriptions: { [legacySub]: live },
+    metadata: { [legacySub]: { productId: legacyProduct } }, catalog: { [legacyProduct]: name },
+    tenantKey: 'fixture-sensitive', actorClientId: legacyActor, existingGame: false,
+    target: { stationId: legacyStation, roomId: legacyUuid(105), startsAt: '2099-01-01T12:00:00+03:00', durationMinutes: 60 },
+    bookings: [], basePriceMinor: 10000, operations: [], ruleProductIds: [legacyProduct], ...extraCtx };
+  if (ctx.existingGame && ctx.exercise?.availableClientSubscriptions) ctx.exercise = { ...ctx.exercise,
+    availableClientSubscriptions: ctx.exercise.availableClientSubscriptions.map(row => ({ ...live, ...row })) };
+  if (ctxDescriptor) Object.defineProperty(ctx, ctxDescriptor.key, ctxDescriptor.descriptor);
+  if (configuredDescriptor) Object.defineProperty(configured, configuredDescriptor.key, configuredDescriptor.descriptor);
+  const msg = { _subscriptionPricePreview: ctx, ...extraMsg };
+  const node = { send() { assert.fail('No new request may be sent'); } };
+  if (!loggerMissing) node.log = text => { if (loggerThrows) throw Error('fixture-sensitive'); info.push(JSON.parse(text)); };
+  const usage = message => { calls.push('canonicalUsage'); message._managedSubscriptionPolicyInput = {}; };
+  const result = (baseline ? legacyExecuteBaseline : legacyExecute)(msg, canonical, globals, node, usage, LegacyDate);
+  const port = result.findIndex(Boolean);
+  if (port === 4) legacyFinalize(msg, globals, LegacyDate);
+  return { msg, ctx, port, calls, info };
+}
+
+test('legacy diagnostics distinguish missing/excluded plans and actual shared rule dispositions', () => {
+  const rules = { formatVersion: 1, rules: [legacyRule] };
+  const scenarios = [
+    [{}, 'NO_PLAN', 'NO_MATCH'],
+    [{ name: 'kotelniki friendship' }, 'OPEN_GAME_EXCLUDED', 'NO_MATCH'],
+    [{ planRules: rules, live: { purchaseDate: '2026-08-01' } }, 'NO_PLAN', 'SALE_BEFORE_CUTOFF'],
+    [{ planRules: rules, stationExclusions: { formatVersion: 1,
+      exclusions: [{ stationId: legacyStation, productIds: [legacyProduct] }] } }, 'NO_PLAN', 'STATION_EXCLUDED'],
+  ];
+  for (const [options, verdict, disposition] of scenarios) for (const observerMode of ['missing', 'scoped', 'throws']) {
+    const result = legacyDiagnostic({ ...options, observerMode });
+    assert.equal(result.port, 4);
+    assert.equal(result.msg.statusCode, 503);
+    assert.deepEqual(result.msg.payload, { error: { code: 'PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED' } });
+    assert.equal(result.info.length, 1);
+    const [event] = result.info;
+    assert.equal(event.event, 'subscription_price_preview_legacy_plan_refused');
+    assert.equal(event.previewLegacyPlanVerdict, verdict);
+    assert.equal(event.previewLegacyRuleDisposition, disposition);
+    assert.equal(event.previewLegacyResolverEvidence, verdict === 'NO_PLAN' ? 'NO_RECOGNIZED_MARKER' : 'UNKNOWN');
+    assert.equal(event.previewTargetKind, 'NEW_GAME');
+    assert.equal(event.previewLegacyOrigin, 'UNKNOWN');
+    assert.equal(event.previewLegacyRequestedCountBucket, 'ONE');
+    assert.equal(event.previewLegacyPartialQuotesDiscarded, false);
+    assert.equal(event.previewLegacyBoundNamePresent, true);
+    assert.equal(event.previewLegacyFactsFailed, false);
+    assert(!JSON.stringify(event).includes('fixture-sensitive'));
+    assert(!/\d{4}-\d{2}-\d{2}|[a-f0-9]{8}-[a-f0-9-]{27}/i.test(JSON.stringify(event)));
+  }
+});
+
+test('legacy diagnostic preserves all guard results, helper call order, quote batches and evaluator transitions', () => {
+  const scenarios = [{}, { name: 'kotelniki friendship' },
+    ...['friendship', 'friendshiptwohours', 'networkfriendship', 'piter friendship', 'sport', 'academy', 'ra'].map(name => ({ name })),
+    { live: { isFrozen: true } }, { live: { visitsLeft: 0 } }, { live: { visitsLeft: 1 }, ctx: { target: {
+      stationId: legacyStation, roomId: legacyUuid(105), startsAt: '2099-01-01T12:00:00+03:00', durationMinutes: 120 } } },
+    { live: { availableTypes: {} } }, { live: { availableTypes: [{ id: 9999 }] } },
+    { live: { productId: legacyUuid(110) } }, { msg: { error: {} } }, { ctx: { startedAt: legacyNow - 29000 } },
+    { ctx: { instanceErrors: { [legacySub]: 'SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE' } } },
+    { ctx: { quotes: [{ status: 'AVAILABLE' }] } },
+    { ctx: { eventCategory: 'GROUP_TRAINING' } }, { ctx: { eventCategory: 'TOURNAMENT' } },
+    { planRules: { formatVersion: 1, rules: [legacyRule] } },
+    { planRules: { malformed: true } },
+    { configured: { matched: true, code: 'SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED' } },
+    { configured: { matched: true, code: 'LK1_STATION_EXCLUSIONS_INVALID' } },
+    { name: 'friendship', ctx: { bookings: [{ paymentType: 'SUBSCRIPTION', exerciseDate: '2099-01-01T12:00:00+03:00' }] } },
+    { ctx: { existingGame: true, exercise: { availableClientSubscriptions: [] } } },
+    { ctx: { existingGame: true, exercise: { availableClientSubscriptions: [{ id: legacySub }] } } },
+  ];
+  for (const options of scenarios) {
+    const current = legacyDiagnostic(options), baseline = legacyDiagnostic({ ...options, baseline: true });
+    assert.deepEqual({ ...current, info: [] }, baseline);
+    if (current.ctx.error !== 'PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED') assert.deepEqual(current.info, []);
+    assert.equal(current.calls.filter(c => c === 'resolvePlanKey').length,
+      baseline.calls.filter(c => c === 'resolvePlanKey').length);
+  }
+  const batch = legacyDiagnostic({ ctx: { requestedIds: [legacySub, legacyUuid(111)], quotes: [{ status: 'AVAILABLE' }] } });
+  assert.equal(batch.info[0].previewLegacyRequestedCountBucket, 'MULTIPLE');
+  assert.equal(batch.info[0].previewLegacyPartialQuotesDiscarded, true);
+  assert.equal(batch.msg.payload.quotes, undefined);
+});
+
+test('legacy optional facts and unavailable/throwing sinks cannot change the refusal or invoke accessors', () => {
+  for (const options of [{ loggerThrows: true }, { loggerMissing: true },
+    { configured: { matched: false }, configuredDescriptor: { key: 'legacy', descriptor: {
+      get() { assert.fail('Diagnostic accessor executed'); } } } },
+    { configured: { matched: true, legacy: true, source: 'PLAN', purchaseDate: 'invalid', enforceFrom: '2026-09-01' } },
+    { configured: { matched: true, legacy: true, stationLegacy: true }, configuredDescriptor: { key: 'purchaseDate', descriptor: {
+      get() { assert.fail('Unneeded diagnostic date accessor executed'); } } } },
+    { ctxDescriptor: { key: 'requestedIds', descriptor: { get() { assert.fail('Diagnostic request accessor executed'); } } } },
+  ]) {
+    const result = legacyDiagnostic(options);
+    assert.equal(result.msg.statusCode, 503);
+    assert.deepEqual(result.msg.payload, { error: { code: 'PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED' } });
+    assert(result.info.length <= 1);
+    assert(!JSON.stringify(result.info).includes('fixture-sensitive'));
+  }
+  const missing = legacyDiagnostic({ name: '' });
+  assert.equal(missing.ctx.error, 'PRICE_PREVIEW_PRODUCT_IDENTITY_UNRESOLVED');
+  assert.deepEqual(missing.info, []);
+  const existing = legacyDiagnostic({ ctx: { existingGame: true, exercise: { availableClientSubscriptions: [{ id: legacySub }] } } });
+  assert.equal(existing.info[0].previewTargetKind, 'EXISTING_GAME');
+  for (const field of ['requestedIds', 'quotes']) {
+    const array = new Proxy([], { getOwnPropertyDescriptor(target, key) {
+      if (key === 'length') return { configurable: false, enumerable: false, writable: true,
+        value: { valueOf() { assert.fail('Diagnostic length coercion executed'); } } };
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    } });
+    const result = legacyDiagnostic({ ctx: { [field]: array } });
+    assert.equal(result.msg.statusCode, 503);
+    assert.equal(result.info[0].previewLegacyFactsFailed, false);
+    if (field === 'requestedIds') assert.equal(result.info[0].previewLegacyRequestedCountBucket, 'UNKNOWN');
+    else assert.equal(result.info[0].previewLegacyPartialQuotesDiscarded, undefined);
+  }
+});
+
+test('legacy facts are allowlisted consistently by sanitizer and schema; spoofed values remain unknown', () => {
+  const schema = JSON.parse(fs.readFileSync(new URL('../../docs/diagnostics/schema.v1.json', import.meta.url), 'utf8'));
+  const event = legacyDiagnostic().info[0];
+  const input = { ...event, diagnosticEventId: legacyUuid(120), requestId: legacyUuid(121),
+    source: 'node_red', eventKind: 'audit', routeTemplate: PATH, method: 'POST',
+    productId: 'fixture-sensitive', name: 'fixture-sensitive', body: 'fixture-sensitive' };
+  const output = sanitizeEvent(input);
+  for (const key of Object.keys(event).filter(key => key.startsWith('preview'))) {
+    assert.equal(output[key], event[key]);
+    if (schema.properties[key].enum) assert(schema.properties[key].enum.includes(output[key]));
+    else assert.equal(typeof output[key], schema.properties[key].type);
+  }
+  assert(!JSON.stringify(output).includes('fixture-sensitive'));
+  for (const key of ['previewLegacyPlanVerdict', 'previewLegacyRuleDisposition', 'previewLegacyResolverEvidence',
+    'previewLegacyRequestedCountBucket', 'previewLegacyOrigin', 'previewTargetKind']) {
+    assert.equal(sanitizeEvent({ ...input, [key]: 'fixture-sensitive' })[key], 'UNKNOWN');
+  }
+  for (const key of ['previewLegacyPartialQuotesDiscarded', 'previewLegacyBoundNamePresent', 'previewLegacyFactsFailed']) {
+    assert.equal(sanitizeEvent({ ...input, [key]: 'fixture-sensitive' })[key], undefined);
   }
 });
 
