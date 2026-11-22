@@ -66,3 +66,31 @@ failures. Stop through the existing observer/sink control or an authorized
 guarded restoration of the reviewed source. Neither action authorizes changing
 validation/ownership guards or replaying a business request. This PR is source
 preparation; it does not resolve the missing input evidence for past refusals.
+
+## Scoped activation for the installed generation
+
+`scripts/prepare_preview_request_validation_release.mjs` pins the verified live
+flow and the exact entry/final preimages for November 12. It activates the merged
+PR389 entry wrappers and surgically adds a no-throw final observer call. Existing
+legacy warnings, response/cleanup, router lifecycle and every unrelated node stay
+unchanged. The exact-graph contract allows only `entry.func` and
+`final.func/initialize/finalize/libs`, with no added nodes or changed routes.
+
+The final node's own VM contains `preview-request-validation-observer.mjs` bundled
+with the matching runtime/sanitizer. Only native `crypto` and `perf_hooks` imports
+are permitted. Filtering occurs before budget consumption; the shared runtime
+receives a new minimal request with constant route/method, not original message
+fields. No settings, shared global registration, npm package or key is needed.
+The fixed startup marker pins release, entry/final, bundle/schema hashes and two
+fields. The guard event uses a separate `preview_request_validation_guard_diagnostic`
+envelope; it must not be added to the canonical HTTP count or the legacy warning.
+Its observation-local random identity does not prove exact HTTP linkage.
+
+Run the adapter from a clean pushed source commit with a fresh verified private
+workspace and a new mode0700 external output directory. Candidate-specific
+normal apply/rollback and failed-first-restart rehearsals, installed native
+importer verification, source/graph review and the existing reviewed-flow
+preflight are required before the authorized apply. Use the existing global
+lock, exact guarded backups/rollback and full 15-minute soak. Never remove a
+lease to bypass another rollout. Observe only natural traffic after apply;
+no live preview replay or business/provider/DB request is part of acceptance.
