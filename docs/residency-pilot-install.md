@@ -30,6 +30,12 @@ service running for reads, recovery and the bank return route
 `?phResidencyLifecycleReturn=1`. The current `?buyResidency=1` entry is
 independent of this switch.
 
+The lifecycle gateway requires the club and subject from Keycloak UserInfo.
+When UserInfo omits the authorized client, the gateway verifies the same
+access token against the Viva realm signing keys and matches its subject and
+authorized client. An explicit conflicting client or an unavailable signing
+key closes access.
+
 The instructions below describe the existing isolated payment rehearsal.
 For the closed preview, use the configuration above and the
 [no-payment browser check](../scripts/pilot-composition/README.md#browser-preview-and-hot-stop).

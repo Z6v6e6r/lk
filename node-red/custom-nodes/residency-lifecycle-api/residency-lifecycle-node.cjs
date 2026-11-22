@@ -10,6 +10,7 @@ const crypto = require("node:crypto");
 const { constants } = require("node:fs");
 const fs = require("node:fs/promises");
 const { isAbsolute } = require("node:path");
+const { createVivaAccessVerifier, resolveVivaActor } = require("./lib/viva-keycloak-access.cjs");
 const DEFAULT_VIVA = "https://api.vivacrm.ru";
 const DEFAULT_KEYCLOAK = "https://kc.vivacrm.ru/realms/clients/protocol/openid-connect/userinfo";
 const DEFAULT_PRODUCT = "4037a3a3-e551-4f9a-a9db-1410e46b8635";
@@ -22,9 +23,6 @@ const MONGO_CLIENT_OPTIONS = Object.freeze({
   readPreference: "primary", retryReads: true, retryWrites: true, serverSelectionTimeoutMS: 10_000,
   writeConcern: { w: "majority", j: true, wtimeoutMS: 5_000 },
 });
-
-const text = (value, max = 4096) => typeof value === "string" && value.length > 0 && value.length <= max
-  && value.trim() === value && !Array.from(value).some((ch) => ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127);
 
 function readEnv(env, name, fallback) {
   const value = env && typeof env.get === "function" ? env.get(name) : env ? env[name] : undefined;
@@ -206,21 +204,6 @@ function bearer(req) {
   return value.slice(7);
 }
 
-function validateClaims(claims, expectedClientId, expectedTenantKey) {
-  if (!claims || typeof claims !== "object" || Array.isArray(claims)) return null;
-  const subject = text(claims.sub, 256) ? claims.sub : null;
-  if (!subject) return null;
-  const party = text(claims.azp, 128) ? claims.azp
-    : text(claims.client_id, 128) ? claims.client_id
-    : text(claims.clientId, 128) ? claims.clientId : null;
-  if (party !== expectedClientId) return null;
-  const tenant = text(claims.tenantKey, 128) ? claims.tenantKey
-    : text(claims.tenant_key, 128) ? claims.tenant_key
-    : text(claims.tenant, 128) ? claims.tenant : null;
-  if (tenant !== expectedTenantKey) return null;
-  return { userId: subject, tenantId: tenant };
-}
-
 async function readUserinfo(fetchImpl, url, token, timeoutMs) {
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), Math.max(1000, Math.min(5000, timeoutMs))) : null;
@@ -247,6 +230,7 @@ module.exports = function registerResidencyLifecycleApi(RED) {
   function ResidencyLifecycleStoreNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
+    const verifyAccess = createVivaAccessVerifier((...args) => globalThis.fetch(...args));
     const envNames = {
       enabled: String(config.enabledEnv || "LK_RESIDENCY_LIFECYCLE_ENABLED").trim(),
       mongoUri: String(config.mongoUriEnv || "LK_RESIDENCY_LIFECYCLE_MONGO_URI").trim(),
@@ -414,7 +398,7 @@ module.exports = function registerResidencyLifecycleApi(RED) {
         body: { code: "RESIDENCY_AUTH_REQUIRED", message: "Authentication required" } };
       }
       const claims = await readUserinfo(globalThis.fetch, runtime.config.keycloakUserinfoUrl, token, runtime.config.timeoutMs);
-      const actor = validateClaims(claims, runtime.config.expectedClientId, runtime.config.tenantKey);
+      const actor = await resolveVivaActor(claims, token, runtime.config.expectedClientId, runtime.config.tenantKey, verifyAccess);
       if (!actor) {
         node.warn(JSON.stringify({ event: "residency_lifecycle_auth_denied", correlationId: correlation, durationMs: Date.now() - startedAt }));
         return { statusCode: 401, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store",
@@ -501,5 +485,4 @@ module.exports.createAdmissionPolicies = createAdmissionPolicies;
 module.exports.MONGO_CLIENT_OPTIONS = MONGO_CLIENT_OPTIONS;
 module.exports.runtimeConfigError = runtimeConfigError;
 module.exports.bearer = bearer;
-module.exports.validateClaims = validateClaims;
 module.exports.readUserinfo = readUserinfo;

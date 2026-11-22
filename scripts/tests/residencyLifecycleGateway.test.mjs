@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const nodeSource = fs.readFileSync(path.join(repoRoot, "node-red/custom-nodes/residency-lifecycle-api/residency-lifecycle-node.cjs"), "utf8");
 const helpers = require(path.join(repoRoot, "node-red/custom-nodes/residency-lifecycle-api/residency-lifecycle-node.cjs"));
+const { createVivaAccessVerifier, resolveVivaActor } = require(path.join(repoRoot, "node-red/custom-nodes/residency-lifecycle-api/lib/viva-keycloak-access.cjs"));
 const importJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "node-red/imports/lk_residency_lifecycle.import.json"), "utf8"));
 const { RESIDENCY_LIFECYCLE_INDEXES } = await import(path.join(repoRoot, "node-red/custom-nodes/residency-lifecycle-api/lib/residency-lifecycle-store.mjs"));
 
@@ -125,13 +127,52 @@ test("bearer parsing is strict and never echoes the token", () => {
   }
 });
 
-test("claims require the exact client and tenant", () => {
+test("explicit UserInfo claims require the exact client and tenant without a token fallback", async () => {
   const claims = { sub: "user-1", azp: "widget", tenant_key: "iSkq6G" };
-  assert.deepEqual(helpers.validateClaims(claims, "widget", "iSkq6G"), { userId: "user-1", tenantId: "iSkq6G" });
-  assert.equal(helpers.validateClaims({ ...claims, azp: "other" }, "widget", "iSkq6G"), null);
-  assert.equal(helpers.validateClaims({ ...claims, tenant_key: "other" }, "widget", "iSkq6G"), null);
-  assert.equal(helpers.validateClaims({ ...claims, sub: "" }, "widget", "iSkq6G"), null);
-  assert.equal(helpers.validateClaims(null, "widget", "iSkq6G"), null);
+  const resolve = (userinfo) => resolveVivaActor(userinfo, "", "widget", "iSkq6G", () => assert.fail("Unexpected fallback"));
+  assert.deepEqual(await resolve(claims), { userId: "user-1", tenantId: "iSkq6G" });
+  for (const userinfo of [null, { ...claims, azp: "other" }, { ...claims, client_id: "other" },
+    { ...claims, azp: undefined }, { ...claims, tenant_key: "other" }, { ...claims, sub: "" }]) {
+    assert.equal(await resolve(userinfo), null);
+  }
+});
+
+test("client-omitting UserInfo only resolves with a matching signed widget access token", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const issuer = "https://kc.vivacrm.ru/realms/clients";
+  const jwk = { ...publicKey.export({ format: "jwk" }), kid: "fixture-rsa", use: "sig", alg: "RS256" };
+  const now = Math.floor(Date.now() / 1000);
+  const actor = { userId: "user-1", tenantId: "iSkq6G" };
+  const userinfo = { sub: actor.userId, tenant_key: actor.tenantId };
+  let fetches = 0;
+  const fetchKeys = async (url, options) => {
+    fetches++;
+    assert.equal(url, issuer + "/protocol/openid-connect/certs");
+    assert.equal(options.redirect, "error");
+    assert.deepEqual(options.headers, { Accept: "application/json" });
+    return { status: 200, text: async () => JSON.stringify({ keys: [jwk] }) };
+  };
+  const verifyAccess = createVivaAccessVerifier(fetchKeys);
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = (overrides = {}, header = {}) => {
+    const content = encode({ alg: "RS256", kid: jwk.kid, ...header }) + "." + encode({
+      iss: issuer, sub: actor.userId, azp: "widget", typ: "Bearer", aud: "account", exp: now + 120, ...overrides,
+    });
+    return content + "." + sign("RSA-SHA256", Buffer.from(content), privateKey).toString("base64url");
+  };
+  const resolve = (accessToken, verifier = verifyAccess) => resolveVivaActor(userinfo, accessToken, "widget", actor.tenantId, verifier);
+  assert.deepEqual(await resolve(token()), actor);
+  assert.deepEqual(await resolve(token({ tenant_key: actor.tenantId })), actor);
+  for (const overrides of [{ iss: "https://other.example/realms/clients" }, { sub: "someone-else" },
+    { azp: "other" }, { tenant_key: "other" }, { exp: now - 1 }, { nbf: now + 600 }, { typ: "Refresh" }]) {
+    assert.equal(await resolve(token(overrides)), null);
+  }
+  const [header, , signature] = token().split(".");
+  const altered = encode({ iss: issuer, sub: actor.userId, azp: "widget", typ: "Bearer", exp: now + 600 });
+  assert.equal(await resolve([header, altered, signature].join(".")), null);
+  assert.equal(await resolve(token({}, { kid: "unknown" })), null);
+  assert.equal(fetches, 1);
+  assert.equal(await resolve(token(), createVivaAccessVerifier(async () => ({ status: 503 }))), null);
 });
 
 test("userinfo reads only a bounded 200 JSON response", async () => {
