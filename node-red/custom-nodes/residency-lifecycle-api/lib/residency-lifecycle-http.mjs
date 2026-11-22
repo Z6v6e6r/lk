@@ -92,7 +92,7 @@ function cryptoRandomId() {
  * @param {function} [deps.createPolicy] Authorization for a new lifecycle order.
  * @param {function} [deps.pilotPolicy] Authorization for entry to the pilot screen.
  */
-export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*", createPolicy, pilotPolicy }) {
+export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*", createPolicy, pilotPolicy, previewOnly = false }) {
   if (typeof createLifecycle !== "function") throw new Error("RESIDENCY_CREATE_LIFECYCLE_REQUIRED");
   if (typeof allowOrigin !== "string" || !allowOrigin) throw new Error("RESIDENCY_ORIGIN_INVALID");
   // Missing policy is a closed gate, never "allow everyone". Only the Node-RED transport
@@ -139,8 +139,13 @@ export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*"
       || !actor.tenantId || !actor.userId) {
       return respond(401, { code: "RESIDENCY_AUTH_REQUIRED", message: "Authentication required" }, correlation, origin);
     }
-    // Existing orders and bank returns do not pass through the pilot admission gate.
-    if (route.name === "create" || route.name === "pilotAccess") {
+    if (previewOnly && !["pilotAccess", "catalog", "status", "orders"].includes(route.name)) {
+      return route.name === "create"
+        ? respond(503, { code: "RESIDENCY_ORDERS_DISABLED", message: "New residency orders are disabled" }, correlation, origin)
+        : respond(404, { code: "RESIDENCY_ROUTE_NOT_FOUND", message: "Route not found" }, correlation, origin);
+    }
+    // In checkout mode, existing orders and bank returns bypass the hot admission switch.
+    if (previewOnly || route.name === "create" || route.name === "pilotAccess") {
       const policy = route.name === "create" ? createPolicy : pilotPolicy;
       let decision;
       try { decision = await (policy ?? unavailable)({ tenantId: actor.tenantId, userId: actor.userId }); }
@@ -152,7 +157,7 @@ export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*"
         }, correlation, origin);
       }
       if (route.name === "pilotAccess") {
-        return respond(200, { schemaVersion: 1, canCreate: decision.canCreate === true }, correlation, origin);
+        return respond(200, { schemaVersion: 1, canCreate: !previewOnly && decision.canCreate === true }, correlation, origin);
       }
     }
     let lifecycle;

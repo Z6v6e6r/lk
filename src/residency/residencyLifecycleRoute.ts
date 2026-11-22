@@ -10,7 +10,7 @@
  */
 export type ResidencyLifecycleRoute = "purchase" | "return";
 
-export function readResidencyLifecycleRoute(search: string): ResidencyLifecycleRoute | null {
+export function readResidencyLifecycleRoute(search: string, previewOnly = false): ResidencyLifecycleRoute | null {
   const params = new URLSearchParams(search);
   const purchase = params.getAll("buyResidency");
   const lifecycleReturn = params.getAll("phResidencyLifecycleReturn");
@@ -21,7 +21,7 @@ export function readResidencyLifecycleRoute(search: string): ResidencyLifecycleR
     if (lifecycleReturn.length || oldReturn.length || qr.length) return null;
     return "purchase";
   }
-  if (lifecycleReturn.length === 1 && lifecycleReturn[0] === "1") {
+  if (!previewOnly && lifecycleReturn.length === 1 && lifecycleReturn[0] === "1") {
     if (purchase.length || oldReturn.length || qr.length) return null;
     return "return";
   }

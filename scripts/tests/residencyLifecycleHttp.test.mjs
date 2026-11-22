@@ -341,6 +341,58 @@ test("pilot discovery is authenticated, uncached and independent of order recove
   assert.equal(lifecycleCalls, 1);
 });
 
+test("preview-only gates every read and excludes all order and payment actions", async () => {
+  let closed = false;
+  let lifecycleCalls = 0;
+  const api = createResidencyLifecycleApi({
+    previewOnly: true,
+    createPolicy: () => assert.fail("Preview must not call the order policy"),
+    pilotPolicy(actor) {
+      if (actor.userId !== USER) return { allowed: false, statusCode: 403 };
+      if (closed) return { allowed: false, statusCode: 503, code: "RESIDENCY_PILOT_CLOSED" };
+      return { allowed: true, canCreate: true };
+    },
+    createLifecycle() {
+      lifecycleCalls++;
+      return {
+        async catalog() { return {}; },
+        async status() { return {}; },
+        async listOrders() { return { orders: [], count: 0 }; },
+      };
+    },
+  });
+  const base = "/lk/residency/";
+  const reads = ["pilot-access", "catalog", "status", "orders?state=unresolved"];
+  for (const path of reads) {
+    const lookup = req("GET", base + path);
+    assert.equal((await api.handle({ ...lookup, actor: null })).statusCode, 401);
+    assert.equal((await api.handle({ ...lookup, actor: { ...lookup.actor, userId: "other" } })).statusCode, 403);
+  }
+  const order = base + "orders/00000000-0000-4000-8000-000000000001";
+  for (const [method, path, status] of [
+    ["POST", base + "orders", 503],
+    ["GET", order, 404],
+    ["GET", order + "/payment", 404],
+    ["POST", order + "/reconcile", 404],
+    ["POST", order + "/cancel", 404],
+  ]) {
+    assert.equal((await api.handle(req(method, path, {}, { "Idempotency-Key": KEY }))).statusCode, status);
+  }
+  assert.equal(lifecycleCalls, 0);
+  const access = await api.handle(req("GET", base + "pilot-access"));
+  assert.deepEqual(access.body, { schemaVersion: 1, canCreate: false });
+  for (const path of reads.slice(1)) {
+    assert.equal((await api.handle(req("GET", base + path))).statusCode, 200);
+  }
+  closed = true;
+  for (const path of reads) {
+    const denied = await api.handle(req("GET", base + path));
+    assert.equal(denied.statusCode, 503);
+    assert.equal(denied.body.code, "RESIDENCY_PILOT_CLOSED");
+  }
+  assert.equal(lifecycleCalls, 3);
+});
+
 test("provider errors keep their stable status and code without leaking a body", async () => {
   const api = createResidencyLifecycleApi({ createPolicy: () => ({ allowed: true }), createLifecycle: () => ({ async catalog() {
     const error = new Error("upstream text with private data");

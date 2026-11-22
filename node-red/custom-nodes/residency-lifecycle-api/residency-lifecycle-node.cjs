@@ -102,6 +102,7 @@ function readConfig(env) {
   const pilotUsers = readPilotUsers(readEnv(env, "LK_RESIDENCY_LIFECYCLE_PILOT_USERS", ""), tenantKey);
   return {
     pilotControlFile: readEnv(env, "LK_RESIDENCY_LIFECYCLE_PILOT_CONTROL_FILE", ""),
+    previewOnly: readEnv(env, "LK_RESIDENCY_LIFECYCLE_PREVIEW_ONLY", "false") === "true",
     createEnabled: readEnv(env, "LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED", "false") === "true",
     createAudience: CREATE_AUDIENCES.has(createAudience) ? createAudience : null,
     pilotUsers: pilotUsers.users,
@@ -171,7 +172,7 @@ function createAdmissionPolicies(config) {
       if (config.pilotUsersError) return policyInvalid;
       if (!pilotIncludes(actor)) return notAllowed;
       const mode = await readPilotMode(config.pilotControlFile);
-      if (mode === "off") {
+      if (mode === "off" || (config.previewOnly && mode !== "preview")) {
         return { allowed: false, statusCode: 503, code: "RESIDENCY_PILOT_CLOSED", message: "Residency pilot is closed" };
       }
       return { allowed: true, canCreate: mode === "checkout" && config.createEnabled && Boolean(config.createAudience) };
@@ -316,6 +317,7 @@ module.exports = function registerResidencyLifecycleApi(RED) {
             }
             const api = http.createResidencyLifecycleApi({
               allowOrigin: config.allowOrigin,
+              previewOnly: config.previewOnly,
               ...createAdmissionPolicies(config),
               createLifecycle: (actor) => {
                 const ports = provider.createVivaCupResidencyPorts({

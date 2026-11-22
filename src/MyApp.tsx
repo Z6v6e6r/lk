@@ -1042,7 +1042,9 @@ function AppContent() {
 }
 
 export default function App() {
-  if (!PUBLIC_GAME_STATION_ID && typeof window !== "undefined" && readResidencyLifecycleRoute(window.location.search)) {
+  const residencyPreviewOnly = import.meta.env.VITE_LK1_RESIDENCY_PREVIEW_ONLY === "true";
+  if (!PUBLIC_GAME_STATION_ID && typeof window !== "undefined"
+    && readResidencyLifecycleRoute(window.location.search, residencyPreviewOnly)) {
     return <AuthProvider authMode="auto"><ResidencyLifecyclePurchasePage /></AuthProvider>;
   }
   if (!PUBLIC_GAME_STATION_ID && typeof window !== "undefined" && isResidencyPurchaseRoute(window.location.search)) {

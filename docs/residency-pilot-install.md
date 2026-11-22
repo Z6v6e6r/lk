@@ -4,7 +4,9 @@
 
 Use the personal preview at `/lk_new?buyResidency=lifecycle`. Keep
 `LK_RESIDENCY_LIFECYCLE_ENABLED=true`, `LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED=false`
-and `LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE=pilot`. Put only the account's
+`LK_RESIDENCY_LIFECYCLE_PREVIEW_ONLY=true` and
+`LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE=pilot`. Build the frontend with
+`VITE_LK1_RESIDENCY_PREVIEW_ONLY=true`. Put only the account's
 verified `tenantId:userId` in `LK_RESIDENCY_LIFECYCLE_PILOT_USERS`, in private
 runtime configuration. Never use the synthetic test identity for enrollment.
 
@@ -24,11 +26,11 @@ explicitly enabled create setting. Leave both closed to payment for this pilot.
 `Cache-Control: no-store`. The open screen checks again every five seconds
 while visible and on return to the tab. When disabled, a tab outside order
 recovery returns to the main cabinet and keeps its configured auth mode.
-`POST /lk/residency/orders` rejects new purchases independently of browser
-timing. An already admitted operation can still finish. Keep the lifecycle
-service running for reads, recovery and the bank return route
-`?phResidencyLifecycleReturn=1`. The current `?buyResidency=1` entry is
-independent of this switch.
+In this profile, the same admission check protects the catalog, status and
+unresolved order list. The gateway refuses create, payment and recovery
+routes. The frontend keeps the lifecycle bank return outside this build's
+available routes. The current `?buyResidency=1` entry is independent of the
+pilot switch.
 
 The lifecycle gateway requires the club and subject from Keycloak UserInfo.
 When UserInfo omits the authorized client, the gateway verifies the same

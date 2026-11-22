@@ -74,6 +74,8 @@ function memoryStorage() {
 test("the pilot route is strict and never matches the old residency routes", () => {
   assert.equal(readResidencyLifecycleRoute("?buyResidency=lifecycle"), "purchase");
   assert.equal(readResidencyLifecycleRoute("?phResidencyLifecycleReturn=1"), "return");
+  assert.equal(readResidencyLifecycleRoute("?buyResidency=lifecycle", true), "purchase");
+  assert.equal(readResidencyLifecycleRoute("?phResidencyLifecycleReturn=1", true), null);
   assert.equal(readResidencyLifecycleRoute("?buyResidency=lifecycle&v=20261118"), "purchase");
   for (const search of [
     "?buyResidency=1", "?buyResidency=1&phCheckoutReturn=residency", "?residency=1",
