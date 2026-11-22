@@ -416,6 +416,7 @@ test("LK1 tournament booking checks an ambiguous 202 with reads and clears the n
   const deps = {
     selectedId: tournamentId, selectedExerciseId: exerciseId, actionLoading: false, subscriptionUsageShadowEnabled: false,
     checkout: currentCheckout, isRestoringSession: false, checkoutRequestIdRef: requestId,
+    detailRequestIdRef: { current: 0 },
     readAuthToken: token, tournamentPaymentSessionIdentity: value => value,
     checkLevel: async () => true, detail: null, selectedTournament: null, normalizePhone: value => value,
     setError: noOp, setActionLoading: noOp, setConfirmingSubscriptionProductKey: noOp, setCheckout: noOp,
