@@ -1,0 +1,13 @@
+[Unit]
+Description=Dead subscription hold release for the next 14 days every 30 minutes
+Documentation=file:/root/.node-red/dead-hold-release/README.md
+
+[Timer]
+OnCalendar=*:17/30
+AccuracySec=30s
+RandomizedDelaySec=30
+Persistent=false
+Unit=padlhub-dead-hold-release-full.service
+
+[Install]
+WantedBy=timers.target
