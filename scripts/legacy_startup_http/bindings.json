@@ -1,0 +1,32 @@
+{
+  "http": {
+    "identityHash": "8ac9af17aba6fcd08abaf24f4a508bae8199905360c8f9ff57af80e61a1bc247",
+    "nodeSha256": "a89b5e56889d3579f091a68c96c6630559ef1723691b68100e66f1b6dda00ab7",
+    "type": "http request"
+  },
+  "builder": {
+    "identityHash": "ba49e20c3e01a5b8a06bcd65990d27f2557500ee2e7e8d9e55285e11231f1c63",
+    "nodeSha256": "9dd7447022f6294a2b1259c4c159a9e71edfe261c97ec204e2c04ce62fbcabc9",
+    "type": "function"
+  },
+  "manual": {
+    "identityHash": "e40c65c1da69d0ee0f471e0b7b1c2638e2b0f6320e6a37d0bf0bc5c1ea6726c6",
+    "nodeSha256": "7061d91e247d86a588548da93d74c4915e4a4ce7090f71f3c7b572dbefb2a629",
+    "type": "inject"
+  },
+  "startup": {
+    "identityHash": "1f6a23fc9926a8b6944e22cd7a8fd2c7a34e0f98e101aa87b06e9315dcc161cf",
+    "nodeSha256": "029f32920909ef9a6e65450d47fcf230af07a19e0e0c37b165ba88f23c03aa8f",
+    "type": "start-up-trigger"
+  },
+  "debug": {
+    "identityHash": "2069b1a2d5885498c7df26055e553862dd44f4833b112e7acdc5eb6bce543eda",
+    "nodeSha256": "1ec0b684eed018e10cb0a93817eba2d3535540aa016f399cd5ee63669d2b6947",
+    "type": "debug"
+  },
+  "tab": {
+    "identityHash": "79d26d74aba7320b0e6f34dab1c10ad2a9b7b4ccaa6040478c19094963ecc5b3",
+    "nodeSha256": "81331c342589666e4e710ce0e427f209307bc589a27ba5488f30d1a1265cc36b",
+    "type": "tab"
+  }
+}
