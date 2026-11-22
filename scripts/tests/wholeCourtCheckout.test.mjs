@@ -329,7 +329,7 @@ test('ambiguity, bad links and multiple booking IDs never lead to a replacement 
   for (const invalid of [
     { transactionId: undefined },
     { exerciseId: undefined },
-    { paymentUrl: 'https://pay.vivacrm.ru@foreign.invalid/payment' },
+    { paymentUrl: 'https://pay.vivacrm.ru@127.0.0.1/payment' },
     { paymentUrl: 'https://pay.vivacrm.ru.foreign.invalid/payment' },
     { bookingIds: ['synthetic-booking', 'extra-booking'] },
   ]) {
