@@ -1,3 +1,4 @@
+import { getProfileLevelNumericText } from "../../utils/playerLevel";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CABINET_URL } from "../../consts/api_config";
 import {
@@ -10,8 +11,6 @@ import {
 } from "../../utils/communityApi";
 import { apiFetchProfile, type UserProfileType } from "../../utils/apiClient";
 import {
-  CUSTOM_FIELD_IDS,
-  getCustomFieldValue,
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
@@ -39,25 +38,8 @@ function normalizePhone(value: string | null | undefined): string | null {
   return digits;
 }
 
-function getLevelScoreFromProfile(profile: UserProfileType): number {
-  const numericLevel = parseNumericLevel(
-    getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
-  );
-
-  if (typeof numericLevel === "number" && Number.isFinite(numericLevel)) {
-    return numericLevel;
-  }
-
-  const letterLevel = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel);
-  const fallbackLabel = getLetterGrade(3.2);
-  const matchedIndex = ["D", "D+", "C", "C+", "B", "B+", "A"].findIndex(
-    (value) => value === (letterLevel || fallbackLabel),
-  );
-  if (matchedIndex >= 0) {
-    return matchedIndex + 1.5;
-  }
-
-  return 3.2;
+function getLevelScoreFromProfile(profile: UserProfileType): number | null {
+  return parseNumericLevel(getProfileLevelNumericText(profile));
 }
 
 function buildCommunityActor(profile: UserProfileType) {
@@ -71,7 +53,7 @@ function buildCommunityActor(profile: UserProfileType) {
     avatar: profile.photo,
     role: "MEMBER" as const,
     levelScore,
-    levelLabel: getLetterGrade(levelScore),
+    levelLabel: (levelScore === null ? null : getLetterGrade(levelScore)),
   };
 }
 

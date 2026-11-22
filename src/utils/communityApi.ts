@@ -4,6 +4,7 @@ import { readAuthToken } from "./authTokenStorage";
 import { parseEventRegistrationPolicy, type EventRegistrationPolicy, communityType, type CommunityType, type CommunityTypeSettings } from "../services/community-policy";
 import {
   getServ2Origin,
+  apiFetchPadelLiveRatings,
   request,
   type ApiError,
   type ApiResult,
@@ -314,8 +315,8 @@ export interface CommunityActorPayload {
   name: string;
   avatar?: string | null;
   role?: CommunityRole;
-  levelScore: number;
-  levelLabel: string;
+  levelScore: number | null;
+  levelLabel: string | null;
 }
 
 export interface CreateCommunityPayload {
@@ -702,7 +703,7 @@ function normalizeCommunityMember(value: unknown): CommunityMember | null {
   const phone = normalizePhone(value.phone ?? value.phoneNorm ?? value.phoneNumber ?? value.mobile);
   if (!name && !id && !phone) return null;
 
-  const levelScore = toNumeric(value.levelScore ?? value.ratingNumeric ?? value.levelNumeric) ?? 3.2;
+  const levelScore = toNumeric(value.levelScore ?? value.ratingNumeric ?? value.levelNumeric) ?? 0;
 
   return {
     id: id ?? null,
@@ -712,7 +713,7 @@ function normalizeCommunityMember(value: unknown): CommunityMember | null {
     role: normalizeRole(value.role),
     status: normalizeMembershipStatus(value.status),
     levelScore,
-    levelLabel: pickString(value, ["levelLabel", "rating", "level"]) ?? "C",
+    levelLabel: levelScore >= 1 ? pickString(value, ["levelLabel", "rating", "level"]) ?? "—" : "—",
     joinedAt: pickString(value, ["joinedAt", "createdAt"]) ?? new Date(0).toISOString(),
   };
 }
@@ -1365,7 +1366,7 @@ function buildMemberPayload(member: CommunityActorPayload) {
     avatar: member.avatar?.trim() || null,
     role: member.role ?? "MEMBER",
     levelScore: member.levelScore,
-    levelLabel: member.levelLabel.trim(),
+    levelLabel: member.levelLabel?.trim() || null,
   };
 }
 
@@ -1432,6 +1433,23 @@ function buildForceFreshCommunityGetOptions(): Pick<RequestOptions, "baseUrl" | 
   };
 }
 
+async function canonicalCommunityLevels(ids: Array<string | null | undefined>) {
+  const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+  const rows = new Map<string, { ratingNumeric: number | null; rating: string | null }>();
+  for (let i = 0; i < unique.length; i += 100) {
+    const result = await apiFetchPadelLiveRatings(unique.slice(i, i + 100).map(clientId => ({ clientId })));
+    for (const row of result.data || []) if (row.clientId && row.source === "CUP_CANONICAL") rows.set(row.clientId, row);
+  }
+  return rows;
+}
+async function hydrateCommunityLevels(communities: CommunityRecord[]) {
+  const levels = await canonicalCommunityLevels(communities.flatMap(community => community.members.map(member => member.id)));
+  return communities.map(community => ({ ...community, members: community.members.map(member => {
+    const level = member.id ? levels.get(member.id) : null;
+    return { ...member, levelScore: level?.ratingNumeric ?? 0, levelLabel: level?.rating ?? "—" };
+  }) }));
+}
+
 export async function apiFetchCommunities(params: {
   phone?: string | null;
   clientId?: string | null;
@@ -1464,7 +1482,7 @@ export async function apiFetchCommunities(params: {
     }
 
     return {
-      data: extractCommunityListResponse(response.data),
+      data: { ...extractCommunityListResponse(response.data), communities: await hydrateCommunityLevels(extractCommunityListResponse(response.data).communities) },
       error: null,
       status: response.status,
     };
@@ -1513,7 +1531,7 @@ export async function apiFetchCommunity(
   }
 
   return {
-    data: parsed,
+    data: (await hydrateCommunityLevels([parsed]))[0],
     error: null,
     status: response.status,
   };
@@ -2286,6 +2304,10 @@ export async function apiFetchCommunityRanking(
     return errorResult<CommunityRankingResponse>(409, "Рейтинг обновляется. Попробуйте ещё раз через минуту.", null);
   }
 
+  const levels = await canonicalCommunityLevels(parsed.items.map(row => row.playerId));
+  const apply = (row: CommunityRatingItem) => ({ ...row, currentLevel: (row.playerId ? levels.get(row.playerId)?.ratingNumeric : null) ?? 0 });
+  parsed = { ...parsed, items: parsed.items.map(apply), rows: parsed.rows.map(apply),
+    leagueTables: parsed.leagueTables?.map(table => ({ ...table, rows: table.rows.map(apply) })) };
   return {
     data: parsed,
     error: null,
