@@ -16,6 +16,7 @@ import { isTrialGroupTraining, trialGroupCheckoutOperationId } from "../../src/u
 import { getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
 import { hasGroupTrainingSubscriptionEvidence } from "../../src/utils/groupScheduleSubscriptionOffer.ts";
 import { resolveSubscriptionUsageDisplay } from "../../src/utils/subscriptionValidity.ts";
+import { getTournamentBookingLevelDenial, preserveTournamentLevelDenial } from "../../src/utils/tournamentSignupAvailability.ts";
 
 const require = createRequire(import.meta.url);
 const parse = path => ts.createSourceFile(path, fs.readFileSync(path, "utf8"),
@@ -39,9 +40,9 @@ function evaluate(expression, dependencies = {}) {
   return new Function("require", "exports", ...Object.keys(dependencies), code + "\nreturn subject;")(
     require, {}, ...Object.values(dependencies));
 }
-function callback(name, dependencies) {
-  const node = find(page, node => ts.isVariableDeclaration(node) && node.name.getText(page) === name);
-  return evaluate(node.initializer.arguments[0].getText(page), dependencies);
+function callback(name, dependencies, source = page) {
+  const node = find(source, node => ts.isVariableDeclaration(node) && node.name.getText(source) === name);
+  return evaluate(node.initializer.arguments[0].getText(source), dependencies);
 }
 const product = (source = "one-time", id = "fixture-product") => ({
   id, source, name: "Пробная тренировка", type: "SERVICE", cost: 150000, raw: {},
@@ -264,6 +265,7 @@ test("booking callback forwards the promo unchanged and cannot bypass trial elig
   for (const blocked of [false, true]) {
     const calls = [];
     const complete = callback("completeRegistration", {
+      checkLevel: async () => true, registrationRequestIdRef: { current: 1 },
       subscriptionUsageShadowEnabled: false, selectedId: training.id,
       TRIAL_GROUP_CHECKOUT_ENABLED: true, isTrialGroupTraining: () => true,
       trialBookingBlocked: blocked, trialEligibilityKey: `${profile.id}:${training.id}`,
@@ -288,6 +290,7 @@ test("actual trial transaction preserves the promo and owned visit source throug
     const calls = [];
     const create = evaluate(node.getText(api).replace(/^export /, ""), {
       isSpanishTrainingExercise: () => false, isKidsAcademyTraining, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+      resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
       createVivaPaymentWatcher: async () => ({ close() {} }),
       buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
       buildTournamentVivaTransactionPayload: () => ({}),
@@ -313,6 +316,214 @@ test("actual trial transaction preserves the promo and owned visit source throug
   }
 });
 
+
+test("tournament checkout uses only the durable CUP route, carries promo, and never falls back after unknown", async () => {
+  const node = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
+  const cases = [
+    ...["one-time", "client-one-time", "subscription"].map(source => ({ source, exercise: {} })),
+    ...["one-time", "client-one-time"].map(source => ({
+      source, exercise: { direction: { id: 7108 } }, checkoutContext: "tournament",
+    })),
+  ];
+  for (const { source, exercise, checkoutContext } of cases) {
+    const calls = [];
+    const create = evaluate(node.getText(api).replace(/^export /, ""), {
+      isSpanishTrainingExercise: () => false, isTrialGroupTraining: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+      isChildTournamentExercise, isKidsAcademyTraining, tournamentCheckoutRetryKeys: new Map(),
+      resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => checkoutContext ? null : "tournament",
+      createVivaPaymentWatcher: () => { throw Error("unbound payment watcher forbidden"); },
+      buildTournamentPaymentReturnUrls: () => ({ successUrl: "https://padlhub.ru/ok", failUrl: "https://padlhub.ru/fail" }),
+      buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
+      pickString: (row, keys) => keys.map(key => row?.[key]).find(Boolean),
+      request: async (url, options) => {
+        calls.push({ url, options });
+        return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+      },
+    });
+    const params = { checkoutContext, exerciseId: "tournament", clientId: "actor", exercise, product: product(source), promoCode: "PROMO" };
+    await create(params); await create(params);
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.equal(call.url, "https://cup.example/api/tournaments/tournament/checkout");
+      assert.equal(call.options.retries, 0);
+      assert.equal(call.options.headers["Idempotency-Key"], "tournament:tournament:actor");
+      assert.deepEqual(JSON.parse(call.options.body), { productId: params.product.id, source, promoCode: "PROMO",
+        successUrl: "https://padlhub.ru/ok", failUrl: "https://padlhub.ru/fail" });
+    }
+  }
+});
+
+test("the tournament page uses CUP even for unclassified or training-shaped source data", async () => {
+  const tournamentPage = parse("src/components/tournament-signup/TournamentSignupPage.tsx");
+  const checkoutCall = find(tournamentPage, node => ts.isCallExpression(node)
+    && node.expression.getText(tournamentPage) === "apiCreateTournamentVivaTransaction");
+  const context = find(tournamentPage, node => ts.isPropertyAssignment(node)
+    && node.parent === checkoutCall.arguments[0] && node.name.getText(tournamentPage) === "checkoutContext");
+  assert.equal(context.initializer.text, "tournament");
+
+  const entry = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
+  const calls = [];
+  const paused = { data: null, error: { status: 503, raw: { code: "TOURNAMENT_NEW_OPERATIONS_PAUSED" } }, status: 503 };
+  let salesPaused = true;
+  const ownerAttempts = [];
+  const create = evaluate(`(${entry.getText(api).replace(/^export /, "")})`, {
+    isSpanishTrainingExercise: () => false, isKidsAcademyTraining, isChildTournamentExercise,
+    isTrialGroupTraining: isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+    resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
+    createVivaPaymentWatcher: () => assert.fail("unexpected direct Viva payment watcher"),
+    buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
+    buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
+    tournamentCheckoutRetryKeys: new Map(), pickString: (row, keys) => row?.[keys[0]],
+    request: async (url, options) => {
+      assert.equal(options.method, "POST");
+      assert.equal(options.retries, 0);
+      calls.push([url, options.headers?.["Idempotency-Key"]]);
+      if (salesPaused) return paused;
+      ownerAttempts.push(url);
+      return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+    },
+  });
+  for (const source of ["one-time", "client-one-time", "subscription"]) {
+    for (const exercise of [{}, training]) {
+      const result = await create({ checkoutContext: context.initializer.text, exerciseId: "cup-event",
+        clientId: "actor", exercise, product: product(source) });
+      assert.deepEqual(result, paused);
+    }
+  }
+  assert.deepEqual(calls, Array.from({ length: 6 },
+    () => ["https://cup.example/api/tournaments/cup-event/checkout", "tournament:cup-event:actor"]));
+
+  salesPaused = false;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 6);
+  assert.deepEqual(ownerAttempts, [], "lifting the pause does not create a checkout");
+  await create({ checkoutContext: "tournament", exerciseId: "cup-event", clientId: "actor", exercise: training, product: product() });
+  assert.equal(calls.length, 7);
+  assert.deepEqual(ownerAttempts, [calls[6][0]], "a new explicit checkout sends one POST after the pause");
+});
+
+test("LK1 tournament booking checks an ambiguous 202 with reads and clears the notice only on verified booking", async () => {
+  const source = parse("src/components/tournament-signup/TournamentSignupPage.tsx");
+  const pending = { data: null, error: { raw: { details: { code: "LK1_ALLOWANCE_BINDING_INVALID" } } }, status: 202 };
+  const tournamentId = "fixture-tournament";
+  const exerciseId = training.id;
+  const currentCheckout = checkout();
+  const token = () => "fixture-session";
+  const requestId = { current: 1 };
+  const noOp = () => {};
+  let notice;
+  let confirmed = false;
+  const calls = [];
+  const deps = {
+    selectedId: tournamentId, selectedExerciseId: exerciseId, actionLoading: false, subscriptionUsageShadowEnabled: false,
+    checkout: currentCheckout, isRestoringSession: false, checkoutRequestIdRef: requestId,
+    readAuthToken: token, tournamentPaymentSessionIdentity: value => value,
+    checkLevel: async () => true, detail: null, selectedTournament: null, normalizePhone: value => value,
+    setError: noOp, setActionLoading: noOp, setConfirmingSubscriptionProductKey: noOp, setCheckout: noOp,
+    setSubscriptionConfirmationNotice: value => { notice = value; },
+    getTournamentBookingLevelDenial,
+    isTournamentCapacityError: () => false, items: [],
+    setLoadingDetail: noOp, setRegistrationResolvedFor: noOp, setRegistrationSessionIdentity: noOp,
+    setDetail: noOp, setRegistration: noOp, publicRosterDetailAbortRef: { current: null },
+    apiFetchTournamentSignupDetail: async () => {
+      calls.push("GET detail");
+      return { data: { exerciseId } };
+    },
+    apiFetchTournamentMyRegistration: async () => {
+      calls.push("GET CUP registration");
+      return { data: { status: "NONE" } };
+    },
+    apiFetchTournamentVivaMyRegistration: async () => {
+      calls.push("GET Viva registration");
+      return { data: confirmed ? { status: "REGISTERED", bookingId: "fixture-booking" } : { status: "NONE" } };
+    },
+    loadPublicRoster: async () => { calls.push("GET roster"); },
+    preserveTournamentLevelDenial,
+    mergeTournamentPendingPayment: async (_token, _exercise, registration) => registration,
+    apiReconcileTournamentOwner: () => assert.fail("read-only status check attempted a mutation"),
+    apiCreateTournamentVivaTransaction: async () => { calls.push("POST booking"); return pending; },
+  };
+  const loadDetail = callback("loadDetail", { ...deps, isAuthenticated: true }, source);
+  const book = callback("completeVivaRegistration", { ...deps, isAuthenticated: true, loadDetail }, source);
+  await book(currentCheckout, product("client-subscription"));
+  const reads = ["GET detail", "GET CUP registration", "GET Viva registration", "GET roster"];
+  assert.deepEqual(calls, ["POST booking", ...reads]);
+  assert.equal(notice, "Подтверждение записи или доплаты от Viva пока не получено.");
+
+  await loadDetail(tournamentId, { checkOnly: true });
+  assert.ok(notice);
+  confirmed = true;
+  await loadDetail(tournamentId, { checkOnly: true });
+  assert.equal(notice, null);
+  assert.deepEqual(calls, ["POST booking", ...reads, ...reads, ...reads]);
+
+  const confirmation = find(source, node => ts.isJsxElement(node) && node.children.some(child =>
+    ts.isJsxText(child) && child.getText(source).trim() === "Запись подтверждена."));
+  const renderConfirmation = (registration, registrationSessionIdentity = token()) =>
+    renderToStaticMarkup(evaluate(`(${confirmation.parent.parent.getText(source)})`, {
+      loadingDetail: false, subscriptionConfirmationNotice: notice, isAuthenticated: true,
+      selectedId: tournamentId, selectedExerciseId: exerciseId, registrationResolvedFor: `${tournamentId}:${exerciseId}`,
+      registrationSessionIdentity, tournamentPaymentSessionIdentity: value => value, readAuthToken: token, registration,
+    }));
+  assert.equal(renderConfirmation({ status: "REGISTERED", bookingId: null }), "");
+  assert.equal(renderConfirmation({ status: "REGISTERED", bookingId: "fixture-booking" }, "previous-session"), "");
+  assert.match(renderConfirmation({ status: "REGISTERED", bookingId: "fixture-booking" }), /Запись подтверждена\./u);
+
+  const submit = [];
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "completeVivaRegistration") submit.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(submit.length > 0);
+  assert.ok(submit.every(call => {
+    // The void expression and arrow are children of the JSX click attribute.
+    const attribute = call.parent.parent.parent.parent;
+    return ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "onClick";
+  }), "neither OAuth completion nor passive reload can submit a booking");
+});
+
+test("only a durable CUP refusal rotates the key for a new explicit action", async () => {
+  const names = ["tournamentCheckoutRetryKeys", "tournamentCheckoutRefusalMessages"];
+  const declarations = names.map(name =>
+    find(api, node => ts.isVariableDeclaration(node) && node.name.getText(api) === name).getText(api));
+  const entry = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "apiCreateTournamentVivaTransaction");
+  const remember = find(api, node => ts.isFunctionDeclaration(node) && node.name?.text === "rememberTournamentCheckoutSuccessor");
+  const calls = [];
+  const operationId = "tournament-owner:11111111-1111-4111-8111-111111111111";
+  const responses = [
+    { data: null, error: { message: "lost" }, status: null },
+    { data: { state: "REJECTED", code: "LEVEL_NOT_ALLOWED", operationId }, error: null, status: 201 },
+    { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 },
+    { data: null, error: { message: "lost" }, status: null },
+  ];
+  const saved = new Map();
+  const load = () => evaluate(`(() => { const ${declarations.join("; const ")}; ${remember.getText(api)}; ${entry.getText(api).replace(/^export /, "")}; return apiCreateTournamentVivaTransaction; })()`, {
+    isSpanishTrainingExercise: () => false, isTrialGroupTraining: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: true,
+    isChildTournamentExercise, isKidsAcademyTraining, resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "tournament",
+    createVivaPaymentWatcher: () => { throw Error("unbound payment watcher forbidden"); },
+    buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
+    buildTournamentVivaTransactionPayload: () => ({}), PHAB_API_BASE: "https://cup.example/api",
+    globalThis: { sessionStorage: { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) } },
+    pickString: (row, keys) => keys.map(key => row?.[key]).find(Boolean),
+    request: async (url, options) => {
+      assert.match(url, /\/tournaments\/tournament\/checkout$/);
+      calls.push(options.headers["Idempotency-Key"]);
+      return responses.shift();
+    },
+  });
+  const create = load();
+  const params = { exerciseId: "tournament", clientId: "actor", exercise: {}, product: product() };
+  await create(params);
+  const refusal = await create(params);
+  assert.equal(refusal.status, 403);
+  assert.match(refusal.error.message, /уровень/);
+  assert.equal(calls.length, 2);
+  await create(params);
+  await load()(params);
+  assert.deepEqual(calls, ["tournament:tournament:actor", "tournament:tournament:actor",
+    `tournament-retry:${operationId}`, `tournament-retry:${operationId}`]);
+});
 // Use the actual checkout normalizer/filter, rather than the identity stub above.
 // The provider remains responsible for populating availableClientSubscriptions.
 function subscriptionCheckoutReader(availableClientSubscriptions, exerciseOverrides = {}) {
@@ -510,6 +721,7 @@ test("kids training transaction rejects stale adult discounts and keeps the orig
   const writes = [];
   const create = evaluate(node.getText(api).replace(/^export /, ""), {
     isKidsAcademyTraining, isPadelKidsProduct, isChildTournamentExercise,
+    resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => "group_training",
     isSpanishTrainingExercise: () => false, TRIAL_GROUP_CHECKOUT_ENABLED: false,
     API_BASE: "https://fixture.invalid", TENANT_KEY: "fixture",
     createVivaPaymentWatcher: async () => ({ close() {} }),

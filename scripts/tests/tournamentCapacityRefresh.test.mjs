@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { isTournamentCapacityError } from '../../src/utils/tournamentCapacityError.ts';
 import { isSubscriptionBookingReleased } from '../../src/utils/subscriptionRejoin.ts';
 import { createTournamentParticipantReader } from '../../src/utils/tournamentParticipantRead.ts';
+import { getTournamentBookingLevelDenial } from '../../src/utils/tournamentSignupAvailability.ts';
 import { setImmediate } from 'node:timers/promises';
 
 const source = ts.createSourceFile('signup.tsx', fs.readFileSync(
@@ -48,11 +49,12 @@ test('capacity refresh updates roster and cards without repeating the booking or
   const changes = [];
   let bookings = 0;
   const deps = { selectedId: 'fixture-tournament', selectedExerciseId: 'fixture-event', actionLoading: false,
+    checkLevel: async () => true,
     subscriptionUsageShadowEnabled: false, isAuthenticated: true, isRestoringSession: false,
     checkout, discountPending: false, discountError: null, currentDiscountQuotes: [],
     checkoutRequestIdRef: { current: 1 }, readAuthToken: () => 'fixture-session',
     tournamentPaymentSessionIdentity: value => value, normalizePhone: value => value,
-    detail: null, selectedTournament: null, isTournamentCapacityError,
+    detail: null, selectedTournament: null, getTournamentBookingLevelDenial, isTournamentCapacityError,
     apiCreateTournamentVivaTransaction: async () => { bookings++; return { status: 409, data: null,
       error: { status: 409, message: 'Нет свободных мест', raw: { details: { code: 'CAPACITY_FULL' } } } }; },
     loadPublicRoster: async (id, options) => { changes.push(['roster', id, options]); },
