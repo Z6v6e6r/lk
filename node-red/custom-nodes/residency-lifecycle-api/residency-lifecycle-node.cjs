@@ -7,6 +7,9 @@
 // It never logs a token, phone, provider id, order id or raw provider body.
 
 const crypto = require("node:crypto");
+const { constants } = require("node:fs");
+const fs = require("node:fs/promises");
+const { isAbsolute } = require("node:path");
 const DEFAULT_VIVA = "https://api.vivacrm.ru";
 const DEFAULT_KEYCLOAK = "https://kc.vivacrm.ru/realms/clients/protocol/openid-connect/userinfo";
 const DEFAULT_PRODUCT = "4037a3a3-e551-4f9a-a9db-1410e46b8635";
@@ -31,6 +34,7 @@ function readEnv(env, name, fallback) {
 const RETURN_TARGET_KEY = /^[a-z][a-z0-9_-]{0,31}$/;
 const PILOT_USER = /^[A-Za-z0-9._:@-]{1,128}:[A-Za-z0-9._:@-]{1,256}$/;
 const CREATE_AUDIENCES = new Set(["pilot", "all"]);
+const PILOT_ACCESS_PATH = "/lk/residency/pilot-access";
 
 /**
  * Personal pilot access is an allowlist of verified `tenantId:userId` claims. It is
@@ -99,6 +103,7 @@ function readConfig(env) {
   const createAudience = readEnv(env, "LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE", "pilot");
   const pilotUsers = readPilotUsers(readEnv(env, "LK_RESIDENCY_LIFECYCLE_PILOT_USERS", ""), tenantKey);
   return {
+    pilotControlFile: readEnv(env, "LK_RESIDENCY_LIFECYCLE_PILOT_CONTROL_FILE", ""),
     createEnabled: readEnv(env, "LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED", "false") === "true",
     createAudience: CREATE_AUDIENCES.has(createAudience) ? createAudience : null,
     pilotUsers: pilotUsers.users,
@@ -133,6 +138,55 @@ function readConfig(env) {
     timeoutMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_TIMEOUT_MS", "8000")),
     paymentTtlMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_PAYMENT_TTL_MS", "1200000")),
     dispatchLeaseMs: Number(readEnv(env, "LK_RESIDENCY_LIFECYCLE_DISPATCH_LEASE_MS", "120000")),
+  };
+}
+
+async function readPilotMode(filePath) {
+  if (!isAbsolute(filePath)) return "off";
+  let file;
+  try {
+    file = await fs.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > 9) return "off";
+    const buffer = Buffer.alloc(10);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    const value = buffer.toString("utf8", 0, bytesRead);
+    if (value === "preview\n" || value === "preview") return "preview";
+    if (value === "checkout\n" || value === "checkout") return "checkout";
+    return "off";
+  } catch {
+    return "off";
+  } finally {
+    await file?.close().catch(() => {});
+  }
+}
+
+function createAdmissionPolicies(config) {
+  const pilotIncludes = ({ tenantId, userId }) => config.pilotUsers?.has(tenantId + ":" + userId);
+  const policyInvalid = { allowed: false, statusCode: 503, code: "RESIDENCY_CREATE_POLICY_INVALID",
+    message: "Residency pilot access is not configured" };
+  const notAllowed = { allowed: false, statusCode: 403, code: "RESIDENCY_CREATE_NOT_ALLOWED",
+    message: "Residency pilot access is not enabled for this account" };
+
+  return {
+    async pilotPolicy(actor) {
+      if (config.pilotUsersError) return policyInvalid;
+      if (!pilotIncludes(actor)) return notAllowed;
+      const mode = await readPilotMode(config.pilotControlFile);
+      if (mode === "off") {
+        return { allowed: false, statusCode: 503, code: "RESIDENCY_PILOT_CLOSED", message: "Residency pilot is closed" };
+      }
+      return { allowed: true, canCreate: mode === "checkout" && config.createEnabled && Boolean(config.createAudience) };
+    },
+    async createPolicy(actor) {
+      if (!config.createEnabled || await readPilotMode(config.pilotControlFile) !== "checkout") {
+        return { allowed: false, statusCode: 503, code: "RESIDENCY_ORDERS_DISABLED",
+          message: "New residency orders are disabled" };
+      }
+      if (!config.createAudience || config.pilotUsersError) return policyInvalid;
+      if (config.createAudience === "all" || pilotIncludes(actor)) return { allowed: true };
+      return notAllowed;
+    },
   };
 }
 
@@ -276,26 +330,9 @@ module.exports = function registerResidencyLifecycleApi(RED) {
               node.warn(JSON.stringify({ event: "residency_lifecycle_create_policy_invalid",
                 reason: config.pilotUsersError || "AUDIENCE" }));
             }
-            const createPolicy = ({ tenantId, userId }) => {
-              // A stopped pilot keeps servicing existing orders: reads, reconcile and
-              // activation never pass through this function. Only a new order is refused.
-              if (!config.createEnabled) {
-                return { allowed: false, statusCode: 503, code: "RESIDENCY_ORDERS_DISABLED",
-                  message: "New residency orders are disabled" };
-              }
-              if (!config.createAudience || config.pilotUsersError) {
-                return { allowed: false, statusCode: 503, code: "RESIDENCY_CREATE_POLICY_INVALID",
-                  message: "Residency pilot access is not configured" };
-              }
-              if (config.createAudience === "all") return { allowed: true };
-              const identity = tenantId + ":" + userId;
-              if (config.pilotUsers instanceof Set && config.pilotUsers.has(identity)) return { allowed: true };
-              return { allowed: false, statusCode: 403, code: "RESIDENCY_CREATE_NOT_ALLOWED",
-                message: "Residency pilot access is not enabled for this account" };
-            };
             const api = http.createResidencyLifecycleApi({
               allowOrigin: config.allowOrigin,
-              createPolicy,
+              ...createAdmissionPolicies(config),
               createLifecycle: (actor) => {
                 const ports = provider.createVivaCupResidencyPorts({
                   fetch: globalThis.fetch,
@@ -363,9 +400,10 @@ module.exports = function registerResidencyLifecycleApi(RED) {
       assertOpen();
       const startedAt = Date.now();
       const req = msg.req || {};
+      const requestPath = String(req.originalUrl || req.url || msg.url || "");
       const runtime = await node.getRuntime();
       if (String(req.method || msg.method || "").toUpperCase() === "OPTIONS") {
-        return runtime.api.handle({ method: "OPTIONS", path: String(req.originalUrl || req.url || msg.url || ""),
+        return runtime.api.handle({ method: "OPTIONS", path: requestPath,
           headers: req.headers || msg.headers || {}, body: null, actor: null });
       }
       const token = bearer(req);
@@ -388,21 +426,21 @@ module.exports = function registerResidencyLifecycleApi(RED) {
           userId: actor.userId, identity: actor.tenantId + ":" + actor.userId, correlationId: correlation }));
       }
       const minute = Math.floor(Date.now() / 60000);
-      const rateKey = "residency-lifecycle:" + crypto.createHash("sha256").update(actor.userId).digest("hex").slice(0, 16) + ":" + minute;
-      let attempts = 0;
+      const bucket = requestPath.split("?")[0] === PILOT_ACCESS_PATH ? "residency-pilot-access:" : "residency-lifecycle:";
+      const rateKey = bucket + crypto.createHash("sha256").update(actor.userId).digest("hex").slice(0, 16);
       try {
-        const stored = Number(node.context().flow.get(rateKey));
-        attempts = Number.isFinite(stored) && stored > 0 ? stored : 0;
+        const stored = node.context().flow.get(rateKey);
+        const attempts = stored?.minute === minute ? stored.attempts : 0;
         if (attempts >= runtime.config.rateLimit) {
           return { statusCode: 429, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store",
             "Referrer-Policy": "no-referrer", "Access-Control-Allow-Origin": runtime.config.allowOrigin },
           body: { code: "RESIDENCY_RATE_LIMITED", message: "Too many requests" } };
         }
-        node.context().flow.set(rateKey, attempts + 1);
+        node.context().flow.set(rateKey, { minute, attempts: attempts + 1 });
       } catch { /* rate limiting must not block the request if flow context is unavailable */ }
       const operation = runtime.api.handle({
         method: String(req.method || msg.method || "").toUpperCase(),
-        path: String(req.originalUrl || req.url || msg.url || ""),
+        path: requestPath,
         headers: req.headers || msg.headers || {},
         body: msg.payload,
         actor: { ...actor, actorToken: token },
@@ -459,6 +497,7 @@ module.exports = function registerResidencyLifecycleApi(RED) {
 };
 
 module.exports.readConfig = readConfig;
+module.exports.createAdmissionPolicies = createAdmissionPolicies;
 module.exports.MONGO_CLIENT_OPTIONS = MONGO_CLIENT_OPTIONS;
 module.exports.runtimeConfigError = runtimeConfigError;
 module.exports.bearer = bearer;

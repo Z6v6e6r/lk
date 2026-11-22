@@ -16,8 +16,8 @@ const newRoutes = importJson.filter((node) => node.type === "http in")
 const oldRoutes = live.routes.map((row) => ({ method: row.method, url: row.url, id: row.id }));
 
 test("the added flow shares no URL/method or node id with the installed LK1 graph", () => {
-  assert.equal(newRoutes.length, 15);
-  assert.equal(newRoutes.filter((route) => route.method !== "OPTIONS").length, 8);
+  assert.equal(newRoutes.length, 17);
+  assert.equal(newRoutes.filter((route) => route.method !== "OPTIONS").length, 9);
   const oldKeys = new Set(oldRoutes.map((row) => row.method + " " + row.url));
   for (const route of newRoutes) {
     assert.equal(oldKeys.has(route.method + " " + route.url), false, "duplicate route " + route.method + " " + route.url);

@@ -29,7 +29,7 @@ test("an additive candidate adds the reviewed nodes without touching the live gr
   fs.writeFileSync(ws.preimage, JSON.stringify(liveGraph()));
   const before = fs.readFileSync(ws.preimage);
   const result = prepareInstall({ preimage: ws.preimage, importFile, candidate: ws.candidate, report: ws.report });
-  assert.equal(result.added.httpIn, 15);
+  assert.equal(result.added.httpIn, 17);
   assert.equal(result.untouched.existingNodes, 3);
   assert.equal(result.untouched.replacedNodes, 0);
   assert.deepEqual(fs.readFileSync(ws.preimage), before);
