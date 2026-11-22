@@ -39,6 +39,8 @@ import { resolveCommunityJoinRouteData } from "./utils/communityJoinRoute";
 import { appendCurrentAuthModeToNavigableUrl } from "./utils/authMode";
 import { readPostAuthReturnUrl } from "./utils/authReturn";
 import { ResidencyPurchasePage } from "./residency/ResidencyPurchasePage";
+import { ResidencyLifecyclePurchasePage } from "./residency/ResidencyLifecyclePurchasePage";
+import { readResidencyLifecycleRoute } from "./residency/residencyLifecycleRoute";
 import { isResidencyPurchaseRoute } from "./residency/residencyPurchase";
 import type { GamesMountData, OpenGamesOptions } from "./types/gamesOverlay";
 import type { LevelsInfoMountData, OpenLevelsInfoOptions } from "./types/levelsInfoOverlay";
@@ -1018,6 +1020,12 @@ function AppContent() {
 }
 
 export default function App() {
+  const publicStation = (import.meta.env.VITE_PUBLIC_GAME_STATION_ID as string | undefined)?.trim();
+  const residencyPreviewOnly = import.meta.env.VITE_LK1_RESIDENCY_PREVIEW_ONLY === "true";
+  if (!publicStation && typeof window !== "undefined"
+    && readResidencyLifecycleRoute(window.location.search, residencyPreviewOnly)) {
+    return <AuthProvider authMode="auto"><ResidencyLifecyclePurchasePage /></AuthProvider>;
+  }
   if (typeof window !== "undefined" && isResidencyPurchaseRoute(window.location.search)) {
     return <ResidencyPurchasePage />;
   }
