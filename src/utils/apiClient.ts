@@ -3690,6 +3690,7 @@ export interface UpdateProfileData {
 
 export interface SubscriptionName {
   sertName: string;
+  productId?: string;
 }
 
 export interface PaymentUrl {
@@ -10621,12 +10622,18 @@ export async function apiFetchSubscriptionPricePreview(
   return result;
 }
 
-export async function apiFetchSubscriptioName(subId: string, _phone: string): Promise<ApiResult<SubscriptionName>> {
+export async function apiFetchSubscriptioName(
+  subId: string, _phone: string, options: { requireProductId?: boolean } = {},
+): Promise<ApiResult<SubscriptionName>> {
   return readSubscriptionSnapshot<SubscriptionName>({
-    key: JSON.stringify(["name", subId, API_BASE, TENANT_KEY, SERV2, SERV2_FALLBACK, IS_DEV_RELEASE_CHANNEL]),
+    key: JSON.stringify([options.requireProductId ? "product-identity" : "name", subId, API_BASE, TENANT_KEY,
+      SERV2, SERV2_FALLBACK, IS_DEV_RELEASE_CHANNEL]),
     token: readAuthToken(),
     currentToken: readAuthToken,
-    sanitize: sanitizeSubscriptionName,
+    sanitize: value => {
+      const metadata = sanitizeSubscriptionName(value);
+      return options.requireProductId && !metadata?.productId ? null : metadata;
+    },
     load: () => fetchSubscriptionName(subId),
   });
 }

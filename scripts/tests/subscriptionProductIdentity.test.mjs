@@ -187,13 +187,18 @@ test('refresh cannot remap an instance to another product; failed refresh retain
   assert.equal(h.db.get(key('instance', actor, sub)).invalid, true);
   assert.equal((await h.run(request())).statusCode, 503);
 });
-test('booking finish binds identity to server continuation and HTTP exposes name only', async () => {
+test('booking finish binds identity to server continuation and HTTP exposes only catalogue metadata', async () => {
   const h = harness(); const m = request({ caller: 'booking', actorClientId: actor });
   m._subscriptionBooking = { step: 'lk1_product_identity', actorClientId: actor, clientSubscriptionId: sub, tenantKey: tenant };
   const completed = await h.run(m); const forged = clone(completed);
   const r = execute('finish', completed); assert.equal(r[0]._subscriptionBooking.lk1ProductIdentity.productId, product);
   assert.equal(r[0]._subscriptionProduct, undefined);
-  const name = execute('finish', await h.run(request())); assert.deepEqual(name[1].payload, { sertName: 'Fixture annual' });
+  const name = execute('finish', await h.run(request()));
+  assert.deepEqual(name[1].payload, { sertName: 'Fixture annual', productId: product });
+  const outsider = harness({ owned: [] });
+  const denied = execute('finish', await outsider.run(request()));
+  assert.equal(denied[1].statusCode, 403);
+  assert.equal(denied[1].payload.productId, undefined);
   forged._subscriptionBooking.actorClientId = randomUUID(); assert.equal(execute('finish', forged), null);
 });
 test('policy projection uses verified product and fresh dates; conflicts fail closed and cannot enable entitlement', () => {

@@ -1,4 +1,4 @@
-import { isKidsAcademyTraining, isPadelKidsProduct, needsPadelKidsIdentity, resolvePadelKidsVisits } from "./kidsTrainingSubscriptions";
+import { isKidsAcademyTraining, isPadelKidsProduct, needsPadelKidsIdentity, withPadelKidsIdentity } from "./kidsTrainingSubscriptions";
 import { isSpanishTrainingExercise } from "./spanishTrainingExclusion";
 import {
   API_BASE,
@@ -1686,26 +1686,28 @@ function pickSubscriptionLookupId(value: unknown) {
 async function resolveClientSubscriptionProductNames(
   products: TournamentVivaProduct[],
   clientPhone: string | null | undefined,
+  padelKidsOnly = false,
 ) {
   const phone = String(clientPhone || "").trim();
-  if (!phone || products.length === 0) return products;
 
   const resolved = await Promise.all(products.map(async (product) => {
-    if (product.source !== "client-subscription") return product;
+    if (product.source !== "client-subscription" || !phone) return product;
+    if (padelKidsOnly && !isPadelKidsProduct(product) && !needsPadelKidsIdentity(product)) return product;
     const lookupId = pickSubscriptionLookupId(product.raw);
     if (!lookupId) return product;
 
-    const nameResult = await apiFetchSubscriptioName(lookupId, phone);
-    const resolvedName = nameResult.data?.sertName?.trim();
-    if (!resolvedName) return product;
-
-    return {
-      ...product,
-      name: resolvedName,
-    };
+    const nameResult = await apiFetchSubscriptioName(lookupId, phone, {
+      requireProductId: padelKidsOnly && needsPadelKidsIdentity(product),
+    });
+    if (nameResult.error || !nameResult.data) return product;
+    const identified = padelKidsOnly && lookupId === product.id
+      ? withPadelKidsIdentity(product, nameResult.data.productId)
+      : product;
+    const name = typeof nameResult.data.sertName === "string" ? nameResult.data.sertName.trim() : "";
+    return name ? { ...identified, name } : identified;
   }));
 
-  return resolved;
+  return padelKidsOnly ? resolved.filter(isPadelKidsProduct) : resolved;
 }
 
 function collectComparableIds(value: unknown, keys: string[], seen = new Set<unknown>()): Set<string> {
@@ -2662,17 +2664,11 @@ export async function apiFetchTournamentVivaCheckout(
     }),
   ]);
 
-  const eligibleSubscriptions = childTournament ? [] : filterClientSubscriptionsForExercise(
+  const clientSubscriptions = childTournament ? [] : filterClientSubscriptionsForExercise(
     normalizeVivaProducts(pickFirstArray(exercise, ["availableClientSubscriptions"]), "client-subscription"),
     exerciseId,
     exercise,
   );
-  const ownership = kidsAcademyTraining && needsPadelKidsIdentity(eligibleSubscriptions)
-    ? await apiFetchSubscriptions({ includeFinished: true, size: 1000 })
-    : null;
-  const clientSubscriptions = kidsAcademyTraining
-    ? resolvePadelKidsVisits(eligibleSubscriptions, ownership?.error ? [] : extractItems(ownership?.data))
-    : eligibleSubscriptions;
   const clientOneTimes = normalizeVivaProducts(
     pickFirstArray(exercise, ["availableClientOneTimes"]),
     "client-one-time",
@@ -2699,6 +2695,7 @@ export async function apiFetchTournamentVivaCheckout(
   const resolvedClientSubscriptions = await resolveClientSubscriptionProductNames(
     clientSubscriptions,
     profileResult.data.phone,
+    kidsAcademyTraining,
   );
 
   return {
