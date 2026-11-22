@@ -1,0 +1,58 @@
+[
+  {
+    v: 2,
+    key: {
+      _id: 1
+    },
+    name: '_id_'
+  },
+  {
+    v: 2,
+    key: {
+      tenantId: 1,
+      orderId: 1
+    },
+    name: 'residency_order_identity',
+    unique: true
+  },
+  {
+    v: 2,
+    key: {
+      tenantId: 1,
+      idempotencyKeyHash: 1
+    },
+    name: 'residency_order_idempotency',
+    unique: true
+  },
+  {
+    v: 2,
+    key: {
+      tenantId: 1,
+      userId: 1,
+      activeSlot: 1
+    },
+    name: 'residency_order_active_slot',
+    unique: true,
+    partialFilterExpression: {
+      activeSlot: 1
+    }
+  },
+  {
+    v: 2,
+    key: {
+      tenantId: 1,
+      userId: 1,
+      state: 1
+    },
+    name: 'residency_order_user_state'
+  },
+  {
+    v: 2,
+    key: {
+      tenantId: 1,
+      state: 1,
+      'payment.expiresAt': 1
+    },
+    name: 'residency_order_expiry'
+  }
+]

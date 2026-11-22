@@ -1,0 +1,39 @@
+services:
+  mongo:
+    image: mongo:8.0.5
+    container_name: lk1-pilot-mongo
+    command: ["mongod", "--bind_ip_all", "--quiet"]
+    networks: [pilotnet]
+  nodered:
+    image: lk1-residency-pilot-nodered:4.0.9
+    container_name: lk1-pilot-nodered
+    depends_on: [mongo]
+    ports:
+      - "127.0.0.1:1880:1880"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+      LK_RESIDENCY_LIFECYCLE_ENABLED: "true"
+      LK_RESIDENCY_LIFECYCLE_MONGO_URI: "mongodb://lk1-pilot-mongo:27017"
+      LK_RESIDENCY_LIFECYCLE_MONGO_DB: "lk_residency_pilot"
+      LK_RESIDENCY_LIFECYCLE_VIVA_API_URL: "https://host.docker.internal:9443/viva"
+      LK_RESIDENCY_LIFECYCLE_CUP_API_URL: "https://host.docker.internal:9443/cup"
+      LK_RESIDENCY_LIFECYCLE_CUP_INTEGRATION_TOKEN: "cup-integration-token-0123456789abcdef"
+      LK_RESIDENCY_LIFECYCLE_KEYCLOAK_USERINFO_URL: "https://host.docker.internal:9443/kc/realms/clients/protocol/openid-connect/userinfo"
+      LK_RESIDENCY_LIFECYCLE_SUCCESS_URL: "https://127.0.0.1:8443/lk_new"
+      LK_RESIDENCY_LIFECYCLE_FAIL_URL: "https://127.0.0.1:8443/lk_new"
+      LK_RESIDENCY_LIFECYCLE_RETURN_TARGETS: '{"lk1pilot":{"successUrl":"https://127.0.0.1:8443/lk_new?phResidencyLifecycleReturn=1","failUrl":"https://127.0.0.1:8443/lk_new?phResidencyLifecycleReturn=1"}}'
+      LK_RESIDENCY_LIFECYCLE_DEFAULT_RETURN_TARGET: "lk1pilot"
+      LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED: "${LK_PILOT_CREATE_ENABLED:-true}"
+      LK_RESIDENCY_LIFECYCLE_PILOT_CONTROL_FILE: /run/pilot/mode
+      LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE: "pilot"
+      LK_RESIDENCY_LIFECYCLE_PILOT_USERS: '["iSkq6G:pilot.user.0001"]'
+      LK_RESIDENCY_LIFECYCLE_EXTERNAL_GUARD: "true"
+      LK_RESIDENCY_LIFECYCLE_ENSURE_INDEXES: "false"
+      FIXTURE_ADMIN_TOKEN: "fixture.admin.token"
+    volumes:
+      - ./control:/run/pilot:ro
+    networks: [pilotnet]
+networks:
+  pilotnet:

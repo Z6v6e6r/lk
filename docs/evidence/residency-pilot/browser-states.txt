@@ -1,0 +1,22 @@
+Residency LK1 pilot — local browser harness states (2026-11-18)
+
+Environment
+  Chrome headless + CDP, synthetic JWT with phone/azp=widget/tenant=iSkq6G claim,
+  local fixture server for /lk/residency/*, built dist with VITE_SERV2=127.0.0.1:5199.
+  This is not the real LK1 session, Viva or CUP.
+
+Rendered states (visible text excerpts)
+  pilot           790 ₽ / 30 дней, 30%, 50%, "Стать резидентом · 790 ₽"
+  active          "Продление станет доступно после окончания текущего срока: 18 декабря 2026 г."
+  unavailable     "Не удалось проверить действующее резидентство. Повторите позже."
+  legacy marker   "Есть незавершённая покупка в прежнем оформлении..." + old page link
+  return pending  "Заказ: ожидает оплаты" + "Проверить оплату"
+  return unknown  "Заказ: результат оплаты неизвестен"
+  review          "Оплата получена, но резидентство требует проверки."
+  paid            "Резидентство активно до 18 декабря 2026 г." + 30%/50% copy
+  denied          "Персональный доступ к новому оформлению не включён для этого аккаунта."
+  disabled        "Создание новых заказов приостановлено. Уже начатые заказы можно проверить."
+  unknown create  "Заказ: результат оплаты неизвестен" + recovery buttons
+  failed          "Заказ: оплата не прошла" + "Начать новую покупку" (new key only after a
+                  confirmed terminal refusal; no automatic re-create)
+  double click    one POST /lk/residency/orders (createPosts=1)

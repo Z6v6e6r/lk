@@ -1,5 +1,11 @@
 # Покупка резидентства ПадлхАБ
 
+> Personal pilot entry: the server-owned lifecycle screen is a separate
+> `/lk_new?buyResidency=lifecycle` entry for one allowlisted account. It does not replace
+> this page, does not change `?buyResidency=1`, and is not linked from production UI.
+> See [residency-lifecycle.md](residency-lifecycle.md) and
+> [residency-pilot-acceptance.md](residency-pilot-acceptance.md).
+
 Владелец: LK, существующий subscription checkout. Аудитория: покупатели продукта Viva
 `4037a3a3-e551-4f9a-a9db-1410e46b8635` («Резидентство ПадлхАБ»).
 

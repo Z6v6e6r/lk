@@ -1,0 +1,30 @@
+== 1. reset ==
+== 2. published old client creates its Viva transaction directly ==
+{"transactionId":"13229fd0-70df-4343-8a2a-a8252ef96f6d","toPay":79000,"paymentUrl":"https://bank.fixture.invalid/pay/6a40ae9d-d62c-47f0-b1ff-470c5aca7f65"}
+== 3. new create refused before any provider POST ==
+{"code":"RESIDENCY_EXTERNAL_PURCHASE_PENDING"}
+mongo_orders=0
+== 4. old transaction is a confirmed terminal refusal (CANCELLED) ==
+{}
+== 5. new create proceeds ==
+{"orderId":"7acc787e-b8e0-4484-8c98-8b209ace412d","state":"PENDING_PAYMENT","payment":"PENDING","paymentUrl":"https://bank.fixture.invalid/pay/7c7148a8-31cb-43a8-95d4-3ffc492e3861","recovery":"AWAITING_PAYMENT"}
+== 6. provider confirms payment, CUP confirms activation ==
+{"orderId":"7acc787e-b8e0-4484-8c98-8b209ace412d","state":"ACTIVE","payment":"PAID","paymentUrl":null,"recovery":"NONE"}
+== 7. reverse: new order first, old checkout second, old payment ==
+{"externalCheck":{"state":"OK","openCount":1,"paidAfterOrderCount":0,"requiresReview":true,"reason":null,"retryable":false}}
+{"orderId":"ac120df6-2fe7-422c-87ba-0f3869441afd","state":"PAID_REQUIRES_REVIEW","payment":"PENDING","paymentUrl":null,"recovery":"REVIEW_REQUIRED"}
+== 8. ordinary account: new create denied, no order ==
+{"code":"RESIDENCY_CREATE_NOT_ALLOWED"}
+mongo_orders=0
+== 9. two devices at the same time ==
+A_status_body:
+B_status_body:
+{"code":"RESIDENCY_ORDER_ALREADY_PENDING","message":"An unresolved residency order already exists"}{"schemaVersion":1,"order":{"schemaVersion":1,"orderId":"f9b657d0-f013-41a6-8d75-de85913ca016","mode":"NEW","state":"PENDING_PAYMENT","terminal":false,"terminalReason":null,"product":{"productId":"4037a3a3-e551-4f9a-a9db-1410e46b8635","title":"Резидентство ПадлхАБ","termDays":30,"currency":"RUB"},"pricing":{"baseAmountMinor":79000,"discountLines":[],"totalMinor":79000,"currency":"RUB"},"consent":{"expectedTotalMinor":79000,"productId":"4037a3a3-e551-4f9a-a9db-1410e46b8635","acceptedAt":"2026-11-18T20:18:19.895Z"},"renewal":null,"payment":{"status":"PENDING","paymentUrl":"https://bank.fixture.invalid/pay/5bd178f7-c65b-40a7-9514-b7c63b1d90c2","expiresAt":"2026-11-18T20:38:19.900Z","overdue":false,"instruction":"Оплатите по ссылке. Статус обновится после подтверждения банком."},"recovery":{"state":"AWAITING_PAYMENT","required":false,"reason":null,"action":"PAY","retryable":true,"since":"2026-11-18T20:18:19.902Z"},"activation":{"state":"NOT_STARTED","attempts":0,"lastErrorCode":null},"residency":null,"createdAt":"2026-11-18T20:18:19.895Z","updatedAt":"2026-11-18T20:18:19.902Z","revision":2},"idempotentReplay":false,"recoveryRequired":false,"recovery":{"state":"AWAITING_PAYMENT","required":false,"reason":null,"action":"PAY","retryable":true,"since":"2026-11-18T20:18:19.902Z"}}
+
+mongo_orders=1
+new_txs=1
+== 10. old operation appears during the new POST (deterministic race) ==
+{"orderId":"eb29543d-3d81-4410-8fb8-460ee5781d1b","state":"PENDING_PAYMENT","payment":"UNKNOWN","paymentUrl":null,"recovery":"UNKNOWN_OUTCOME"}
+race_guard=pass
+race_txs={"total":2,"old":1,"new":1}
+mongo_orders=1
