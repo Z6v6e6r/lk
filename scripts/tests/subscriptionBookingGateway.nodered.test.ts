@@ -1,3 +1,4 @@
+import "./friendship2TournamentPaymentStatus.test.mjs";
 import { managedRuntimeResponse, entitlementDecision } from "./helpers/subscriptionBookingManagedFixtures.mjs";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import test from "node:test";

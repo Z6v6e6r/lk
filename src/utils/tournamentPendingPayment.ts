@@ -66,6 +66,10 @@ export async function mergeTournamentPendingPayment(token: string | null, exerci
   // v1 had no account/booking binding and must never be consumed.
   try { storage()?.removeItem(`${PREFIX}${exerciseId}`); } catch { /* no-op */ }
   if (!registration || registration.status !== "PAYMENT_PENDING") return registration;
+  // A fresh server verdict can revoke a previously usable checkout.
+  if (registration.paymentStatusVerified) {
+    return { ...registration, paymentUrl: canPayTournamentPending(registration) ? registration.paymentUrl : null };
+  }
   let result = { ...registration };
   try {
     const name = await key(token, exerciseId, registration.bookingId);

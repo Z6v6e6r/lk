@@ -623,3 +623,18 @@ idempotency key with a collision-free tenant-qualified durable identity and
 primary/majority read-back. Result lifecycle side effects are asynchronous: the durable
 transition returns `202`, while rating/event/Viva sinks are driven by the versioned
 outbox and exact tenant/result/revision contracts.
+
+### Статус оплаты двухчасового турнира по «Дружбе 2.0»
+
+`POST /lk/subscription-bookings` с `action: "tournament-payment-status"`,
+`exerciseId` и `bookingId` читает статус после проверки профиля Viva. Действие выполняет
+только чтение MongoDB и GET существующей брони и счёта в Viva. Поиск привязан к владельцу,
+турниру, точной брони и подтверждённой операции «Дружбы 2.0» со скидкой. Ссылку можно
+вернуть только по действующему исходному счёту. Просроченный или отклонённый счёт
+сохраняет статус `PAYMENT_PENDING` без ссылки. Отменённая бронь возвращает `NONE`,
+сверенная оплата возвращает `REGISTERED`. Для других операций ответ `NOT_APPLICABLE`.
+
+В подготовленном кандидате меняются тела двух function nodes существующего маршрута.
+Для релиза сначала подготовить и проверить backend по свежему снимку 147 с помощью
+`scripts/prepare_friendship2_tournament_payment_status_release.mjs`, затем выпустить
+`tournament-signup.js`.

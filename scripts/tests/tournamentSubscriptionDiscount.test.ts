@@ -390,14 +390,41 @@ test("mismatched server amount or legacy booking-only confirmation never opens d
   for (const response of [{ state: "CONFIRMED", bookingId: "fixture:booking" },
     { ...confirmation, toPayMinor: 700001, toPay: 7000.01 },
     { ...confirmation, paymentUrl: null }, { ...confirmation, paid: true }]) {
-    const result = await bookingGateway(response, [])(params);
-    assert.equal(result.status, 202);
-    assert.equal(result.data, null);
+    const result = await bookingGateway(response, [])({ ...params, preservePendingTournamentPayment: true });
+    assert.equal(result.data.paymentPending, true);
+    assert.equal(result.data.paid, false);
+    assert.equal(result.data.paymentUrl, null);
   }
   const legacy = await bookingGateway({ state: "CONFIRMED", bookingId: "fixture:booking" }, [])({
     ...params, product: { ...params.product, lk1MoneyDiscountCandidate: false, tournamentDiscountQuote: undefined }, exercise: {},
   });
   assert.equal(legacy.data.paid, true, "legacy subscription-only confirmation remains valid");
+});
+
+test("Нагатинская Премиум, 120 мин: 2 000 ₽ opens checkout and incomplete evidence stays unpaid", async () => {
+  const quoteTwoHours = { ...quote, durationMinutes: 120, basePriceMinor: 400_000, amountMinor: 200_000,
+    discountPercent: 50, productId: "fixture-one-time-tariff",
+    exerciseId: "02ed9526-6687-485e-9992-5e7e7f93870f" };
+  const fixture = { ...params, exerciseId: quoteTwoHours.exerciseId, preservePendingTournamentPayment: true,
+    product: buildTournamentSubscriptionDiscountProduct(quoteTwoHours) };
+  const complete = { ...confirmation, toPayMinor: 200_000, toPay: 2000 };
+  for (const [response, expectedUrl] of [[complete, complete.paymentUrl], [
+    { state: "CONFIRMED", bookingId: confirmation.bookingId }, null,
+  ]] as const) {
+    const requests: { url: string; body: unknown }[] = [];
+    const result = await bookingGateway(response, requests)(fixture);
+    assert.equal(result.error, null);
+    assert.equal(result.data.paymentUrl, expectedUrl);
+    assert.equal(result.data.paymentPending === true, expectedUrl === null);
+    assert.equal(result.data.toPay, 200_000);
+    assert.equal(result.data.paid, false);
+    assert.equal(requests.length, 1);
+  }
+  const otherCaller = await bookingGateway({ ...complete, paymentUrl: null }, [])({
+    ...fixture, preservePendingTournamentPayment: false,
+  });
+  assert.equal(otherCaller.status, 202);
+  assert.equal(otherCaller.data, null);
 });
 
 test("tournament UI binds asynchronous checkout and quotes to actor/event and displays quoted minor units", () => {
