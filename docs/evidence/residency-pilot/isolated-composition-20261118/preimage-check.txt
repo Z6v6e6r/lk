@@ -1,0 +1,45 @@
+# Preimage check against the pinned live route snapshot (2026-11-18)
+
+The full `/root/.node-red/flows.json` could not be pulled: SSH to 147 times out from this
+workspace. The check below runs the packet's `preimage-check.mjs` against the pinned
+316-route snapshot converted to http-in nodes. It proves the tool and the route separation;
+it is not a substitute for the fresh full preimage at apply time.
+
+```text
+$ node scripts/pilot-composition/preimage-check.mjs \
+    --flows /tmp/live-routes-preimage.json \
+    --import node-red/imports/lk_residency_lifecycle.import.json \
+    --expect-http-in 316
+{
+ "ok": true,
+ "preimage": "/tmp/live-routes-preimage.json",
+ "preimageSha256": "1980943ef2b2adb052c4c87a17f3c467f9831763a099db1e62c1d990f2bc4f4c",
+ "nodes": 316,
+ "httpIn": 316,
+ "importNodes": 19,
+ "importHttp": 15,
+ "addedRoutes": [
+  "GET /lk/residency/catalog",
+  "GET /lk/residency/orders",
+  "GET /lk/residency/orders/:orderId",
+  "GET /lk/residency/orders/:orderId/payment",
+  "GET /lk/residency/status",
+  "OPTIONS /lk/residency/catalog",
+  "OPTIONS /lk/residency/orders",
+  "OPTIONS /lk/residency/orders/:orderId",
+  "OPTIONS /lk/residency/orders/:orderId/cancel",
+  "OPTIONS /lk/residency/orders/:orderId/payment",
+  "OPTIONS /lk/residency/orders/:orderId/reconcile",
+  "OPTIONS /lk/residency/status",
+  "POST /lk/residency/orders",
+  "POST /lk/residency/orders/:orderId/cancel",
+  "POST /lk/residency/orders/:orderId/reconcile"
+ ]
+}
+```
+
+Negative control: injecting `POST /lk/residency/orders` into the snapshot exits 1 with
+`PREIMAGE_CHECK_FAILED: route collision: POST /lk/residency/orders`.
+
+At apply time the operator must run the same tool on the fresh full export with
+`--expect-nodes 5678 --expect-http-in 316` and keep the printed `preimageSha256`.

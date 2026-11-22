@@ -1,0 +1,15 @@
+{
+  "name": "@padlhub/node-red-residency-lifecycle-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Server-owned residency order, payment and activation lifecycle for LK1.",
+  "main": "residency-lifecycle-node.cjs",
+  "dependencies": {
+    "mongodb": "7.2.0"
+  },
+  "node-red": {
+    "nodes": {
+      "residency-lifecycle-api": "residency-lifecycle-node.cjs"
+    }
+  }
+}
