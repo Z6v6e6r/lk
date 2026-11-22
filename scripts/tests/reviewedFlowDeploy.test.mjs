@@ -386,6 +386,7 @@ const prepareRuntime = (
     advanceOnFailedRestartMs = 0,
     advanceOnSuccessfulRestartMs = 0,
     restoreSourceOnFailedRestart = false,
+    lifecycleOverrides = {},
   } = {},
 ) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "reviewed-flow-runtime-"));
@@ -453,10 +454,18 @@ const prepareRuntime = (
       }
       nowMs += advanceOnSuccessfulRestartMs;
       processStatus = "online";
-      processPid = 1235;
+      processPid = 1234 + restartCount - 10;
       return { pid: processPid, status: processStatus, restartCount };
     },
   };
+  const lifecycleCalls = [];
+  const lifecycle = { budgetMs: 0 };
+  for (const action of ["preflight", "begin", "drain", "ready", "verify", "finish"]) {
+    lifecycle[action] = binding => {
+      lifecycleCalls.push({ action, binding, diskDigest: sha256(fs.readFileSync(liveFlowPath)) });
+      lifecycleOverrides[action]?.(binding);
+    };
+  }
   const runtime = createReviewedFlowRuntime({
     liveFlowPath,
     stageParent: root,
@@ -470,6 +479,7 @@ const prepareRuntime = (
     now: () => nowMs,
     randomUUID: () => `reviewed-flow-lease-${++leaseSequence}`,
     pm2,
+    lifecycle,
   });
   return {
     runtime,
@@ -482,6 +492,7 @@ const prepareRuntime = (
     backupDirectory,
     deploymentLeasePath,
     restartPreviousValues,
+    lifecycleCalls,
     advanceTime(milliseconds) {
       nowMs += milliseconds;
     },
@@ -661,7 +672,7 @@ test("v3 editor lease blocks every legacy reviewed-flow action", (t) => {
   const common = { deploymentId: prepared.contract.deploymentId, candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, stamp: "20260820T120001+0300", flowBackup: "/bad", contractBackup: "/bad", candidateBackup: "/bad", expectedLeaseSha256: "a".repeat(64), expectedActiveSha256: "a".repeat(64), expectedFlowBackupSha256: "a".repeat(64), expectedContractBackupSha256: "a".repeat(64) };
   for (const [name, call] of Object.entries({
     preflight: () => prepared.runtime.preflight(common), apply: () => prepared.runtime.apply(common),
-    rollback: () => prepared.runtime.rollback(common), reconcile: () => prepared.runtime.reconcileCurrent(common), finalize: () => prepared.runtime.finalizeLegacyCandidate(common),
+    rollback: () => prepared.runtime.rollback(common), reconcile: () => prepared.runtime.reconcileCurrent(common), finalize: () => prepared.runtime.finalizeLegacyCandidate(common), resume: () => prepared.runtime.resumeAdmission(common),
   })) assert.throws(call, /lease|editor/i, name);
   assert.equal(reserve.leaseToken, "editor-lease-token");
 });
@@ -1937,4 +1948,71 @@ test('unknown failure recovery policy is rejected before backup or publication',
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
   assert.equal(fs.existsSync(prepared.backupDirectory), false);
   assert.deepEqual(prepared.restartPreviousValues, []);
+});
+
+test('release drains source before publication, verifies new PID/source and opens only after postchecks', t => {
+  const p = prepareRuntime(t);
+  const result = p.runtime.apply({ candidatePath: p.candidatePath, contractPath: p.contractPath,
+    deploymentId: p.contract.deploymentId, stamp: '20260820T120001+0300' });
+  assert.equal(result.nodeRedReady, true); assert.equal(result.admissionReopened, true);
+  const actions = p.lifecycleCalls.map(c => c.action);
+  assert.equal(actions[0], 'preflight'); assert.equal(actions[1], 'begin');
+  assert.equal(actions[2], 'drain'); assert.equal(p.lifecycleCalls[2].diskDigest, sha256(p.liveBytes));
+  const ready = p.lifecycleCalls.filter(c => c.action === 'ready');
+  assert.ok(ready.every(c => c.binding.pid !== 1234 && c.binding.diskDigest === sha256(p.candidateBytes)));
+  assert.equal(actions.at(-1), 'finish');
+});
+
+test('drain timeout never publishes or restarts; original staged packet can safely resume admission', t => {
+  let blocked = true;
+  const p = prepareRuntime(t, { lifecycleOverrides: { drain: () => { if (blocked) throw Error('drain blocked'); } } });
+  const args = { candidatePath: p.candidatePath, contractPath: p.contractPath, deploymentId: p.contract.deploymentId };
+  assert.throws(() => p.runtime.apply({ ...args, stamp: '20260820T120001+0300' }), /drain blocked/);
+  assert.deepEqual(p.restartPreviousValues, []); assert.equal(sha256(fs.readFileSync(p.liveFlowPath)), sha256(p.liveBytes));
+  assert.equal(p.lifecycleCalls.some(c => c.action === 'finish'), false);
+  blocked = false;
+  assert.equal(p.runtime.resumeAdmission(args).admissionReopened, true);
+  assert.deepEqual(p.restartPreviousValues, []);
+});
+
+test('readiness failure keeps admission closed across automatic rollback until explicit verified resume', t => {
+  let first = true;
+  const p = prepareRuntime(t, { lifecycleOverrides: { ready: () => { if (first) { first = false; throw Error('not ready'); } } } });
+  const args = { candidatePath: p.candidatePath, contractPath: p.contractPath, deploymentId: p.contract.deploymentId, stamp: '20260820T120001+0300' };
+  assert.throws(() => p.runtime.apply(args), /rollback completed/);
+  assert.deepEqual(p.restartPreviousValues, [10, 11]);
+  assert.equal(p.lifecycleCalls.some(c => c.action === 'finish'), false);
+  const names = fs.readdirSync(p.backupDirectory);
+  const result = p.runtime.resumeAdmission({ deploymentId: p.contract.deploymentId,
+    flowBackup: path.join(p.backupDirectory, names.find(n => n.startsWith('flows-pre-'))),
+    contractBackup: path.join(p.backupDirectory, names.find(n => n.startsWith('contract-'))) });
+  assert.equal(result.admissionReopened, true); assert.deepEqual(p.restartPreviousValues, [10, 11]);
+});
+
+test('both candidate and rollback readiness failures retain lease and never open admission', t => {
+  const p = prepareRuntime(t, { lifecycleOverrides: { ready: () => { throw Error('not ready'); } } });
+  assert.throws(() => p.runtime.apply({ candidatePath: p.candidatePath, contractPath: p.contractPath,
+    deploymentId: p.contract.deploymentId, stamp: '20260820T120001+0300' }), /rollback is incomplete/);
+  assert.equal(fs.existsSync(p.deploymentLeasePath), true);
+  assert.equal(p.lifecycleCalls.some(c => c.action === 'finish'), false);
+});
+
+test('invalid release options and missing rollback preimages never acquire admission', t => {
+  const p=prepareRuntime(t);const args={candidatePath:p.candidatePath,contractPath:p.contractPath,deploymentId:p.contract.deploymentId};
+  assert.throws(()=>p.runtime.apply(args),/Timestamp/);
+  assert.throws(()=>p.runtime.apply({...args,stamp:'20260820T120001+0300',failureRecovery:'unknown'}),/Invalid apply/);
+  assert.equal(p.lifecycleCalls.some(c=>c.action==='begin'),false);
+  assert.equal(fs.existsSync(p.backupDirectory),false);
+  assert.deepEqual(p.restartPreviousValues,[]);
+});
+
+test('reconciliation validates candidate path, receipt/lease phase and backup integrity before admission',t=>{
+  const p=prepareRuntime(t);const applied=p.runtime.apply({candidatePath:p.candidatePath,contractPath:p.contractPath,deploymentId:p.contract.deploymentId,stamp:'20260820T120001+0300'});
+  const before=p.lifecycleCalls.filter(c=>c.action==='begin').length;
+  const common={deploymentId:p.contract.deploymentId,flowBackup:applied.flowBackup,contractBackup:applied.contractBackup,candidateBackup:applied.candidateBackup,stamp:'20260820T120002+0300'};
+  assert.throws(()=>p.runtime.reconcileCurrent({...common,candidateBackup:'/bad'}));
+  assert.throws(()=>p.runtime.reconcileCurrent(common),/matching incomplete-restart lease/);
+  fs.writeFileSync(applied.flowBackup,'{}',{mode:0o600});
+  assert.throws(()=>p.runtime.rollback(common),/backup digest/);
+  assert.equal(p.lifecycleCalls.filter(c=>c.action==='begin').length,before);
 });

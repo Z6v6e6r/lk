@@ -16,6 +16,7 @@ import {
   validateEditorPauseInjectsContract,
   writeFileExclusiveAtomicDurable,
   writeFileExclusiveDurable,
+  createReleaseLifecycleAdapter,
 } from "./runtime_contract.mjs";
 
 const LIVE_FLOW_PATH = "/root/.node-red/flows.json";
@@ -32,9 +33,6 @@ const EDITOR_SOAK_MS = 15 * 60 * 1000;
 const DEFAULT_DEPLOYMENT_LEASE_MS = 15 * 60 * 1000;
 const DEFAULT_PM2_COMMAND_TIMEOUT_MS = 60 * 1000;
 const SOURCE_ROLLBACK_SCHEDULING_MARGIN_MS = 60 * 1000;
-const DEFAULT_SOURCE_ROLLBACK_BUDGET_MS = (
-  3 * DEFAULT_PM2_COMMAND_TIMEOUT_MS + SOURCE_ROLLBACK_SCHEDULING_MARGIN_MS
-);
 const DEPLOYMENT_LEASE_PHASES = new Set(["applying", "soaking", "rollback-restart-required"]);
 const EDITOR_DEPLOYMENT_LEASE_PHASES = new Set(["editor-reserved", "editor-soaking", "editor-owner-decision"]);
 const LEGACY_DEPLOYMENT_LEASE_PHASE = "legacy-unknown";
@@ -134,13 +132,14 @@ export function createReviewedFlowRuntime({
   deploymentLeasePath = DEPLOYMENT_LEASE_PATH,
   deploymentLeaseMs = DEFAULT_DEPLOYMENT_LEASE_MS,
   pm2CommandTimeoutMs = DEFAULT_PM2_COMMAND_TIMEOUT_MS,
-  sourceRollbackBudgetMs = DEFAULT_SOURCE_ROLLBACK_BUDGET_MS,
+  sourceRollbackBudgetMs,
   uid = 0,
   gid = 0,
   getUid = () => process.getuid?.(),
   now = () => Date.now(),
   randomUUID = () => crypto.randomUUID(),
   pm2 = createPm2Adapter({ commandTimeoutMs: pm2CommandTimeoutMs }),
+  lifecycle = createReleaseLifecycleAdapter(),
 } = {}) {
   const protectedFileOptions = { uid, gid, mode: 0o600 };
   if (!Number.isInteger(deploymentLeaseMs) || deploymentLeaseMs < 60_000 || deploymentLeaseMs > 60 * 60 * 1000) {
@@ -150,17 +149,45 @@ export function createReviewedFlowRuntime({
     throw new Error("PM2 command timeout must be between 1 and 120 seconds");
   }
   const minimumSourceRollbackBudgetMs = (
-    3 * pm2CommandTimeoutMs + SOURCE_ROLLBACK_SCHEDULING_MARGIN_MS
+    3 * (pm2CommandTimeoutMs + lifecycle.budgetMs) + SOURCE_ROLLBACK_SCHEDULING_MARGIN_MS
   );
+  if (!Number.isInteger(lifecycle.budgetMs) || lifecycle.budgetMs < 0 || lifecycle.budgetMs > 100_000) {
+    throw new Error("Release lifecycle runtime budget is invalid");
+  }
+  sourceRollbackBudgetMs ??= minimumSourceRollbackBudgetMs;
   if (
     !Number.isInteger(sourceRollbackBudgetMs)
     || sourceRollbackBudgetMs < minimumSourceRollbackBudgetMs
     || sourceRollbackBudgetMs > 10 * 60 * 1000
   ) {
     throw new Error(
-      `Source rollback runtime budget must cover three PM2 commands plus scheduling margin (${minimumSourceRollbackBudgetMs}ms minimum)`,
+      `Source rollback runtime budget must cover three PM2 commands and lifecycle checks plus scheduling margin (${minimumSourceRollbackBudgetMs}ms minimum)`,
     );
   }
+
+  let lifecycleBinding = null;
+  const processManager = pm2;
+  const readyBinding = processInfo => ({
+    ...lifecycleBinding, pid: processInfo.pid,
+    diskDigest: sha256(fs.readFileSync(liveFlowPath)),
+    runtimeDigest: canonicalFlowSha256(JSON.parse(fs.readFileSync(liveFlowPath, "utf8"))),
+  });
+  // Every restart, including automatic rollback and forward reconciliation,
+  // uses the same admission fence and drain/readiness contract.
+  pm2 = {
+    inspect: () => processManager.inspect(), assertOnline: () => processManager.assertOnline(),
+    restart(previousRestartCount) {
+      if (!lifecycleBinding) throw new Error("Node-RED restart requires closed release admission");
+      const before = processManager.inspect();
+      // A previously failed restart can leave the process offline. The durable
+      // admission fence already protects it; no old listener exists to drain.
+      if (before.status === "online" && before.pid > 0) lifecycle.drain({ ...lifecycleBinding, pid: before.pid });
+      const current = processManager.restart(previousRestartCount);
+      if (current.pid === before.pid && before.pid > 0) throw new Error("Node-RED restart did not change process identity");
+      lifecycle.ready(readyBinding(current));
+      return current;
+    },
+  };
 
   const activationState = (contract) => {
     const boundary = contract?.activationBoundary;
@@ -327,6 +354,7 @@ export function createReviewedFlowRuntime({
     if (current.token !== expectedLease.token || current.deploymentId !== expectedLease.deploymentId) {
       throw new Error("Reviewed-flow deployment lease ownership mismatch");
     }
+    if (lifecycleBinding) lifecycle.verify(readyBinding(processManager.assertOnline()));
     unlinkDeploymentLease();
     return true;
   };
@@ -383,10 +411,12 @@ export function createReviewedFlowRuntime({
     const prepared = readPrepared(options.candidatePath, options.contractPath, options.deploymentId);
     const activation = assertActivationLead(
       prepared.contract,
-      deploymentLeaseMs + sourceRollbackBudgetMs,
+      deploymentLeaseMs + sourceRollbackBudgetMs + lifecycle.budgetMs,
       "Preflight",
     );
     const processInfo = pm2.assertOnline();
+    lifecycle.preflight({ pid: processInfo.pid, diskDigest: prepared.contract.sourceSha256,
+      runtimeDigest: canonicalFlowSha256(JSON.parse(prepared.liveBytes.toString("utf8"))) });
     return {
       ok: true,
       action: "preflight",
@@ -531,7 +561,7 @@ export function createReviewedFlowRuntime({
     }
   };
 
-  const rollback = (options) => {
+  const rollback = (options, { validateOnly = false } = {}) => {
     assertRoot();
     assertNoEditorLease();
     const { deploymentId, flowBackup, contractBackup } = resolveBackupArtifacts(options, "Rollback");
@@ -573,6 +603,7 @@ export function createReviewedFlowRuntime({
     if (sha256(backupBytes) !== contract.sourceSha256) throw new Error("Rollback flow digest mismatch");
     if (isSourceActive && activeLease?.phase === "applying") {
       const processInfo = pm2.assertOnline();
+      if (validateOnly) return;
       const deploymentLeaseReleased = releaseDeploymentLease(activeLease);
       return {
         ok: true,
@@ -591,6 +622,7 @@ export function createReviewedFlowRuntime({
         deploymentLeaseReleased,
       };
     }
+    if (validateOnly) return;
     const rollbackLease = activeLease
       ? refreshDeploymentLease(activeLease, contract, "rollback-restart-required")
       : acquireDeploymentLease(contract, "rollback-restart-required");
@@ -621,7 +653,7 @@ export function createReviewedFlowRuntime({
     };
   };
 
-  const reconcileCurrent = (options) => {
+  const reconcileCurrent = (options, { validateOnly = false } = {}) => {
     assertRoot();
     assertNoEditorLease();
     const stamp = safeTimestamp(options.stamp);
@@ -775,8 +807,9 @@ export function createReviewedFlowRuntime({
           || activeLease.candidateSha256 !== contract.candidateSha256
           || sha256(fs.readFileSync(deploymentLeasePath)) !== verified.leaseSha256
         ) throw new Error("Current candidate reconciliation verified receipt conflicts with the active lease");
-        releaseDeploymentLease(activeLease);
       }
+      if (validateOnly) return;
+      if (activeLease) releaseDeploymentLease(activeLease);
       const receipt = {
         ...verified,
         state: "SUCCESS",
@@ -805,6 +838,7 @@ export function createReviewedFlowRuntime({
       || activeLease.candidateSha256 !== contract.candidateSha256
     ) throw new Error("Current candidate reconciliation requires the matching incomplete-restart lease");
     const expectedLeaseSha256 = sha256(fs.readFileSync(deploymentLeasePath));
+    if (validateOnly) return;
 
     const intent = {
       ...receiptBase,
@@ -1383,7 +1417,95 @@ export function createReviewedFlowRuntime({
     return { ok: true, action: "abort-editor-modified", deploymentId: lease.deploymentId, receiptPath, deploymentLeaseReleased: true, liveFlowWritten: false, nodeRedRestarted: false };
   };
 
-  return { preflight, apply, rollback, reconcileCurrent, finalizeLegacyCandidate, reserveEditorModified, confirmEditorModified, finishEditorModified, abortEditorModified };
+  const resumeAdmission = options => {
+    if (options.candidatePath || options.contractPath) {
+      const prepared = readPrepared(options.candidatePath, options.contractPath, options.deploymentId);
+      return { ok: true, action: "resume-admission", deploymentId: prepared.contract.deploymentId, nodeRedRestarted: false };
+    }
+    const { contractBackup, flowBackup, artifactStamp } = resolveBackupArtifacts(options, "Resume admission");
+    assertProtectedFile(contractBackup, protectedFileOptions);
+    assertProtectedFile(flowBackup, protectedFileOptions);
+    const contract = JSON.parse(fs.readFileSync(contractBackup, "utf8"));
+    const candidateBackup = path.join(backupDirectory, `candidate-${contract.deploymentId}-${artifactStamp}.flow.json`);
+    assertProtectedFile(candidateBackup, protectedFileOptions);
+    validateReviewedFlowContract({ liveBytes: fs.readFileSync(flowBackup), candidateBytes: fs.readFileSync(candidateBackup), contract });
+    return { ok: true, action: "resume-admission", deploymentId: contract.deploymentId, nodeRedRestarted: false };
+  };
+  const guarded = (operation, action) => options => {
+    assertRoot();
+    assertNoEditorLease();
+    if (action === "apply") {
+      safeTimestamp(options.stamp);
+      if (!["restore-source", "retain-candidate"].includes(options.failureRecovery ?? "restore-source")) throw new Error("Invalid apply failure recovery policy");
+    }
+    if (action === "reconcile-current") safeTimestamp(options.stamp);
+    // Resolve protected contract/preimage before publishing an admission fence.
+    let contract;
+    if (action === "apply" || action === "resume-admission" && (options.candidatePath || options.contractPath)) {
+      if (action === "apply") assertDeploymentLeaseAvailable();
+      contract = readPrepared(options.candidatePath, options.contractPath, options.deploymentId).contract;
+      const before = processManager.assertOnline();
+      if (action === "apply") {
+        lifecycle.preflight({ pid: before.pid, diskDigest: contract.sourceSha256,
+          runtimeDigest: canonicalFlowSha256(JSON.parse(fs.readFileSync(liveFlowPath, "utf8"))) });
+        assertActivationLead(contract, deploymentLeaseMs + sourceRollbackBudgetMs + lifecycle.budgetMs, "Admission drain");
+      }
+    } else {
+      assertNoEditorLease();
+      const artifacts = resolveBackupArtifacts(options, action);
+      assertProtectedFile(artifacts.contractBackup, protectedFileOptions);
+      contract = JSON.parse(fs.readFileSync(artifacts.contractBackup, "utf8"));
+      if (contract.deploymentId !== options.deploymentId) throw new Error("Lifecycle deployment identity mismatch");
+      assertProtectedFile(artifacts.flowBackup, protectedFileOptions);
+      if (sha256(fs.readFileSync(artifacts.flowBackup)) !== contract.sourceSha256) throw new Error("Lifecycle backup digest mismatch");
+      if (action === "resume-admission" || action === "reconcile-current") {
+        const candidateBackup = path.join(backupDirectory, `candidate-${contract.deploymentId}-${artifacts.artifactStamp}.flow.json`);
+        assertProtectedFile(candidateBackup, protectedFileOptions);
+        validateReviewedFlowContract({ liveBytes: fs.readFileSync(artifacts.flowBackup), candidateBytes: fs.readFileSync(candidateBackup), contract });
+      }
+    }
+    const lease = readDeploymentLease({ includeExpired: true });
+    if (lease && (lease.deploymentId !== contract.deploymentId || lease.sourceSha256 !== contract.sourceSha256
+      || lease.candidateSha256 !== contract.candidateSha256)) throw new Error("Lifecycle foreign deployment lease");
+    if (action === "apply" || options.candidatePath || options.contractPath) assertProtectedFileModes(liveFlowPath, { uid, gid, modes: [0o600, 0o644] });
+    else assertProtectedFile(liveFlowPath, protectedFileOptions);
+    const liveDigest = sha256(fs.readFileSync(liveFlowPath));
+    if (![contract.sourceSha256, contract.candidateSha256].includes(liveDigest)) throw new Error("Active flow no longer matches; lifecycle requires exact reviewed source or candidate on disk");
+    if (action === "rollback") {
+      assertActivationLead(contract, sourceRollbackBudgetMs + lifecycle.budgetMs, "Explicit source rollback admission");
+      if (liveDigest === contract.sourceSha256 && !lease) throw new Error("Reviewed source is active without a matching deployment lease; rollback resume is refused");
+      if (liveDigest === contract.sourceSha256 && lease?.phase === "soaking") throw new Error("Reviewed source is active under a soaking lease; rollback state is ambiguous");
+    }
+    if (action === "rollback") rollback(options, { validateOnly: true });
+    if (action === "reconcile-current") reconcileCurrent(options, { validateOnly: true });
+    if (action === "resume-admission") resumeAdmission(options);
+    if (action === "apply") {
+      if (fs.existsSync(backupDirectory)) assertProtectedDirectory(backupDirectory, { uid, gid, mode: 0o700 });
+      for (const name of [`flows-pre-${contract.deploymentId}-${options.stamp}.json`, `contract-${contract.deploymentId}-${options.stamp}.json`, `candidate-${contract.deploymentId}-${options.stamp}.flow.json`]) {
+        if (fs.existsSync(path.join(backupDirectory, name))) throw new Error("Reviewed deployment backup stamp already exists");
+      }
+    }
+    lifecycleBinding = { deploymentId: contract.deploymentId, hashes: [contract.sourceSha256, contract.candidateSha256] };
+    try {
+      lifecycle.begin(lifecycleBinding);
+      const before = processManager.inspect();
+      if (before.status === "online" && before.pid > 0) lifecycle.drain({ ...lifecycleBinding, pid: before.pid });
+      const result = operation(options);
+      const processInfo = processManager.assertOnline();
+      const binding = readyBinding(processInfo);
+      if (!lifecycleBinding.hashes.includes(binding.diskDigest)) throw new Error("Release source drift before admission reopen");
+      lifecycle.verify(binding);
+      lifecycle.finish(binding);
+      return { ...result, nodeRedReady: true, admissionReopened: true };
+    } finally {
+      // Failure never unblocks ingress. Matching rollback/reconcile can resume;
+      // the durable marker deliberately has no automatic expiry.
+      lifecycleBinding = null;
+    }
+  };
+  return { preflight, apply: guarded(apply, "apply"), rollback: guarded(rollback, "rollback"),
+    reconcileCurrent: guarded(reconcileCurrent, "reconcile-current"), resumeAdmission: guarded(resumeAdmission, "resume-admission"), finalizeLegacyCandidate,
+    reserveEditorModified, confirmEditorModified, finishEditorModified, abortEditorModified };
 }
 
 const getArg = (name) => {
@@ -1403,8 +1525,9 @@ export function main() {
     ? runtime.preflight(common)
     : action === "apply"
       ? runtime.apply({ ...common, stamp: getArg("--stamp"), failureRecovery: getArg("--failure-recovery") ?? undefined })
-      : action === "rollback"
-        ? runtime.rollback({
+      : action === "rollback" || action === "resume-admission"
+        ? runtime[action === "rollback" ? "rollback" : "resumeAdmission"]({
+          ...(action === "resume-admission" ? common : {}),
           deploymentId: common.deploymentId,
           flowBackup: getArg("--flow-backup"),
           contractBackup: getArg("--contract-backup"),
@@ -1453,7 +1576,7 @@ export function main() {
         : null;
   if (!result) {
     throw new Error(
-      "Usage: deploy_reviewed_flow_147_remote.mjs <preflight|apply|rollback|reconcile-current|finalize-legacy-v1-candidate|reserve-editor-modified|confirm-editor-modified|finish-editor-modified|abort-editor-modified> [options]",
+      "Usage: deploy_reviewed_flow_147_remote.mjs <preflight|apply|rollback|resume-admission|reconcile-current|finalize-legacy-v1-candidate|reserve-editor-modified|confirm-editor-modified|finish-editor-modified|abort-editor-modified> [options]",
     );
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
