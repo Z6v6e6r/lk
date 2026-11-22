@@ -295,12 +295,11 @@ export function resolveSubscriptionDecisionPresentation({
         continueWithoutSubscription: false,
       };
     }
-    if (includesCode(codes, ACTION_UNAVAILABLE_CODES)) {
+    const splitGameFull = action === "JOIN_GAME" && error.status === 409 && codes.includes("SPLIT_GAME_FULL");
+    if (splitGameFull || includesCode(codes, ACTION_UNAVAILABLE_CODES)) {
       const alreadyJoined = codes.some((code) => code.includes("ALREADY_JOINED"));
-      const full = codes.some((code) => code === "GAME_FULL" || code === "CAPACITY_FULL");
-      const gameFullMessage = !alreadyJoined && action === "JOIN_GAME" && error.status === 409 && codes.includes("GAME_FULL")
-        ? errorMessage(error)
-        : null;
+      const full = splitGameFull || codes.some((code) => code === "GAME_FULL" || code === "CAPACITY_FULL");
+      const gameFullMessage = splitGameFull && !alreadyJoined ? errorMessage(error) : null;
       return {
         kind: "ACTION_UNAVAILABLE",
         title: gameFullMessage?.split(". ", 1)[0] || "Действие недоступно",

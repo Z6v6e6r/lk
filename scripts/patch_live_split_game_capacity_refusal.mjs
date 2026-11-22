@@ -41,7 +41,7 @@ ${context}`);
   next = replaceOnce(next, noPriorOperation, `    const joinCapacityBinding = JSON.stringify(lk1GameCapacityBinding(ctx));
     if (lk1GameCapacityJoin(ctx)) {
       if (fullCapacityRead === joinCapacityBinding) {
-        return finishError(ctx, 409, ${JSON.stringify(FULL)}, { code: "GAME_FULL" });
+        return finishError(ctx, 409, ${JSON.stringify(FULL)}, { code: "SPLIT_GAME_FULL" });
       }
       ctx.lk1FreshCapacityCheck = joinCapacityBinding;
     }
@@ -92,7 +92,7 @@ ${noPriorOperation}`);
         operation.precreatedEntitlementReserved, quote.createAttemptedAt, quote.bookingAttemptedAt,
         quote.transactionAttemptedAt, quote.transactionId, quote.transactionIntent, quote.checkout,
         quote.visitJob, quote.unpaidCancellation].some(Boolean)) {
-      return finishError(ctx, 409, ${JSON.stringify(WAS_FULL)}, { code: "GAME_FULL" });
+      return finishError(ctx, 409, ${JSON.stringify(WAS_FULL)}, { code: "SPLIT_GAME_FULL" });
     }
 ${release}`);
 }
@@ -103,7 +103,7 @@ export function patchSplitRouter(source) {
     && !ctx.bookingId && !ctx.transactionId && !ctx.lk1Checkout && !ctx.ownsExercise
     && Number(msg.statusCode) === 409 && msg.payload?.code === "CONFLICT"
     && toStr(msg.payload.message || msg.payload.error) === "Нет свободных мест") {
-    return fail(409, ${JSON.stringify(FULL)}, { code: "GAME_FULL" });
+    return fail(409, ${JSON.stringify(FULL)}, { code: "SPLIT_GAME_FULL" });
   }
 ${fallback}`);
 }

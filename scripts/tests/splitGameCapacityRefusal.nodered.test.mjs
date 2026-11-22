@@ -116,7 +116,7 @@ function checkCapacity({ exercise = fullExercise, error, fresh = true, changeBin
 test('a fresh join with a full Viva exercise ends before reserving a visit or launching checkout', () => {
   const msg = checkCapacity();
   assert.equal(msg.statusCode, 409);
-  assert.equal(msg.payload.details.code, 'GAME_FULL');
+  assert.equal(msg.payload.details.code, 'SPLIT_GAME_FULL');
   assert.equal(msg.payload.error, 'Все места в игре заняты. Состав игры можно уточнить у администратора станции.');
 
   const presentation = resolveSubscriptionDecisionPresentation({
@@ -138,7 +138,7 @@ test('an unbound, unclear or non-full exercise read does not become a capacity r
     { exercise: { ...fullExercise, canceled: true } },
     { exercise: { ...fullExercise, archived: true } },
     { exercise: { ...fullExercise, directionId: 6306 } },
-  ]) assert.notEqual(checkCapacity(params).payload.details?.code, 'GAME_FULL');
+  ]) assert.notEqual(checkCapacity(params).payload.details?.code, 'SPLIT_GAME_FULL');
 });
 
 test('a concurrent claim found after the full exercise read keeps its reconciliation outcome', () => {
@@ -174,14 +174,14 @@ test('a reconciled old refusal describes that attempt and never books the game a
   };
   const msg = run(operation);
   assert.equal(msg.statusCode, 409);
-  assert.equal(msg.payload.details.code, 'GAME_FULL');
+  assert.equal(msg.payload.details.code, 'SPLIT_GAME_FULL');
   assert.match(msg.payload.error, /^На момент вашей попытки/);
-  assert.notEqual(run({ ...operation, transactionId: 'fixture-payment' }).payload.details?.code, 'GAME_FULL');
+  assert.notEqual(run({ ...operation, transactionId: 'fixture-payment' }).payload.details?.code, 'SPLIT_GAME_FULL');
 });
 
 test('only the direct join booking refusal becomes game-full, never a payment or CREATE failure', () => {
   for (const [action, step, error, expected] of [
-    ['join', 'create_booking', undefined, 'GAME_FULL'],
+    ['join', 'create_booking', undefined, 'SPLIT_GAME_FULL'],
     ['join', 'transaction', undefined, 'CONFLICT'],
     ['create', 'create_booking', undefined, 'CONFLICT'],
     ['join', 'create_booking', new Error('transport issue'), 'CONFLICT'],
