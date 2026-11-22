@@ -31,10 +31,20 @@ const lk1GameCapacityJoin = (ctx) => ctx.caller === "split"
 
 ${context}`);
 
+  const lookup = 'if (ctx.step === "lk1_ingress_operation_find") {';
+  next = replaceOnce(next, lookup, `${lookup}
+  const fullCapacityRead = ctx.lk1FullCapacityRead;
+  delete ctx.lk1FullCapacityRead;`);
   const noPriorOperation = `    delete ctx.lk1IngressReplay;
     ctx.step = "lk1_profile_continue";
   } else {`;
-  next = replaceOnce(next, noPriorOperation, `    if (lk1GameCapacityJoin(ctx)) ctx.lk1FreshCapacityCheck = JSON.stringify(lk1GameCapacityBinding(ctx));
+  next = replaceOnce(next, noPriorOperation, `    const joinCapacityBinding = JSON.stringify(lk1GameCapacityBinding(ctx));
+    if (lk1GameCapacityJoin(ctx)) {
+      if (fullCapacityRead === joinCapacityBinding) {
+        return finishError(ctx, 409, ${JSON.stringify(FULL)}, { code: "GAME_FULL" });
+      }
+      ctx.lk1FreshCapacityCheck = joinCapacityBinding;
+    }
 ${noPriorOperation}`);
 
   const exercise = `if (ctx.step === "exercise") {`;
@@ -53,7 +63,13 @@ ${noPriorOperation}`);
       && Number.isSafeInteger(capacityExercise.maxClientsCount) && capacityExercise.maxClientsCount > 0
       && Number.isSafeInteger(capacityExercise.clientsCount)
       && capacityExercise.clientsCount >= capacityExercise.maxClientsCount) {
-      return finishError(ctx, 409, ${JSON.stringify(FULL)}, { code: "GAME_FULL" });
+      // Another request with this ID may have taken the last seat. Re-check the
+      // operation after the Viva read and let existing bookings use normal recovery.
+      ctx.lk1FullCapacityRead = freshCapacityCheck;
+      ctx.lk1IngressReplay = true;
+      return lk1Find(ctx, "lk1_ingress_operation_find", {
+        _id: \`lk1-product:\${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}\`,
+      });
     }
   }`);
 

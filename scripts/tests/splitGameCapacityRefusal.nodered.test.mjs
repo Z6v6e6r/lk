@@ -13,7 +13,13 @@ const candidate = livePath ? JSON.parse(composeSplitGameCapacity(fs.readFileSync
 const body = (id) => candidate.find(node => node.id === id).func;
 const gatewayFixture = patchTournamentCapacityRouter(read(
   '../nodered_subscription_booking_nodes/fn_subscription_booking_router.js',
-)).replace('if (ctx.step === "booking_create") {', `if (ctx.step === "lk1_ingress_operation_find") {
+)).replace('if (ctx.step === "booking_create") {', `
+function lk1Find(ctx, step, query) {
+  ctx.step = step;
+  msg.payload = query;
+  return emit(1);
+}
+if (ctx.step === "lk1_ingress_operation_find") {
   const operation = msg.payload[0];
   if (!operation) {
     delete ctx.lk1IngressReplay;
@@ -23,6 +29,7 @@ const gatewayFixture = patchTournamentCapacityRouter(read(
     if (operation.state === "RELEASED" && ctx.caller === "split" && ctx.managedAction === "JOIN_GAME") {
       return finishPending(ctx, "Needs reconciliation");
     }
+    return finishPending(ctx, "Operation already exists");
   }
 }
 if (ctx.step === "booking_create") {`);
@@ -72,8 +79,10 @@ const fullExercise = {
   id: 'fixture-game', directionId: 6181, typeId: 2349, clientsCount: 4, maxClientsCount: 4,
 };
 
-function checkCapacity({ exercise = fullExercise, error, fresh = true, changeBinding = false } = {}) {
+function checkCapacity({ exercise = fullExercise, error, fresh = true, changeBinding = false,
+  concurrentOperation = false } = {}) {
   const { ctx, split } = makePair();
+  const quote = ctx.lk1;
   delete ctx.lk1;
   const msg = { _subscriptionBooking: ctx, _splitCtx: split, payload: [] };
   if (fresh) {
@@ -86,7 +95,20 @@ function checkCapacity({ exercise = fullExercise, error, fresh = true, changeBin
   if (changeBinding) split.exerciseId = 'different';
   Object.assign(msg, { statusCode: 200, payload: exercise, error });
   const out = gateway(msg, globals);
-  assert.ok(out.slice(1, 4).every(value => value == null));
+  if (ctx.step === 'lk1_ingress_operation_find') {
+    assert.equal(out[1], msg);
+    assert.ok(out.slice(2, 4).every(value => value == null));
+    assert.deepEqual(msg.payload, { _id: ctx.operationKey });
+    msg.payload = concurrentOperation ? [{
+      _id: ctx.operationKey, tenantKey: ctx.tenantKey, operationId: ctx.operationId,
+      actorClientId: ctx.actorClientId, clientSubscriptionId: ctx.clientSubscriptionId,
+      exerciseId: ctx.exerciseId, category: ctx.category, lk1: quote, state: 'PENDING_CONFIRMATION',
+    }] : [];
+    const afterRead = gateway(msg, globals);
+    assert.ok(afterRead.slice(0, 4).every(value => value == null));
+  } else {
+    assert.ok(out.slice(1, 4).every(value => value == null));
+  }
   assert.equal(finalizer(msg, globals)[0], null);
   return msg;
 }
@@ -117,6 +139,12 @@ test('an unbound, unclear or non-full exercise read does not become a capacity r
     { exercise: { ...fullExercise, archived: true } },
     { exercise: { ...fullExercise, directionId: 6306 } },
   ]) assert.notEqual(checkCapacity(params).payload.details?.code, 'GAME_FULL');
+});
+
+test('a concurrent claim found after the full exercise read keeps its reconciliation outcome', () => {
+  const msg = checkCapacity({ concurrentOperation: true });
+  assert.equal(msg.statusCode, 202);
+  assert.equal(msg.payload.state, 'PENDING_CONFIRMATION');
 });
 
 test('capacity races after the subscription write still use reconciliation', () => {
