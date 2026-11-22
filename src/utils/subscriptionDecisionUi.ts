@@ -298,13 +298,16 @@ export function resolveSubscriptionDecisionPresentation({
     if (includesCode(codes, ACTION_UNAVAILABLE_CODES)) {
       const alreadyJoined = codes.some((code) => code.includes("ALREADY_JOINED"));
       const full = codes.some((code) => code === "GAME_FULL" || code === "CAPACITY_FULL");
+      const gameFullMessage = !alreadyJoined && action === "JOIN_GAME" && error.status === 409 && codes.includes("GAME_FULL")
+        ? errorMessage(error)
+        : null;
       return {
         kind: "ACTION_UNAVAILABLE",
-        title: "Действие недоступно",
+        title: gameFullMessage?.split(". ", 1)[0] || "Действие недоступно",
         message: alreadyJoined
           ? "Вы уже участвуете в этой игре."
           : full
-            ? "В игре нет свободных мест."
+            ? gameFullMessage || "В игре нет свободных мест."
             : errorMessage(error) || "Подписка не может быть применена к выбранному действию.",
         reasonCode: primaryCode,
         retryable: false,

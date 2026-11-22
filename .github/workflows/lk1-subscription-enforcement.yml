@@ -552,6 +552,7 @@ jobs:
           scripts/tests/spanishTrainingExclusion.test.ts
           scripts/tests/tournamentSubscriptionDiscount.test.ts
           scripts/tests/tournamentCapacityRefusal.nodered.test.mjs
+          scripts/tests/splitGameCapacityRefusal.nodered.test.mjs
           scripts/tests/tournamentCapacityPatcher.test.mjs
           scripts/tests/tournamentCapacityRefresh.test.mjs
           scripts/tests/tournamentSignup.checkoutReadiness.test.ts
