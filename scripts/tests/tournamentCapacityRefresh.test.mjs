@@ -6,12 +6,16 @@ import { isTournamentCapacityError } from '../../src/utils/tournamentCapacityErr
 import { isSubscriptionBookingReleased } from '../../src/utils/subscriptionRejoin.ts';
 import { createTournamentParticipantReader } from '../../src/utils/tournamentParticipantRead.ts';
 import { setImmediate } from 'node:timers/promises';
+import { describeTournamentLevelGate, resolveTournamentLevelGate } from '../../src/utils/tournamentLevelDecision.ts';
 
 const source = ts.createSourceFile('signup.tsx', fs.readFileSync(
   'src/components/tournament-signup/TournamentSignupPage.tsx', 'utf8'),
 ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function hook(name, dependencies) {
-  dependencies = { isSubscriptionBookingReleased, ...dependencies };
+  dependencies = { isSubscriptionBookingReleased, resolveTournamentLevelGate, describeTournamentLevelGate,
+    // CUP without a level rule for the fixture tournament: the gate stays open.
+    apiFetchTournamentLevelDecision: async () => ({ status: 404, data: null, error: { status: 404, message: 'not found' } }),
+    setLevelGate: () => {}, ...dependencies };
   let callback;
   function visit(node) {
     if (ts.isVariableDeclaration(node) && node.name.getText(source) === name) {
@@ -65,6 +69,31 @@ test('capacity refresh updates roster and cards without repeating the booking or
   assert.deepEqual(changes.filter(([name]) => name === 'roster'), [['roster', 'fixture-event', { force: true }]]);
   assert.equal(changes.filter(([name]) => name === 'setError').at(-1)[1], 'Нет свободных мест');
   assert.equal(changes.some(([name, value]) => name === 'setSubscriptionConfirmationNotice' && value), false);
+  assert.deepEqual(changes.at(-1), ['setActionLoading', false]);
+});
+
+test('a refused CUP level decision stops before any Viva booking', async () => {
+  const checkout = { profile: { id: 'fixture-actor', phone: 'fixture-phone' } };
+  const changes = [];
+  let bookings = 0;
+  const deps = { selectedId: 'fixture-tournament', selectedExerciseId: 'fixture-event', actionLoading: false,
+    subscriptionUsageShadowEnabled: false, isAuthenticated: true, isRestoringSession: false,
+    checkout, discountPending: false, discountError: null, currentDiscountQuotes: [],
+    checkoutRequestIdRef: { current: 1 }, readAuthToken: () => 'fixture-session',
+    tournamentPaymentSessionIdentity: value => value, normalizePhone: value => value,
+    detail: { levelLabel: 'C' }, selectedTournament: null, isTournamentCapacityError,
+    apiFetchTournamentLevelDecision: async () => ({ status: 200, error: null, data: { enforced: true, allowed: false,
+      reasonCode: 'LEVEL_NOT_ALLOWED', ruleKind: 'RANGE', baseRange: { min: 3, max: 3.5 }, levelTolerance: 0.2,
+      effectiveRange: { min: 2.8, max: 3.7 }, playerLevel: 3.8, ruleVersion: 'fixture' } }),
+    apiCreateTournamentVivaTransaction: async () => { bookings++; return { status: 200, data: {}, error: null }; },
+    loadPublicRoster: async () => assert.fail('no roster reload'), loadList: async () => assert.fail('no list reload'),
+  };
+  for (const name of ['setActionLoading', 'setError', 'setSubscriptionConfirmationNotice',
+    'setConfirmingSubscriptionProductKey', 'setCheckout', 'setLevelGate']) deps[name] = value => changes.push([name, value]);
+  await hook('completeVivaRegistration', deps)(checkout, { id: 'fixture-subscription', source: 'client-subscription' });
+  assert.equal(bookings, 0);
+  assert.equal(changes.find(([name]) => name === 'setLevelGate')[1].kind, 'BLOCKED');
+  assert.match(changes.filter(([name]) => name === 'setError').at(-1)[1], /3,80 вне допустимых границ 2,80–3,70/);
   assert.deepEqual(changes.at(-1), ['setActionLoading', false]);
 });
 
