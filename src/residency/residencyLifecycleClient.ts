@@ -355,6 +355,14 @@ export function createResidencyLifecycleClient(transport: LifecycleTransport) {
   }
 
   const client = {
+    async readPilotAccess(signal?: AbortSignal): Promise<LifecycleResult<{ canCreate: boolean }>> {
+      const result = await call("/lk/residency/pilot-access", { method: "GET", signal });
+      if (!okStatus(result.status)) return { ok: false, failure: failure(result) };
+      const body = record(result.data);
+      return body?.schemaVersion === 1 && typeof body.canCreate === "boolean"
+        ? { ok: true, value: { canCreate: body.canCreate } } : invalid(result);
+    },
+
     async readCatalog(signal?: AbortSignal): Promise<LifecycleResult<LifecycleCatalog>> {
       const result = await call("/lk/residency/catalog", { method: "GET", signal });
       if (!okStatus(result.status)) return { ok: false, failure: failure(result) };

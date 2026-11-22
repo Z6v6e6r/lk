@@ -308,6 +308,39 @@ test("missing create policy is a closed gate, not an implicit allow", async () =
   assert.equal(result.body.code, "RESIDENCY_CREATE_POLICY_INVALID");
 });
 
+test("pilot discovery is authenticated, uncached and independent of order recovery", async () => {
+  let policyCalls = 0;
+  let lifecycleCalls = 0;
+  let open = true;
+  const api = createResidencyLifecycleApi({
+    async pilotPolicy(actor) {
+      policyCalls += 1;
+      if (actor.userId !== USER) return { allowed: false, statusCode: 403 };
+      if (!open) return { allowed: false, statusCode: 503, code: "RESIDENCY_PILOT_CLOSED" };
+      return { allowed: true, canCreate: false };
+    },
+    createLifecycle() {
+      lifecycleCalls += 1;
+      return { async listOrders() { return { schemaVersion: 1, count: 0, orders: [] }; } };
+    },
+  });
+  const lookup = req("GET", "/lk/residency/pilot-access");
+  assert.equal((await api.handle({ ...lookup, actor: null })).statusCode, 401);
+  assert.equal(policyCalls, 0);
+  assert.equal((await api.handle({ ...lookup, actor: { ...lookup.actor, userId: "another-player" } })).statusCode, 403);
+  const granted = await api.handle(lookup);
+  assert.equal(granted.statusCode, 200);
+  assert.equal(granted.headers["Cache-Control"], "no-store");
+  assert.deepEqual(granted.body, { schemaVersion: 1, canCreate: false });
+  open = false;
+  const closed = await api.handle(lookup);
+  assert.equal(closed.statusCode, 503);
+  assert.equal(closed.body.code, "RESIDENCY_PILOT_CLOSED");
+  assert.equal(lifecycleCalls, 0);
+  assert.equal((await api.handle(req("GET", "/lk/residency/orders?state=unresolved"))).statusCode, 200);
+  assert.equal(lifecycleCalls, 1);
+});
+
 test("provider errors keep their stable status and code without leaking a body", async () => {
   const api = createResidencyLifecycleApi({ createPolicy: () => ({ allowed: true }), createLifecycle: () => ({ async catalog() {
     const error = new Error("upstream text with private data");

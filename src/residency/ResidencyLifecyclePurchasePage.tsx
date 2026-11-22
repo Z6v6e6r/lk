@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../components/auth/AuthForm";
 import { useAuth } from "../context/authShared";
+import { appendCurrentAuthModeToNavigableUrl } from "../utils/authMode";
 import { hasZeroAttempt } from "../components/subscription-storefront/zeroCheckoutPayment";
 import {
   RESIDENCY_LIFECYCLE_RETURN_TARGET,
@@ -18,6 +19,7 @@ import {
   saveResidencyLifecycleAttempt,
 } from "./residencyLifecycleAttempt.ts";
 import { readResidencyLifecycleRoute, residencyLifecycleLegacyUrl } from "./residencyLifecycleRoute.ts";
+import { useResidencyPilotAccess } from "./useResidencyPilotAccess";
 import {
   formatResidencyDate,
   formatResidencyMoney,
@@ -26,7 +28,7 @@ import {
 import "./residency-purchase.css";
 import "./residency-lifecycle-purchase.css";
 
-type Phase = "idle" | "loading" | "auth" | "ready" | "creating" | "recovery" | "payment" | "active" | "blocked" | "error";
+type Phase = "idle" | "loading" | "ready" | "creating" | "recovery" | "payment" | "active" | "blocked" | "error";
 
 function safePaymentUrl(value: string | null): string | null {
   if (!value) return null;
@@ -50,6 +52,22 @@ function failureMessage(failure: LifecycleFailure): string {
 
 export function ResidencyLifecyclePurchasePage() {
   const auth = useAuth();
+  if (auth.isRestoringSession || auth.isLoading) {
+    return <main className="ph-residency-purchase ph-residency-pilot"><p role="status">Проверяем сессию…</p></main>;
+  }
+  if (!auth.isAuthenticated) {
+    return <main className="ph-residency-purchase ph-residency-pilot">
+      <article className="ph-residency-card">
+        <h1 className="ph-residency-badge"><span className="ph-residency-plus" aria-hidden="true">+</span><span>Резидент</span></h1>
+        <p>Новое оформление резидентства доступно после входа в личный кабинет.</p>
+        <AuthForm onLogin={() => { window.location.reload(); }} />
+      </article>
+    </main>;
+  }
+  return <ResidencyLifecycleSession key={auth.phone} />;
+}
+
+function ResidencyLifecycleSession() {
   const route = useMemo(() => readResidencyLifecycleRoute(typeof window === "undefined" ? "" : window.location.search), []);
   const mounted = useRef(true);
   const busy = useRef(false);
@@ -60,6 +78,20 @@ export function ResidencyLifecyclePurchasePage() {
   const [externalCheck, setExternalCheck] = useState<LifecycleExternalCheck | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const pilotAccess = useResidencyPilotAccess(route === "purchase");
+  const pilotOpen = pilotAccess.state === "open";
+  const canCreate = pilotOpen && pilotAccess.canCreate;
+  const canNavigateToPayment = useRef(false);
+  const servicingOrder = order !== null || phase === "creating" || phase === "recovery";
+  const leavePilot = route === "purchase" && pilotAccess.state === "closed" && !servicingOrder;
+
+  useEffect(() => {
+    if (leavePilot) window.location.replace(appendCurrentAuthModeToNavigableUrl("/lk_new"));
+  }, [leavePilot]);
+
+  useEffect(() => {
+    canNavigateToPayment.current = canCreate;
+  }, [canCreate]);
 
   useEffect(() => {
     mounted.current = true;
@@ -105,13 +137,12 @@ export function ResidencyLifecyclePurchasePage() {
   }, [setSafe]);
 
   const load = useCallback(async () => {
-    if (!auth.isAuthenticated) { setSafe(setPhase, "auth"); return; }
     if (route === null) { setSafe(setPhase, "blocked"); setSafe(setError, "Маршрут нового оформления не распознан."); return; }
+    if (route === "purchase" && !pilotOpen) return;
     setSafe(setPhase, "loading");
     setSafe(setError, null);
     const unresolved = await residencyLifecycleClient.listUnresolvedDetailed();
     if (!unresolved.ok) {
-      if (unresolved.failure.status === 401) { setSafe(setPhase, "auth"); return; }
       setSafe(setError, failureMessage(unresolved.failure));
       setSafe(setPhase, "error");
       return;
@@ -146,7 +177,7 @@ export function ResidencyLifecyclePurchasePage() {
     setSafe(setCatalog, nextCatalog.value);
     setSafe(setStatus, nextStatus.value);
     setSafe(setPhase, "ready");
-  }, [auth.isAuthenticated, loadOrder, route, setSafe]);
+  }, [loadOrder, pilotOpen, route, setSafe]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -198,7 +229,7 @@ export function ResidencyLifecyclePurchasePage() {
   }, [order, setSafe]);
 
   const start = useCallback(async () => {
-    if (!catalog || !decision || decision.kind !== "READY" || busy.current) return;
+    if (!canCreate || !catalog || !decision || decision.kind !== "READY" || busy.current) return;
     busy.current = true;
     setSafe(setError, null);
     setSafe(setPhase, "creating");
@@ -265,21 +296,20 @@ export function ResidencyLifecyclePurchasePage() {
       if (attempt) saveResidencyLifecycleAttempt({ ...attempt, orderId: result.value.order.orderId });
       if (result.value.order.state === "ACTIVE") { setSafe(setPhase, "active"); return; }
       const paymentUrl = safePaymentUrl(result.value.order.payment.paymentUrl);
-      if (paymentUrl) { window.location.assign(paymentUrl); return; }
+      if (paymentUrl && mounted.current && canNavigateToPayment.current) {
+        window.location.assign(paymentUrl);
+        return;
+      }
       setSafe(setPhase, result.value.order.recovery.state === "AWAITING_PAYMENT" ? "payment" : "recovery");
     } finally { busy.current = false; }
-  }, [catalog, decision, setSafe]);
+  }, [canCreate, catalog, decision, setSafe]);
 
-  if (auth.isRestoringSession || auth.isLoading) {
-    return <main className="ph-residency-purchase ph-residency-pilot"><p role="status">Проверяем сессию…</p></main>;
-  }
-  if (!auth.isAuthenticated) {
+  if (route === "purchase" && !pilotOpen && !servicingOrder) {
+    const message = leavePilot ? "Возвращаемся в личный кабинет…"
+      : pilotAccess.state === "unavailable" ? "Не удалось проверить доступ к пилоту." : "Проверяем доступ к пилоту…";
     return <main className="ph-residency-purchase ph-residency-pilot">
-      <article className="ph-residency-card">
-        <h1 className="ph-residency-badge"><span className="ph-residency-plus" aria-hidden="true">+</span><span>Резидент</span></h1>
-        <p>Новое оформление резидентства доступно после входа в личный кабинет.</p>
-        <AuthForm onLogin={() => { window.location.reload(); }} />
-      </article>
+      <p role="status">{message}</p>
+      {pilotAccess.state === "unavailable" && <a href={appendCurrentAuthModeToNavigableUrl("/lk_new").toString()}>Вернуться в личный кабинет</a>}
     </main>;
   }
 
@@ -321,7 +351,8 @@ export function ResidencyLifecyclePurchasePage() {
         {decision.eligibleAt && <p className="ph-residency-pilot-muted">Доступно с {formatResidencyDate(decision.eligibleAt)}</p>}
       </>}
 
-      {phase === "ready" && decision?.kind === "READY" && <>
+      {phase === "ready" && !canCreate && <p role="status">Предпросмотр. Оформление и оплата отключены.</p>}
+      {phase === "ready" && canCreate && decision?.kind === "READY" && <>
         <p className="ph-residency-pilot-muted">Цена и условия прочитаны с сервера. Нажимая кнопку, вы подтверждаете итоговую сумму {formatResidencyMoney(totalMinor)}.</p>
         <button className="ph-residency-cta" type="button" onClick={() => { void start(); }}>
           {modeLabel} · {formatResidencyMoney(totalMinor)}
@@ -350,10 +381,11 @@ export function ResidencyLifecyclePurchasePage() {
           {order.residency?.validUntil && <p>Действует до {formatResidencyDate(order.residency.validUntil)}</p>}
           {order.payment.instruction && <p className="ph-residency-pilot-muted">{order.payment.instruction}</p>}
         </section>
-        {phase !== "active" && paymentUrl && <a className="ph-residency-cta" href={paymentUrl} rel="noopener noreferrer">Открыть ссылку на оплату</a>}
+        {phase !== "active" && paymentUrl && (route === "return" || canCreate)
+          && <a className="ph-residency-cta" href={paymentUrl} rel="noopener noreferrer">Открыть ссылку на оплату</a>}
         {phase !== "active" && <button className="ph-residency-pilot-secondary" type="button" onClick={() => { void reconcile(); }}>Проверить оплату</button>}
         {phase === "recovery" && <button className="ph-residency-pilot-secondary" type="button" onClick={() => { void refreshUnresolved(); }}>Найти мой незавершённый заказ</button>}
-        {order && ["PAYMENT_FAILED", "EXPIRED", "CANCELLED"].includes(order.state)
+        {canCreate && ["PAYMENT_FAILED", "EXPIRED", "CANCELLED"].includes(order.state)
           && <button className="ph-residency-pilot-secondary" type="button" onClick={restartAfterTerminal}>Начать новую покупку</button>}
         {order.state === "PAID_REQUIRES_REVIEW" || order.state === "ACTIVATION_FAILED" ? <p role="alert">Оплата получена, но резидентство требует проверки. Обратитесь в поддержку клуба.</p> : null}
         {phase === "active" && <p role="status">Резидентство активно. Скидки 30% на игры и 50% на групповые тренировки и турниры действуют в оплаченный период.</p>}

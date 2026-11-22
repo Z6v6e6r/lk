@@ -1,5 +1,39 @@
 # Residency LK1 pilot: installation and recovery packet
 
+## Closed preview with a hot stop
+
+Use the personal preview at `/lk_new?buyResidency=lifecycle`. Keep
+`LK_RESIDENCY_LIFECYCLE_ENABLED=true`, `LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED=false`
+and `LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE=pilot`. Put only the account's
+verified `tenantId:userId` in `LK_RESIDENCY_LIFECYCLE_PILOT_USERS`, in private
+runtime configuration. Never use the synthetic test identity for enrollment.
+
+Set `LK_RESIDENCY_LIFECYCLE_PILOT_CONTROL_FILE` at initial installation to an
+absolute path in a private operator-managed directory. Give Node-RED read access
+to the file and traversal access to the directory. Keep writes restricted to
+operators. In a container, mount the parent directory read-only so that an
+atomic replacement is visible. Start with `off`. For later switches, write
+`preview` or `off` to a temporary file in that directory with the required
+owner and permissions, then rename it over the control file. Node-RED reads it
+on each admission check. A missing, unreadable or unrecognized file closes
+admission. `preview` also blocks new orders independently of the create setting.
+The original payment rehearsal requires both `checkout` in the file and an
+explicitly enabled create setting. Leave both closed to payment for this pilot.
+
+`GET /lk/residency/pilot-access` requires the verified session and sends
+`Cache-Control: no-store`. The open screen checks again every five seconds
+while visible and on return to the tab. When disabled, a tab outside order
+recovery returns to the main cabinet and keeps its configured auth mode.
+`POST /lk/residency/orders` rejects new purchases independently of browser
+timing. An already admitted operation can still finish. Keep the lifecycle
+service running for reads, recovery and the bank return route
+`?phResidencyLifecycleReturn=1`. The current `?buyResidency=1` entry is
+independent of this switch.
+
+The instructions below describe the existing isolated payment rehearsal.
+For the closed preview, use the configuration above and the
+[no-payment browser check](../scripts/pilot-composition/README.md#browser-preview-and-hot-stop).
+
 Status: **prepared and exercised in the isolated composition; not installed on 147.**
 The supervised personal-pilot decision and the pre-flight absence check are in
 [residency-pilot-alexey-decision.md](residency-pilot-alexey-decision.md); the Hermes browser
@@ -9,10 +43,11 @@ Everything below is reversible and none of it changes the published old checkout
 separate frontend publication. Live mutations require the owner's explicit approval naming
 source, scope, target, order, verification, stop signal and recovery.
 
-## 1. Frozen artifacts
+## 1. Original #452 rehearsal artifacts
 
-All hashes below were produced from this task branch; the published bundle is a live
-artifact and is not rebuilt.
+The hashes below identify the original rehearsal. For the hot switch, build a
+new bundle and regenerate the install packet from the exact candidate. The
+current import has 21 nodes, including 17 HTTP input nodes.
 
 | Artifact | Value |
 | --- | --- |
@@ -95,6 +130,7 @@ LK_RESIDENCY_LIFECYCLE_KEYCLOAK_USERINFO_URL
 LK_RESIDENCY_LIFECYCLE_SUCCESS_URL / _FAIL_URL          # base URLs, no query string
 LK_RESIDENCY_LIFECYCLE_RETURN_TARGETS={"lk1pilot":{"successUrl":"https://padlhub.su/lk_new?phResidencyLifecycleReturn=1","failUrl":"…"}}
 LK_RESIDENCY_LIFECYCLE_DEFAULT_RETURN_TARGET=lk1pilot
+LK_RESIDENCY_LIFECYCLE_PILOT_CONTROL_FILE=/absolute/operator-managed/pilot-mode
 LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED=false             # step 1: servicing only
 LK_RESIDENCY_LIFECYCLE_CREATE_AUDIENCE=pilot
 LK_RESIDENCY_LIFECYCLE_PILOT_USERS=["iSkq6G:<verified-sub>"]
@@ -123,7 +159,10 @@ belongs only in `RETURN_TARGETS`.
    - `POST /lk/residency/orders` → 503 `RESIDENCY_ORDERS_DISABLED` (no provider POST);
    - old `/lk/residency/passes`, summer-subscription and tournament routes → unchanged;
    - `getIndexes()` matches section 4; `ENSURE_INDEXES` remains false.
-7. Enable the pilot: `CREATE_ENABLED=true`, verified `PILOT_USERS`, restart.
+7. For the isolated payment rehearsal, set `CREATE_ENABLED=true` and verified
+   `PILOT_USERS`, restart once to load that configuration, then set the control
+   file to `checkout`. For the closed preview, keep `CREATE_ENABLED=false` and
+   set the control file to `preview`.
 8. Verify: pilot create without `Idempotency-Key` → 400 `RESIDENCY_IDEMPOTENCY_KEY_REQUIRED`
    (no order, no provider POST); ordinary account create → 403; the old checkout still loads.
    This verification does not create a financial operation.
@@ -134,7 +173,7 @@ belongs only in `RETURN_TARGETS`.
 
 | Check | Expected | Stop signal |
 | --- | --- | --- |
-| Routes | 8 lifecycle methods + OPTIONS; no collision | any changed old route/id |
+| Routes | 9 lifecycle methods + OPTIONS; no collision | any changed old route/id |
 | Indexes | exactly the five reviewed specs | missing/mismatched index (503) |
 | Create gate | 503 with `CREATE_ENABLED=false`, 403 ordinary, 200 pilot | 200 for an ordinary account |
 | External guard | 409 `RESIDENCY_EXTERNAL_PURCHASE_PENDING` when an old transaction is open; 503 when the provider list is unreadable | create 200 while the list is unavailable |

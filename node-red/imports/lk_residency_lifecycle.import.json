@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "LK Residency Lifecycle",
     "disabled": false,
-    "info": "Residency lifecycle owner API (LK1).\n\nRoutes:\nGET /lk/residency/catalog\nGET /lk/residency/status\nPOST /lk/residency/orders\nGET /lk/residency/orders/:orderId\nGET /lk/residency/orders/:orderId/payment\nPOST /lk/residency/orders/:orderId/reconcile\nPOST /lk/residency/orders/:orderId/cancel\n\nRequires the @padlhub/node-red-residency-lifecycle-api custom node.\nMutating routes require Idempotency-Key and the LK bearer.\nActivation is accepted only from CUP verified residency evidence.",
+    "info": "Residency lifecycle owner API (LK1).\n\nRoutes:\nGET /lk/residency/pilot-access\nGET /lk/residency/catalog\nGET /lk/residency/status\nPOST /lk/residency/orders\nGET /lk/residency/orders/:orderId\nGET /lk/residency/orders/:orderId/payment\nPOST /lk/residency/orders/:orderId/reconcile\nPOST /lk/residency/orders/:orderId/cancel\n\nRequires the @padlhub/node-red-residency-lifecycle-api custom node.\nMutating routes require Idempotency-Key and the LK bearer.\nActivation is accepted only from CUP verified residency evidence.",
     "env": []
   },
   {
@@ -264,6 +264,40 @@
     "swaggerDoc": "",
     "x": 220,
     "y": 760,
+    "wires": [
+      [
+        "lk_residency_lifecycle_http_20261118"
+      ]
+    ]
+  },
+  {
+    "id": "lk_residency_lifecycle_in_pilot_access_20261122",
+    "type": "http in",
+    "z": "lk_residency_lifecycle_tab_20261118",
+    "name": "GET /lk/residency/pilot-access",
+    "url": "/lk/residency/pilot-access",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 220,
+    "y": 850,
+    "wires": [
+      [
+        "lk_residency_lifecycle_http_20261118"
+      ]
+    ]
+  },
+  {
+    "id": "lk_residency_lifecycle_options_pilot_access_20261122",
+    "type": "http in",
+    "z": "lk_residency_lifecycle_tab_20261118",
+    "name": "OPTIONS /lk/residency/pilot-access",
+    "url": "/lk/residency/pilot-access",
+    "method": "options",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 220,
+    "y": 890,
     "wires": [
       [
         "lk_residency_lifecycle_http_20261118"

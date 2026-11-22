@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createRequire } from "node:module";
@@ -78,6 +79,45 @@ test("runtime configuration fails closed before any request", () => {
   assert.equal(helpers.runtimeConfigError(helpers.readConfig(env({ ...base, LK_RESIDENCY_LIFECYCLE_KEYCLOAK_USERINFO_URL: "http://kc" }))), "KEYCLOAK_URL");
 });
 
+test("a running pilot policy reads the file again, fails closed and separates preview from create", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lk-residency-access-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const control = path.join(dir, "mode");
+  const config = helpers.readConfig(env({
+    LK_RESIDENCY_LIFECYCLE_PILOT_CONTROL_FILE: control,
+    LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED: "true",
+    LK_RESIDENCY_LIFECYCLE_PILOT_USERS: JSON.stringify(["iSkq6G:pilot-user"]),
+  }));
+  const policies = helpers.createAdmissionPolicies(config);
+  const pilot = { tenantId: "iSkq6G", userId: "pilot-user" };
+  const setMode = (mode) => {
+    fs.writeFileSync(control + ".next", mode + "\n");
+    fs.renameSync(control + ".next", control);
+  };
+
+  assert.equal((await policies.pilotPolicy(pilot)).code, "RESIDENCY_PILOT_CLOSED");
+  setMode("preview");
+  assert.deepEqual(await policies.pilotPolicy(pilot), { allowed: true, canCreate: false });
+  assert.equal((await policies.createPolicy(pilot)).code, "RESIDENCY_ORDERS_DISABLED");
+  assert.equal((await policies.pilotPolicy({ ...pilot, userId: "ordinary-user" })).statusCode, 403);
+  assert.equal((await policies.pilotPolicy({ ...pilot, tenantId: "other" })).statusCode, 403);
+  setMode("checkout");
+  assert.deepEqual(await policies.pilotPolicy(pilot), { allowed: true, canCreate: true });
+  assert.equal((await policies.createPolicy(pilot)).allowed, true);
+  const previewOnly = helpers.createAdmissionPolicies({ ...config, createEnabled: false });
+  assert.deepEqual(await previewOnly.pilotPolicy(pilot), { allowed: true, canCreate: false });
+  assert.equal((await previewOnly.createPolicy(pilot)).allowed, false);
+  for (const value of ["off", "on", "checkout "]) {
+    setMode(value);
+    assert.equal((await policies.pilotPolicy(pilot)).allowed, false);
+    assert.equal((await policies.createPolicy(pilot)).allowed, false);
+  }
+  fs.renameSync(control, control + ".actual");
+  fs.symlinkSync(control + ".actual", control);
+  fs.writeFileSync(control + ".actual", "checkout\n");
+  assert.equal((await policies.pilotPolicy(pilot)).allowed, false);
+});
+
 test("bearer parsing is strict and never echoes the token", () => {
   assert.equal(helpers.bearer({ headers: { authorization: "Bearer " + "a".repeat(32) } }), "a".repeat(32));
   for (const value of [undefined, "", "Bearer short", "Basic " + "a".repeat(32), "Bearer " + "a".repeat(32) + "\n"]) {
@@ -107,10 +147,10 @@ test("the import exposes the exact routes and no reverse-proxy or token material
   const routes = importJson.filter((node) => node.type === "http in").map((node) => node.method.toUpperCase() + " " + node.url).sort();
   assert.deepEqual(routes, [
     "GET /lk/residency/catalog", "GET /lk/residency/orders", "GET /lk/residency/orders/:orderId", "GET /lk/residency/orders/:orderId/payment",
-    "GET /lk/residency/status", "OPTIONS /lk/residency/catalog", "OPTIONS /lk/residency/orders",
+    "GET /lk/residency/status", "GET /lk/residency/pilot-access", "OPTIONS /lk/residency/catalog", "OPTIONS /lk/residency/orders",
     "OPTIONS /lk/residency/orders/:orderId", "OPTIONS /lk/residency/orders/:orderId/cancel",
     "OPTIONS /lk/residency/orders/:orderId/payment", "OPTIONS /lk/residency/orders/:orderId/reconcile",
-    "OPTIONS /lk/residency/status", "POST /lk/residency/orders",
+    "OPTIONS /lk/residency/status", "OPTIONS /lk/residency/pilot-access", "POST /lk/residency/orders",
     "POST /lk/residency/orders/:orderId/cancel", "POST /lk/residency/orders/:orderId/reconcile",
   ].sort());
   assert.equal(new Set(importJson.map((node) => node.id)).size, importJson.length);

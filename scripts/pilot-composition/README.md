@@ -25,7 +25,8 @@ built with `VITE_RESIDENCY_PASS_API_BASE`, `VITE_SERV2` and `VITE_SERV2_FALLBACK
 ```bash
 export LK_PILOT_WORK=/tmp/lk1-pilot-run
 export LK_PLAYWRIGHT_ROOT=/path/to/playwright       # package with the chromium browser
-mkdir -p "$LK_PILOT_WORK/certs"
+mkdir -p "$LK_PILOT_WORK/certs" "$LK_PILOT_WORK/control"
+printf '%s\n' checkout > "$LK_PILOT_WORK/control/mode"
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$LK_PILOT_WORK/certs/key.pem" \
   -out "$LK_PILOT_WORK/certs/cert.pem" -days 3 -subj "/CN=127.0.0.1" \
   -addext "subjectAltName=IP:127.0.0.1,DNS:localhost,DNS:host.docker.internal"
@@ -55,6 +56,21 @@ NEW_BUNDLE="$PWD/dist/bundle.js" OLD_BUNDLE="$LK_PILOT_WORK/bundle-old.js" \
 NODE_TLS_REJECT_UNAUTHORIZED=0 node scripts/pilot-composition/e2e.mjs | tee e2e-result.json
 NODE_TLS_REJECT_UNAUTHORIZED=0 bash scripts/pilot-composition/backend-transcript.sh | tee backend-http.txt
 ```
+
+### Browser preview and hot stop
+
+For the no-payment run, initialize `control/mode` with `off` and start the
+composition with `LK_PILOT_CREATE_ENABLED=false`. Run the following with the
+same `LK_PILOT_WORK` and `LK_PLAYWRIGHT_ROOT`.
+
+```bash
+NODE_EXTRA_CA_CERTS="$LK_PILOT_WORK/certs/cert.pem" node scripts/pilot-composition/e2e-hot-switch.mjs
+```
+
+The browser uses synthetic pilot and ordinary accounts. The test opens the legacy
+and pilot pages, switches off the pilot with its tab already open, then reopens
+the pilot. It compares the Node-RED container ID, PID, start time and restart
+count and checks that no transaction or subscription was created.
 
 `NODE_TLS_REJECT_UNAUTHORIZED=0` applies only to these throwaway processes because the fixture
 uses a self-signed certificate. It must never be used on 147.

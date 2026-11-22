@@ -145,6 +145,21 @@ test("the local attempt keeps one key for one confirmed operation and is namespa
   }
 });
 
+test("pilot access accepts only the explicit capability from the server", async () => {
+  const signal = new AbortController().signal;
+  for (const data of [{ schemaVersion: 1, canCreate: false }, { schemaVersion: 1, canCreate: "false" }]) {
+    const client = createResidencyLifecycleClient(async (request) => {
+      assert.equal(request.path, "/lk/residency/pilot-access");
+      assert.equal(request.method, "GET");
+      assert.equal(request.signal, signal);
+      return { status: 200, data, networkError: false };
+    });
+    const result = await client.readPilotAccess(signal);
+    if (data.canCreate === false) assert.deepEqual(result, { ok: true, value: { canCreate: false } });
+    else assert.equal(result.ok, false);
+  }
+});
+
 test("the client sends the exact confirmed total and reuses the idempotency key", async () => {
   const calls: Array<Record<string, unknown>> = [];
   const transport: LifecycleTransport = async (request) => {

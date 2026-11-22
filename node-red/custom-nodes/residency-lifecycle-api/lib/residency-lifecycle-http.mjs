@@ -11,6 +11,7 @@ const IDEMPOTENCY_MIN = 16;
 const IDEMPOTENCY_MAX = 128;
 
 const ROUTES = Object.freeze([
+  { method: "GET", pattern: /^\/lk\/residency\/pilot-access$/, name: "pilotAccess" },
   { method: "GET", pattern: /^\/lk\/residency\/catalog$/, name: "catalog" },
   { method: "GET", pattern: /^\/lk\/residency\/status$/, name: "status" },
   { method: "POST", pattern: /^\/lk\/residency\/orders$/, name: "create", idempotent: true },
@@ -88,14 +89,15 @@ function cryptoRandomId() {
  * @param {object} deps
  * @param {(actor: {tenantId: string, userId: string, providerClientId?: string, actorToken?: string}) => object} deps.createLifecycle
  * @param {string} [deps.allowOrigin]
- * @param {(actor: {tenantId: string, userId: string}) => {allowed: boolean, statusCode?: number, code?: string, message?: string}} [deps.createPolicy]
+ * @param {function} [deps.createPolicy] Authorization for a new lifecycle order.
+ * @param {function} [deps.pilotPolicy] Authorization for entry to the pilot screen.
  */
-export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*", createPolicy }) {
+export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*", createPolicy, pilotPolicy }) {
   if (typeof createLifecycle !== "function") throw new Error("RESIDENCY_CREATE_LIFECYCLE_REQUIRED");
   if (typeof allowOrigin !== "string" || !allowOrigin) throw new Error("RESIDENCY_ORIGIN_INVALID");
   // Missing policy is a closed gate, never "allow everyone". Only the Node-RED transport
   // passes a policy built from verified configuration; unit tests pass an explicit one.
-  const authorizeCreate = typeof createPolicy === "function" ? createPolicy : () => ({
+  const unavailable = () => ({
     allowed: false, statusCode: 503, code: "RESIDENCY_CREATE_POLICY_INVALID",
     message: "Residency pilot access is not configured",
   });
@@ -137,21 +139,20 @@ export function createResidencyLifecycleApi({ createLifecycle, allowOrigin = "*"
       || !actor.tenantId || !actor.userId) {
       return respond(401, { code: "RESIDENCY_AUTH_REQUIRED", message: "Authentication required" }, correlation, origin);
     }
-    // The personal pilot gate applies only to creating a new order. Existing orders stay
-    // readable, reconcilable and activatable after the pilot is stopped, and the decision
-    // is made from the verified actor, never from a body/query/localStorage switch.
-    if (route.name === "create") {
+    // Existing orders and bank returns do not pass through the pilot admission gate.
+    if (route.name === "create" || route.name === "pilotAccess") {
+      const policy = route.name === "create" ? createPolicy : pilotPolicy;
       let decision;
-      try { decision = authorizeCreate({ tenantId: actor.tenantId, userId: actor.userId }); }
-      catch {
-        decision = { allowed: false, statusCode: 503, code: "RESIDENCY_CREATE_POLICY_INVALID",
-          message: "Residency pilot access is not configured" };
-      }
+      try { decision = await (policy ?? unavailable)({ tenantId: actor.tenantId, userId: actor.userId }); }
+      catch { decision = unavailable(); }
       if (!decision || decision.allowed !== true) {
         return respond(Number.isInteger(decision?.statusCode) ? decision.statusCode : 503, {
           code: typeof decision?.code === "string" ? decision.code : "RESIDENCY_CREATE_NOT_ALLOWED",
           message: typeof decision?.message === "string" ? decision.message : "New residency orders are not allowed",
         }, correlation, origin);
+      }
+      if (route.name === "pilotAccess") {
+        return respond(200, { schemaVersion: 1, canCreate: decision.canCreate === true }, correlation, origin);
       }
     }
     let lifecycle;
