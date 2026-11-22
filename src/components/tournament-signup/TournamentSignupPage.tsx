@@ -1284,7 +1284,10 @@ export default function TournamentSignupPage({
         rosterRequest = loadPublicRoster(exerciseId, { ...rosterOptions, force: true });
       }
 
-      if (checkTwoHourTournamentPayment && ownerRegistration?.status === "PAYMENT_PENDING" && ownerRegistration.bookingId) {
+      if (ownerRosterChanged && ownerRegistration?.status === "PAYMENT_PENDING") {
+        // A terminal reconciliation retires the old link even while status readback is catching up.
+        ownerRegistration = { ...ownerRegistration, paymentUrl: null, paymentExpiresAt: null, paymentStatusVerified: true };
+      } else if (checkTwoHourTournamentPayment && ownerRegistration?.status === "PAYMENT_PENDING" && ownerRegistration.bookingId) {
         const paymentStatus = vivaRegistration?.paymentStatusVerified && vivaRegistration.bookingId === ownerRegistration.bookingId
           ? vivaRegistration
           : await apiReadTournamentPaymentStatus(exerciseId, ownerRegistration);
