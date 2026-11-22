@@ -625,3 +625,47 @@ idempotency key with a collision-free tenant-qualified durable identity and
 primary/majority read-back. Result lifecycle side effects are asynchronous: the durable
 transition returns `202`, while rating/event/Viva sinks are driven by the versioned
 outbox and exact tenant/result/revision contracts.
+
+### Статус оплаты двухчасового турнира по «Дружбе 2.0»
+
+`POST /lk/subscription-bookings` с `action: "tournament-payment-status"`,
+`exerciseId` и `bookingId` читает статус после проверки профиля Viva. Действие выполняет
+только чтение MongoDB и GET существующей брони и счёта в Viva. Поиск привязан к владельцу,
+турниру, точной брони и подтверждённой операции «Дружбы 2.0» со скидкой. Ссылку можно
+вернуть только по действующему исходному счёту. Просроченный или отклонённый счёт
+сохраняет статус `PAYMENT_PENDING` без ссылки. Отменённая бронь возвращает `NONE`,
+сверенная оплата возвращает `REGISTERED`. Для других операций ответ `NOT_APPLICABLE`.
+
+В подготовленном кандидате меняются тела двух function nodes существующего маршрута.
+Для релиза сначала подготовить и проверить backend по свежему снимку 147 с помощью
+`scripts/prepare_friendship2_tournament_payment_status_release.mjs`, затем выпустить
+`tournament-signup.js`.
+
+### Турниры ВСК по «Дружбе.ВСК»
+
+Для подписки `94e32355-1c69-462b-9f2a-77f2817cb24c` на турнир Viva
+с направлением `6977` и типом `2349` предпросмотр предлагает 0 ₽.
+Серверная запись использует один визит этого абонемента через Viva
+`paymentType: SUBSCRIPTION`. Счёт и ссылка на оплату не создаются.
+Если посещений нет, дневной визит уже использован или достигнут лимит
+активных броней по подписке, этот способ записи недоступен.
+Прежние операции с доплатой остаются в журнале для сверки. Повтор старой
+операции не возобновляет оплату, а проверенный путь повторной записи
+после подтверждённой отмены сохраняется.
+
+`scripts/prepare_vsk_tournament_visit.mjs` принимает проверенный SHA-256
+свежего дискового потока 147 и пишет новый кандидат в приватный файл вне Git.
+Затрагиваются только тела функций:
+
+- `POST /lk/subscriptions/game-price-preview` — router
+  `lk_subscription_price_preview_20260908_router` и evaluator
+  `lk_subscription_price_preview_20260908_evaluate`.
+- `POST /lk/subscription-bookings` — routers
+  `lk_subscription_booking_router_20260804`, `6cffa6278ef875e4` и evaluators
+  `lk_subscription_managed_policy_20260820`, `34e66e06d53503bb`.
+
+Для прогона на копии текущего потока задать
+`VSK_TOURNAMENT_VISIT_FLOW_FIXTURE=/absolute/private/source.flow.json` и запустить
+`node --test scripts/tests/vskTournamentVisit.test.mjs`. Тест подставляет
+ответы MongoDB и Viva и не отправляет запросы. Подготовка кандидата не импортирует
+поток и не изменяет ранее созданные счета и брони.
