@@ -140,6 +140,7 @@ export interface TournamentRegistrationState {
   levelDenialReason?: string;
   paymentUrl?: string | null;
   paymentExpiresAt?: string | null;
+  paymentStatusVerified?: boolean;
 }
 
 export type TournamentVivaProductType =
@@ -184,6 +185,7 @@ export interface TournamentVivaCheckout {
 
 export interface TournamentVivaTransactionResult {
   paymentUrl: string | null;
+  paymentPending?: boolean;
   bookingId: string | null;
   toPay: number | null;
   paid: boolean;
@@ -2253,8 +2255,39 @@ export async function apiFetchTournamentMyRegistration(
   return { ...result, data: registration };
 }
 
+export async function apiReadTournamentPaymentStatus(
+  exerciseId: string,
+  registration: TournamentRegistrationState,
+): Promise<TournamentRegistrationState> {
+  const { bookingId } = registration;
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  if (!bookingId || !uuid.test(bookingId) || !uuid.test(exerciseId)) return registration;
+  const { data, error } = await request<unknown>("/lk/subscription-bookings", {
+    baseUrl: getServ2Origin(),
+    method: "POST",
+    auth: true,
+    retries: 0,
+    body: JSON.stringify({ action: "tournament-payment-status", exerciseId, bookingId }),
+  });
+  if (error || !isRecord(data) || data.bookingId !== bookingId || data.exerciseId !== exerciseId) return registration;
+  if (data.status === "NONE") return { ...createAvailableTournamentVivaRegistrationState(), paymentStatusVerified: true };
+  if (data.status === "REGISTERED") return {
+    ...registration, status: "REGISTERED", canRegister: false, message: null,
+    paymentUrl: null, paymentExpiresAt: null, paymentStatusVerified: true,
+  };
+  if (data.status === "PAYMENT_PENDING" || data.status === "UNAVAILABLE") return {
+    ...registration, status: "PAYMENT_PENDING", canRegister: false,
+    message: data.status === "UNAVAILABLE" ? "Не удалось проверить статус платежа. Обновите карточку турнира." : null,
+    paymentUrl: data.status === "PAYMENT_PENDING" ? pickString(data, ["paymentUrl"]) : null,
+    paymentExpiresAt: data.status === "PAYMENT_PENDING" ? pickString(data, ["paymentExpiresAt"]) : null,
+    paymentStatusVerified: true,
+  };
+  return registration;
+}
+
 export async function apiFetchTournamentVivaMyRegistration(
   exerciseId: string,
+  options: { checkTwoHourTournamentPayment?: boolean } = {},
 ): Promise<ApiResult<TournamentRegistrationState>> {
   const bookingResult = await fetchTournamentVivaMyBooking(exerciseId);
   if (bookingResult.error) {
@@ -2269,7 +2302,7 @@ export async function apiFetchTournamentVivaMyRegistration(
     ?? createAvailableTournamentVivaRegistrationState();
 
   return {
-    data: registration,
+    data: options.checkTwoHourTournamentPayment ? await apiReadTournamentPaymentStatus(exerciseId, registration) : registration,
     error: null,
     status: bookingResult.status,
   };
@@ -2780,6 +2813,7 @@ export async function apiFetchTournamentVivaPublicCheckout(
 }
 
 type CreateTournamentVivaTransactionParams = {
+  preservePendingTournamentPayment?: boolean;
   exerciseId: string;
   checkoutContext?: "tournament";
   studioId: string | null;
@@ -3130,6 +3164,13 @@ async function apiCreateTournamentVivaBookingFromSubscription(
   const expectedDiscount = params.product.tournamentDiscountQuote || params.product.groupDiscountQuote;
   if (!payment || (expectedDiscount && (!isRecord(response.data)
     || response.data.toPayMinor !== expectedDiscount.amountMinor || payment.toPay !== expectedDiscount.amountMinor))) {
+    const quote = params.product.tournamentDiscountQuote;
+    if (params.preservePendingTournamentPayment && quote?.durationMinutes === 120 && (quote.amountMinor ?? 0) > 0) {
+      // The seat exists. Missing or conflicting payment evidence must not turn it into
+      // a paid registration or invite the player to create another booking.
+      return { data: { bookingId, paymentPending: true, paymentUrl: null, paid: false,
+        toPay: quote.amountMinor, paymentExpiresAt: null, raw: null }, error: null, status: response.status };
+    }
     return { data: null, error: { status: 202,
       message: "Запись создана; доплата требует подтверждения. Не создавайте повторную запись.",
       raw: response.data }, status: 202 };
