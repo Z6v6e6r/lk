@@ -39,6 +39,7 @@ import {
   apiFetchTournamentVivaMyRegistration,
   apiFetchTournamentVivaPublicCheckout,
   apiResolveTournamentVivaRegistrationBookingId,
+  apiReadTournamentPaymentStatus,
   apiReconcileTournamentOwner,
   apiRegisterForTournament,
   type TournamentRegistrationState,
@@ -987,6 +988,7 @@ export default function TournamentSignupPage({
   const [discountLoading, setDiscountLoading] = useState(false);
   const [discountError, setDiscountError] = useState<string | null>(null);
   const checkoutRequestIdRef = useRef(0);
+  const detailRequestIdRef = useRef(0);
   const [activeDetailTab, setActiveDetailTab] = useState<TournamentDetailTab>("roster");
   const [typeFilter, setTypeFilter] = useState(ALL_FILTER_VALUE);
   const [stationFilter, setStationFilter] = useState(ALL_FILTER_VALUE);
@@ -1231,78 +1233,108 @@ export default function TournamentSignupPage({
   }, [loadList, subscriptionUsageShadowEnabled]);
 
   const loadDetail = useCallback(async (tournamentId: string, { checkOnly = false } = {}) => {
+    const detailRequestId = ++detailRequestIdRef.current;
+    const checkoutRequestId = checkoutRequestIdRef.current;
     const requestToken = readAuthToken();
-    const requestId = checkoutRequestIdRef.current;
+    const sessionIdentity = tournamentPaymentSessionIdentity(requestToken);
+    const isCurrentDetail = () => detailRequestId === detailRequestIdRef.current
+      && (!checkOnly || checkoutRequestId === checkoutRequestIdRef.current)
+      && sessionIdentity === tournamentPaymentSessionIdentity(readAuthToken());
+
     setLoadingDetail(true);
     setError(null);
     setRegistrationResolvedFor(null);
     const detailResult = await apiFetchTournamentSignupDetail(tournamentId);
-    if (checkOnly && checkoutRequestIdRef.current !== requestId) return;
-    const fallbackExerciseId = items.find((item) => item.id === tournamentId)?.exerciseId ?? tournamentId;
-    const exerciseId = detailResult.data?.exerciseId || fallbackExerciseId;
+    if (!isCurrentDetail()) return;
+    const listedTournament = items.find((item) => item.id === tournamentId);
+    const exerciseId = detailResult.data?.exerciseId || listedTournament?.exerciseId || tournamentId;
+    const startsAt = Date.parse(detailResult.data?.startsAt || listedTournament?.startsAt || "");
+    const endsAt = Date.parse(detailResult.data?.endsAt || listedTournament?.endsAt || "");
+    const checkTwoHourTournamentPayment = endsAt - startsAt === 120 * 60_000;
     publicRosterDetailAbortRef.current?.abort();
     const rosterAbortController = new AbortController();
     publicRosterDetailAbortRef.current = rosterAbortController;
     const rosterOptions = { signal: rosterAbortController.signal };
     let rosterRequest = checkOnly ? null : loadPublicRoster(exerciseId, rosterOptions);
-    // Keep the attached controller available until the post-reconciliation read completes.
-    const finishRosterRead = () => {
-      if (publicRosterDetailAbortRef.current === rosterAbortController) {
-        publicRosterDetailAbortRef.current = null;
-      }
-    };
-    const [registrationResult, vivaRegistrationResult] = isAuthenticated && !subscriptionUsageShadowEnabled
-      ? await Promise.all([
-          apiFetchTournamentMyRegistration(tournamentId),
-          apiFetchTournamentVivaMyRegistration(exerciseId),
-        ])
-      : [null, null];
+    try {
+      const [registrationResult, vivaRegistrationResult] = isAuthenticated && !subscriptionUsageShadowEnabled
+        ? await Promise.all([
+            apiFetchTournamentMyRegistration(tournamentId),
+            apiFetchTournamentVivaMyRegistration(exerciseId, { checkTwoHourTournamentPayment }),
+          ])
+        : [null, null];
+      if (!isCurrentDetail()) return;
 
-    let ownerRegistration = registrationResult?.data;
-    const pendingCopay = ownerRegistration?.status === "PAYMENT_PENDING";
-    const ownsCopay = pendingCopay || Boolean(ownerRegistration?.status === "REGISTERED" && ownerRegistration.bookingId);
-    let ownerRosterChanged = false;
-    if ((pendingCopay || (checkOnly && ownsCopay)
-      || (!ownsCopay && !checkOnly && vivaRegistrationResult?.data?.status === "REGISTERED"))
-      && tournamentPaymentSessionIdentity(requestToken) === tournamentPaymentSessionIdentity(readAuthToken())) {
-      const reconciliation = await apiReconcileTournamentOwner(exerciseId);
-      ownerRosterChanged = reconciliation.data?.state === "COMPLETED" || reconciliation.data?.state === "CANCELLED";
-      if (pendingCopay && ownerRosterChanged) {
-        ownerRegistration = (await apiFetchTournamentMyRegistration(tournamentId)).data ?? ownerRegistration;
+      let ownerRegistration = registrationResult?.data;
+      const vivaRegistration = vivaRegistrationResult?.data;
+      const pendingCopay = ownerRegistration?.status === "PAYMENT_PENDING";
+      const ownsCopay = pendingCopay || Boolean(ownerRegistration?.status === "REGISTERED" && ownerRegistration.bookingId);
+      let ownerRosterChanged = false;
+      if (pendingCopay || (checkOnly && ownsCopay)
+        || (!ownsCopay && !checkOnly && vivaRegistration?.status === "REGISTERED")) {
+        const reconciliation = await apiReconcileTournamentOwner(exerciseId);
+        if (!isCurrentDetail()) return;
+        ownerRosterChanged = reconciliation.data?.state === "COMPLETED" || reconciliation.data?.state === "CANCELLED";
+        if (pendingCopay && ownerRosterChanged) {
+          ownerRegistration = (await apiFetchTournamentMyRegistration(tournamentId)).data ?? ownerRegistration;
+          if (!isCurrentDetail()) return;
+        }
       }
-    }
-    if (!rosterOptions.signal.aborted && (checkOnly || ownerRosterChanged)) {
-      rosterRequest = loadPublicRoster(exerciseId, { ...rosterOptions, force: true });
-    }
-    if (rosterRequest) void rosterRequest.finally(finishRosterRead);
-    else finishRosterRead();
+      if (!rosterOptions.signal.aborted && (checkOnly || ownerRosterChanged)) {
+        rosterRequest = loadPublicRoster(exerciseId, { ...rosterOptions, force: true });
+      }
 
-    const resolvedRegistration = await mergeTournamentPendingPayment(
-      requestToken, exerciseId,
-      preserveTournamentLevelDenial(
-        ownerRegistration,
-        (ownsCopay ? ownerRegistration : vivaRegistrationResult?.data ?? ownerRegistration)
-          ?? detailResult.data?.registration ?? null,
-      ),
-    );
-    if (checkOnly && checkoutRequestIdRef.current !== requestId) return;
-    if (tournamentPaymentSessionIdentity(requestToken) !== tournamentPaymentSessionIdentity(readAuthToken())) {
+      if (ownerRosterChanged && ownerRegistration?.status === "PAYMENT_PENDING") {
+        // A terminal reconciliation retires the old link even while status readback is catching up.
+        ownerRegistration = { ...ownerRegistration, paymentUrl: null, paymentExpiresAt: null, paymentStatusVerified: true };
+      } else if (checkTwoHourTournamentPayment && ownerRegistration?.status === "PAYMENT_PENDING" && ownerRegistration.bookingId) {
+        const paymentStatus = vivaRegistration?.paymentStatusVerified && vivaRegistration.bookingId === ownerRegistration.bookingId
+          ? vivaRegistration
+          : await apiReadTournamentPaymentStatus(exerciseId, ownerRegistration);
+        if (!isCurrentDetail()) return;
+        if (paymentStatus.paymentStatusVerified) {
+          const payable = paymentStatus.status === "PAYMENT_PENDING";
+          ownerRegistration = {
+            ...ownerRegistration,
+            paymentUrl: payable ? paymentStatus.paymentUrl : null,
+            paymentExpiresAt: payable ? paymentStatus.paymentExpiresAt : null,
+            paymentStatusVerified: true,
+          };
+        }
+      }
+
+      const resolvedRegistration = await mergeTournamentPendingPayment(
+        requestToken, exerciseId,
+        preserveTournamentLevelDenial(
+          ownerRegistration,
+          (ownsCopay ? ownerRegistration : vivaRegistration ?? ownerRegistration)
+            ?? detailResult.data?.registration ?? null,
+        ),
+      );
+      if (!isCurrentDetail()) return;
+      if (detailResult.error) {
+        setError(detailResult.error.message || "Не удалось открыть турнир");
+        setDetail(null);
+      } else {
+        setDetail(detailResult.data ?? null);
+      }
+      setRegistrationSessionIdentity(sessionIdentity);
+      if (resolvedRegistration?.paymentStatusVerified) clearStoredPendingPayment(exerciseId);
+      setRegistration(resolvedRegistration);
+      if (checkoutRequestIdRef.current === checkoutRequestId && resolvedRegistration?.status === "REGISTERED" && resolvedRegistration.bookingId) {
+        setSubscriptionConfirmationNotice(null);
+      }
+      setRegistrationResolvedFor(`${tournamentId}:${exerciseId}`);
       setLoadingDetail(false);
-      return;
+    } finally {
+      const finishRosterRead = () => {
+        if (publicRosterDetailAbortRef.current === rosterAbortController) {
+          publicRosterDetailAbortRef.current = null;
+        }
+      };
+      if (rosterRequest) void rosterRequest.finally(finishRosterRead);
+      else finishRosterRead();
     }
-    if (detailResult.error) {
-      setError(detailResult.error.message || "Не удалось открыть турнир");
-      setDetail(null);
-    } else {
-      setDetail(detailResult.data ?? null);
-    }
-    setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(requestToken));
-    setRegistration(resolvedRegistration);
-    if (checkoutRequestIdRef.current === requestId && resolvedRegistration?.status === "REGISTERED" && resolvedRegistration.bookingId) {
-      setSubscriptionConfirmationNotice(null);
-    }
-    setRegistrationResolvedFor(`${tournamentId}:${exerciseId}`);
-    setLoadingDetail(false);
   }, [isAuthenticated, items, loadPublicRoster, subscriptionUsageShadowEnabled]);
 
   const ensurePricingPreviewLoaded = useCallback(async (tournament: TournamentSignupSummary | null | undefined) => {
@@ -1485,6 +1517,7 @@ export default function TournamentSignupPage({
     setRegistration(null);
     if (!selectedId) return;
     void loadDetail(selectedId);
+    return () => { detailRequestIdRef.current += 1; };
   }, [loadDetail, selectedId, phone]);
 
   useEffect(() => {
@@ -1526,6 +1559,7 @@ export default function TournamentSignupPage({
     setConfirmingSubscriptionProductKey(subscriptionProductKey);
     try {
       const result = await apiCreateTournamentVivaTransaction({
+        preservePendingTournamentPayment: true,
         exerciseId: selectedExerciseId,
         checkoutContext: "tournament",
         studioId: nextCheckout.studioId,
@@ -1569,7 +1603,8 @@ export default function TournamentSignupPage({
         setError(result.error?.message || "Не удалось создать запись через Viva");
         return;
       }
-      if (result.data.paymentUrl) {
+      const paymentUrl = result.data.paymentUrl;
+      if (paymentUrl || result.data.paymentPending) {
         const nextRegistration: TournamentRegistrationState = {
           status: "PAYMENT_PENDING",
           bookingId: result.data.bookingId,
@@ -1577,15 +1612,25 @@ export default function TournamentSignupPage({
           waitlistNumber: null,
           canRegister: false,
           canCancel: true,
-          message: "Ожидается оплата.",
-          paymentUrl: result.data.paymentUrl,
-          paymentExpiresAt: result.data.paymentExpiresAt ?? new Date(Date.now() + PAYMENT_HOLD_MS).toISOString(),
+          message: paymentUrl ? null : "Ссылку на оплату пока не удалось подтвердить. Обновите карточку турнира.",
+          paymentUrl,
+          paymentExpiresAt: paymentUrl
+            ? result.data.paymentExpiresAt ?? new Date(Date.now() + PAYMENT_HOLD_MS).toISOString() : null,
         };
-        await storeTournamentPendingPayment(paymentToken, selectedExerciseId, nextRegistration);
-        if (tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
         setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(paymentToken));
         setRegistration(nextRegistration);
-        if (!canPayTournamentPending(nextRegistration) || !navigateToExternalUrl(result.data.paymentUrl)) {
+        setCheckout(null);
+        if (!paymentUrl) return;
+        if (product.tournamentDiscountQuote) {
+          // The owned status can recover this bill after return. Do not delay
+          // navigation on browser storage for a discounted tournament.
+          void storeTournamentPendingPayment(paymentToken, selectedExerciseId, nextRegistration);
+        } else {
+          await storeTournamentPendingPayment(paymentToken, selectedExerciseId, nextRegistration);
+        }
+        if (checkoutRequestIdRef.current !== requestId
+          || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
+        if (!canPayTournamentPending(nextRegistration) || !navigateToExternalUrl(paymentUrl)) {
           setError("Не удалось открыть страницу оплаты");
         }
         return;
@@ -1793,6 +1838,15 @@ export default function TournamentSignupPage({
     }, Math.min(expiresAt - Date.now(), 2_147_483_647));
     return () => window.clearTimeout(timer);
   }, [registration]);
+
+  useEffect(() => {
+    if (!selectedId || registration?.status !== "PAYMENT_PENDING") return;
+    const refreshRestoredCard = (event: PageTransitionEvent) => {
+      if (event.persisted) void loadDetail(selectedId);
+    };
+    window.addEventListener("pageshow", refreshRestoredCard);
+    return () => window.removeEventListener("pageshow", refreshRestoredCard);
+  }, [loadDetail, registration?.status, selectedId]);
 
   const canPayPending = isAuthenticated && !isRestoringSession && Boolean(registrationSessionIdentity)
     && registrationSessionIdentity === tournamentPaymentSessionIdentity(readAuthToken()) && canPayTournamentPending(registration);
@@ -2256,6 +2310,20 @@ export default function TournamentSignupPage({
                   </div>
 
                   <div className="tournament-signup-register-stack">
+                    {registration?.status === "PAYMENT_PENDING" && (
+                      <div className="tournament-signup-notice" role="status" aria-live="polite">
+                        <strong>Ожидает оплаты</strong>
+                        {registration.message && <div>{registration.message}</div>}
+                        <button
+                          className="tournament-signup-ghost"
+                          type="button"
+                          onClick={() => void loadDetail(selectedId)}
+                          disabled={actionLoading}
+                        >
+                          Обновить статус
+                        </button>
+                      </div>
+                    )}
                     {subscriptionUsageShadowEnabled && isAuthenticated && selectedExerciseId && (
                       <div className="tournament-signup-auth">
                         <div className="tournament-signup-auth-head">

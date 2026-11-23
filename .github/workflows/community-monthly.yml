@@ -64,6 +64,9 @@ on:
       - scripts/nodered_games_nodes/fn_split_router.js
       - scripts/nodered_subscription_booking_nodes/**
       - scripts/tests/gameCreateOwner*
+      - scripts/tests/wholeCourtCheckout.test.mjs
+      - scripts/nodered_whole_court_checkout_nodes/**
+      - scripts/patch_nodered_whole_court_checkout.mjs
       - scripts/tests/helpers/gameCreateOwnerHarness.mjs
       - scripts/tests/fixtures/quarter-create-owner-v1.json
       - scripts/tests/monetarySelfLeaveFence*
@@ -133,6 +136,9 @@ on:
       - scripts/nodered_games_nodes/fn_split_router.js
       - scripts/nodered_subscription_booking_nodes/**
       - scripts/tests/gameCreateOwner*
+      - scripts/tests/wholeCourtCheckout.test.mjs
+      - scripts/nodered_whole_court_checkout_nodes/**
+      - scripts/patch_nodered_whole_court_checkout.mjs
       - scripts/tests/helpers/gameCreateOwnerHarness.mjs
       - scripts/tests/fixtures/quarter-create-owner-v1.json
       - scripts/tests/monetarySelfLeaveFence*
@@ -216,6 +222,8 @@ jobs:
         run: node --test scripts/tests/gameCreateOwner.test.mjs
           scripts/tests/gameCreateOwnerGraph.test.mjs
           scripts/tests/gameCreateOwner.mongo.test.mjs
+      - name: Test original whole-court checkout and Mongo dispatch race
+        run: node --test scripts/tests/wholeCourtCheckout.test.mjs
       - name: Test monetary SELF dispatch fencing with real Mongo write conflicts
         run: node --test scripts/tests/monetarySelfLeaveFence.test.mjs
           scripts/tests/monetarySelfLeaveFence.mongo.test.mjs
