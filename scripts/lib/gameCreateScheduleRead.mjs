@@ -424,9 +424,10 @@ export async function readGameCreateSchedule(
       studioId: stationId,
       roomId: slot.roomId,
       subServiceIds: service.subServiceId,
+      // The LK1 game screen sends its exact master-service price window in HH:mm.
+      fromTime: slot.startsAt.slice(11, 16),
+      toTime: slot.endsAt.slice(11, 16),
       fromDate: day,
-      fromTime: slot.startsAt.slice(11, 19),
-      toTime: slot.endsAt.slice(11, 19),
     });
     let pricePayload;
     try {

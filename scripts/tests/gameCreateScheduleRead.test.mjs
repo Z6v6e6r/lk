@@ -48,8 +48,9 @@ test("asks Viva for the LK1-owned schedule and binds a quote to a current availa
     }
     if (url.pathname.endsWith("/price")) {
       assert.equal(url.searchParams.get("roomId"), roomId);
-      assert.equal(url.searchParams.get("fromTime"), "07:00:00");
-      assert.equal(url.searchParams.get("toTime"), "08:00:00");
+      assert.equal(url.searchParams.get("fromDate"), day);
+      assert.equal(url.searchParams.get("fromTime"), "07:00");
+      assert.equal(url.searchParams.get("toTime"), "08:00");
       return Response.json({
         [url.searchParams.get("subServiceIds")]: {
           calculation: {
