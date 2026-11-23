@@ -63,7 +63,7 @@ function gate(fetchProfile) {
   return { render, setToken(value) { token = value; }, setTarget(value) { target = value; render(); } };
 }
 
-test('only explicit admission limits require onboarding, including skins, subdivisions and training titles', () => {
+test('recognizes explicit level metadata, including skins, subdivisions and activity titles', () => {
   for (const event of [restricted, { accessLevels: ['3.25'] }, { levelLabel: 'C1–B+4' },
     { raw: { skin: { accessLevels: ['C+'] } } }, { name: 'Тренировка, уровень D–D+' },
     { direction: { name: 'Групповая уровня C' } }, { settings: { maxRating: 4.2 } },
@@ -82,7 +82,6 @@ test('unrestricted events do not request a level; restricted rated clients use f
   const g = gate(async () => { calls++; return { data: rated }; });
   assert.equal(await g.render().checkLevel({}), true); assert.equal(calls, 0);
   assert.equal(await g.render().checkLevel(restricted, rated.id), true); assert.equal(calls, 1);
-  assert.equal(g.render().levelProfileRef.current, rated);
 });
 test('missing level prompts existing onboarding, with return to the selected event and no automatic booking', async () => {
   const g = gate(async () => ({ data: unrated }));
@@ -173,25 +172,77 @@ function callback(path, name, dependencies) {
   }).outputText;
   return new Function(...Object.keys(dependencies), compiled + '\nreturn callback;')(...Object.values(dependencies));
 }
-test('checkout replacement during level verification stops both event writers before the first write', async () => {
-  for (const kind of ['training', 'tournament']) {
-    const d = deferred(), requestRef = { current: 1 }; let writes = 0;
-    const checkout = { profile: { ...unrated, phone: '70000000000' }, exercise: { id: 'fixture-event' } };
-    const dependencies = {
-      subscriptionUsageShadowEnabled: false, selectedId: 'fixture-event', selectedExerciseId: 'fixture-event',
-      actionLoading: false, isAuthenticated: true, isRestoringSession: false, checkout,
-      discountPending: false, discountError: null, TRIAL_GROUP_CHECKOUT_ENABLED: false,
-      detail: restricted, selectedTournament: restricted,
-      registrationRequestIdRef: requestRef, checkoutRequestIdRef: requestRef,
-      checkLevel: () => d.promise, readAuthToken: () => 'fixture-session',
-      apiCreateTournamentVivaTransaction: () => { writes++; throw Error('stale checkout write'); },
-    };
-    const fn = kind === 'training'
-      ? callback('components/group-schedule/GroupSchedulePage.tsx', 'completeRegistration', dependencies)
-      : callback('components/tournament-signup/TournamentSignupPage.tsx', 'completeVivaRegistration', dependencies);
-    const pending = kind === 'training' ? fn({ id: 'fixture-event' }, checkout, {}) : fn(checkout, { source: 'one-time' });
-    requestRef.current += 1; d.resolve(true); await pending; assert.equal(writes, 0);
+test('only tournament signup uses the level onboarding gate', () => {
+  for (const path of [
+    'components/group-schedule/GroupSchedulePage.tsx',
+    'components/games/GameJoinPage.tsx',
+    'components/games/GamesPage.tsx',
+  ]) {
+    assert.doesNotMatch(read(path), /useLevelOnboardingGate|levelOnboardingDialog/, path);
   }
+  assert.match(read('components/tournament-signup/TournamentSignupPage.tsx'), /useLevelOnboardingGate\(selectedId\)/);
+});
+
+test('checkout replacement during tournament level verification stops the first write', async () => {
+  const d = deferred(), requestRef = { current: 1 };
+  let writes = 0;
+  const checkout = { profile: { ...unrated, phone: '70000000000' }, exercise: { id: 'fixture-event' } };
+  const complete = callback('components/tournament-signup/TournamentSignupPage.tsx', 'completeVivaRegistration', {
+    subscriptionUsageShadowEnabled: false, selectedId: 'fixture-event', selectedExerciseId: 'fixture-event',
+    actionLoading: false, isAuthenticated: true, isRestoringSession: false, checkout,
+    discountPending: false, discountError: null, detail: restricted, selectedTournament: restricted,
+    checkoutRequestIdRef: requestRef, checkLevel: () => d.promise, readAuthToken: () => 'fixture-session',
+    apiCreateTournamentVivaTransaction: () => { writes++; throw Error('stale checkout write'); },
+  });
+  const pending = complete(checkout, { source: 'one-time' });
+  requestRef.current += 1;
+  d.resolve(true);
+  await pending;
+  assert.equal(writes, 0);
+});
+
+test('training with a level label reaches checkout without a player level', async () => {
+  const training = { id: 'fixture-training', levelLabel: 'C', raw: { accessLevels: ['C'] } };
+  const writes = [];
+  const complete = callback('components/group-schedule/GroupSchedulePage.tsx', 'completeRegistration', {
+    subscriptionUsageShadowEnabled: false, selectedId: training.id, TRIAL_GROUP_CHECKOUT_ENABLED: false,
+    setActionLoading() {}, setDetailError(value) { assert.equal(value, null); }, setActionMessage() {},
+    buildPaymentReturnUrls: () => ({ successUrl: 'https://fixture.invalid/success', failUrl: 'https://fixture.invalid/fail' }),
+    apiCreateTournamentVivaTransaction: async (params) => {
+      writes.push(params);
+      return { data: { bookingId: 'fixture-booking' } };
+    },
+    setRegistration() {}, loadRegistrationState: async () => {}, loadList: async () => {},
+  });
+
+  for (const [status, paymentSource] of [['UNRATED', 'one-time'], ['UNAVAILABLE', 'client-subscription']]) {
+    const profile = { ...unrated, phone: '70000000000', level: { ...unrated.level, status } };
+    await complete(training, { profile, exercise: { id: training.id } }, { source: paymentSource });
+  }
+  assert.deepEqual(writes.map(({ exerciseId, product }) => [exerciseId, product.source]), [
+    [training.id, 'one-time'],
+    [training.id, 'client-subscription'],
+  ]);
+});
+
+test('game join needs a loaded game but can continue without a player level', async () => {
+  const commands = [];
+  const deps = {
+    subscriptionUsageShadowEnabled: false, canCurrentUserJoinGameInDetails: true, gameRecordId: 'fixture-game',
+    activeGameRecord: null, profileId: unrated.id, profilePhoneNorm: '70000000000', detailsHasFreeSlots: true,
+    LEGACY_ROSTER_BRIDGE_ENABLED: true, setUpdatingGameRoster() {},
+    setGameRosterError(value) { assert.equal(value, null); },
+    apiCommandPadelGameRoster: async (id, action) => { commands.push([id, action]); return {}; },
+    apiFetchPadelGameRecord: async () => ({}),
+  };
+  const join = (game) => callback('components/games/GamesPage.tsx', 'handleJoinCurrentUserFromDetails', {
+    ...deps, activeGameRecord: game,
+  })();
+
+  await join(null);
+  assert.deepEqual(commands, []);
+  await join({ id: deps.gameRecordId, ...restricted });
+  assert.deepEqual(commands, [[deps.gameRecordId, 'JOIN_GAME']]);
 });
 
 test('loading is visible, cancelling aborts the read, and its late result cannot hide a newer check', async () => {

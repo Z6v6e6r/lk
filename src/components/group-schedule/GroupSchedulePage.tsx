@@ -1,4 +1,3 @@
-import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
 import { GroupTrainingInfo } from "./GroupTrainingInfo";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../auth/AuthForm";
@@ -374,7 +373,6 @@ export default function GroupSchedulePage({
   const [linkDirectionLabel, setLinkDirectionLabel] = useState<string | null>(initialDirectionLabel || null);
   const [stationFilter, setStationFilter] = useState(initialStudioId || ALL_FILTER_VALUE);
   const [selectedId, setSelectedId] = useState<string | null>(initialExerciseId || null);
-  const { checkLevel, levelOnboardingDialog } = useLevelOnboardingGate(selectedId);
   const [selectedDetail, setSelectedDetail] = useState<GroupTrainingSummary | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -926,10 +924,6 @@ export default function GroupSchedulePage({
       return;
     }
 
-    const requestId = registrationRequestIdRef.current;
-    if (!await checkLevel(training, activeCheckout.profile.id)) return;
-    if (registrationRequestIdRef.current !== requestId) return;
-
     setActionLoading(true);
     setDetailError(null);
     setActionMessage(null);
@@ -973,7 +967,6 @@ export default function GroupSchedulePage({
     await loadRegistrationState(training);
     await loadList();
   }, [
-    checkLevel,
     loadList,
     loadRegistrationState,
     previewSubscriptionDiscount,
@@ -1054,7 +1047,6 @@ export default function GroupSchedulePage({
 
   return (
     <div className={`group-schedule-page tournament-signup-page${selectedId ? " group-schedule-page--detail" : ""}`}>
-      {levelOnboardingDialog}
       <header className="tournament-signup-header">
         <button
           className="page-back"
