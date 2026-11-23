@@ -8,7 +8,7 @@ export const PLAYER_RATING_COLLECTIONS = {
 } as const;
 
 export const PLAYER_RATING_LEDGER_SCHEMA_VERSION = 1;
-export const PLAYER_RATING_WORKER_VERSION = "rating-worker-v1.0.14";
+export const PLAYER_RATING_WORKER_VERSION = "rating-worker-v1.0.15";
 
 export interface PlayerRatingIdentity {
   playerKey: string;
@@ -83,15 +83,52 @@ function roundRatingDelta(value: number): number {
   return Math.round(value * 100000) / 100000;
 }
 
-export function ratingGradeFromNumeric(value: unknown): string {
-  const rating = toFiniteRating(value) ?? 1;
-  if (rating >= 6) return "A";
-  if (rating >= 5) return "B+";
-  if (rating >= 4.2) return "B";
-  if (rating >= 3.5) return "C+";
-  if (rating >= 3) return "C";
-  if (rating >= 2.5) return "D+";
-  return "D";
+export const PLAYER_RATING_BANDS = [
+  { grade: "A", min: 5.5, max: 7 },
+  { grade: "B+", min: 4.7, max: 5.5 },
+  { grade: "B", min: 4, max: 4.7 },
+  { grade: "C+", min: 3.5, max: 4 },
+  { grade: "C", min: 3, max: 3.5 },
+  { grade: "D+", min: 2, max: 3 },
+  { grade: "D", min: 1, max: 2 },
+] as const;
+
+export type PlayerRatingBand = typeof PLAYER_RATING_BANDS[number];
+
+function ratingBandForNumber(rating: number): PlayerRatingBand {
+  return PLAYER_RATING_BANDS.find((band) => rating >= band.min) ?? PLAYER_RATING_BANDS[6];
+}
+
+export function ratingGradeFromNumeric(value: unknown): PlayerRatingBand["grade"] {
+  return ratingBandForNumber(roundPlayerRating(toFiniteRating(value) ?? 1)).grade;
+}
+
+export function ratingSublevelsForBand({ grade, min, max }: PlayerRatingBand) {
+  const width = (max - min) / 4;
+  const boundaries = [min, ...[1, 2, 3].map((step) => roundPlayerRating(min + step * width)), max];
+  const [letter, plus = ""] = grade;
+  return ([1, 2, 3, 4] as const).map((index) => ({
+    index,
+    label: letter + (index === 1 ? "" : String(index - 1)) + plus,
+    min: boundaries[index - 1],
+    max: boundaries[index],
+  }));
+}
+
+export function ratingSublevelFromNumeric(value: number) {
+  const rating = roundPlayerRating(toFiniteRating(value) ?? 1);
+  const band = ratingBandForNumber(rating);
+  const steps = ratingSublevelsForBand(band);
+  return steps.find((step) => rating < step.max) ?? steps[3];
+}
+
+export function ratingGradesForChange(before: unknown, after: unknown) {
+  const beforeNumeric = toFiniteRating(before);
+  const afterNumeric = toFiniteRating(after);
+  return {
+    gradeBefore: beforeNumeric == null ? null : ratingGradeFromNumeric(beforeNumeric),
+    gradeAfter: afterNumeric == null ? null : ratingGradeFromNumeric(afterNumeric),
+  };
 }
 
 export function buildPlayerRatingKey(input: {
@@ -557,8 +594,7 @@ export function buildTournamentCompensationEvent(input: {
       before: input.event.change.after,
       delta: roundRatingDelta(-delta),
       after: input.event.change.before,
-      gradeBefore: input.event.change.gradeAfter,
-      gradeAfter: input.event.change.gradeBefore,
+      ...ratingGradesForChange(input.event.change.after, input.event.change.before),
     },
     projectionIntent: { viva: "REQUIRED_DURING_MIGRATION" },
   };

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   buildGameResultBaselineEvent,
+  ratingGradeFromNumeric,
   replayPlayerRatingEvents,
 } from "../../src/services/player-rating/ledger.ts";
 import {
@@ -397,11 +398,60 @@ test("result player collection and game roster projection are identity-safe", ()
   assert.equal(collectResultPlayers(result()).length, 4);
   const projected = applyRatingImpactToGameRoster(
     players.map((player) => ({ id: player.id, phone: player.phoneNorm, ratingNumeric: 3 })),
-    [{ id: "p1", phoneNorm: players[0].phoneNorm, after: 3.25, gradeAfter: "C" }],
+    [{ id: "p1", phoneNorm: players[0].phoneNorm, after: 2.3, gradeAfter: "D" }],
   );
 
-  assert.equal(projected[0].ratingNumeric, 3.25);
+  assert.equal(projected[0].ratingNumeric, 2.3);
+  assert.equal(projected[0].rating, "D+");
   assert.equal(projected[1].ratingNumeric, 3);
+});
+
+test("worker recovery aligns grades for uninserted events in a legacy prepared plan", async () => {
+  const nowIso = "2026-07-31T12:00:00.000Z";
+  const queuedResult = result({
+    resultModelVersion: 2,
+    ratingEnabled: true,
+    status: "PENDING_REVIEW",
+    lifecycleState: "PENDING_REVIEW",
+    ratingWork: {
+      generation: 1,
+      desiredState: "APPLIED",
+      status: "RUNNING",
+      leaseOwner: "worker-1",
+    },
+  });
+  const plan = buildGameResultRatingPlan({ result: queuedResult, ratingRows: ratingRows(), nowIso });
+  for (const event of plan.applyEvents) event.change.gradeAfter = "A";
+  for (const impact of plan.ratingImpact) impact.gradeAfter = "A";
+  queuedResult.ratingWork.preparedPlan = plan;
+  const db = new MemoryDb();
+  const alreadyInserted = plan.applyEvents[0];
+  const baselines = ratingRows().map((row) => buildGameResultBaselineEvent({
+    resultId: "res-1",
+    occurredAt: "2026-07-31T11:59:59.999Z",
+    player: { id: row.clientId, phoneNorm: row.phoneNorm, name: row.name },
+    ratingNumeric: row.ratingNumeric,
+    createdAt: nowIso,
+  }));
+  assert.ok(baselines.every(Boolean));
+  db.collections.set("rating_events", new MemoryCollection([...baselines, alreadyInserted]));
+  db.collections.set("player_rating_state", new MemoryCollection(ratingRows()));
+  db.collections.set(GAME_RESULT_COLLECTIONS.results, new MemoryCollection([queuedResult]));
+
+  const completion = await processClaimedGameResultJob(db as any, {
+    result: structuredClone(queuedResult), owner: "worker-1", nowIso,
+  });
+  assert.equal(completion.status, "APPLIED");
+  const events = db.collection("rating_events").docs;
+  assert.deepEqual(events.find((event) => event.id === alreadyInserted.id), alreadyInserted);
+  for (const event of plan.applyEvents.slice(1)) {
+    const change = events.find((candidate) => candidate.id === event.id)?.change;
+    assert.equal(change?.after, event.change.after);
+    assert.equal(change?.gradeAfter, ratingGradeFromNumeric(event.change.after));
+  }
+  const stored = db.collection(GAME_RESULT_COLLECTIONS.results).docs[0];
+  assert.deepEqual(stored.ratingImpact.map((impact: any) => impact.gradeAfter),
+    plan.ratingImpact.map((impact) => ratingGradeFromNumeric(impact.after)));
 });
 
 test("worker apply, crash retry, and dispute revert remain idempotent end to end", async () => {

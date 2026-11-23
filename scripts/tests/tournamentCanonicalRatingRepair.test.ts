@@ -89,6 +89,8 @@ test("repair event is append-only reconciliation and token is deterministic", ()
   const token = buildConfirmationToken([row]);
   assert.equal(token, buildConfirmationToken([row]));
   assert.match(token, /^REPAIR_[A-F0-9]{20}$/);
+  assert.notEqual(token, buildConfirmationToken([{ ...row, desiredGrade: "C" }]));
+  assert.notEqual(token, buildConfirmationToken([{ ...row, currentGrade: "D+" }]));
   const event = buildRepairEvent(row, "2026-07-20T00:00:00.000Z");
   assert.equal(event.change.before, 2.39616);
   assert.equal(event.change.delta, 1.20022);
