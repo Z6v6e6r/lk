@@ -8,6 +8,7 @@ const vivaOrigin = "https://api.vivacrm.ru";
 const lk1Origin = "https://padlhub.su";
 const vivaUserPath = "/end-user/api/v1/iSkq6G";
 const residencyProductId = "4037a3a3-e551-4f9a-a9db-1410e46b8635";
+const residencyProductTitle = "Резидентство ПадлхАБ";
 const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
 const tokenPattern = /^Bearer [A-Za-z\d._~-]{20,12000}$/;
@@ -323,14 +324,45 @@ function ownedResidency(payload) {
       entry?.product?.id,
       entry?.subscription?.id,
     ].filter((id) => uuid.test(id ?? ""));
+  const completePage =
+    payload?.last === true &&
+    (payload.first === true || payload.number === 0) &&
+    payload.totalElements === rows.length;
+  const legacyIds = completePage
+    ? rows
+        .filter((row) => row?.status === "ACTIVE" && productIds(row).length === 0)
+        .map((row) => row.subscriptionId)
+    : [];
   return {
     active: rows.filter((row) => productIds(row).includes(residencyProductId)),
-    complete:
-      payload?.last === true &&
-      (payload.first === true || payload.number === 0) &&
-      payload.totalElements === rows.length &&
-      rows.every((row) => productIds(row).length > 0),
+    complete: completePage && rows.every((row) => productIds(row).length > 0),
+    legacyIds:
+      legacyIds.length <= 20 &&
+      new Set(legacyIds).size === legacyIds.length &&
+      legacyIds.every((id) => uuid.test(id ?? ""))
+        ? legacyIds
+        : [],
   };
+}
+
+function discountedGameQuote(quote, expected, shareMinor, duration, now) {
+  return (
+    quote?.selectionKey === expected &&
+    Number.isSafeInteger(quote.evaluatedAt) &&
+    Number.isSafeInteger(quote.expiresAt) &&
+    quote.evaluatedAt <= now + 5000 &&
+    quote.expiresAt > now &&
+    quote.expiresAt > quote.evaluatedAt &&
+    quote.expiresAt - quote.evaluatedAt <= 60000 &&
+    quote.basePriceMinor === shareMinor &&
+    quote.freeMinutes === 0 &&
+    quote.paidMinutes === duration &&
+    quote.status === "AVAILABLE" &&
+    quote.reasonCode == null &&
+    Number.isSafeInteger(quote.amountMinor) &&
+    quote.amountMinor > 0 &&
+    quote.amountMinor < shareMinor
+  );
 }
 
 /** LK1 owns resolution of the service and the provider reads. The selection carries no caller price. */
@@ -476,7 +508,7 @@ export async function readGameCreateSchedule(
     const shareMinor = Math.round(wholeCourtMinor / 4);
     let residency = { status: "UNAVAILABLE" };
     try {
-      const { active: activeResidency, complete } = ownedResidency(
+      const { active: activeResidency, complete, legacyIds } = ownedResidency(
         await read(
           vivaOrigin +
             vivaUserPath +
@@ -485,10 +517,16 @@ export async function readGameCreateSchedule(
       );
       if (activeResidency.length === 0 && complete) {
         residency = { status: "NOT_APPLICABLE" };
-      } else if (activeResidency.length === 1) {
-        const item = activeResidency[0];
-        const subscriptionId = item.clientSubscriptionId ?? item.id;
-        if (!uuid.test(subscriptionId ?? "")) throw upstreamUnavailable();
+      } else if (
+        activeResidency.length === 1 ||
+        (activeResidency.length === 0 && legacyIds.length > 0)
+      ) {
+        const [item] = activeResidency;
+        const subscriptionIds = item
+          ? [item.clientSubscriptionId ?? item.subscriptionId ?? item.id]
+          : legacyIds;
+        if (!subscriptionIds.every((id) => uuid.test(id ?? "")))
+          throw upstreamUnavailable();
         const target = {
           targetKind: "NEW_GAME",
           // LK1 uses slotId only to correlate this read quote with the exact tuple.
@@ -506,13 +544,9 @@ export async function readGameCreateSchedule(
           "POST",
           {
             target,
-            subscriptionIds: [subscriptionId],
+            subscriptionIds,
           },
         );
-        const [quote] =
-          Array.isArray(result?.quotes) && result.quotes.length === 1
-            ? result.quotes
-            : [];
         const expected = JSON.stringify([
           target.slotId,
           stationId,
@@ -524,23 +558,33 @@ export async function readGameCreateSchedule(
           4,
         ]);
         if (
-          quote?.subscriptionId === subscriptionId &&
-          quote.selectionKey === expected &&
-          Number.isSafeInteger(quote.evaluatedAt) &&
-          Number.isSafeInteger(quote.expiresAt) &&
-          quote.evaluatedAt <= now() + 5000 &&
-          quote.expiresAt > now() &&
-          quote.expiresAt > quote.evaluatedAt &&
-          quote.expiresAt - quote.evaluatedAt <= 60000 &&
-          quote.basePriceMinor === shareMinor &&
-          quote.freeMinutes === 0 &&
-          quote.paidMinutes === duration &&
-          quote.status === "AVAILABLE" &&
-          quote.reasonCode == null &&
-          Number.isSafeInteger(quote.amountMinor) &&
-          quote.amountMinor > 0 &&
-          quote.amountMinor < shareMinor
-        ) {
+          !Array.isArray(result?.quotes) ||
+          result.quotes.length !== subscriptionIds.length ||
+          new Set(result.quotes.map((quote) => quote?.subscriptionId)).size !==
+            subscriptionIds.length ||
+          !result.quotes.every((quote) => subscriptionIds.includes(quote?.subscriptionId))
+        )
+          throw upstreamUnavailable();
+        const discounted = result.quotes.filter((quote) =>
+          discountedGameQuote(quote, expected, shareMinor, duration, now()),
+        );
+        // The older owned-list shape has only instance IDs. Read the canonical
+        // product label after the owner has validated and priced that instance.
+        const matching = item
+          ? discounted
+          : (
+              await Promise.all(
+                discounted.map(async (quote) => {
+                  const name = await read(
+                    lk1Origin + "/lk/subscriptions/product?" +
+                      new URLSearchParams({ subId: quote.subscriptionId }),
+                  );
+                  return name?.sertName === residencyProductTitle ? quote : null;
+                }),
+              )
+            ).filter(Boolean);
+        if (matching.length === 1 && matching[0].expiresAt > now()) {
+          const [quote] = matching;
           residency = { status: "APPLIED", amountMinor: quote.amountMinor };
           expiresAt = Math.min(expiresAt, quote.expiresAt);
         }

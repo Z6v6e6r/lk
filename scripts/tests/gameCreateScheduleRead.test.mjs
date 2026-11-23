@@ -294,6 +294,75 @@ test("an incomplete subscription list preserves the base quote and reads the ver
   assert.deepEqual(paths, ["timeslots", "price", "subscriptions", "status"]);
 });
 
+test("an owned legacy instance uses the LK1 game quote and its verified product label", async () => {
+  const payload = grouped([
+    [fragment("07:00", "07:30"), fragment("07:30", "08:00")],
+  ]);
+  const {
+    slots: [selection],
+  } = await readGrouped(payload);
+  const friendshipId = "568e3c9a-6cee-4e81-bd5a-2b28d0630b38";
+  for (const [label, matchingSelection, expected] of [
+    ["Резидентство ПадлхАБ", true, { status: "APPLIED", amountMinor: 42000 }],
+    ["Другой продукт", true, { status: "UNAVAILABLE" }],
+    ["Резидентство ПадлхАБ", false, { status: "UNAVAILABLE" }],
+  ]) {
+    const requestedLabels = [];
+    const result = await readGameCreateSchedule(
+      { ...request, query: { ...request.query, slotId: selection.id } },
+      {
+        now: () => clock,
+        fetchImpl: async (raw, options) => {
+          const url = new URL(raw);
+          if (url.pathname.endsWith("/timeslots")) return Response.json(payload);
+          if (url.pathname.endsWith("/price"))
+            return Response.json({
+              [url.searchParams.get("subServiceIds")]: {
+                calculation: { fixture: { basePrice: { valueFrom: 2400 }, impacts: [] } },
+              },
+            });
+          if (url.pathname.endsWith("/subscriptions"))
+            return Response.json({
+              first: true,
+              last: true,
+              totalElements: 2,
+              content: [friendshipId, residencyId].map((subscriptionId) => ({
+                subscriptionId,
+                status: "ACTIVE",
+              })),
+            });
+          if (url.pathname.endsWith("/game-price-preview")) {
+            const { target, subscriptionIds } = JSON.parse(options.body);
+            assert.deepEqual(subscriptionIds, [friendshipId, residencyId]);
+            const selectionKey = JSON.stringify([
+              target.slotId, target.stationId, target.roomId, target.masterServiceId,
+              target.subServiceIds, target.startsAt, target.durationMinutes, 4,
+            ]);
+            return Response.json({
+              quotes: subscriptionIds.map((subscriptionId, index) => ({
+                subscriptionId,
+                selectionKey: matchingSelection || index === 0 ? selectionKey : "another-slot",
+                status: "AVAILABLE", reasonCode: null,
+                basePriceMinor: 60000, amountMinor: index === 0 ? 0 : 42000,
+                paidMinutes: 60, freeMinutes: 0, evaluatedAt: clock, expiresAt: clock + 20000,
+              })),
+            });
+          }
+          if (url.pathname.endsWith("/subscriptions/product")) {
+            requestedLabels.push(url.searchParams.get("subId"));
+            return Response.json({ sertName: label });
+          }
+          assert.equal(url.href, "https://padlhub.su/lk/residency/status");
+          return new Response(null, { status: 401 });
+        },
+      },
+    );
+    assert.deepEqual(result.residency, expected);
+    assert.deepEqual(requestedLabels, matchingSelection ? [residencyId] : []);
+    assert.equal(result.shareMinor, 60000);
+  }
+});
+
 test("price denial leaves exact amounts unknown and preserves only verified LK1 status", async () => {
   const payload = grouped([
     [fragment("07:00", "07:30"), fragment("07:30", "08:00")],
