@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   GameCreateScheduleReadError,
@@ -11,7 +12,7 @@ const roomId = "a6c94564-a2bf-4d1b-b13c-b41b0796fb30";
 const residencyId = "d30d5898-21c3-4f94-8b0a-1f23cbbdab70";
 const day = "2026-12-06";
 const clock = Date.parse(day + "T05:00:00+03:00");
-const auth = "Bearer synthetic.actor.token.test";
+const auth = `Bearer ${randomUUID()}`;
 const request = {
   query: { stationId, day, durationMinutes: "60" },
   authorization: auth,
