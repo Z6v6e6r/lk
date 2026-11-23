@@ -571,6 +571,26 @@ test("physical replica set retries an automatic game after a concurrent CUP manu
     await db.collection("lk_game_results").insertOne(queued);
     await db.createCollection("player_ratings");
     await db.createCollection("lk_game_rating_events");
+    await db.createCollection("rating_projection_outbox");
+    const getCollection = db.collection.bind(db);
+    // Abort after all four projected state/outbox writes, just before completing the result.
+    const aborted = await processClaimedGameResultJob({
+      client,
+      collection(name: string) {
+        const collection = getCollection(name);
+        if (name === GAME_RESULT_COLLECTIONS.lifecycleEvents) {
+          collection.updateOne = async () => { throw new Error("synthetic transaction interruption"); };
+        }
+        return collection;
+      },
+    }, {
+      result: queued, owner: "synthetic-worker", nowIso: "2026-07-31T12:00:00.000Z",
+    });
+    assert.equal(aborted.status, "RETRYABLE");
+    assert.equal(await db.collection("rating_projection_outbox").countDocuments({}), 0);
+    assert.equal(await db.collection("player_ratings").countDocuments({}), 0);
+    assert.equal(await db.collection("rating_events").countDocuments({}), fixture.length);
+    await db.collection("lk_game_results").updateOne({ id: queued.id }, { $set: { ratingWork: queued.ratingWork } });
     const first = fixture[0]!;
     const manual = {
       ...first.event, _id: "synthetic-manual", id: "synthetic-manual", idempotencyKey: "synthetic-manual",
@@ -578,7 +598,6 @@ test("physical replica set retries an automatic game after a concurrent CUP manu
       source: { kind: "ADMIN_MANUAL", domain: "ADMIN_MANUAL" },
       change: { before: first.row.ratingNumeric, after: 4.7, delta: 1.6, gradeBefore: "C", gradeAfter: "B+" },
     };
-    const getCollection = db.collection.bind(db);
     let raced = false;
     const workerDb = {
       client,
@@ -619,6 +638,7 @@ test("physical replica set retries an automatic game after a concurrent CUP manu
     assert.equal(current?.ratingNumeric, gameEvent?.change.after);
     assert.equal(await db.collection("rating_events").countDocuments({ "source.kind": "ADMIN_MANUAL" }), 1);
     assert.equal(await db.collection("rating_events").countDocuments({ "source.kind": "GAME" }), 4);
+    assert.equal(await db.collection("rating_projection_outbox").countDocuments({}), 4);
   } finally {
     // This database was created for this test on the loopback replica set.
     await db.dropDatabase();

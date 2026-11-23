@@ -331,7 +331,7 @@ async function projectIdentity(db, { identity, current, result, nowIso, session 
     await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).updateOne(
       { _id: outbox.id },
       { $setOnInsert: outbox },
-      { upsert: true },
+      { upsert: true, session },
     );
   }
   return { state, lastEvent };
