@@ -7,7 +7,7 @@ export type StorefrontPlanKey = typeof storefrontPlanKeys[number];
 export function storefrontPlanKeysForSearch(search: string): readonly StorefrontPlanKey[] {
   return new URLSearchParams(search).get('plans') === 'ra,academy'
     ? ['ra', 'academy']
-    : storefrontPlanKeys;
+    : storefrontPlanKeys.filter(key => key !== 'academy');
 }
 
 export interface StorefrontStatus {

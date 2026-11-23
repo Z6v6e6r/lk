@@ -200,7 +200,7 @@ function PlanCardBody(props: {
           </div>
         )}
 
-        <div className={`subscription-card__price-row${props.plan.billingOptions.length > 2 ? " subscription-card__price-row--variants" : ""}`}>
+        <div className={`subscription-card__price-row${props.plan.billingOptions.some(option => option.id === 'monthly-two-hours') ? " subscription-card__price-row--variants" : ""}`}>
           <p className="subscription-card__price">
             {typeof props.selectedOption.priceCompareMinor === 'number' && props.selectedOption.priceCompareMinor > 0
               ? <>
@@ -230,7 +230,6 @@ function PlanCardBody(props: {
         >
           {props.selectedOption.ctaLabel ?? props.plan.ctaLabel ?? 'Оформить подписку'}
         </button>
-        {props.checkoutAddon}
 
         {props.selectedOption.statusMessage && <p className="subscription-card__availability" role="status">{props.selectedOption.statusMessage}</p>}
         <div className="subscription-card__benefits">
@@ -256,6 +255,7 @@ function PlanCardBody(props: {
             )
           ))}
         </div>
+        {props.checkoutAddon}
       </div>
     </div>
   );
