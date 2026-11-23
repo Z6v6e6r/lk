@@ -48,6 +48,8 @@ export function createSubscriptionPriceTarget(input: {
 
 export interface SubscriptionPriceQuote {
   subscriptionId: string;
+  /** Product of the validated subscription benefit, when returned on a new-game quote. */
+  appliedSubscriptionProductId?: string;
   selectionKey: string;
   status: "AVAILABLE" | "LIMIT_USED" | "UNAVAILABLE";
   basePriceMinor: number;

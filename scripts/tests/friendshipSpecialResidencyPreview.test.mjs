@@ -101,7 +101,9 @@ test('foreign inconsistent residency proof stays unavailable',()=>{
   // A foreign or otherwise invalid proof cannot become AVAILABLE: the real validator remains authoritative.
   const url=residencyTransportConfig(k=>globals[k],'preview').url;
   execute(ctx,{method:'POST',url,responseUrl:url,statusCode:200,payload:evidence});
-  assert.equal(ctx.quotes.find(q=>q.subscriptionId===resident).status,'UNAVAILABLE');
+  const quote=ctx.quotes.find(q=>q.subscriptionId===resident);
+  assert.equal(quote.status,'UNAVAILABLE');
+  assert.equal(quote.appliedSubscriptionProductId,undefined);
 });
 test('valid supported residency response preserves the established discount without a free visit',()=>{
   const ctx=pendingContext();const evidence=residencyFixture({clientSubscriptionId:resident});
@@ -111,6 +113,26 @@ test('valid supported residency response preserves the established discount with
   assert.equal(port,4);assert.equal(ctx.statusCode,200,ctx.error);
   assert.equal(ctx.quotes.length,2);assert.equal(ctx.quotes[1].status,'AVAILABLE');
   assert.equal(ctx.quotes[1].amountMinor,200000);assert.equal(ctx.quotes[1].freeMinutes,0);
+  assert.equal(ctx.quotes[1].appliedSubscriptionProductId,undefined);
+});
+test('validated residency quote identifies its subscription product for new games only',()=>{
+  for(const targetKind of ['NEW_GAME','EXISTING_GAME']) {
+    const ctx=context([resident],null);
+    const evidence=residencyFixture({clientSubscriptionId:resident});
+    ctx.target={...ctx.target,targetKind,startsAt:evidence.startsAt};
+    ctx.existingGame=targetKind==='EXISTING_GAME';
+    ctx.exercise.direction.id=4588;
+    ctx.exercise.type.id=1613;
+    const first=execute(ctx);
+    assert.equal(first.port,0,ctx.error);
+    const result=execute(ctx,{...first.msg,statusCode:200,responseUrl:first.msg.url,payload:evidence});
+    assert.equal(result.port,4);
+    assert.equal(ctx.statusCode,200,ctx.error);
+    assert.equal(ctx.quotes.length,1);
+    assert.equal(ctx.quotes[0].status,'AVAILABLE');
+    assert.equal(ctx.quotes[0].amountMinor,280000);
+    assert.equal(ctx.quotes[0].appliedSubscriptionProductId,targetKind==='NEW_GAME'?RESIDENCY_PRODUCT_ID:undefined);
+  }
 });
 for(const order of [[friend,resident],[resident,friend]]) test('supported mixed batch survives residency401: '+order.join(','),()=>{
   const ctx=context(order,'GROUP_TRAINING');const first=execute(ctx);assert.equal(first.port,0,ctx.error);

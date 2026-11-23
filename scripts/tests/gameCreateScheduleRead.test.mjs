@@ -294,7 +294,7 @@ test("an incomplete subscription list preserves the base quote and reads the ver
   assert.deepEqual(paths, ["timeslots", "price", "subscriptions", "status"]);
 });
 
-test("an owned legacy instance uses the LK1 game quote and its verified product label", async () => {
+test("an owned legacy instance needs the LK1 quote for the exact product and slot", async () => {
   const payload = grouped([
     [fragment("07:00", "07:30"), fragment("07:30", "08:00")],
   ]);
@@ -302,12 +302,16 @@ test("an owned legacy instance uses the LK1 game quote and its verified product 
     slots: [selection],
   } = await readGrouped(payload);
   const friendshipId = "568e3c9a-6cee-4e81-bd5a-2b28d0630b38";
-  for (const [label, matchingSelection, expected] of [
-    ["Резидентство ПадлхАБ", true, { status: "APPLIED", amountMinor: 42000 }],
-    ["Другой продукт", true, { status: "UNAVAILABLE" }],
-    ["Резидентство ПадлхАБ", false, { status: "UNAVAILABLE" }],
+  const productId = "4037a3a3-e551-4f9a-a9db-1410e46b8635";
+  for (const { quotedProduct, variant, expected } of [
+    { quotedProduct: productId, expected: { status: "APPLIED", amountMinor: 42000 } },
+    { quotedProduct: friendshipId },
+    { quotedProduct: undefined },
+    { quotedProduct: productId, variant: "another-slot" },
+    { quotedProduct: productId, variant: "expired" },
+    { quotedProduct: productId, variant: "zero" },
+    { quotedProduct: productId, variant: "duplicate" },
   ]) {
-    const requestedLabels = [];
     const result = await readGameCreateSchedule(
       { ...request, query: { ...request.query, slotId: selection.id } },
       {
@@ -341,24 +345,26 @@ test("an owned legacy instance uses the LK1 game quote and its verified product 
             return Response.json({
               quotes: subscriptionIds.map((subscriptionId, index) => ({
                 subscriptionId,
-                selectionKey: matchingSelection || index === 0 ? selectionKey : "another-slot",
+                selectionKey: variant === "another-slot" && index === 1 ? "another-slot" : selectionKey,
                 status: "AVAILABLE", reasonCode: null,
-                basePriceMinor: 60000, amountMinor: index === 0 ? 0 : 42000,
-                paidMinutes: 60, freeMinutes: 0, evaluatedAt: clock, expiresAt: clock + 20000,
+                ...(index === 1 || variant === "duplicate"
+                  ? { appliedSubscriptionProductId: quotedProduct }
+                  : {}),
+                subscriptionName: "Резидентство ПадлхАБ",
+                basePriceMinor: 60000,
+                amountMinor: variant === "duplicate" || (index === 1 && variant !== "zero") ? 42000 : 0,
+                paidMinutes: 60, freeMinutes: 0,
+                evaluatedAt: clock - 1000,
+                expiresAt: variant === "expired" ? clock : clock + 20000,
               })),
             });
-          }
-          if (url.pathname.endsWith("/subscriptions/product")) {
-            requestedLabels.push(url.searchParams.get("subId"));
-            return Response.json({ sertName: label });
           }
           assert.equal(url.href, "https://padlhub.su/lk/residency/status");
           return new Response(null, { status: 401 });
         },
       },
     );
-    assert.deepEqual(result.residency, expected);
-    assert.deepEqual(requestedLabels, matchingSelection ? [residencyId] : []);
+    assert.deepEqual(result.residency, expected ?? { status: "UNAVAILABLE" });
     assert.equal(result.shareMinor, 60000);
   }
 });

@@ -12,6 +12,12 @@ RUB for the fixed Viva tenant. When Viva declares a currency it must be RUB. An
 unconfirmed residency result stays unavailable. A quote expires after at most 30 seconds.
 There are no reservation, checkout or payment commands in this reader.
 
+When Viva's owned-subscriptions page contains only subscription instance IDs,
+the reader requires the LK1 new-game quote to include `appliedSubscriptionProductId`.
+LK1 returns this field after validating the Residency product, ownership and policy
+for the selected slot. Older quotes without product identity cannot establish a
+Residency price for an instance from that page.
+
 Run `node scripts/game-create-schedule-qa.mjs` from this worktree with its pinned
 dependencies installed. The service binds `127.0.0.1:24811`. For Docker use the isolated
 LK2 QA overlay sharing the API network namespace. Keep it off public ingress. LK2

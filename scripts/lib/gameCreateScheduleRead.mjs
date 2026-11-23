@@ -8,7 +8,6 @@ const vivaOrigin = "https://api.vivacrm.ru";
 const lk1Origin = "https://padlhub.su";
 const vivaUserPath = "/end-user/api/v1/iSkq6G";
 const residencyProductId = "4037a3a3-e551-4f9a-a9db-1410e46b8635";
-const residencyProductTitle = "Резидентство ПадлхАБ";
 const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
 const tokenPattern = /^Bearer [A-Za-z\d._~-]{20,12000}$/;
@@ -568,21 +567,13 @@ export async function readGameCreateSchedule(
         const discounted = result.quotes.filter((quote) =>
           discountedGameQuote(quote, expected, shareMinor, duration, now()),
         );
-        // The older owned-list shape has only instance IDs. Read the canonical
-        // product label after the owner has validated and priced that instance.
-        const matching = item
-          ? discounted
-          : (
-              await Promise.all(
-                discounted.map(async (quote) => {
-                  const name = await read(
-                    lk1Origin + "/lk/subscriptions/product?" +
-                      new URLSearchParams({ subId: quote.subscriptionId }),
-                  );
-                  return name?.sertName === residencyProductTitle ? quote : null;
-                }),
-              )
-            ).filter(Boolean);
+        // The legacy list proves ownership but does not identify the product.
+        // Only the LK1 quote can provide that binding when it is absent there.
+        const matching = discounted.filter(
+          (quote) =>
+            quote.appliedSubscriptionProductId === residencyProductId ||
+            (item && quote.appliedSubscriptionProductId === undefined),
+        );
         if (matching.length === 1 && matching[0].expiresAt > now()) {
           const [quote] = matching;
           residency = { status: "APPLIED", amountMinor: quote.amountMinor };
