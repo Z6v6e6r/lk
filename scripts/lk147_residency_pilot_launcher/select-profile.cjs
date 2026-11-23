@@ -95,11 +95,13 @@ function verifyPilotEnv(expectedSha256) {
 function select() {
   const raw = readProtected(path.join(directory, 'profiles.json'), { privateFile: true, limit: 4096 });
   const profiles = JSON.parse(raw.toString('utf8'));
-  const hasPilotSuccessor = profiles?.schema === 4;
+  const hasPilotQuote = profiles?.schema === 5;
+  const hasPilotSuccessor = hasPilotQuote || profiles?.schema === 4;
   const hasPilot = hasPilotSuccessor || profiles?.schema === 3;
   const keys = ['candidateSha256', 'retainedEnvSha256', 'schema', 'sourceSha256'];
   if (hasPilot) keys.push('pilotEnvSha256', 'pilotSha256');
   if (hasPilotSuccessor) keys.push('pilotSuccessorSha256');
+  if (hasPilotQuote) keys.push('pilotQuoteSha256');
   if (!profiles || Object.keys(profiles).sort().join(',') !== keys.sort().join(',')
     || (!hasPilot && profiles.schema !== 2) || !shaPattern.test(profiles.sourceSha256)
     || !shaPattern.test(profiles.candidateSha256) || profiles.sourceSha256 === profiles.candidateSha256
@@ -117,6 +119,12 @@ function select() {
     || [profiles.sourceSha256, profiles.candidateSha256, profiles.pilotSha256].includes(profiles.pilotSuccessorSha256))) {
     refuse('PROFILES_INVALID');
   }
+  if (hasPilotQuote && (typeof profiles.pilotQuoteSha256 !== 'string'
+    || !shaPattern.test(profiles.pilotQuoteSha256)
+    || [profiles.sourceSha256, profiles.candidateSha256, profiles.pilotSha256, profiles.pilotSuccessorSha256]
+      .includes(profiles.pilotQuoteSha256))) {
+    refuse('PROFILES_INVALID');
+  }
   for (const [index, filename] of retainedEnvFiles.entries()) {
     const env = readProtected(filename, { privateFile: true, privateDirectory: false, limit: 1024 * 1024 });
     if (sha256(env) !== profiles.retainedEnvSha256[index]) refuse('RETAINED_ENV_HASH_MISMATCH');
@@ -129,7 +137,8 @@ function select() {
   if (digest === profiles.sourceSha256) return 'source';
   if (digest === profiles.candidateSha256) return 'candidate';
   if (hasPilot && (digest === profiles.pilotSha256
-    || (hasPilotSuccessor && digest === profiles.pilotSuccessorSha256))) {
+    || (hasPilotSuccessor && digest === profiles.pilotSuccessorSha256)
+    || (hasPilotQuote && digest === profiles.pilotQuoteSha256))) {
     verifyPilotEnv(profiles.pilotEnvSha256);
     return 'pilot';
   }
