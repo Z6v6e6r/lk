@@ -10,6 +10,19 @@ const toFiniteNumber = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
 };
+// Keep these thresholds in sync with PLAYER_RATING_BANDS. Function nodes have no module imports.
+const ratingGradeFromNumeric = (value) => {
+  const number = toFiniteNumber(value);
+  if (number === null) return null;
+  const numeric = Math.round(number * 100000) / 100000;
+  if (numeric < 2) return 'D';
+  if (numeric < 3) return 'D+';
+  if (numeric < 3.5) return 'C';
+  if (numeric < 4) return 'C+';
+  if (numeric < 4.7) return 'B';
+  if (numeric < 5.5) return 'B+';
+  return 'A';
+};
 const normalizeEventKeyPart = (value, fallback = 'unknown') => {
   const text = toStr(value);
   return encodeURIComponent(text || fallback).replace(/%/g, '~');
@@ -251,7 +264,7 @@ const sanitizeRatingImpact = (ratingImpact) => asArray(ratingImpact).map((entry)
   actual: Number.isFinite(Number(entry?.actual)) ? Number(entry.actual) : null,
   delta: Number.isFinite(Number(entry?.delta)) ? Number(entry.delta) : null,
   after: Number.isFinite(Number(entry?.after)) ? Number(entry.after) : null,
-  gradeAfter: entry?.gradeAfter || null,
+  gradeAfter: ratingGradeFromNumeric(entry?.after) ?? (entry?.gradeAfter || null),
 }));
 const sanitizeCorrectionContext = (value) => {
   if (!value || typeof value !== 'object') return null;
@@ -528,7 +541,11 @@ const now = new Date();
 const nowIso = now.toISOString();
 const nowTs = now.getTime();
 const gameId = ctx.game?.id || pending.gameId;
-const ratingImpact = asArray(pending.ratingImpact);
+const ratingImpact = asArray(pending.ratingImpact).map((entry) => ({
+  ...entry,
+  gradeBefore: ratingGradeFromNumeric(entry?.before) ?? entry?.gradeBefore,
+  gradeAfter: ratingGradeFromNumeric(entry?.after) ?? entry?.gradeAfter,
+}));
 const ratingEnabled = pending?.ratingEnabled !== false && pending?.ratingEvent?.ratingEnabled !== false;
 const ratingEventId = ratingEnabled ? (pending?.ratingEvent?.id || `rate_${pending.id}`) : null;
 const ratingEventStatus = String(pending?.ratingEvent?.status || '').toUpperCase();

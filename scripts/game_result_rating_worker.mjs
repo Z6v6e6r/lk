@@ -10,6 +10,8 @@ import {
   PLAYER_RATING_LEDGER_SCHEMA_VERSION,
   buildGameResultBaselineEvent,
   ratingGradeFromNumeric,
+  ratingGradesForChange,
+  toFiniteRating,
   replayPlayerRatingEvents,
 } from "../src/services/player-rating/ledger.ts";
 import {
@@ -19,7 +21,7 @@ import {
   buildGameResultRevertPlan,
 } from "./lib/gameResultRating.mjs";
 
-export const GAME_RESULT_RATING_WORKER_VERSION = "game-result-rating-worker-v1.0.0";
+export const GAME_RESULT_RATING_WORKER_VERSION = "game-result-rating-worker-v1.0.1";
 export const GAME_RESULT_COLLECTIONS = {
   results: "lk_game_results",
   lifecycleEvents: "lk_game_rating_events",
@@ -348,7 +350,9 @@ export function applyRatingImpactToGameRoster(players, ratingImpact) {
     return {
       ...player,
       ratingNumeric: impact.after,
-      rating: impact.gradeAfter || ratingGradeFromNumeric(impact.after),
+      rating: toFiniteRating(impact.after) == null && impact.gradeAfter
+        ? impact.gradeAfter
+        : ratingGradeFromNumeric(impact.after),
     };
   });
 }
@@ -494,6 +498,11 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
           });
       await persistPreparedPlan(db, { result, owner, plan, nowIso });
     }
+    // A recovered prepared plan can carry labels from the previous worker's scale.
+    const ratingImpact = asArray(plan.ratingImpact).map((impact) => ({
+      ...impact,
+      ...ratingGradesForChange(impact.before, impact.after),
+    }));
 
     await assertJobLease(db, { result, owner, desiredState });
 
@@ -512,7 +521,12 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
     const eventOperations = [...asArray(plan.compensationEvents), ...asArray(plan.applyEvents)].map((event) => ({
       updateOne: {
         filter: { _id: event.id },
-        update: { $setOnInsert: event },
+        update: {
+          $setOnInsert: {
+            ...event,
+            change: { ...event.change, ...ratingGradesForChange(event.change.before, event.change.after) },
+          },
+        },
         upsert: true,
       },
     }));
@@ -547,7 +561,7 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
       lifecycleSet.revertedAtTs = Date.parse(nowIso);
     } else {
       lifecycleSet.formula = plan.formula;
-      lifecycleSet.ratingImpact = plan.ratingImpact;
+      lifecycleSet.ratingImpact = ratingImpact;
       lifecycleSet.appliedAt = nowIso;
       lifecycleSet.appliedAtTs = Date.parse(nowIso);
     }
@@ -562,10 +576,10 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
         { _id: game._id },
         {
           $set: {
-            participants: applyRatingImpactToGameRoster(game.participants, plan.ratingImpact),
-            waitlist: applyRatingImpactToGameRoster(game.waitlist, plan.ratingImpact),
+            participants: applyRatingImpactToGameRoster(game.participants, ratingImpact),
+            waitlist: applyRatingImpactToGameRoster(game.waitlist, ratingImpact),
             organizer: game.organizer
-              ? (applyRatingImpactToGameRoster([game.organizer], plan.ratingImpact)[0] || game.organizer)
+              ? (applyRatingImpactToGameRoster([game.organizer], ratingImpact)[0] || game.organizer)
               : game.organizer,
             resultId: result.id,
             resultRatingStatus: completedWorkStatus,
@@ -603,11 +617,11 @@ export async function processClaimedGameResultJob(db, { result, owner, nowIso, m
           "ratingWork.appliedAt": nowIso,
           "ratingWork.appliedAtTs": Date.parse(nowIso),
           "ratingEvent.formula": plan.formula,
-          "ratingEvent.ratingImpact": plan.ratingImpact,
+          "ratingEvent.ratingImpact": ratingImpact,
           "ratingEvent.appliedAt": nowIso,
           "ratingEvent.appliedAtTs": Date.parse(nowIso),
           ratingFormula: plan.formula,
-          ratingImpact: plan.ratingImpact,
+          ratingImpact,
           intermediateResults: plan.intermediateResults,
           "resultPayload.intermediateResults": plan.intermediateResults,
         };

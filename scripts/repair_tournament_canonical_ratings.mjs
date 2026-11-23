@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ratingGradeFromNumeric } from "../src/services/player-rating/ledger.ts";
 
 const RUNTIME_PACKAGE = "/opt/padlhub-rating-worker/current/package.json";
 const localPackage = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../package.json");
@@ -47,16 +48,6 @@ const normalizePhone = (value) => {
   if (digits.length === 10) return `7${digits}`;
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
-};
-const ratingGrade = (value) => {
-  const rating = toFinite(value) ?? 1;
-  if (rating >= 6) return "A";
-  if (rating >= 5) return "B+";
-  if (rating >= 4.2) return "B";
-  if (rating >= 3.5) return "C+";
-  if (rating >= 3) return "C";
-  if (rating >= 2.5) return "D+";
-  return "D";
 };
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const unique = (values) => [...new Set(values.filter(Boolean))];
@@ -115,7 +106,7 @@ export function replayTournamentCanonicalTargets(events) {
   const rounded = roundRating(ratingNumeric);
   return {
     ratingNumeric: rounded,
-    rating: ratingGrade(rounded),
+    rating: ratingGradeFromNumeric(rounded),
     baselineEventId: eventId(baseline),
     lastSourceEventId: eventId(lastEvent),
     lastSourceEventAt: lastEvent?.occurredAt || lastEvent?.createdAt || null,
@@ -202,7 +193,8 @@ function buildPlanRow(state, events) {
     name: toStr(state.name) || "Игрок",
     currentRating: current,
     desiredRating: replay.ratingNumeric,
-    currentGrade: toStr(state.rating) || ratingGrade(current),
+    currentGrade: toStr(state.rating) || ratingGradeFromNumeric(current),
+    expectedStoredGrade: toStr(state.rating),
     desiredGrade: replay.rating,
     delta: roundDelta(replay.ratingNumeric - current),
     ledgerReplayRating,
@@ -224,6 +216,9 @@ export function buildConfirmationToken(plan) {
     row.repairEventId,
     row.currentRating,
     row.desiredRating,
+    row.currentGrade,
+    row.desiredGrade,
+    row.expectedStoredGrade,
     row.expectedLastEventId,
     row.sourceFrontierHash,
   ]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
@@ -335,6 +330,7 @@ async function applyPlanRow(client, db, plannedRow) {
       );
       if (!state) throw new Error(`State disappeared for ${plannedRow.playerKey}`);
       if (toFinite(state.ratingNumeric) !== plannedRow.currentRating
+        || toStr(state.rating) !== plannedRow.expectedStoredGrade
         || toStr(state.lastEventId) !== plannedRow.expectedLastEventId) {
         throw new Error(`State CAS changed for ${plannedRow.playerKey}`);
       }
@@ -367,6 +363,7 @@ async function applyPlanRow(client, db, plannedRow) {
         {
           _id: state._id,
           ratingNumeric: currentPlan.currentRating,
+          rating: state.rating ?? null,
           lastEventId: currentPlan.expectedLastEventId,
         },
         { $set: stateSet },

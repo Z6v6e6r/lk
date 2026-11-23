@@ -1,4 +1,5 @@
 import type { CustomField, UserProfileType } from "./apiClient";
+import { PLAYER_RATING_BANDS, ratingGradeFromNumeric } from "../services/player-rating/ledger.ts";
 
 export const CUSTOM_FIELD_IDS = {
   vivaPadelLevel: "9018d922-6427-41a6-9ac0-4a2c0440eb8a",
@@ -7,7 +8,7 @@ export const CUSTOM_FIELD_IDS = {
   tournamentsAccess: "e17a32f3-65f7-47c5-bda1-33d79932c884",
 } as const;
 
-const LEVEL_GRADE_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"] as const;
+const LEVEL_GRADE_LABELS = PLAYER_RATING_BANDS.map((band) => band.grade);
 
 export function getCustomFieldValue(
   profile: UserProfileType,
@@ -45,13 +46,7 @@ export function parseNumericLevel(value?: string): number | null {
 }
 
 export function getLetterGrade(value: number): string {
-  if (value < 2) return "D";
-  if (value < 3) return "D+";
-  if (value < 3.5) return "C";
-  if (value < 4) return "C+";
-  if (value < 4.7) return "B";
-  if (value < 5.5) return "B+";
-  return "A";
+  return ratingGradeFromNumeric(value);
 }
 
 export function normalizeLevelGradeLabel(

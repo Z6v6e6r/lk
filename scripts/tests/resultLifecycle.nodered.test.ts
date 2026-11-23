@@ -1283,6 +1283,9 @@ test("accept-correction reapplies ratings and finalizes result", () => {
   assert.equal(ledgerEvent.change.before, 3);
   assert.equal(ledgerEvent.change.delta, 0.2);
   assert.equal(ledgerEvent.change.after, 3.2);
+  assert.equal(ledgerEvent.change.gradeAfter, "C");
+  assert.equal(ledgerMutation.stateOperation.update.$set.rating, "C");
+  assert.equal(pending.ratingImpact[0].gradeAfter, "C+");
   assert.equal(ledgerEvent.formula.version, "game-rating-v1");
   assert.equal(ledgerEvent.formula.K, 0.3);
   assert.equal(ledgerEvent.projectionIntent.viva, "REQUIRED_DURING_MIGRATION");
