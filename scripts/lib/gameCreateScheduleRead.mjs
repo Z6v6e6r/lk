@@ -80,17 +80,33 @@ function readRows(payload, keys) {
   return arrays[0];
 }
 
+function slotRows(payload) {
+  const keys = ["timeslots", "content", "data", "items", "result", "slots"];
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    !Object.hasOwn(payload, "byTrainer")
+  )
+    return readRows(payload, keys).flat(2);
+  const grouped = payload.byTrainer;
+  if (
+    !grouped ||
+    typeof grouped !== "object" ||
+    Array.isArray(grouped) ||
+    keys.some((key) => Array.isArray(payload[key]))
+  )
+    throw upstreamUnavailable();
+  const groups = Object.values(grouped);
+  if (groups.length === 0) return [];
+  if (groups.length !== 1 || !Array.isArray(groups[0]?.slots))
+    throw upstreamUnavailable();
+  return groups[0].slots.flat(2);
+}
+
 function normalizeSlots(payload, day, startOfDay, duration, subServiceId, now) {
-  const rows = readRows(payload, [
-    "timeslots",
-    "content",
-    "data",
-    "items",
-    "result",
-    "slots",
-  ]).flat(2);
+  const rows = slotRows(payload);
   if (rows.length > 2000) throw upstreamUnavailable();
-  const slots = new Map();
+  const rooms = new Map();
   let observed = 0;
   for (const row of rows) {
     const roomId = row?.roomId ?? row?.resourceId ?? row?.room?.id;
@@ -101,7 +117,6 @@ function normalizeSlots(payload, day, startOfDay, duration, subServiceId, now) {
     );
     const to = minutesOfDay(row?.timeTo ?? row?.dateTimeTo ?? row?.to, day);
     const explicitDuration = row?.durationMinutes ?? row?.duration?.minutes;
-    const id = row?.id ?? row?.slotId ?? row?.timeSlotId;
     const subServiceIds = row?.subServiceIds;
     if (
       !uuid.test(roomId ?? "") ||
@@ -111,41 +126,75 @@ function normalizeSlots(payload, day, startOfDay, duration, subServiceId, now) {
       from === null ||
       (row.date !== undefined &&
         (typeof row.date !== "string" || row.date.slice(0, 10) !== day)) ||
+      (row.subServiceId !== undefined && row.subServiceId !== subServiceId) ||
       (subServiceIds !== undefined &&
         (!Array.isArray(subServiceIds) ||
           !subServiceIds.includes(subServiceId)))
     )
       continue;
-    const minutes = to === null ? explicitDuration : to - from;
-    if (!Number.isInteger(minutes) || minutes <= 0) continue;
+    const end =
+      to === null && Number.isInteger(explicitDuration)
+        ? from + explicitDuration
+        : to;
+    if (end === null || end <= from || end > 1440) continue;
     observed++;
-    if (
-      minutes < duration ||
-      from + duration >= 1440 ||
-      row.available === false ||
-      row.isAvailable === false
-    )
-      continue;
-    const start = startOfDay + from * 60000;
-    if (start < now + minimumLead * 60000) continue;
-    const startsAt = moscowLocal(start);
-    const endsAt = moscowLocal(start + duration * 60000);
-    const key = createHash("sha256")
-      .update(JSON.stringify([roomId, startsAt, endsAt]))
-      .digest("hex");
-    slots.set(key, {
-      id: key,
-      roomId,
+    const id = row.id ?? row.slotId ?? row.timeSlotId;
+    const ranges = rooms.get(roomId) ?? [];
+    ranges.push({
+      from,
+      end,
       courtName: roomName.trim(),
-      startsAt,
-      endsAt,
+      available: row.available !== false && row.isAvailable !== false,
       upstreamSlotId:
         typeof id === "string" && /^[A-Za-z\d._:-]{1,200}$/.test(id)
           ? id
           : null,
     });
+    rooms.set(roomId, ranges);
   }
   if (rows.length > 0 && observed === 0) throw upstreamUnavailable();
+
+  const slots = new Map();
+  for (const [roomId, ranges] of rooms) {
+    const available = ranges
+      .filter((range) => range.available)
+      .sort((a, b) => a.from - b.from);
+    const blocked = ranges.filter((range) => !range.available);
+    for (const [index, first] of available.entries()) {
+      const start = startOfDay + first.from * 60000;
+      const until = first.from + duration;
+      if (
+        until >= 1440 ||
+        start < now + minimumLead * 60000 ||
+        blocked.some((range) => range.from < until && range.end > first.from)
+      )
+        continue;
+      let covered = first.end;
+      for (
+        let cursor = index + 1;
+        covered < until && cursor < available.length;
+        cursor++
+      ) {
+        const next = available[cursor];
+        if (next.from > covered) break;
+        covered = Math.max(covered, next.end);
+      }
+      if (covered < until) continue;
+      const startsAt = moscowLocal(start);
+      const endsAt = moscowLocal(start + duration * 60000);
+      const key = createHash("sha256")
+        .update(JSON.stringify([roomId, startsAt, endsAt]))
+        .digest("hex");
+      slots.set(key, {
+        id: key,
+        roomId,
+        courtName: first.courtName,
+        startsAt,
+        endsAt,
+        upstreamSlotId: first.upstreamSlotId,
+      });
+    }
+  }
   return [...slots.values()].sort(
     (a, b) =>
       a.startsAt.localeCompare(b.startsAt) ||
@@ -161,6 +210,7 @@ async function readJson(
   correlationId,
   signal,
   body,
+  priceRead,
 ) {
   const response = await fetchImpl(url, {
     method,
@@ -177,6 +227,11 @@ async function readJson(
   });
   if (!response.ok || !response.body) {
     await response.body?.cancel();
+    if (response.status === 403 && priceRead)
+      throw new GameCreateScheduleReadError(
+        503,
+        "GAME_CREATE_SCHEDULE_UPSTREAM_FORBIDDEN",
+      );
     if (response.status === 401 || response.status === 403)
       throw new GameCreateScheduleReadError(
         401,
@@ -214,6 +269,69 @@ function amountMinor(payload, subServiceId) {
     : null;
 }
 
+function lifecycleResidency(payload, slot, now) {
+  const time = (value) =>
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|\+03:00)$/.test(
+      value,
+    )
+      ? Date.parse(value)
+      : NaN;
+  const observedAt = time(payload?.observedAt);
+  if (
+    payload?.schemaVersion !== 1 ||
+    !Number.isFinite(observedAt) ||
+    observedAt > now + 5000 ||
+    observedAt <= now - 30000
+  )
+    return;
+  const at = Math.min(observedAt, now);
+  if (
+    payload.state === "NONE" &&
+    payload.source === "VIVA_OWNED_SUBSCRIPTIONS" &&
+    payload.validFrom === null &&
+    payload.validUntil === null
+  )
+    return { status: "NOT_APPLICABLE", observedAt: at };
+  if (payload.state === "ACTIVE" && payload.source === "CUP_RESIDENCY_POLICY") {
+    const from = time(payload.validFrom);
+    const until = time(payload.validUntil);
+    if (
+      !Number.isFinite(from) ||
+      !Number.isFinite(until) ||
+      from > now ||
+      until <= now
+    )
+      return;
+    return {
+      status:
+        from <= Date.parse(slot.startsAt) && until >= Date.parse(slot.endsAt)
+          ? "ACTIVE_UNQUOTED"
+          : "NOT_APPLICABLE",
+      observedAt: at,
+    };
+  }
+}
+
+function ownedResidency(payload) {
+  const rows = readRows(payload, ["subscriptions", "content", "items", "data"]);
+  const productIds = (entry) =>
+    [
+      entry?.productId,
+      entry?.subscriptionProductId,
+      entry?.product?.id,
+      entry?.subscription?.id,
+    ].filter((id) => uuid.test(id ?? ""));
+  return {
+    active: rows.filter((row) => productIds(row).includes(residencyProductId)),
+    complete:
+      payload?.last === true &&
+      (payload.first === true || payload.number === 0) &&
+      payload.totalElements === rows.length &&
+      rows.every((row) => productIds(row).length > 0),
+  };
+}
+
 /** LK1 owns resolution of the service and the provider reads. The selection carries no caller price. */
 export async function readGameCreateSchedule(
   { query, authorization, correlationId, signal },
@@ -248,15 +366,22 @@ export async function readGameCreateSchedule(
 
   const deadline = AbortSignal.timeout(15000);
   const combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
-  const read = (url, method = "GET", body) =>
+  const read = (
+    url,
+    method = "GET",
+    body,
+    priceRead = false,
+    signal = combined,
+  ) =>
     readJson(
       fetchImpl,
       url,
       method,
       authorization,
       correlationId,
-      combined,
+      signal,
       body,
+      priceRead,
     );
   try {
     const master =
@@ -303,51 +428,66 @@ export async function readGameCreateSchedule(
       fromTime: slot.startsAt.slice(11, 19),
       toTime: slot.endsAt.slice(11, 19),
     });
-    const wholeCourtMinor = amountMinor(
-      await read(master + "/price?" + priceQuery),
-      service.subServiceId,
-    );
+    let pricePayload;
+    try {
+      pricePayload = await read(
+        master + "/price?" + priceQuery,
+        "GET",
+        undefined,
+        true,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof GameCreateScheduleReadError) ||
+        error.message !== "GAME_CREATE_SCHEDULE_UPSTREAM_FORBIDDEN"
+      )
+        throw error;
+      // The price denial and the account's residency status are independent reads.
+      const status = await read(
+        lk1Origin + "/lk/residency/status",
+        "GET",
+        undefined,
+        false,
+        AbortSignal.any([combined, AbortSignal.timeout(4500)]),
+      ).catch(() => undefined);
+      const observedAt = now();
+      const evidence = lifecycleResidency(status, slot, observedAt) ?? {
+        status: "UNAVAILABLE",
+        observedAt,
+      };
+      return {
+        wholeCourtMinor: null,
+        shareMinor: null,
+        residency: { status: evidence.status },
+        currency: "RUB",
+        observedAt: new Date(evidence.observedAt).toISOString(),
+        expiresAt: new Date(evidence.observedAt + 30000).toISOString(),
+      };
+    }
+    const wholeCourtMinor = amountMinor(pricePayload, service.subServiceId);
     if (wholeCourtMinor === null) throw upstreamUnavailable();
     const observedAt = now();
     let expiresAt = observedAt + 30000;
     const shareMinor = Math.round(wholeCourtMinor / 4);
     let residency = { status: "UNAVAILABLE" };
     try {
-      const subscriptionsPayload = await read(
-        vivaOrigin +
-          vivaUserPath +
-          "/subscriptions?includeFinished=false&size=100",
+      const { active: activeResidency, complete } = ownedResidency(
+        await read(
+          vivaOrigin +
+            vivaUserPath +
+            "/subscriptions?includeFinished=false&page=0&size=100",
+        ),
       );
-      const subscriptions = readRows(subscriptionsPayload, [
-        "subscriptions",
-        "content",
-        "items",
-        "data",
-      ]);
-      const productIds = (entry) =>
-        [
-          entry?.productId,
-          entry?.subscriptionProductId,
-          entry?.product?.id,
-          entry?.subscription?.id,
-        ].filter((id) => uuid.test(id ?? ""));
-      const activeResidency = subscriptions.filter((entry) =>
-        productIds(entry).includes(residencyProductId),
-      );
-      if (
-        activeResidency.length === 0 &&
-        subscriptionsPayload?.last === true &&
-        subscriptionsPayload?.totalElements === subscriptions.length &&
-        subscriptions.every((entry) => productIds(entry).length > 0)
-      ) {
+      if (activeResidency.length === 0 && complete) {
         residency = { status: "NOT_APPLICABLE" };
-      } else if (activeResidency.length === 1 && slot.upstreamSlotId) {
+      } else if (activeResidency.length === 1) {
         const item = activeResidency[0];
         const subscriptionId = item.clientSubscriptionId ?? item.id;
         if (!uuid.test(subscriptionId ?? "")) throw upstreamUnavailable();
         const target = {
           targetKind: "NEW_GAME",
-          slotId: slot.upstreamSlotId,
+          // LK1 uses slotId only to correlate this read quote with the exact tuple.
+          slotId: slot.upstreamSlotId ?? slot.id,
           stationId,
           roomId: slot.roomId,
           masterServiceId: service.masterServiceId,

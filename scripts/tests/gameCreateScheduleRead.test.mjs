@@ -167,3 +167,161 @@ test("QA HTTP ingress accepts only that GET and requires actor credentials", asy
     400,
   );
 });
+
+const grouped = (slots) => ({ byTrainer: { noTrainer: { slots } } });
+const fragment = (from, to, fields = {}) => ({
+  roomId,
+  roomName: "Корт №1",
+  timeFrom: day + "T" + from + ":00+03:00",
+  timeTo: day + "T" + to + ":00+03:00",
+  ...fields,
+});
+const readGrouped = (payload, durationMinutes = "60") =>
+  readGameCreateSchedule(
+    { ...request, query: { ...request.query, durationMinutes } },
+    { now: () => clock, fetchImpl: async () => Response.json(payload) },
+  );
+
+test("only continuous available Viva fragments on the same court cover the requested duration", async () => {
+  const continuous = [
+    fragment("07:00", "07:30"),
+    fragment("07:30", "08:00"),
+    fragment("08:00", "08:30"),
+    fragment("08:30", "09:00"),
+  ];
+  for (const [duration, starts] of [
+    ["60", 3],
+    ["90", 2],
+    ["120", 1],
+  ]) {
+    const response = await readGrouped(
+      grouped(continuous.map((row) => [row])),
+      duration,
+    );
+    assert.equal(response.slots.length, starts);
+    assert.equal(response.slots[0].startsAt, day + "T07:00:00+03:00");
+    assert.equal(
+      Date.parse(response.slots[0].endsAt) -
+        Date.parse(response.slots[0].startsAt),
+      Number(duration) * 60_000,
+    );
+  }
+  assert.deepEqual(
+    (await readGrouped(grouped([continuous[0], continuous[2]]))).slots,
+    [],
+  );
+  assert.deepEqual(
+    (
+      await readGrouped(
+        grouped([continuous[0], { ...continuous[1], roomId: randomUUID() }]),
+      )
+    ).slots,
+    [],
+  );
+  assert.deepEqual(
+    (
+      await readGrouped(
+        grouped([
+          continuous[0],
+          continuous[1],
+          { ...continuous[1], available: false },
+        ]),
+      )
+    ).slots,
+    [],
+  );
+});
+
+test("rejects competing or malformed Viva slot groups", async () => {
+  for (const payload of [
+    { ...grouped([[slot]]), slots: [slot] },
+    { byTrainer: { one: { slots: [[slot]] }, two: { slots: [[slot]] } } },
+    { byTrainer: { one: { timeSlots: [[slot]] } } },
+    grouped(Array.from({ length: 2001 }, () => slot)),
+  ]) {
+    await assert.rejects(readGrouped(payload), (error) => error.status === 503);
+  }
+});
+
+test("price denial leaves exact amounts unknown and preserves only verified LK1 status", async () => {
+  const payload = grouped([
+    [fragment("07:00", "07:30"), fragment("07:30", "08:00")],
+  ]);
+  const {
+    slots: [selection],
+  } = await readGrouped(payload);
+  const good = {
+    schemaVersion: 1,
+    state: "ACTIVE",
+    source: "CUP_RESIDENCY_POLICY",
+    validFrom: new Date(clock - 60_000).toISOString(),
+    validUntil: day + "T08:30:00+03:00",
+    observedAt: new Date(clock).toISOString(),
+  };
+  for (const [status, expected] of [
+    [good, "ACTIVE_UNQUOTED"],
+    [
+      { ...good, observedAt: new Date(clock - 29_000).toISOString() },
+      "ACTIVE_UNQUOTED",
+    ],
+    [{ ...good, source: "OTHER" }, "UNAVAILABLE"],
+    [
+      { ...good, observedAt: new Date(clock - 31_000).toISOString() },
+      "UNAVAILABLE",
+    ],
+    [{ ...good, validUntil: day + "T07:30:00+03:00" }, "NOT_APPLICABLE"],
+    [{ ...good, validFrom: day + "T06:00:00+03:00" }, "UNAVAILABLE"],
+    [
+      {
+        ...good,
+        state: "NONE",
+        source: "VIVA_OWNED_SUBSCRIPTIONS",
+        validFrom: null,
+        validUntil: null,
+      },
+      "NOT_APPLICABLE",
+    ],
+    [null, "UNAVAILABLE"],
+  ]) {
+    const paths = [];
+    const result = await readGameCreateSchedule(
+      { ...request, query: { ...request.query, slotId: selection.id } },
+      {
+        now: () => clock,
+        fetchImpl: async (raw, options) => {
+          const url = new URL(raw);
+          paths.push([
+            url.origin,
+            url.pathname.split("/").at(-1),
+            options.method,
+          ]);
+          if (url.pathname.endsWith("/timeslots"))
+            return Response.json(payload);
+          if (url.pathname.endsWith("/price"))
+            return new Response(null, { status: 403 });
+          assert.equal(url.href, "https://padlhub.su/lk/residency/status");
+          return Response.json(status);
+        },
+      },
+    );
+    assert.equal(result.wholeCourtMinor, null);
+    assert.equal(result.shareMinor, null);
+    assert.deepEqual(result.residency, { status: expected });
+    if (expected === "ACTIVE_UNQUOTED")
+      assert.equal(
+        Date.parse(result.expiresAt),
+        Date.parse(status.observedAt) + 30_000,
+      );
+    assert.deepEqual(
+      paths.map(([, path]) => path),
+      ["timeslots", "price", "status"],
+    );
+  }
+  await assert.rejects(
+    readGameCreateSchedule(request, {
+      now: () => clock,
+      fetchImpl: async () => new Response(null, { status: 403 }),
+    }),
+    (error) => error.status === 401,
+  );
+});
