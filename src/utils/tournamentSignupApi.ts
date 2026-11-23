@@ -66,7 +66,6 @@ import {
   normalizeTournamentSignupListSnapshotState,
   type TournamentSignupListSnapshotState,
 } from "./tournamentSignupListSnapshot";
-import { pollSubscriptionBookingConfirmation } from "./subscriptionBookingConfirmation";
 
 import { isGroupSubscriptionDiscountQuote, type GroupSubscriptionQuote } from "./groupSubscriptionDiscount";
 import { isChildTournamentExercise, isTournamentSubscriptionDiscountQuote, type TournamentSubscriptionDiscountQuote } from "./tournamentSubscriptionDiscount";
@@ -138,8 +137,10 @@ export interface TournamentRegistrationState {
   canRegister: boolean;
   canCancel: boolean;
   message: string | null;
+  levelDenialReason?: string;
   paymentUrl?: string | null;
   paymentExpiresAt?: string | null;
+  paymentStatusVerified?: boolean;
 }
 
 export type TournamentVivaProductType =
@@ -184,6 +185,7 @@ export interface TournamentVivaCheckout {
 
 export interface TournamentVivaTransactionResult {
   paymentUrl: string | null;
+  paymentPending?: boolean;
   bookingId: string | null;
   toPay: number | null;
   paid: boolean;
@@ -618,7 +620,7 @@ function normalizeRegistration(value: unknown): TournamentRegistrationState | nu
     canRegister: value.canRegister !== false && status !== "PAYMENT_PENDING",
     canCancel: value.canCancel !== false && status !== "NONE",
     message: status === "PAYMENT_PENDING"
-      ? "Запись создана в Viva, ожидается оплата."
+      ? "Ожидается оплата."
       : pickString(value, ["message", "reason", "note"]),
     paymentUrl,
     paymentExpiresAt: pickString(value, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "expiresAt"]),
@@ -2243,14 +2245,49 @@ export async function apiFetchTournamentMyRegistration(
       cache: "no-store",
     },
   );
-  return {
-    ...result,
-    data: normalizeRegistration(result.data),
+  const registration = normalizeRegistration(result.data);
+  const decision = isRecord(result.data) ? result.data.levelDecision : null;
+  if (registration?.status === "NONE" && isRecord(decision)
+    && decision.enforced === true && decision.allowed === false) {
+    registration.levelDenialReason = pickString(decision, ["message"])
+      ?? registration.message ?? "Запись недоступна по условиям допуска к турниру.";
+  }
+  return { ...result, data: registration };
+}
+
+export async function apiReadTournamentPaymentStatus(
+  exerciseId: string,
+  registration: TournamentRegistrationState,
+): Promise<TournamentRegistrationState> {
+  const { bookingId } = registration;
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  if (!bookingId || !uuid.test(bookingId) || !uuid.test(exerciseId)) return registration;
+  const { data, error } = await request<unknown>("/lk/subscription-bookings", {
+    baseUrl: getServ2Origin(),
+    method: "POST",
+    auth: true,
+    retries: 0,
+    body: JSON.stringify({ action: "tournament-payment-status", exerciseId, bookingId }),
+  });
+  if (error || !isRecord(data) || data.bookingId !== bookingId || data.exerciseId !== exerciseId) return registration;
+  if (data.status === "NONE") return { ...createAvailableTournamentVivaRegistrationState(), paymentStatusVerified: true };
+  if (data.status === "REGISTERED") return {
+    ...registration, status: "REGISTERED", canRegister: false, message: null,
+    paymentUrl: null, paymentExpiresAt: null, paymentStatusVerified: true,
   };
+  if (data.status === "PAYMENT_PENDING" || data.status === "UNAVAILABLE") return {
+    ...registration, status: "PAYMENT_PENDING", canRegister: false,
+    message: data.status === "UNAVAILABLE" ? "Не удалось проверить статус платежа. Обновите карточку турнира." : null,
+    paymentUrl: data.status === "PAYMENT_PENDING" ? pickString(data, ["paymentUrl"]) : null,
+    paymentExpiresAt: data.status === "PAYMENT_PENDING" ? pickString(data, ["paymentExpiresAt"]) : null,
+    paymentStatusVerified: true,
+  };
+  return registration;
 }
 
 export async function apiFetchTournamentVivaMyRegistration(
   exerciseId: string,
+  options: { checkTwoHourTournamentPayment?: boolean } = {},
 ): Promise<ApiResult<TournamentRegistrationState>> {
   const bookingResult = await fetchTournamentVivaMyBooking(exerciseId);
   if (bookingResult.error) {
@@ -2265,7 +2302,7 @@ export async function apiFetchTournamentVivaMyRegistration(
     ?? createAvailableTournamentVivaRegistrationState();
 
   return {
-    data: registration,
+    data: options.checkTwoHourTournamentPayment ? await apiReadTournamentPaymentStatus(exerciseId, registration) : registration,
     error: null,
     status: bookingResult.status,
   };
@@ -2314,6 +2351,7 @@ export async function apiCancelTournamentVivaRegistration(
   options: {
     placeNumber?: number | null;
     refundMethod?: BookingCancellationRefundMethod | null;
+    cupTournament?: boolean;
   } = {},
 ): Promise<ApiResult<TournamentRegistrationState>> {
   const resolvedBookingIdResult = await apiResolveTournamentVivaRegistrationBookingId(
@@ -2411,6 +2449,13 @@ export async function apiCancelTournamentVivaRegistration(
     }
   }
 
+  if (options.cupTournament) {
+    const reconciled = await apiReconcileTournamentOwner(exerciseId, resolvedBookingId);
+    const reply = reconciled.data;
+    if (reply?.state === "CANCELLED" && reply.actorClientId && reply.requestKey) {
+      rememberTournamentCheckoutSuccessor(`tournament:${exerciseId}:${reply.actorClientId}`, reply.requestKey, reply.operationId);
+    }
+  }
   clearTrialGroupCheckoutOperations(exerciseId);
 
   return {
@@ -2430,6 +2475,20 @@ export async function apiCancelTournamentVivaRegistration(
   };
 }
 
+export function apiReconcileTournamentOwner(exerciseId: string, cancelledBookingId?: string) {
+  const id = encodeURIComponent(exerciseId);
+  // LK invalidates the public roster before returning CUP's confirmed payment.
+  const url = cancelledBookingId
+    ? `${PHAB_API_BASE}/tournaments/${id}/checkout/reconcile`
+    : `${getServ2Origin()}/lk/tournaments/participants/reconcile-payment?exerciseId=${id}`;
+  return request<{ state?: string; actorClientId?: string; requestKey?: string; operationId?: string }>(
+    url,
+    { method: "POST", auth: true, retries: 0, ...(cancelledBookingId && {
+      body: JSON.stringify({ cancelledBookingId }),
+    }) },
+  );
+}
+
 export async function apiRegisterForTournament(
   tournamentId: string,
 ): Promise<ApiResult<TournamentRegistrationState>> {
@@ -2441,7 +2500,7 @@ export async function apiRegisterForTournament(
       auth: true,
       headers: phabHeaders(),
       body: JSON.stringify({ authProvider: "lk-keycloak", tenantKey: TENANT_KEY }),
-      retries: 1,
+      retries: 0,
     },
   );
   return {
@@ -2754,7 +2813,9 @@ export async function apiFetchTournamentVivaPublicCheckout(
 }
 
 type CreateTournamentVivaTransactionParams = {
+  preservePendingTournamentPayment?: boolean;
   exerciseId: string;
+  checkoutContext?: "tournament";
   studioId: string | null;
   clientPhone: string;
   clientId?: string | null;
@@ -2914,7 +2975,7 @@ async function apiCreateTournamentCustomEnergyTransaction(
       method: "POST",
       auth: true,
       headers: phabHeaders(),
-      retries: 1,
+      retries: 0,
       body: JSON.stringify(buildTournamentCustomEnergyCheckoutPayload(params, pricing, successUrl, failUrl)),
     },
   );
@@ -2960,8 +3021,12 @@ function normalizeConfirmedSubscriptionBookingPayment(payload: unknown): Tournam
     || (value.toPay !== undefined && value.toPay !== minor / 100)) return null;
   let paymentUrl: string | null = null;
   if (minor > 0) {
-    if (value.paid !== false || typeof value.transactionId !== "string" || !value.transactionId.trim()
-      || typeof value.paymentUrl !== "string") return null;
+    if (typeof value.transactionId !== "string" || !value.transactionId.trim()) return null;
+    if (value.paid === true && value.paymentUrl === null) {
+      return { bookingId: value.bookingId, paymentUrl: null, toPay: minor,
+        paid: true, paymentExpiresAt: null, raw: payload };
+    }
+    if (value.paid !== false || typeof value.paymentUrl !== "string") return null;
     try {
       const url = new URL(value.paymentUrl);
       if (url.protocol !== "https:" || url.username || url.password) return null;
@@ -3045,7 +3110,8 @@ async function apiCreateTournamentVivaBookingFromSubscription(
   };
   const baseIdempotencyKey = `lk-subscription-${hashPart(idempotencySeed)}${hashPart([...idempotencySeed].reverse().join(""))}`;
   const idempotencyKey = getTournamentSubscriptionRejoinTracker().resolve(baseIdempotencyKey);
-  const bookingRequest = () => request<unknown>(
+  // This route can create a booking, even when replayed with the same operation ID.
+  const response = await request<unknown>(
     `/lk/subscription-bookings?operationId=${encodeURIComponent(idempotencyKey)}`,
     {
       method: "POST",
@@ -3074,9 +3140,8 @@ async function apiCreateTournamentVivaBookingFromSubscription(
       }),
     },
   );
-  const response = await pollSubscriptionBookingConfirmation(bookingRequest);
   if (response.error) {
-    // Keep this submission/poll on its original ID. Only a later explicit
+    // Keep this submission on its original ID. Only a later explicit
     // submission may use the server-proved successor.
     getTournamentSubscriptionRejoinTracker().rememberReleased(idempotencyKey, response.status, response.error.raw);
     return { data: null, error: response.error, status: response.status };
@@ -3088,7 +3153,7 @@ async function apiCreateTournamentVivaBookingFromSubscription(
       data: null,
       error: {
         status: response.status,
-        message: pickString(response.data, ["message"]) || "Запись ожидает подтверждения Viva. Повторите проверку.",
+        message: "Подтверждение записи от Viva пока не получено.",
         raw: response.data,
       },
       status: response.status,
@@ -3099,9 +3164,19 @@ async function apiCreateTournamentVivaBookingFromSubscription(
   const expectedDiscount = params.product.tournamentDiscountQuote || params.product.groupDiscountQuote;
   if (!payment || (expectedDiscount && (!isRecord(response.data)
     || response.data.toPayMinor !== expectedDiscount.amountMinor || payment.toPay !== expectedDiscount.amountMinor))) {
+    const quote = params.product.tournamentDiscountQuote;
+    if (params.preservePendingTournamentPayment && quote?.durationMinutes === 120 && (quote.amountMinor ?? 0) > 0) {
+      // The seat exists. Missing or conflicting payment evidence must not turn it into
+      // a paid registration or invite the player to create another booking.
+      return { data: { bookingId, paymentPending: true, paymentUrl: null, paid: false,
+        toPay: quote.amountMinor, paymentExpiresAt: null, raw: null }, error: null, status: response.status };
+    }
     return { data: null, error: { status: 202,
       message: "Запись создана; доплата требует подтверждения. Не создавайте повторную запись.",
       raw: response.data }, status: 202 };
+  }
+  if (params.product.tournamentDiscountQuote && payment.paid) {
+    await apiReconcileTournamentOwner(params.exerciseId);
   }
   return {
     data: payment,
@@ -3224,6 +3299,29 @@ export async function apiFetchTournamentSubscriptionDiscounts(
   return result;
 }
 
+const tournamentCheckoutRetryKeys = new Map<string, string>();
+const tournamentCheckoutRefusalMessages: Record<string, string> = {
+  LEVEL_NOT_ALLOWED: "Ваш игровой уровень не подходит для этого турнира.",
+  PLAYER_LEVEL_REQUIRED: "Укажите игровой уровень, чтобы записаться на турнир.",
+  PLAYER_LEVEL_UNKNOWN: "Не удалось подтвердить ваш игровой уровень.",
+  ACTIVITY_LEVEL_INVALID: "Не удалось проверить ограничения по уровню для этого турнира.",
+  GENDER_NOT_ALLOWED: "Условия участия в этом турнире не позволяют записаться.",
+  PLAYER_GENDER_REQUIRED: "Укажите пол в профиле, чтобы записаться на турнир.",
+};
+
+function rememberTournamentCheckoutSuccessor(initialKey: string, previousKey: string | null, operationId?: string | null) {
+  let saved: string | null | undefined;
+  try { saved = globalThis.sessionStorage?.getItem(`lk-tournament-checkout:${initialKey}`); }
+  catch { /* Embedded storage may be unavailable. */ }
+  const remembered = saved && /^tournament-retry:tournament-owner:[0-9a-f-]{36}$/i.test(saved)
+    ? saved : tournamentCheckoutRetryKeys.get(initialKey);
+  if ((remembered ?? initialKey) !== previousKey || !operationId || !/^tournament-owner:[0-9a-f-]{36}$/i.test(operationId)) return;
+  const successor = `tournament-retry:${operationId}`;
+  tournamentCheckoutRetryKeys.set(initialKey, successor);
+  try { globalThis.sessionStorage?.setItem(`lk-tournament-checkout:${initialKey}`, successor); }
+  catch { /* Embedded storage may be unavailable. */ }
+}
+
 export async function apiCreateTournamentVivaTransaction(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
@@ -3241,7 +3339,8 @@ export async function apiCreateTournamentVivaTransaction(
     return { data: null, error: { status: 409,
       message: "На детские тренировки действуют разовая оплата и абонемент «Падел.Дети»." }, status: 409 };
   }
-  const trialGroupTarget = TRIAL_GROUP_CHECKOUT_ENABLED
+  const tournamentCheckout = params.checkoutContext === "tournament";
+  const trialGroupTarget = !tournamentCheckout && TRIAL_GROUP_CHECKOUT_ENABLED
     && (isTrialGroupTraining(params.exercise) || isTrialGroupTraining(params.tournament));
   if (trialGroupTarget && !["client-subscription", "one-time", "client-one-time"].includes(params.product.source)) {
     return { data: null, error: { status: 409,
@@ -3265,7 +3364,7 @@ export async function apiCreateTournamentVivaTransaction(
       return { data: null, error: { status: 409, message: "Условия скидки изменились. Обновите варианты записи." }, status: 409 };
     }
     // Freshness is checked when shown; the gateway recomputes before a first write
-    // and replays the same operation after a pending booking even when its quote expires.
+    // and recognizes a later explicit submission of the same operation after the quote expires.
     if (!isTournamentSubscriptionDiscountQuote(displayed, params.exerciseId, actorId, displayed.evaluatedAt)) {
       return { data: null, error: { status: 409, message: "Не удалось подтвердить скидку. Обновите варианты записи." }, status: 409 };
     }
@@ -3314,12 +3413,27 @@ export async function apiCreateTournamentVivaTransaction(
     return apiCreateTournamentVivaBookingFromSubscription(params);
   }
 
-  const paymentWatcher = await createVivaPaymentWatcher(params.clientId);
+  const tournamentOwnerTarget = tournamentCheckout || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.exercise)
+    === "tournament" || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.tournament) === "tournament";
+  const paymentWatcher = tournamentOwnerTarget ? null : await createVivaPaymentWatcher(params.clientId);
   const transactionStartedAtMs = Date.now();
   const returnUrls = buildTournamentPaymentReturnUrls(params.exerciseId);
   const successUrl = params.successUrl?.trim() || returnUrls.successUrl;
   const failUrl = params.failUrl?.trim() || returnUrls.failUrl;
   const payload = buildTournamentVivaTransactionPayload(params, successUrl, failUrl);
+
+  const initialTournamentKey = tournamentOwnerTarget
+    ? `tournament:${params.exerciseId}:${params.clientId || params.profile?.id || "self"}` : null;
+  let tournamentOperationId = initialTournamentKey;
+  if (initialTournamentKey) {
+    let saved: string | null | undefined;
+    try { saved = globalThis.sessionStorage?.getItem(`lk-tournament-checkout:${initialTournamentKey}`); }
+    catch { /* Embedded storage may be unavailable. */ }
+    if (saved && /^tournament-retry:tournament-owner:[0-9a-f-]{36}$/i.test(saved)) {
+      tournamentCheckoutRetryKeys.set(initialTournamentKey, saved);
+    }
+    tournamentOperationId = tournamentCheckoutRetryKeys.get(initialTournamentKey) ?? initialTournamentKey;
+  }
   const trialOperationId = trialGroupTarget
     ? trialGroupCheckoutOperationId(params.exerciseId, params.clientId || params.profile?.id || "", params.product.id, params.promoCode ?? null, params.product.source)
     : null;
@@ -3327,19 +3441,39 @@ export async function apiCreateTournamentVivaTransaction(
   const result = await request<unknown>(
     trialOperationId
       ? `/lk/trial-group-bookings?operationId=${encodeURIComponent(trialOperationId)}`
-      : `${API_BASE}/end-user/api/v2/${TENANT_KEY}/transactions`,
+      : tournamentOperationId
+        ? `${PHAB_API_BASE}/tournaments/${encodeURIComponent(params.exerciseId)}/checkout`
+        : `${API_BASE}/end-user/api/v2/${TENANT_KEY}/transactions`,
     {
       ...(trialOperationId ? { baseUrl: getServ2Origin() } : {}),
+      ...(tournamentOperationId ? { headers: { "Idempotency-Key": tournamentOperationId } } : {}),
       method: "POST",
       auth: true,
       retries: 0,
       body: JSON.stringify(trialOperationId ? {
         exerciseId: params.exerciseId, productId: params.product.id,
         source: params.product.source, promoCode: params.promoCode ?? null,
+      } : tournamentOperationId ? {
+        productId: params.product.id, source: params.product.source, promoCode: params.promoCode ?? null, successUrl, failUrl,
       } : payload),
     },
   );
-  if (trialOperationId && (result.error || pickString(result.data, ["state"]) === "PENDING_CONFIRMATION")) {
+  const ownerState = initialTournamentKey ? pickString(result.data, ["state"]) : null;
+  if (initialTournamentKey && (ownerState === "REJECTED" || ownerState === "CANCELLED")) {
+    const code = pickString(result.data, ["code"]);
+    const refusedOperation = pickString(result.data, ["operationId"]);
+    const message = code && Object.hasOwn(tournamentCheckoutRefusalMessages, code)
+      ? tournamentCheckoutRefusalMessages[code] : null;
+    if (message || (ownerState === "CANCELLED" && code === "TOURNAMENT_BOOKING_CANCELLED")) {
+      rememberTournamentCheckoutSuccessor(initialTournamentKey, tournamentOperationId, refusedOperation);
+    }
+    if (ownerState === "CANCELLED") {
+      return { data: null, error: { status: 409, message: "Предыдущая запись отменена. Выберите способ записи снова.", raw: result.data }, status: 409 };
+    }
+    return { data: null, error: { status: 403,
+      message: message ?? "Запись не соответствует правилам турнира.", raw: result.data }, status: 403 };
+  }
+  if ((trialOperationId || tournamentOperationId) && (result.error || pickString(result.data, ["state"]) === "PENDING_CONFIRMATION")) {
     paymentWatcher?.close();
     return { data: null, error: result.error || { status: 202,
       message: "Запись ожидает подтверждения. Повторите проверку; повторная оплата не создаётся.", raw: result.data }, status: result.status };
@@ -3427,7 +3561,7 @@ export async function apiCreateTournamentVivaTransaction(
   }) ?? Promise.resolve<TournamentVivaPaymentResolution | null>(null);
   const paymentResolutionPromises: Array<Promise<TournamentVivaPaymentResolution | null>> = [
     watcherResolution,
-    pollTournamentVivaPaymentResolution(params.exerciseId, transactionId),
+    ...(tournamentOwnerTarget ? [] : [pollTournamentVivaPaymentResolution(params.exerciseId, transactionId)]),
   ];
   if (transactionId) {
     // The operation status is Viva's own checkout-link source; the websocket event alone
@@ -3479,6 +3613,10 @@ export async function apiCreateTournamentVivaTransaction(
       },
       status: result.status,
     };
+  }
+
+  if (tournamentOperationId && paid) {
+    await apiReconcileTournamentOwner(params.exerciseId);
   }
 
   return {

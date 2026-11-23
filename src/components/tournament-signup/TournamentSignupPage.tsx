@@ -1,3 +1,5 @@
+import { EventAllowedLevel } from "../UI/EventAllowedLevel";
+import { useLevelOnboardingGate } from "../onboarding/useLevelOnboardingGate";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isTournamentCapacityError } from "../../utils/tournamentCapacityError";
 import { isSubscriptionBookingReleased } from "../../utils/subscriptionRejoin";
@@ -37,6 +39,9 @@ import {
   apiFetchTournamentVivaMyRegistration,
   apiFetchTournamentVivaPublicCheckout,
   apiResolveTournamentVivaRegistrationBookingId,
+  apiReadTournamentPaymentStatus,
+  apiReconcileTournamentOwner,
+  apiRegisterForTournament,
   type TournamentRegistrationState,
   type TournamentSignupDetail,
   type TournamentSignupSummary,
@@ -66,7 +71,11 @@ import {
   type TournamentSignupParticipant,
   type TournamentSignupPublicRoster,
 } from "../../utils/tournamentSignupRoster";
-import { canOfferTournamentRegistration } from "../../utils/tournamentSignupAvailability";
+import {
+  canOfferTournamentRegistration,
+  getTournamentBookingLevelDenial,
+  preserveTournamentLevelDenial,
+} from "../../utils/tournamentSignupAvailability";
 import {
   pickSubscriptionValidityDate,
   resolveSubscriptionUsageDisplay,
@@ -481,21 +490,6 @@ function getTournamentCheckoutProducts(checkout: TournamentVivaCheckout) {
   ];
 }
 
-function findMatchingTournamentPaymentProduct(
-  checkout: TournamentVivaCheckout,
-  product: TournamentVivaProduct,
-) {
-  const products = getTournamentCheckoutProducts(checkout);
-  return products.find((candidate) => candidate.source === product.source && candidate.id === product.id)
-    ?? products.find((candidate) => candidate.isCustomTournamentEnergy && product.isCustomTournamentEnergy)
-    ?? products.find((candidate) => candidate.id === product.id)
-    ?? products.find((candidate) => (
-      normalizeTournamentProductName(candidate.name) === normalizeTournamentProductName(product.name)
-      && candidate.source === product.source
-    ))
-    ?? (products.length === 1 ? products[0] : null);
-}
-
 function shouldShowSubscriptionHint(product: TournamentVivaProduct) {
   if (!SUMMER_SUBSCRIPTION_PRODUCT_NAMES.has(normalizeTournamentProductName(product.name))) return false;
   const visits = getTournamentPaymentProductRemainingVisits(product) ?? product.visitsTotal;
@@ -750,37 +744,9 @@ function normalizeLevelLabel(value: string | null | undefined, numeric: number |
   return `${token[1]}${token[3] || ""}${token[2] ? formatSuperscript(token[2]) : ""}`;
 }
 
-function getLiveRatingKey(clientId: string | null | undefined, phone: string | null | undefined, name: string | null | undefined) {
-  const safeClientId = String(clientId || "").trim();
-  if (safeClientId) return `id:${safeClientId}`;
-  const phoneNorm = normalizePhone(phone);
-  if (phoneNorm) return `phone:${phoneNorm}`;
-  const safeName = String(name || "").trim().toLowerCase();
-  return safeName ? `name:${safeName}` : "";
-}
-
-function getPlayerLiveRating(
-  participant: TournamentSignupParticipant,
-  liveRatings: Map<string, PadelLiveRatingItem>,
-) {
-  const keys = [
-    getLiveRatingKey(participant.id, null, null),
-    getLiveRatingKey(null, participant.phone, null),
-    getLiveRatingKey(null, null, participant.name),
-  ].filter(Boolean);
-  for (const key of keys) {
-    const item = liveRatings.get(key);
-    if (item) return item;
-  }
-  return null;
-}
-
-function getPlayerLevelMeta(
-  participant: TournamentSignupParticipant,
-  liveRating: PadelLiveRatingItem | null,
-) {
-  const numeric = liveRating?.ratingNumeric ?? participant.ratingNumeric;
-  const rawLevel = liveRating?.rating || participant.level;
+function getPlayerLevelMeta(liveRating: PadelLiveRatingItem | null) {
+  const numeric = liveRating?.ratingNumeric ?? null;
+  const rawLevel = liveRating?.rating ?? null;
   const label = normalizeLevelLabel(rawLevel, numeric);
   const numericGrade = numeric != null ? getLetterGrade(numeric) : null;
   const gradeKey = numericGrade && isLevelGrade(numericGrade)
@@ -1003,6 +969,7 @@ export default function TournamentSignupPage({
   const [dateIndex, setDateIndex] = useState(initialDateIndex >= 0 ? initialDateIndex : DAYS_BEFORE_TODAY);
   const [items, setItems] = useState<TournamentSignupSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(targetTournamentId);
+  const { checkLevel, levelOnboardingDialog } = useLevelOnboardingGate(selectedId);
   const [detail, setDetail] = useState<TournamentSignupDetail | null>(null);
   const [registration, setRegistration] = useState<TournamentRegistrationState | null>(null);
   const [registrationSessionIdentity, setRegistrationSessionIdentity] = useState<string | null>(null);
@@ -1021,6 +988,7 @@ export default function TournamentSignupPage({
   const [discountLoading, setDiscountLoading] = useState(false);
   const [discountError, setDiscountError] = useState<string | null>(null);
   const checkoutRequestIdRef = useRef(0);
+  const detailRequestIdRef = useRef(0);
   const [activeDetailTab, setActiveDetailTab] = useState<TournamentDetailTab>("roster");
   const [typeFilter, setTypeFilter] = useState(ALL_FILTER_VALUE);
   const [stationFilter, setStationFilter] = useState(ALL_FILTER_VALUE);
@@ -1031,7 +999,6 @@ export default function TournamentSignupPage({
   const [subscriptionConfirmationNotice, setSubscriptionConfirmationNotice] = useState<string | null>(null);
   const [registrationResolvedFor, setRegistrationResolvedFor] = useState<string | null>(null);
   const [checkoutPreparedFor, setCheckoutPreparedFor] = useState<string | null>(null);
-  const [pendingPaymentProduct, setPendingPaymentProduct] = useState<TournamentVivaProduct | null>(null);
   const [isPurchasableListOpen, setPurchasableListOpen] = useState(false);
   const [isStationModalOpen, setStationModalOpen] = useState(false);
   const [pricingPreviewByExerciseId, setPricingPreviewByExerciseId] = useState<Record<string, TournamentPricingPreview | null>>({});
@@ -1073,6 +1040,8 @@ export default function TournamentSignupPage({
     checkoutRequestIdRef.current += 1;
     setCheckout(null);
     setCheckoutResolvedFor(null);
+    setSubscriptionConfirmationNotice(null);
+    setLoadingDetail(false);
     setActionLoading(false);
     return () => { checkoutRequestIdRef.current += 1; };
   }, [checkoutContextKey]);
@@ -1263,47 +1232,109 @@ export default function TournamentSignupPage({
     await loadList({ requestRefresh: !subscriptionUsageShadowEnabled });
   }, [loadList, subscriptionUsageShadowEnabled]);
 
-  const loadDetail = useCallback(async (tournamentId: string) => {
+  const loadDetail = useCallback(async (tournamentId: string, { checkOnly = false } = {}) => {
+    const detailRequestId = ++detailRequestIdRef.current;
+    const checkoutRequestId = checkoutRequestIdRef.current;
     const requestToken = readAuthToken();
+    const sessionIdentity = tournamentPaymentSessionIdentity(requestToken);
+    const isCurrentDetail = () => detailRequestId === detailRequestIdRef.current
+      && (!checkOnly || checkoutRequestId === checkoutRequestIdRef.current)
+      && sessionIdentity === tournamentPaymentSessionIdentity(readAuthToken());
+
     setLoadingDetail(true);
     setError(null);
     setRegistrationResolvedFor(null);
     const detailResult = await apiFetchTournamentSignupDetail(tournamentId);
-    const fallbackExerciseId = items.find((item) => item.id === tournamentId)?.exerciseId ?? tournamentId;
-    const exerciseId = detailResult.data?.exerciseId || fallbackExerciseId;
+    if (!isCurrentDetail()) return;
+    const listedTournament = items.find((item) => item.id === tournamentId);
+    const exerciseId = detailResult.data?.exerciseId || listedTournament?.exerciseId || tournamentId;
+    const startsAt = Date.parse(detailResult.data?.startsAt || listedTournament?.startsAt || "");
+    const endsAt = Date.parse(detailResult.data?.endsAt || listedTournament?.endsAt || "");
+    const checkTwoHourTournamentPayment = endsAt - startsAt === 120 * 60_000;
     publicRosterDetailAbortRef.current?.abort();
     const rosterAbortController = new AbortController();
     publicRosterDetailAbortRef.current = rosterAbortController;
-    void loadPublicRoster(exerciseId, { signal: rosterAbortController.signal }).finally(() => {
-      if (publicRosterDetailAbortRef.current === rosterAbortController) {
-        publicRosterDetailAbortRef.current = null;
-      }
-    });
-    const [registrationResult, vivaRegistrationResult] = isAuthenticated && !subscriptionUsageShadowEnabled
-      ? await Promise.all([
-          apiFetchTournamentMyRegistration(tournamentId),
-          apiFetchTournamentVivaMyRegistration(exerciseId),
-        ])
-      : [null, null];
+    const rosterOptions = { signal: rosterAbortController.signal };
+    let rosterRequest = checkOnly ? null : loadPublicRoster(exerciseId, rosterOptions);
+    try {
+      const [registrationResult, vivaRegistrationResult] = isAuthenticated && !subscriptionUsageShadowEnabled
+        ? await Promise.all([
+            apiFetchTournamentMyRegistration(tournamentId),
+            apiFetchTournamentVivaMyRegistration(exerciseId, { checkTwoHourTournamentPayment }),
+          ])
+        : [null, null];
+      if (!isCurrentDetail()) return;
 
-    if (detailResult.error) {
-      setError(detailResult.error.message || "Не удалось открыть турнир");
-      setDetail(null);
-    } else {
-      setDetail(detailResult.data ?? null);
-    }
-    const resolvedRegistration = await mergeTournamentPendingPayment(
-      requestToken, exerciseId,
-      vivaRegistrationResult?.data ?? registrationResult?.data ?? detailResult.data?.registration ?? null,
-    );
-    if (tournamentPaymentSessionIdentity(requestToken) !== tournamentPaymentSessionIdentity(readAuthToken())) {
+      let ownerRegistration = registrationResult?.data;
+      const vivaRegistration = vivaRegistrationResult?.data;
+      const pendingCopay = ownerRegistration?.status === "PAYMENT_PENDING";
+      const ownsCopay = pendingCopay || Boolean(ownerRegistration?.status === "REGISTERED" && ownerRegistration.bookingId);
+      let ownerRosterChanged = false;
+      if (pendingCopay || (checkOnly && ownsCopay)
+        || (!ownsCopay && !checkOnly && vivaRegistration?.status === "REGISTERED")) {
+        const reconciliation = await apiReconcileTournamentOwner(exerciseId);
+        if (!isCurrentDetail()) return;
+        ownerRosterChanged = reconciliation.data?.state === "COMPLETED" || reconciliation.data?.state === "CANCELLED";
+        if (pendingCopay && ownerRosterChanged) {
+          ownerRegistration = (await apiFetchTournamentMyRegistration(tournamentId)).data ?? ownerRegistration;
+          if (!isCurrentDetail()) return;
+        }
+      }
+      if (!rosterOptions.signal.aborted && (checkOnly || ownerRosterChanged)) {
+        rosterRequest = loadPublicRoster(exerciseId, { ...rosterOptions, force: true });
+      }
+
+      if (ownerRosterChanged && ownerRegistration?.status === "PAYMENT_PENDING") {
+        // A terminal reconciliation retires the old link even while status readback is catching up.
+        ownerRegistration = { ...ownerRegistration, paymentUrl: null, paymentExpiresAt: null, paymentStatusVerified: true };
+      } else if (checkTwoHourTournamentPayment && ownerRegistration?.status === "PAYMENT_PENDING" && ownerRegistration.bookingId) {
+        const paymentStatus = vivaRegistration?.paymentStatusVerified && vivaRegistration.bookingId === ownerRegistration.bookingId
+          ? vivaRegistration
+          : await apiReadTournamentPaymentStatus(exerciseId, ownerRegistration);
+        if (!isCurrentDetail()) return;
+        if (paymentStatus.paymentStatusVerified) {
+          const payable = paymentStatus.status === "PAYMENT_PENDING";
+          ownerRegistration = {
+            ...ownerRegistration,
+            paymentUrl: payable ? paymentStatus.paymentUrl : null,
+            paymentExpiresAt: payable ? paymentStatus.paymentExpiresAt : null,
+            paymentStatusVerified: true,
+          };
+        }
+      }
+
+      const resolvedRegistration = await mergeTournamentPendingPayment(
+        requestToken, exerciseId,
+        preserveTournamentLevelDenial(
+          ownerRegistration,
+          (ownsCopay ? ownerRegistration : vivaRegistration ?? ownerRegistration)
+            ?? detailResult.data?.registration ?? null,
+        ),
+      );
+      if (!isCurrentDetail()) return;
+      if (detailResult.error) {
+        setError(detailResult.error.message || "Не удалось открыть турнир");
+        setDetail(null);
+      } else {
+        setDetail(detailResult.data ?? null);
+      }
+      setRegistrationSessionIdentity(sessionIdentity);
+      if (resolvedRegistration?.paymentStatusVerified) clearStoredPendingPayment(exerciseId);
+      setRegistration(resolvedRegistration);
+      if (checkoutRequestIdRef.current === checkoutRequestId && resolvedRegistration?.status === "REGISTERED" && resolvedRegistration.bookingId) {
+        setSubscriptionConfirmationNotice(null);
+      }
+      setRegistrationResolvedFor(`${tournamentId}:${exerciseId}`);
       setLoadingDetail(false);
-      return;
+    } finally {
+      const finishRosterRead = () => {
+        if (publicRosterDetailAbortRef.current === rosterAbortController) {
+          publicRosterDetailAbortRef.current = null;
+        }
+      };
+      if (rosterRequest) void rosterRequest.finally(finishRosterRead);
+      else finishRosterRead();
     }
-    setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(requestToken));
-    setRegistration(resolvedRegistration);
-    setRegistrationResolvedFor(`${tournamentId}:${exerciseId}`);
-    setLoadingDetail(false);
   }, [isAuthenticated, items, loadPublicRoster, subscriptionUsageShadowEnabled]);
 
   const ensurePricingPreviewLoaded = useCallback(async (tournament: TournamentSignupSummary | null | undefined) => {
@@ -1467,9 +1498,7 @@ export default function TournamentSignupPage({
       setRegistration(null);
       setCheckout(null);
       setAuthRequired(false);
-      setPendingPaymentProduct(null);
       setConfirmingSubscriptionProductKey(null);
-      setSubscriptionConfirmationNotice(null);
       setRegistrationResolvedFor(null);
       setActiveDetailTab("roster");
       setPurchasableListOpen(false);
@@ -1478,9 +1507,7 @@ export default function TournamentSignupPage({
     }
     setCheckout(null);
     setCheckoutPreparedFor(null);
-    setPendingPaymentProduct(null);
     setConfirmingSubscriptionProductKey(null);
-    setSubscriptionConfirmationNotice(null);
     setRegistrationResolvedFor(null);
     setPurchasableListOpen(false);
     setStationModalOpen(false);
@@ -1490,6 +1517,7 @@ export default function TournamentSignupPage({
     setRegistration(null);
     if (!selectedId) return;
     void loadDetail(selectedId);
+    return () => { detailRequestIdRef.current += 1; };
   }, [loadDetail, selectedId, phone]);
 
   useEffect(() => {
@@ -1503,12 +1531,12 @@ export default function TournamentSignupPage({
       await previewSubscriptionDiscount(selectedExerciseId);
       return;
     }
-    if (!isAuthenticated || !nextCheckout.profile) {
-      setPendingPaymentProduct(product);
+    if (!isAuthenticated) {
       setAuthRequired(true);
       setError(null);
       return;
     }
+    if (!nextCheckout.profile) return;
     if (isRestoringSession || nextCheckout !== checkout
       || ((product.source === "one-time" || product.tournamentDiscountQuote) && (discountPending || discountError))
       || (product.tournamentDiscountQuote && !currentDiscountQuotes.includes(product.tournamentDiscountQuote))) {
@@ -1518,6 +1546,9 @@ export default function TournamentSignupPage({
 
     const requestId = checkoutRequestIdRef.current;
     const paymentToken = readAuthToken();
+    if (!await checkLevel(detail ?? selectedTournament, nextCheckout.profile.id)) return;
+    if (checkoutRequestIdRef.current !== requestId || paymentToken !== readAuthToken()) return;
+
     const profile = nextCheckout.profile;
     const subscriptionProductKey = product.source === "client-subscription"
       ? `${product.source}:${product.id}`
@@ -1528,7 +1559,9 @@ export default function TournamentSignupPage({
     setConfirmingSubscriptionProductKey(subscriptionProductKey);
     try {
       const result = await apiCreateTournamentVivaTransaction({
+        preservePendingTournamentPayment: true,
         exerciseId: selectedExerciseId,
+        checkoutContext: "tournament",
         studioId: nextCheckout.studioId,
         clientId: profile.id,
         profile,
@@ -1540,6 +1573,14 @@ export default function TournamentSignupPage({
       });
       if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
       if (result.error || !result.data) {
+        const levelDenial = subscriptionProductKey && getTournamentBookingLevelDenial(result.error);
+        if (levelDenial) {
+          setCheckout(null);
+          setDiscountQuotes([]);
+          setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(paymentToken));
+          setRegistration(current => preserveTournamentLevelDenial(levelDenial, current));
+          return;
+        }
         if (result.status === 409 && isSubscriptionBookingReleased(result.error?.raw)) {
           setError(result.error?.message || "Предыдущая запись отменена. Выберите вариант записи снова.");
           setCheckout(null);
@@ -1554,19 +1595,16 @@ export default function TournamentSignupPage({
         }
         if (result.status === 202 && subscriptionProductKey) {
           setError(null);
-          setSubscriptionConfirmationNotice(
-            "Viva приняла запись. Подтверждение может занять до минуты — состав обновится автоматически.",
-          );
+          setSubscriptionConfirmationNotice("Подтверждение записи или доплаты от Viva пока не получено.");
           setCheckout(null);
-          await loadPublicRoster(selectedExerciseId, { force: true });
-          await loadDetail(selectedId);
-          await loadList();
+          await loadDetail(selectedId, { checkOnly: true });
           return;
         }
         setError(result.error?.message || "Не удалось создать запись через Viva");
         return;
       }
-      if (result.data.paymentUrl) {
+      const paymentUrl = result.data.paymentUrl;
+      if (paymentUrl || result.data.paymentPending) {
         const nextRegistration: TournamentRegistrationState = {
           status: "PAYMENT_PENDING",
           bookingId: result.data.bookingId,
@@ -1574,15 +1612,25 @@ export default function TournamentSignupPage({
           waitlistNumber: null,
           canRegister: false,
           canCancel: true,
-          message: "Запись создана в Viva, ожидается оплата.",
-          paymentUrl: result.data.paymentUrl,
-          paymentExpiresAt: result.data.paymentExpiresAt ?? new Date(Date.now() + PAYMENT_HOLD_MS).toISOString(),
+          message: paymentUrl ? null : "Ссылку на оплату пока не удалось подтвердить. Обновите карточку турнира.",
+          paymentUrl,
+          paymentExpiresAt: paymentUrl
+            ? result.data.paymentExpiresAt ?? new Date(Date.now() + PAYMENT_HOLD_MS).toISOString() : null,
         };
-        await storeTournamentPendingPayment(paymentToken, selectedExerciseId, nextRegistration);
-        if (tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
         setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(paymentToken));
         setRegistration(nextRegistration);
-        if (!canPayTournamentPending(nextRegistration) || !navigateToExternalUrl(result.data.paymentUrl)) {
+        setCheckout(null);
+        if (!paymentUrl) return;
+        if (product.tournamentDiscountQuote) {
+          // The owned status can recover this bill after return. Do not delay
+          // navigation on browser storage for a discounted tournament.
+          void storeTournamentPendingPayment(paymentToken, selectedExerciseId, nextRegistration);
+        } else {
+          await storeTournamentPendingPayment(paymentToken, selectedExerciseId, nextRegistration);
+        }
+        if (checkoutRequestIdRef.current !== requestId
+          || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
+        if (!canPayTournamentPending(nextRegistration) || !navigateToExternalUrl(paymentUrl)) {
           setError("Не удалось открыть страницу оплаты");
         }
         return;
@@ -1599,6 +1647,7 @@ export default function TournamentSignupPage({
       }
     }
   }, [
+    checkLevel,
     actionLoading,
     checkout,
     currentDiscountQuotes,
@@ -1616,6 +1665,30 @@ export default function TournamentSignupPage({
     selectedTournament,
     subscriptionUsageShadowEnabled,
   ]);
+
+  const registerFree = async () => {
+    if (!selectedId || !selectedExerciseId || !checkout?.profile || actionLoading || isRestoringSession) return;
+    const requestId = checkoutRequestIdRef.current;
+    const token = readAuthToken();
+    if (!await checkLevel(detail ?? selectedTournament, checkout.profile.id)
+      || checkoutRequestIdRef.current !== requestId || token !== readAuthToken()) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      const result = await apiRegisterForTournament(selectedId);
+      if (checkoutRequestIdRef.current !== requestId || token !== readAuthToken()) return;
+      if (result.error || !result.data || !["REGISTERED", "WAITLIST"].includes(result.data.status)) {
+        setError(result.error?.message ?? result.data?.message ?? "Не удалось подтвердить бесплатную запись.");
+        return;
+      }
+      setCheckout(null);
+      await loadPublicRoster(selectedExerciseId, { force: true });
+      await loadDetail(selectedId);
+      await loadList();
+    } finally {
+      if (checkoutRequestIdRef.current === requestId) setActionLoading(false);
+    }
+  };
 
   const loadCheckout = useCallback(async (mode: "auth" | "public") => {
     if (!selectedId || !selectedExerciseId || actionLoading) return;
@@ -1649,7 +1722,8 @@ export default function TournamentSignupPage({
       ...result.data.clientSubscriptions,
     ];
     if (availableProducts.length === 0) {
-      if (mode === "public") {
+      if (mode === "public" || (result.data.profile?.id && !result.data.customPricing && result.data.purchasedProducts.length === 0
+        && !result.data.tariffErrors?.length)) {
         setCheckout(result.data);
         setCheckoutResolvedFor(checkoutContextKey);
         return;
@@ -1765,10 +1839,22 @@ export default function TournamentSignupPage({
     return () => window.clearTimeout(timer);
   }, [registration]);
 
+  useEffect(() => {
+    if (!selectedId || registration?.status !== "PAYMENT_PENDING") return;
+    const refreshRestoredCard = (event: PageTransitionEvent) => {
+      if (event.persisted) void loadDetail(selectedId);
+    };
+    window.addEventListener("pageshow", refreshRestoredCard);
+    return () => window.removeEventListener("pageshow", refreshRestoredCard);
+  }, [loadDetail, registration?.status, selectedId]);
+
   const canPayPending = isAuthenticated && !isRestoringSession && Boolean(registrationSessionIdentity)
     && registrationSessionIdentity === tournamentPaymentSessionIdentity(readAuthToken()) && canPayTournamentPending(registration);
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
-  const canRegister = !subscriptionConfirmationNotice
+  const hasCurrentRegistration = registrationResolvedFor === `${selectedId}:${selectedExerciseId}`
+    && registrationSessionIdentity === tournamentPaymentSessionIdentity(readAuthToken());
+  const levelDenialReason = isAuthenticated && hasCurrentRegistration ? registration?.levelDenialReason : null;
+  const canRegister = !subscriptionConfirmationNotice && (!isAuthenticated || hasCurrentRegistration)
     && canOfferTournamentRegistration(detail?.status, registration);
   const detailDateParts = getDateParts(selectedTournament?.date ?? null);
   const detailStartTime = formatClock(selectedTournament?.startsAt ?? null);
@@ -1847,35 +1933,6 @@ export default function TournamentSignupPage({
   ]);
 
   useEffect(() => {
-    if (subscriptionUsageShadowEnabled) return;
-    if (!pendingPaymentProduct || !isAuthenticated || !checkout?.profile || actionLoading || discountPending) return;
-    if (discountError) {
-      setPendingPaymentProduct(null);
-      setError(discountError);
-      return;
-    }
-    const matchedProduct = findMatchingTournamentPaymentProduct(checkout, pendingPaymentProduct);
-    if (!matchedProduct) {
-      setPendingPaymentProduct(null);
-      setError("После входа выбранный способ оплаты не найден. Выберите способ записи ещё раз.");
-      return;
-    }
-    const discount = matchTournamentSubscriptionDiscount(currentDiscountQuotes, matchedProduct);
-    setPendingPaymentProduct(null);
-    void completeVivaRegistration(checkout, discount ? buildTournamentSubscriptionDiscountProduct(discount) : matchedProduct);
-  }, [
-    actionLoading,
-    checkout,
-    completeVivaRegistration,
-    currentDiscountQuotes,
-    discountError,
-    discountPending,
-    isAuthenticated,
-    pendingPaymentProduct,
-    subscriptionUsageShadowEnabled,
-  ]);
-
-  useEffect(() => {
     if (subscriptionUsageShadowEnabled) {
       setLiveRatings(new Map());
       return;
@@ -1888,10 +1945,6 @@ export default function TournamentSignupPage({
     let cancelled = false;
     const players = detailParticipants.map((participant) => ({
       clientId: participant.id,
-      phone: participant.phone,
-      name: participant.name,
-      rating: participant.level,
-      ratingNumeric: participant.ratingNumeric,
     }));
 
     void apiFetchPadelLiveRatings(players).then((result) => {
@@ -1902,12 +1955,7 @@ export default function TournamentSignupPage({
       }
       const next = new Map<string, PadelLiveRatingItem>();
       result.data.forEach((item) => {
-        const keys = [
-          getLiveRatingKey(item.clientId, null, null),
-          getLiveRatingKey(null, item.phoneNorm, null),
-          getLiveRatingKey(null, null, item.name),
-        ].filter(Boolean);
-        keys.forEach((key) => next.set(key, item));
+        if (item.clientId) next.set(item.clientId, item);
       });
       setLiveRatings(next);
     });
@@ -1919,6 +1967,7 @@ export default function TournamentSignupPage({
 
   return (
     <div className="tournament-signup-page">
+      {levelOnboardingDialog}
       <header className="tournament-signup-header">
         <button className="page-back" onClick={selectedId ? () => setSelectedId(null) : onBack} type="button">
           ← Назад
@@ -2051,28 +2100,42 @@ export default function TournamentSignupPage({
                 <button
                   className="tournament-signup-ghost"
                   type="button"
-                  onClick={() => {
-                    setAuthRequired(false);
-                    setPendingPaymentProduct(null);
-                  }}
+                  onClick={() => setAuthRequired(false)}
                 >
                   Закрыть
                 </button>
               </div>
               <AuthForm
-                onLogin={() => {
-                  setAuthRequired(false);
-                }}
+                onLogin={() => setAuthRequired(false)}
               />
             </div>
           )}
           {loadingDetail && <div className="tournament-signup-muted">Загрузка турнира...</div>}
           {!loadingDetail && error && <div className="tournament-signup-error">{error}</div>}
-          {!loadingDetail && subscriptionConfirmationNotice && (
-            <div className="tournament-signup-notice" role="status" aria-live="polite">
-              {subscriptionConfirmationNotice}
-            </div>
+          {!loadingDetail && levelDenialReason && (
+            <div className="tournament-signup-error" role="status">{levelDenialReason}</div>
           )}
+          {!loadingDetail && subscriptionConfirmationNotice && (
+            <>
+              <div className="tournament-signup-notice" role="status" aria-live="polite">
+                {subscriptionConfirmationNotice}
+              </div>
+              <button
+                type="button"
+                className="tournament-signup-payment-purchase-toggle"
+                onClick={() => void loadDetail(selectedId, { checkOnly: true })}
+                disabled={actionLoading}
+              >
+                Проверить запись
+              </button>
+            </>
+          )}
+          {!loadingDetail && !subscriptionConfirmationNotice && isAuthenticated
+            && registrationResolvedFor === `${selectedId}:${selectedExerciseId}`
+            && registrationSessionIdentity === tournamentPaymentSessionIdentity(readAuthToken())
+            && registration?.status === "REGISTERED" && registration.bookingId && (
+              <div className="tournament-signup-notice" role="status" aria-live="polite">Запись подтверждена.</div>
+            )}
           {!loadingDetail && selectedTournament && (
             <>
               {!subscriptionUsageShadowEnabled
@@ -2097,6 +2160,7 @@ export default function TournamentSignupPage({
                       {
                         placeNumber: registration?.placeNumber ?? null,
                         refundMethod: action.refundMethod,
+                        cupTournament: true,
                       },
                     );
                     return {
@@ -2122,6 +2186,7 @@ export default function TournamentSignupPage({
                     </div>
                     <div className="details-time details-time-strong">{selectedTournament.title}</div>
                     <div className="details-time">{detailTournamentTypeLabel}</div>
+                    <EventAllowedLevel event={detail ?? selectedTournament} />
                   </div>
                   <CalendarDateBadge
                     monthLabel={detailDateParts.month}
@@ -2192,8 +2257,7 @@ export default function TournamentSignupPage({
                         <div className="game-empty">Стань первым участником</div>
                       ) : (
                         detailParticipants.map((participant, index) => {
-                          const liveRating = getPlayerLiveRating(participant, liveRatings);
-                          const levelMeta = getPlayerLevelMeta(participant, liveRating);
+                          const levelMeta = getPlayerLevelMeta(liveRatings.get(participant.id) ?? null);
 
                           return (
                             <div className="details-roster-row" key={`${participant.id}-${index}`}>
@@ -2246,6 +2310,20 @@ export default function TournamentSignupPage({
                   </div>
 
                   <div className="tournament-signup-register-stack">
+                    {registration?.status === "PAYMENT_PENDING" && (
+                      <div className="tournament-signup-notice" role="status" aria-live="polite">
+                        <strong>Ожидает оплаты</strong>
+                        {registration.message && <div>{registration.message}</div>}
+                        <button
+                          className="tournament-signup-ghost"
+                          type="button"
+                          onClick={() => void loadDetail(selectedId)}
+                          disabled={actionLoading}
+                        >
+                          Обновить статус
+                        </button>
+                      </div>
+                    )}
                     {subscriptionUsageShadowEnabled && isAuthenticated && selectedExerciseId && (
                       <div className="tournament-signup-auth">
                         <div className="tournament-signup-auth-head">
@@ -2275,6 +2353,13 @@ export default function TournamentSignupPage({
                         </div>
                         {checkout ? (
                           <div className="tournament-signup-payment-options">
+                            {checkout.profile && !checkout.customPricing && !checkout.tariffErrors?.length
+                              && [checkout.clientSubscriptions, checkout.oneTimes, checkout.subscriptions, checkout.purchasedProducts]
+                                .every(products => products.length === 0) && (
+                              <button type="button" className="section-cta" onClick={() => void registerFree()} disabled={actionLoading}>
+                                {actionLoading ? "Подтверждаем запись…" : "Записаться без оплаты"}
+                              </button>
+                            )}
                             {checkout.clientSubscriptions.length > 0 && (
                               <div className="tournament-signup-payment-group">
                                 {checkout.clientSubscriptions.map((product) => {
@@ -2392,7 +2477,6 @@ export default function TournamentSignupPage({
                                   type="button"
                                   className="tournament-signup-payment-purchase-toggle"
                                   onClick={() => {
-                                    setPendingPaymentProduct(null);
                                     setAuthRequired(true);
                                     setError(null);
                                   }}
@@ -2417,7 +2501,7 @@ export default function TournamentSignupPage({
                       </div>
                     )}
 
-                    {!subscriptionUsageShadowEnabled && (canPayPending || canCancel) && (
+                    {!subscriptionUsageShadowEnabled && (canPayPending || canCancel || registration?.status === "PAYMENT_PENDING") && (
                       <div className="tournament-signup-actions">
                         {canPayPending && (
                           <button
@@ -2427,6 +2511,12 @@ export default function TournamentSignupPage({
                             disabled={actionLoading}
                           >
                             Оплатить
+                          </button>
+                        )}
+                        {registration?.status === "PAYMENT_PENDING" && (
+                          <button type="button" className="tournament-signup-payment-purchase-toggle"
+                            onClick={() => void loadDetail(selectedId, { checkOnly: true })} disabled={actionLoading}>
+                            Проверить оплату
                           </button>
                         )}
                         {canCancel && (
@@ -2465,7 +2555,7 @@ export default function TournamentSignupPage({
                     )}
                     {selectedTournament.address && <div><span>Адрес</span><strong>{selectedTournament.address}</strong></div>}
                     {selectedTournament.format && <div><span>Формат</span><strong>{selectedTournament.format}</strong></div>}
-                    {selectedTournament.levelLabel && <div><span>Уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
+                    {selectedTournament.levelLabel && <div><span>Допустимый уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
                     {selectedTournament.priceLabel && <div><span>Стоимость</span><strong>{selectedTournament.priceLabel}</strong></div>}
                   </div>
                   {detail?.description && <p className="tournament-signup-copy">{detail.description}</p>}

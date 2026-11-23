@@ -1,3 +1,4 @@
+import { getProfileLevelGrade, getProfileLevelNumericText } from "./playerLevel";
 import {
   apiFetchProfile,
   apiUpdatePadelGameRecord,
@@ -11,14 +12,11 @@ import {
   type CommunityRecord,
 } from "./communityApi";
 import {
-  CUSTOM_FIELD_IDS,
-  getCustomFieldValue,
   getLetterGrade,
   parseNumericLevel,
 } from "./customFields";
 
 const inFlightAutopublishGameIds = new Set<string>();
-const RATING_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"] as const;
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -253,21 +251,8 @@ function buildCommunityGamePreviewLabel(game: PadelGameRecord): string {
   return [game.booking?.studioName, game.booking?.roomName].filter(Boolean).join(" • ") || "Матч сообщества";
 }
 
-function getCommunityActorLevelScore(
-  numericRating: number | null,
-  letterGrade: string | null | undefined,
-): number {
-  if (typeof numericRating === "number" && Number.isFinite(numericRating)) {
-    return Math.max(1.5, Math.min(6, numericRating));
-  }
-
-  const normalizedGrade = String(letterGrade || "").trim().toUpperCase();
-  const matchedIndex = RATING_LABELS.findIndex((item) => item === normalizedGrade);
-  if (matchedIndex >= 0) {
-    return matchedIndex + 1.5;
-  }
-
-  return 3.2;
+function getCommunityActorLevelScore(numericRating: number | null, _letterGrade: string | null | undefined): number | null {
+  return typeof numericRating === "number" && Number.isFinite(numericRating) ? numericRating : null;
 }
 
 function buildCommunityActor(
@@ -276,9 +261,9 @@ function buildCommunityActor(
 ): CommunityActorPayload {
   if (profile) {
     const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() || "Игрок";
-    const explicitGrade = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel) ?? null;
+    const explicitGrade = getProfileLevelGrade(profile) ?? null;
     const numericValue = parseNumericLevel(
-      getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
+      getProfileLevelNumericText(profile),
     );
     const levelScore = getCommunityActorLevelScore(numericValue, explicitGrade);
 
@@ -289,7 +274,7 @@ function buildCommunityActor(
       avatar: profile.photo ?? null,
       role: "MEMBER",
       levelScore,
-      levelLabel: explicitGrade ?? getLetterGrade(levelScore),
+      levelLabel: explicitGrade ?? (levelScore === null ? null : getLetterGrade(levelScore)),
     };
   }
 
@@ -303,7 +288,7 @@ function buildCommunityActor(
     avatar: fallbackGame.organizer?.photo ?? null,
     role: "MEMBER",
     levelScore: fallbackLevelScore,
-    levelLabel: fallbackGrade || getLetterGrade(fallbackLevelScore),
+    levelLabel: fallbackGrade || (fallbackLevelScore === null ? null : getLetterGrade(fallbackLevelScore)),
   };
 }
 

@@ -66,7 +66,12 @@ test("failed or empty checkout settles once; only manual retry or a changed acto
   };
 
   const emptyCheckout = { oneTimes: [], subscriptions: [], clientSubscriptions: [], purchasedProducts: [], customPricing: null };
-  for (const result of [{ data: null, error: { message: "Fixture service unavailable" } }, { data: emptyCheckout, error: null }]) {
+  const signedInEmptyCheckout = { ...emptyCheckout, profile: { id: "synthetic-actor" } };
+  for (const result of [
+    { data: null, error: { message: "Fixture service unavailable" } },
+    { data: emptyCheckout, error: null },
+    { data: signedInEmptyCheckout, error: null },
+  ]) {
     const state = { checkoutPreparedFor: null as string | null, checkout: null, actionLoading: false,
       checkoutContextKey: "event:exercise:auth:actor-a", selectedId: "event", selectedExerciseId: "exercise",
       registrationResolvedFor: "event:exercise", error: null as string | null };
@@ -93,8 +98,10 @@ test("failed or empty checkout settles once; only manual retry or a changed acto
     await pending.at(-1);
     assert.equal(requests, 1);
     assert.equal(state.actionLoading, false);
-    assert.equal(state.checkout, null);
-    assert.ok(state.error);
+    const freeCandidate = result.data === signedInEmptyCheckout;
+    assert.equal(state.checkout, freeCandidate ? signedInEmptyCheckout : null);
+    if (freeCandidate) assert.equal(state.error, null);
+    else assert.ok(state.error);
     for (let render = 0; render < 5; render++) renderEffect();
     assert.equal(requests, 1, "settled errors and empty results must not cause render-driven network retries");
 

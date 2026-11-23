@@ -1,7 +1,8 @@
+import { getProfileLevelNumericText } from "../../utils/playerLevel";
 import { useEffect, useState } from "react";
 import type { UserProfileType } from "../../utils/apiClient";
 import { useDeadlineCountdown } from "../../hooks/useDeadlineCountdown";
-import { CUSTOM_FIELD_IDS, getCustomFieldValue, getLetterGrade, parseNumericLevel } from "../../utils/customFields";
+import { getLetterGrade, parseNumericLevel } from "../../utils/customFields";
 import { formatReferralCountdownLabel } from "../../utils/referralSubscription";
 
 interface UserProfileProps {
@@ -117,7 +118,7 @@ export function UserProfile({ profile, openEditForm, onAvatarClick, shareOffer, 
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const initials = (profile.firstName?.[0] || "") + (profile.lastName?.[0] || "");
   const balance = (profile.deposit / 100).toLocaleString("ru-RU");
-  const numericLevelRaw = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
+  const numericLevelRaw = getProfileLevelNumericText(profile);
   const numericLevel = parseNumericLevel(numericLevelRaw ?? undefined);
   const letterGrade = numericLevel != null ? getLetterGrade(numericLevel) : null;
   const gradeKey = letterGrade && isLevelGrade(letterGrade) ? letterGrade : null;
@@ -248,9 +249,11 @@ export function UserProfile({ profile, openEditForm, onAvatarClick, shareOffer, 
                 ) : (
                   <div className="cab-avatar cab-avatar--fallback">{initials || "?"}</div>
                 )}
-                <div className="cab-avatar-badge" style={badgeStyle}>{letterGrade || "—"}</div>
+                <div className="cab-avatar-badge" title={profile.level?.status === "UNAVAILABLE" ? "Уровень временно недоступен" : profile.level?.status === "CONFLICT" ? "Требуется сверка уровня" : letterGrade || "Уровень не определён"} style={badgeStyle}>{letterGrade || "—"}</div>
               </div>
             </button>
+            {profile.level?.status === "CONFLICT" && <span className="cab-avatar-level-status" role="status">Требуется сверка уровня</span>}
+            {profile.level?.status === "UNAVAILABLE" && <span className="cab-avatar-level-status" role="status">Уровень недоступен</span>}
 
           </div>
 
