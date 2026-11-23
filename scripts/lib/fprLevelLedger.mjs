@@ -155,7 +155,8 @@ export function buildFprPlayerEvents({ clientId, events, context, nowIso }) {
       && e.source.fprProtocolId === source.document.tournamentId && !e.source.compensatesEventId)
       .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || eventId(a).localeCompare(eventId(b))).at(-1);
     const event = buildTournamentRatingEvent({ tournamentId: sourceId, finishedAt, standing: row, canonicalBefore: before,
-      occurredAt: finishedAt, createdAt: nowIso, previousEventId: predecessor?.id });
+      occurredAt: finishedAt, createdAt: nowIso, previousEventId: predecessor?.id,
+      protocolId: source.document.tournamentId });
     if (!event) throw new Error('FPR_LEVEL_EVENT_INVALID');
     Object.assign(event.source, { fprProtocolId: source.document.tournamentId, fprFinishedAt: finishedAt,
       fprLevelPolicy: FPR_LEVEL_POLICY, fprFormulaVersion: FPR_LEVEL_FORMULA_VERSION,
@@ -167,7 +168,8 @@ export function buildFprPlayerEvents({ clientId, events, context, nowIso }) {
       const id = `rating_evt:fpr_bootstrap:${fprLevelHash(clientId)}`;
       pending.push({ _id: id, id, idempotencyKey: id, schemaVersion: 1, eventType: 'RATING_BOOTSTRAPPED_FROM_TOURNAMENT',
         occurredAt: new Date(Date.parse(finishedAt) - 1).toISOString(), createdAt: nowIso, player: event.player, actor,
-        source: { domain: 'TOURNAMENT_BOOTSTRAP', sourceId, fprBootstrap: true },
+        source: { domain: 'TOURNAMENT_BOOTSTRAP', sourceId, kind: 'TOURNAMENT', eventId: sourceId,
+          resultRef: event.source.resultRef, reason: 'PROTOCOL_BASELINE', fprBootstrap: true },
         change: { before: null, delta: null, after: row.ratingBefore, gradeBefore: null, gradeAfter: ratingGradeFromNumeric(row.ratingBefore) },
         formula: null, projectionIntent: { viva: 'NONE_BOOTSTRAP' } });
     }

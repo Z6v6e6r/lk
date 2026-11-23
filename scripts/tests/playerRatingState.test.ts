@@ -5,6 +5,7 @@ import {
   ratingGradeFromNumeric,
   ratingSublevelFromNumeric,
   ratingSublevelsForBand,
+  buildGameResultBaselineEvent,
   buildTournamentCompensationEvent,
   buildTournamentRatingEvent,
   buildTournamentStartOverrideEvent,
@@ -274,6 +275,9 @@ test("tournament event targets ratingAfter when tournament before differs from c
     gradeBefore: "D+",
     gradeAfter: "C+",
   });
+  assert.equal(event.source.kind, "TOURNAMENT");
+  assert.equal(event.source.eventId, event.source.tournamentId);
+  assert.deepEqual(event.source.resultRef, { id: event.source.tournamentId, revision: event.source.sourceRevision });
   assert.deepEqual(event.source.tournamentRatingSnapshot, {
     before: 3.358,
     delta: 0.23838,
@@ -453,4 +457,51 @@ test("reapplying a prior tournament standings revision after a correction has a 
   assert.ok(restored);
   assert.notEqual(restored?.id, first?.id);
   assert.equal(restored?.source.sourceRevision, first?.source.sourceRevision);
+});
+
+
+test("CUP manual target resets any underlying clamp drift and later game deltas still apply", () => {
+  const player = { key: "client:synthetic", clientId: "synthetic", name: "Synthetic", phoneNorm: null };
+  const start = {
+    _id: "synthetic-baseline", id: "synthetic-baseline", idempotencyKey: "synthetic-baseline",
+    schemaVersion: 1, eventType: "RATING_INITIAL_ASSIGNED",
+    occurredAt: "2026-11-19T00:00:00.000Z", createdAt: "2026-11-19T00:00:00.000Z",
+    player, actor: {}, source: { domain: "ONBOARDING" },
+    change: { before: null, delta: null, after: 7, gradeBefore: null, gradeAfter: "A" },
+    formula: null, projectionIntent: { viva: "NONE_CUP_ONLY" },
+  };
+  const previousGame = { ...start, id: "first-game", eventType: "GAME_RESULT_SUBMITTED_APPLIED",
+    occurredAt: "2026-11-19T00:00:01.000Z", change: { ...start.change, delta: 0.4 } };
+  const manual = { ...start, id: "cup-change", eventType: "RATING_MANUALLY_CHANGED",
+    occurredAt: "2026-11-19T00:00:02.000Z", source: { domain: "ADMIN_MANUAL", kind: "ADMIN_MANUAL" },
+    change: { before: 7, delta: -1, after: 6, gradeBefore: "A", gradeAfter: "A" } };
+  const laterGame = { ...previousGame, id: "later-game", occurredAt: "2026-11-19T00:00:03.000Z",
+    change: { ...previousGame.change, delta: 0.1 } };
+  assert.equal(replayPlayerRatingEvents([start, previousGame, manual])?.ratingNumeric, 6);
+  assert.equal(replayPlayerRatingEvents([laterGame, manual, previousGame, start])?.ratingNumeric, 6.1);
+  assert.equal(replayPlayerRatingEvents([start, previousGame, { ...manual, source: { domain: "CUP_ADMIN" } }])?.ratingNumeric, 6.4);
+});
+
+test("CUP letter alignment records the event without replacing a numeric result", () => {
+  const baseline = buildGameResultBaselineEvent({
+    resultId: "baseline", occurredAt: "2026-11-23T00:00:00.000Z",
+    player: { id: "synthetic" }, ratingNumeric: 2.1,
+  });
+  assert.ok(baseline);
+  const lateResult = {
+    ...baseline, id: "late-result", eventType: "GAME_RESULT_SUBMITTED_APPLIED",
+    occurredAt: "2026-11-23T01:00:00.000Z",
+    change: { before: 2.1, delta: 0.1, after: 2.2, gradeBefore: "D", gradeAfter: "D" },
+  };
+  const alignment = {
+    ...lateResult, id: "alignment", eventType: "RATING_MANUALLY_CHANGED",
+    occurredAt: "2026-11-23T02:00:00.000Z",
+    source: { kind: "ADMIN_MANUAL", expectedLastEventId: baseline.id,
+      gradeAlignment: { previousGrade: "D", previousEventId: baseline.id, clientId: "synthetic" } },
+    change: { before: 2.1, delta: 0, after: 2.1, gradeBefore: "D", gradeAfter: "D+" },
+  };
+  const replay = replayPlayerRatingEvents([alignment, baseline, lateResult]);
+  assert.equal(replay?.ratingNumeric, 2.2);
+  assert.equal(replay?.rating, "D+");
+  assert.equal(replay?.lastEventId, alignment.id);
 });
