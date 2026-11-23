@@ -171,10 +171,12 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
       const status = statuses?.find(item => item.counterKey === key);
       if (!status && key !== 'friendship' && !hasZeroAttempt(key)) return [];
       const billingOptions = key === 'friendship'
-        ? friendshipBillingOptions(statuses ?? [], error, twoHourProductPriceMinor).map(option => ({
-          ...option,
-          benefitGroups: friendshipVariantBenefits[option.id],
-        }))
+        ? friendshipBillingOptions(statuses ?? [], error, twoHourProductPriceMinor)
+          .filter(option => option.id !== 'annual')
+          .map(option => ({
+            ...option,
+            benefitGroups: friendshipVariantBenefits[option.id],
+          }))
         : key === 'energy5'
           ? (status ? energy5BillingOptions(status) : [{ id: 'monthly', label: '60 дней, 5 занятий', priceMinor: null }])
           : status ? billingFromStatus(status) : [{ id: 'monthly', label: resolveZeroOffer(key)?.period ?? '30 дней', priceMinor: null }];
