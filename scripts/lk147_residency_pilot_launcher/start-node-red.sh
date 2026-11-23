@@ -16,7 +16,9 @@ case "$profile" in
     ;;
   candidate|pilot)
     owner_token=$("$node" "$selector" "read-$profile-token") || exit 78
-    export TOURNAMENT_OWNER_RECOVERY_ONLY=true
+    if [ "$profile" = candidate ]; then
+      export TOURNAMENT_OWNER_RECOVERY_ONLY=true
+    fi
     export TOURNAMENT_OWNER_API_BASE=https://padlhub.su/api
     export TOURNAMENT_OWNER_INTEGRATION_TOKEN="$owner_token"
     unset owner_token

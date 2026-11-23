@@ -38,8 +38,9 @@ function probe() {
   const env = process.env;
   process.stdout.write(JSON.stringify({
     retained: env.RETAINED_FIRST + ':' + env.RETAINED_SECOND,
-    tournament: env.TOURNAMENT_OWNER_RECOVERY_ONLY === 'true' &&
-      env.TOURNAMENT_OWNER_INTEGRATION_TOKEN === 'fixture-tournament-token',
+    tournamentRecoveryOnly: env.TOURNAMENT_OWNER_RECOVERY_ONLY ?? null,
+    tournamentOwner: env.TOURNAMENT_OWNER_INTEGRATION_TOKEN === 'fixture-tournament-token' &&
+      env.TOURNAMENT_OWNER_API_BASE === 'https://padlhub.su/api',
     cup: env.CUP_API_BASE_URL,
     pilot: env.LK_RESIDENCY_LIFECYCLE_PREVIEW_ONLY ?? null,
     create: env.LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED ?? null,
@@ -83,13 +84,16 @@ function expectRefusal(result, code) {
   assert.equal(result.stdout, '');
   assert.match(result.stderr, new RegExp(code + '\\n$'));
 }
-function checkLaunch(name, tournament, pilot) {
+function checkLaunch(name, tournamentOwner, pilot) {
   selectGraph(name);
   assert.equal(rawSelect().stdout, name);
-  const result = run(launcher);
+  const result = run(launcher, [], { TOURNAMENT_OWNER_RECOVERY_ONLY: 'true' });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), {
-    retained: 'one:two', tournament, cup: 'http://127.0.0.1:3000/api',
+    retained: 'one:two',
+    tournamentRecoveryOnly: name === 'candidate' ? 'true' : null,
+    tournamentOwner,
+    cup: 'http://127.0.0.1:3000/api',
     pilot: pilot ? 'true' : null, create: pilot ? 'false' : null, control: pilot ? 'off' : null,
   });
 }
