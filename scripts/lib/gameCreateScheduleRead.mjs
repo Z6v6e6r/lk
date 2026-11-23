@@ -1,0 +1,606 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { gameCreateServiceTable } from "./gameCreatePreparationSource.mjs";
+import { extractSubscriptionPricePreviewSource } from "./subscriptionPricePreviewSources.mjs";
+import { createVivaFetch } from "./vivaUserAgent.mjs";
+
+const vivaOrigin = "https://api.vivacrm.ru";
+const lk1Origin = "https://padlhub.su";
+const vivaUserPath = "/end-user/api/v1/iSkq6G";
+const residencyProductId = "4037a3a3-e551-4f9a-a9db-1410e46b8635";
+const uuid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
+const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
+const tokenPattern = /^Bearer [A-Za-z\d._~-]{20,12000}$/;
+const maximumResponseBytes = 524288;
+const leadTimeSource = readFileSync(
+  new URL("../../src/components/games/bookingLeadTime.ts", import.meta.url),
+  "utf8",
+);
+const minimumLead = Number(
+  leadTimeSource.match(
+    /^export const GAME_BOOKING_MIN_LEAD_MINUTES = (\d+);$/m,
+  )?.[1],
+);
+if (!Number.isInteger(minimumLead) || minimumLead <= 0)
+  throw new Error("Booking lead time unavailable");
+const { source: priceParser } = extractSubscriptionPricePreviewSource({
+  source: readFileSync(
+    new URL("../nodered_games_nodes/fn_split_router.js", import.meta.url),
+    "utf8",
+  ),
+  label: "LK1 CREATE schedule court price",
+  roots: ["extractExactCourtPrice"],
+});
+const extractExactCourtPrice = new Function(
+  priceParser + "\nreturn extractExactCourtPrice;",
+)();
+
+export class GameCreateScheduleReadError extends Error {
+  constructor(status, code) {
+    super(code);
+    this.status = status;
+  }
+}
+
+function upstreamUnavailable() {
+  return new GameCreateScheduleReadError(
+    503,
+    "GAME_CREATE_SCHEDULE_UNAVAILABLE",
+  );
+}
+
+function moscowLocal(instant) {
+  return new Date(instant + 180 * 60000).toISOString().slice(0, 19) + "+03:00";
+}
+
+function minutesOfDay(value, day) {
+  if (typeof value !== "string") return null;
+  if (/^(?:[01]\d|2[0-3]):[0-5]\d(?::00(?:\.0{1,3})?)?$/.test(value))
+    return +value.slice(0, 2) * 60 + +value.slice(3, 5);
+  let local = value;
+  if (value.length > 5 && /(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    const instant = Date.parse(value);
+    if (!Number.isFinite(instant) || instant % 60000 !== 0) return null;
+    local = moscowLocal(instant).slice(0, 19);
+  }
+  if (
+    local.length > 5 &&
+    !new RegExp(`^${day}[T ]\\d{2}:\\d{2}(?::00(?:\\.0{1,3})?)?$`).test(local)
+  )
+    return null;
+  const clock = local.length === 5 ? local : local.slice(11, 16);
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clock)) return null;
+  return +clock.slice(0, 2) * 60 + +clock.slice(3);
+}
+
+function readRows(payload, keys) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") throw upstreamUnavailable();
+  const arrays = keys.map((key) => payload[key]).filter(Array.isArray);
+  if (arrays.length !== 1) throw upstreamUnavailable();
+  return arrays[0];
+}
+
+function slotRows(payload) {
+  const keys = ["timeslots", "content", "data", "items", "result", "slots"];
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    !Object.hasOwn(payload, "byTrainer")
+  )
+    return readRows(payload, keys).flat(2);
+  const grouped = payload.byTrainer;
+  if (
+    !grouped ||
+    typeof grouped !== "object" ||
+    Array.isArray(grouped) ||
+    keys.some((key) => Array.isArray(payload[key]))
+  )
+    throw upstreamUnavailable();
+  const groups = Object.values(grouped);
+  if (groups.length === 0) return [];
+  if (groups.length !== 1 || !Array.isArray(groups[0]?.slots))
+    throw upstreamUnavailable();
+  return groups[0].slots.flat(2);
+}
+
+function normalizeSlots(payload, day, startOfDay, duration, subServiceId, now) {
+  const rows = slotRows(payload);
+  if (rows.length > 2000) throw upstreamUnavailable();
+  const rooms = new Map();
+  let observed = 0;
+  for (const row of rows) {
+    const roomId = row?.roomId ?? row?.resourceId ?? row?.room?.id;
+    const roomName = row?.roomName ?? row?.resourceName ?? row?.room?.name;
+    const from = minutesOfDay(
+      row?.timeFrom ?? row?.dateTimeFrom ?? row?.time ?? row?.from,
+      day,
+    );
+    const to = minutesOfDay(row?.timeTo ?? row?.dateTimeTo ?? row?.to, day);
+    const explicitDuration = row?.durationMinutes ?? row?.duration?.minutes;
+    const subServiceIds = row?.subServiceIds;
+    if (
+      !uuid.test(roomId ?? "") ||
+      typeof roomName !== "string" ||
+      !roomName.trim() ||
+      roomName.length > 160 ||
+      from === null ||
+      (row.date !== undefined &&
+        (typeof row.date !== "string" || row.date.slice(0, 10) !== day)) ||
+      (row.subServiceId !== undefined && row.subServiceId !== subServiceId) ||
+      (subServiceIds !== undefined &&
+        (!Array.isArray(subServiceIds) ||
+          !subServiceIds.includes(subServiceId)))
+    )
+      continue;
+    const end =
+      to === null && Number.isInteger(explicitDuration)
+        ? from + explicitDuration
+        : to;
+    if (end === null || end <= from || end > 1440) continue;
+    observed++;
+    const id = row.id ?? row.slotId ?? row.timeSlotId;
+    const ranges = rooms.get(roomId) ?? [];
+    ranges.push({
+      from,
+      end,
+      courtName: roomName.trim(),
+      available: row.available !== false && row.isAvailable !== false,
+      upstreamSlotId:
+        typeof id === "string" && /^[A-Za-z\d._:-]{1,200}$/.test(id)
+          ? id
+          : null,
+    });
+    rooms.set(roomId, ranges);
+  }
+  if (rows.length > 0 && observed === 0) throw upstreamUnavailable();
+
+  const slots = new Map();
+  for (const [roomId, ranges] of rooms) {
+    const available = ranges
+      .filter((range) => range.available)
+      .sort((a, b) => a.from - b.from);
+    const blocked = ranges.filter((range) => !range.available);
+    for (const [index, first] of available.entries()) {
+      const start = startOfDay + first.from * 60000;
+      const until = first.from + duration;
+      if (
+        until >= 1440 ||
+        start < now + minimumLead * 60000 ||
+        blocked.some((range) => range.from < until && range.end > first.from)
+      )
+        continue;
+      let covered = first.end;
+      for (
+        let cursor = index + 1;
+        covered < until && cursor < available.length;
+        cursor++
+      ) {
+        const next = available[cursor];
+        if (next.from > covered) break;
+        covered = Math.max(covered, next.end);
+      }
+      if (covered < until) continue;
+      const startsAt = moscowLocal(start);
+      const endsAt = moscowLocal(start + duration * 60000);
+      const key = createHash("sha256")
+        .update(JSON.stringify([roomId, startsAt, endsAt]))
+        .digest("hex");
+      slots.set(key, {
+        id: key,
+        roomId,
+        courtName: first.courtName,
+        startsAt,
+        endsAt,
+        upstreamSlotId: first.upstreamSlotId,
+      });
+    }
+  }
+  return [...slots.values()].sort(
+    (a, b) =>
+      a.startsAt.localeCompare(b.startsAt) ||
+      a.courtName.localeCompare(b.courtName, "ru"),
+  );
+}
+
+async function readJson(
+  fetchImpl,
+  url,
+  method,
+  bearer,
+  correlationId,
+  signal,
+  body,
+  priceRead,
+) {
+  const response = await fetchImpl(url, {
+    method,
+    redirect: "error",
+    cache: "no-store",
+    signal,
+    headers: {
+      Accept: "application/json",
+      Authorization: bearer,
+      "X-Correlation-ID": correlationId,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!response.ok || !response.body) {
+    await response.body?.cancel();
+    if (response.status === 403 && priceRead)
+      throw new GameCreateScheduleReadError(
+        503,
+        "GAME_CREATE_SCHEDULE_UPSTREAM_FORBIDDEN",
+      );
+    if (response.status === 401 || response.status === 403)
+      throw new GameCreateScheduleReadError(
+        401,
+        "GAME_CREATE_SCHEDULE_AUTH_REQUIRED",
+      );
+    throw upstreamUnavailable();
+  }
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of response.body) {
+    size += chunk.byteLength;
+    if (size > maximumResponseBytes) throw upstreamUnavailable();
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function currenciesMatchRuble(value) {
+  if (!value || typeof value !== "object") return true;
+  return (
+    [value.currency, value.currencyCode].every(
+      (currency) => currency === undefined || currency === "RUB",
+    ) && Object.values(value).every(currenciesMatchRuble)
+  );
+}
+
+function amountMinor(payload, subServiceId) {
+  // The same fixed iSkq6G endpoint and branch of the exact LK1 split pricing parser use major RUB.
+  if (!currenciesMatchRuble(payload)) return null;
+  const major = extractExactCourtPrice(payload, [subServiceId]);
+  if (major === null) return null;
+  const amount = Math.round(major * 100);
+  return Number.isSafeInteger(amount) && amount > 0 && amount <= 10_000_000
+    ? amount
+    : null;
+}
+
+function lifecycleResidency(payload, slot, now) {
+  const time = (value) =>
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|\+03:00)$/.test(
+      value,
+    )
+      ? Date.parse(value)
+      : NaN;
+  const observedAt = time(payload?.observedAt);
+  if (
+    payload?.schemaVersion !== 1 ||
+    !Number.isFinite(observedAt) ||
+    observedAt > now + 5000 ||
+    observedAt <= now - 30000
+  )
+    return;
+  const at = Math.min(observedAt, now);
+  if (
+    payload.state === "NONE" &&
+    payload.source === "VIVA_OWNED_SUBSCRIPTIONS" &&
+    payload.validFrom === null &&
+    payload.validUntil === null
+  )
+    return { status: "NOT_APPLICABLE", observedAt: at };
+  if (payload.state === "ACTIVE" && payload.source === "CUP_RESIDENCY_POLICY") {
+    const from = time(payload.validFrom);
+    const until = time(payload.validUntil);
+    if (
+      !Number.isFinite(from) ||
+      !Number.isFinite(until) ||
+      from > now ||
+      until <= now
+    )
+      return;
+    return {
+      status:
+        from <= Date.parse(slot.startsAt) && until >= Date.parse(slot.endsAt)
+          ? "ACTIVE_UNQUOTED"
+          : "NOT_APPLICABLE",
+      observedAt: at,
+    };
+  }
+}
+
+function ownedResidency(payload) {
+  const rows = readRows(payload, ["subscriptions", "content", "items", "data"]);
+  const productIds = (entry) =>
+    [
+      entry?.productId,
+      entry?.subscriptionProductId,
+      entry?.product?.id,
+      entry?.subscription?.id,
+    ].filter((id) => uuid.test(id ?? ""));
+  const completePage =
+    payload?.last === true &&
+    (payload.first === true || payload.number === 0) &&
+    payload.totalElements === rows.length;
+  const legacyIds = completePage
+    ? rows
+        .filter((row) => row?.status === "ACTIVE" && productIds(row).length === 0)
+        .map((row) => row.subscriptionId)
+    : [];
+  return {
+    active: rows.filter((row) => productIds(row).includes(residencyProductId)),
+    complete: completePage && rows.every((row) => productIds(row).length > 0),
+    legacyIds:
+      legacyIds.length <= 20 &&
+      new Set(legacyIds).size === legacyIds.length &&
+      legacyIds.every((id) => uuid.test(id ?? ""))
+        ? legacyIds
+        : [],
+  };
+}
+
+function discountedGameQuote(quote, expected, shareMinor, duration, now) {
+  return (
+    quote?.selectionKey === expected &&
+    Number.isSafeInteger(quote.evaluatedAt) &&
+    Number.isSafeInteger(quote.expiresAt) &&
+    quote.evaluatedAt <= now + 5000 &&
+    quote.expiresAt > now &&
+    quote.expiresAt > quote.evaluatedAt &&
+    quote.expiresAt - quote.evaluatedAt <= 60000 &&
+    quote.basePriceMinor === shareMinor &&
+    quote.freeMinutes === 0 &&
+    quote.paidMinutes === duration &&
+    quote.status === "AVAILABLE" &&
+    quote.reasonCode == null &&
+    Number.isSafeInteger(quote.amountMinor) &&
+    quote.amountMinor > 0 &&
+    quote.amountMinor < shareMinor
+  );
+}
+
+/** LK1 owns resolution of the service and the provider reads. The selection carries no caller price. */
+export async function readGameCreateSchedule(
+  { query, authorization, correlationId, signal },
+  { fetchImpl = fetch, now = Date.now } = {},
+) {
+  if (!tokenPattern.test(authorization ?? ""))
+    throw new GameCreateScheduleReadError(
+      401,
+      "GAME_CREATE_SCHEDULE_AUTH_REQUIRED",
+    );
+  const { stationId, day, durationMinutes, slotId } = query;
+  const duration = Number(durationMinutes);
+  const service = Object.hasOwn(gameCreateServiceTable, stationId)
+    ? gameCreateServiceTable[stationId]
+    : null;
+  const timestamp = dayPattern.test(day ?? "")
+    ? Date.parse(day + "T00:00:00+03:00")
+    : NaN;
+  if (
+    !service ||
+    !Number.isFinite(timestamp) ||
+    moscowLocal(timestamp).slice(0, 10) !== day ||
+    timestamp + 86400000 <= now() ||
+    timestamp > now() + 14 * 86400000 ||
+    ![60, 90, 120].includes(duration) ||
+    (slotId !== undefined && !/^[a-f\d]{64}$/.test(slotId))
+  )
+    throw new GameCreateScheduleReadError(
+      400,
+      "GAME_CREATE_SCHEDULE_QUERY_INVALID",
+    );
+
+  const deadline = AbortSignal.timeout(15000);
+  const combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  const fetchProvider = createVivaFetch(fetchImpl);
+  const read = (
+    url,
+    method = "GET",
+    body,
+    priceRead = false,
+    signal = combined,
+  ) =>
+    readJson(
+      fetchProvider,
+      url,
+      method,
+      authorization,
+      correlationId,
+      signal,
+      body,
+      priceRead,
+    );
+  const readResidencyStatus = async (slot) => {
+    const status = await read(
+      lk1Origin + "/lk/residency/status",
+      "GET",
+      undefined,
+      false,
+      AbortSignal.any([combined, AbortSignal.timeout(4500)]),
+    ).catch(() => undefined);
+    return lifecycleResidency(status, slot, now());
+  };
+  try {
+    const master =
+      vivaOrigin +
+      vivaUserPath +
+      "/products/master-services/" +
+      service.masterServiceId;
+    const raw = await read(master + "/timeslots", "POST", {
+      date: day,
+      trainers: { type: "NO_TRAINER" },
+      roomFormat: "FULL_ROOM",
+      subServiceIds: [service.subServiceId],
+    });
+    const slots = normalizeSlots(
+      raw,
+      day,
+      timestamp,
+      duration,
+      service.subServiceId,
+      now(),
+    );
+    if (slotId === undefined) {
+      return {
+        slots: slots.map(({ id, roomId, courtName, startsAt, endsAt }) => ({
+          id,
+          roomId,
+          courtName,
+          startsAt,
+          endsAt,
+        })),
+      };
+    }
+    const slot = slots.find((candidate) => candidate.id === slotId);
+    if (!slot)
+      throw new GameCreateScheduleReadError(
+        409,
+        "GAME_CREATE_SCHEDULE_SLOT_CHANGED",
+      );
+    const priceQuery = new URLSearchParams({
+      studioId: stationId,
+      roomId: slot.roomId,
+      subServiceIds: service.subServiceId,
+      // The LK1 game screen sends its exact master-service price window in HH:mm.
+      fromTime: slot.startsAt.slice(11, 16),
+      toTime: slot.endsAt.slice(11, 16),
+      fromDate: day,
+    });
+    let pricePayload;
+    try {
+      pricePayload = await read(
+        master + "/price?" + priceQuery,
+        "GET",
+        undefined,
+        true,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof GameCreateScheduleReadError) ||
+        error.message !== "GAME_CREATE_SCHEDULE_UPSTREAM_FORBIDDEN"
+      )
+        throw error;
+      // The price denial and the account's residency status are independent reads.
+      const evidence = (await readResidencyStatus(slot)) ?? {
+        status: "UNAVAILABLE",
+        observedAt: now(),
+      };
+      return {
+        wholeCourtMinor: null,
+        shareMinor: null,
+        residency: { status: evidence.status },
+        currency: "RUB",
+        observedAt: new Date(evidence.observedAt).toISOString(),
+        expiresAt: new Date(evidence.observedAt + 30000).toISOString(),
+      };
+    }
+    const wholeCourtMinor = amountMinor(pricePayload, service.subServiceId);
+    if (wholeCourtMinor === null) throw upstreamUnavailable();
+    const observedAt = now();
+    let expiresAt = observedAt + 30000;
+    const shareMinor = Math.round(wholeCourtMinor / 4);
+    let residency = { status: "UNAVAILABLE" };
+    try {
+      const { active: activeResidency, complete, legacyIds } = ownedResidency(
+        await read(
+          vivaOrigin +
+            vivaUserPath +
+            "/subscriptions?includeFinished=false&page=0&size=100",
+        ),
+      );
+      if (activeResidency.length === 0 && complete) {
+        residency = { status: "NOT_APPLICABLE" };
+      } else if (
+        activeResidency.length === 1 ||
+        (activeResidency.length === 0 && legacyIds.length > 0)
+      ) {
+        const [item] = activeResidency;
+        const subscriptionIds = item
+          ? [item.clientSubscriptionId ?? item.subscriptionId ?? item.id]
+          : legacyIds;
+        if (!subscriptionIds.every((id) => uuid.test(id ?? "")))
+          throw upstreamUnavailable();
+        const target = {
+          targetKind: "NEW_GAME",
+          // LK1 uses slotId only to correlate this read quote with the exact tuple.
+          slotId: slot.upstreamSlotId ?? slot.id,
+          stationId,
+          roomId: slot.roomId,
+          masterServiceId: service.masterServiceId,
+          subServiceIds: [service.subServiceId],
+          startsAt: slot.startsAt,
+          durationMinutes: duration,
+          shareCount: 4,
+        };
+        const result = await read(
+          lk1Origin + "/lk/subscriptions/game-price-preview",
+          "POST",
+          {
+            target,
+            subscriptionIds,
+          },
+        );
+        const expected = JSON.stringify([
+          target.slotId,
+          stationId,
+          target.roomId,
+          target.masterServiceId,
+          target.subServiceIds,
+          target.startsAt,
+          duration,
+          4,
+        ]);
+        if (
+          !Array.isArray(result?.quotes) ||
+          result.quotes.length !== subscriptionIds.length ||
+          new Set(result.quotes.map((quote) => quote?.subscriptionId)).size !==
+            subscriptionIds.length ||
+          !result.quotes.every((quote) => subscriptionIds.includes(quote?.subscriptionId))
+        )
+          throw upstreamUnavailable();
+        const discounted = result.quotes.filter((quote) =>
+          discountedGameQuote(quote, expected, shareMinor, duration, now()),
+        );
+        // The legacy list proves ownership but does not identify the product.
+        // Only the LK1 quote can provide that binding when it is absent there.
+        const matching = discounted.filter(
+          (quote) =>
+            quote.appliedSubscriptionProductId === residencyProductId ||
+            (item && quote.appliedSubscriptionProductId === undefined),
+        );
+        if (matching.length === 1 && matching[0].expiresAt > now()) {
+          const [quote] = matching;
+          residency = { status: "APPLIED", amountMinor: quote.amountMinor };
+          expiresAt = Math.min(expiresAt, quote.expiresAt);
+        }
+      }
+    } catch {
+      // Availability and the independently quoted base price remain visible.
+    }
+    if (residency.status === "UNAVAILABLE") {
+      const evidence = await readResidencyStatus(slot);
+      if (evidence) {
+        residency = { status: evidence.status };
+        expiresAt = Math.min(expiresAt, evidence.observedAt + 30000);
+      }
+    }
+    if (expiresAt <= now()) throw upstreamUnavailable();
+    return {
+      wholeCourtMinor,
+      shareMinor,
+      residency,
+      currency: "RUB",
+      observedAt: new Date(observedAt).toISOString(),
+      expiresAt: new Date(expiresAt).toISOString(),
+    };
+  } catch (error) {
+    if (error instanceof GameCreateScheduleReadError) throw error;
+    throw upstreamUnavailable();
+  }
+}

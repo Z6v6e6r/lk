@@ -54,6 +54,10 @@ if (productId.toLowerCase()===RESIDENCY_PRODUCT_ID) {
     :target.category==='TOURNAMENT'?proof.rule.tournamentDiscountPercent:proof.rule.groupTrainingDiscountPercent;
   ctx.groupDiscountPercent=percent;
   quote(id,'AVAILABLE',ctx.basePriceMinor-Math.floor(ctx.basePriceMinor*percent/100),0,ctx.target.durationMinutes);
-  ctx.quotes[ctx.quotes.length-1].expiresAt=Math.min(ctx.quotes[ctx.quotes.length-1].expiresAt,proof.validUntil);
+  const residencyQuote=ctx.quotes[ctx.quotes.length-1];
+  residencyQuote.expiresAt=Math.min(residencyQuote.expiresAt,proof.validUntil);
+  if (!eventRoute && ctx.target.targetKind==='NEW_GAME' && action==='CREATE_GAME') {
+    residencyQuote.appliedSubscriptionProductId=proof.binding.providerProductId;
+  }
   continue;
 }

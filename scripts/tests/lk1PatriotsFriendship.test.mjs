@@ -153,7 +153,7 @@ test('the exercise hook sends Patriots money events to fresh ownership readback 
   const actor = 'fixture-actor';
   const subscriptionId = 'fixture-subscription';
   const tenantKey = 'fixture-tenant';
-  const exercise = { id: 'fixture-exercise', studioId: 'fixture-station' };
+  const exercise = { id: 'fixture-exercise', studioId: 'fixture-station', direction: { id: 6306 } };
   function run(productId, rule, selectedOwned = [{ subscriptionId, productId }]) {
     const ctx = { caller: 'http', actorClientId: actor, clientSubscriptionId: subscriptionId,
       tenantKey, lk1ProductIdentity: { actorClientId: actor, subscriptionId, tenantKey, productId } };
@@ -162,6 +162,8 @@ test('the exercise hook sends Patriots money events to fresh ownership readback 
       findOwnedSubscriptions: () => selectedOwned,
       isProTrainingExercise: () => false,
       isSpanishTrainingExercise,
+      exerciseDirectionId: exercise => exercise.direction.id,
+      kidsTrainingExcludesSubscription: () => false,
       isProTrainingEnergyPack: () => false,
       isTopokratyExercise: () => false,
       isTopokratyClubPack: () => false,
