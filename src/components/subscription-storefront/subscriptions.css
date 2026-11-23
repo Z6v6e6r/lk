@@ -640,6 +640,9 @@
 
 .subscription-card__billing-options button:nth-child(2)::before { animation-delay: -1.3s; }
 .subscription-card__billing-options button:nth-child(3)::before { animation-delay: -2.6s; }
+.subscription-card[data-plan-id='friendship'] .subscription-card__billing-options button::before {
+  content: none;
+}
 .subscription-card__billing-label { min-width: 0; }
 .subscription-card__billing-fire {
   flex: 0 0 16px;

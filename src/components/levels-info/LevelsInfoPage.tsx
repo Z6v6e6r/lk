@@ -3,39 +3,20 @@ import { apiFetchProfile, type UserProfileType } from "../../utils/apiClient";
 import {
   CUSTOM_FIELD_IDS,
   getCustomFieldValue,
-  getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
 import { AvatarProgress } from "./AvatarProgress";
+import {
+  PLAYER_RATING_BANDS,
+  ratingGradeFromNumeric,
+  ratingSublevelFromNumeric,
+  ratingSublevelsForBand,
+} from "../../services/player-rating/ledger";
 
 interface LevelsInfoPageProps {
   onBack: () => void;
   profile?: UserProfileType;
 }
-
-type LevelBand = {
-  grade: string;
-  min: number;
-  max: number;
-  label: string;
-  title: string;
-};
-
-type DStep = {
-  label: string;
-  title: string;
-  range: string;
-};
-
-const LEVEL_BANDS: LevelBand[] = [
-  { grade: "A", min: 5.5, max: 7, label: "Рейтинг 5.5+", title: "экспертный" },
-  { grade: "B+", min: 4.7, max: 5.5, label: "Рейтинг 4.7–5.5", title: "продвинутый+" },
-  { grade: "B", min: 4, max: 4.7, label: "Рейтинг 4.0–4.7", title: "сильный" },
-  { grade: "C+", min: 3.5, max: 4, label: "Рейтинг 3.5–4.0", title: "уверенный+" },
-  { grade: "C", min: 3, max: 3.5, label: "Рейтинг 3.0–3.5", title: "уверенный" },
-  { grade: "D+", min: 2, max: 3, label: "Рейтинг 2.0–3.0", title: "базовый+" },
-  { grade: "D", min: 1, max: 2, label: "Рейтинг 1.0–2.0", title: "начальный" },
-];
 
 const STEP_TITLES = ["начальный", "развивающийся", "уверенный", "продвинутый"] as const;
 
@@ -64,41 +45,13 @@ function formatNumber(value: number | null, fractionDigits = 1): string {
   });
 }
 
-function findBandByGrade(grade: string | null): LevelBand | null {
-  if (!grade) return null;
-  return LEVEL_BANDS.find((band) => band.grade === grade) ?? null;
+function formatBandRange(min: number, max: number): string {
+  if (max === 7) return `Рейтинг ${min.toFixed(1)}+`;
+  return `Рейтинг ${min.toFixed(1)}–${max.toFixed(1)}`;
 }
 
 function formatStepRangeValue(value: number): string {
-  return value.toFixed(2);
-}
-
-function buildStepLabels(grade: string): string[] {
-  const normalized = grade.trim().toUpperCase();
-  const hasPlus = normalized.endsWith("+");
-  const base = hasPlus ? normalized.slice(0, -1) : normalized;
-
-  return Array.from({ length: 4 }, (_, index) => {
-    const indexPart = index === 0 ? "" : String(index);
-    const plusPart = hasPlus ? "+" : "";
-    return `${base}${indexPart}${plusPart}`;
-  });
-}
-
-function buildStepsForBand(band: LevelBand, grade: string): DStep[] {
-  const labels = buildStepLabels(grade);
-  const span = (band.max - band.min) / 4;
-
-  return labels.map((label, index) => {
-    const start = band.min + span * index;
-    const rawEnd = band.min + span * (index + 1);
-    const end = index === 3 ? band.max : rawEnd;
-    return {
-      label,
-      title: STEP_TITLES[index],
-      range: `${formatStepRangeValue(start)}–${formatStepRangeValue(end)}`,
-    };
-  });
+  return value.toFixed(3).replace(/(\.\d{2})0$/, "$1");
 }
 
 export default function LevelsInfoPage({
@@ -196,8 +149,8 @@ export default function LevelsInfoPage({
     const fallbackLetter = profile
       ? (getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel) || "").trim().toUpperCase()
       : "";
-    const grade = numeric != null ? getLetterGrade(numeric) : (fallbackLetter || null);
-    const band = findBandByGrade(grade);
+    const grade = numeric != null ? ratingGradeFromNumeric(numeric) : (fallbackLetter || null);
+    const band = PLAYER_RATING_BANDS.find((entry) => entry.grade === grade);
 
     const progress = (() => {
       if (numeric == null || !band) return 0;
@@ -221,23 +174,17 @@ export default function LevelsInfoPage({
   }, [profile]);
 
   const stepsData = useMemo(() => {
-    const fallbackBand = LEVEL_BANDS[LEVEL_BANDS.length - 1];
-    const band = levelData.band ?? fallbackBand;
-    const grade = levelData.grade || band.grade;
-    const steps = buildStepsForBand(band, grade);
-    const currentStepIndex = Math.min(
-      steps.length - 1,
-      Math.max(0, Math.floor(levelData.progress * steps.length)),
-    );
-    const currentStep = steps[currentStepIndex] ?? steps[0];
+    const band = levelData.band ?? PLAYER_RATING_BANDS[6];
+    const steps = ratingSublevelsForBand(band);
+    const currentStep = levelData.numeric == null ? steps[0] : ratingSublevelFromNumeric(levelData.numeric);
 
     return {
-      grade,
+      grade: band.grade,
       steps,
-      currentStepLabel: currentStep?.label ?? grade,
-      currentStepTitle: currentStep?.title ?? STEP_TITLES[0],
+      currentStepLabel: currentStep.label,
+      currentStepTitle: STEP_TITLES[currentStep.index - 1],
     };
-  }, [levelData.band, levelData.grade, levelData.progress]);
+  }, [levelData.band, levelData.numeric]);
 
   if (loading) {
     return <div className="loading">Загрузка...</div>;
@@ -258,12 +205,12 @@ export default function LevelsInfoPage({
         <section className="levels-card levels-section-card">
           <h2 className="levels-section-title">1. Основные уровни</h2>
           <div className="levels-ratings-table">
-            {LEVEL_BANDS.map((band) => {
+            {PLAYER_RATING_BANDS.map((band) => {
               const palette = LEVEL_COLORS[band.grade] ?? LEVEL_COLORS.A;
               const isCurrent = Boolean(levelData.grade) && levelData.grade === band.grade;
               return (
                 <div key={band.grade} className={`levels-rating-row${isCurrent ? " is-current" : ""}`}>
-                  <span>{band.label}</span>
+                  <span>{formatBandRange(band.min, band.max)}</span>
                   <span
                     className="levels-grade-pill"
                     style={{
@@ -289,8 +236,8 @@ export default function LevelsInfoPage({
             {stepsData.steps.map((step) => (
               <article key={step.label} className="levels-step-card">
                 <div className="levels-step-label">{step.label}</div>
-                <div className="levels-step-title">{step.title}</div>
-                <div className="levels-step-range">{step.range}</div>
+                <div className="levels-step-title">{STEP_TITLES[step.index - 1]}</div>
+                <div className="levels-step-range">{formatStepRangeValue(step.min)}–{formatStepRangeValue(step.max)}</div>
               </article>
             ))}
           </div>

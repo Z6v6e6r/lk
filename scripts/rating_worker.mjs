@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runRatingTransaction } from "./lib/ratingTransaction.mjs";
 import { recoverStationMessageOutbox } from './lib/stationMessageOwner.mjs';
 import { processCommunityPolicies } from './lib/communityPolicyProjection.mjs';
 import { readFprLevelActivation, loadFprLevelContext, processFprLevelLedger, processFprProjectionOutbox } from './lib/fprLevelLedger.mjs';
@@ -221,24 +222,24 @@ async function ensureWorkerIndexes(db) {
     .createIndex({ runId: 1 }, { name: "rating_job_runs_id_uq", unique: true });
 }
 
-async function loadStateForIdentity(db, identity) {
+async function loadStateForIdentity(db, identity, session) {
   const clauses = [
     { playerKey: identity.playerKey },
     ...(identity.clientId ? [{ clientId: identity.clientId }, { "identityAliases.clientIds": identity.clientId }] : []),
     ...(identity.phoneNorm ? [{ phoneNorm: identity.phoneNorm }, { "identityAliases.phoneNorms": identity.phoneNorm }] : []),
   ];
-  return db.collection(PLAYER_RATING_COLLECTIONS.state).findOne({ $or: clauses });
+  return db.collection(PLAYER_RATING_COLLECTIONS.state).findOne({ $or: clauses }, { session });
 }
 
-export async function loadEventsForIdentity(db, identity) {
-  const current = await loadStateForIdentity(db, identity);
-  if (current?.fprLevelFrontier) return (await readFprLevelIdentityHistory(db, current.clientId)).events;
+export async function loadEventsForIdentity(db, identity, session) {
+  const current = await loadStateForIdentity(db, identity, session);
+  if (current?.fprLevelFrontier) return (await readFprLevelIdentityHistory(db, current.clientId, session)).events;
   const clauses = [
     { "player.key": identity.playerKey },
     ...(identity.clientId ? [{ "player.clientId": identity.clientId }] : []),
     ...(identity.phoneNorm ? [{ "player.phoneNorm": identity.phoneNorm }] : []),
   ];
-  return db.collection(PLAYER_RATING_COLLECTIONS.events).find({ $or: clauses }).toArray();
+  return db.collection(PLAYER_RATING_COLLECTIONS.events).find({ $or: clauses }, { session }).toArray();
 }
 
 async function resolveCanonicalRatingBefore(db, identity, occurredAt, pendingEvents = []) {
@@ -307,7 +308,7 @@ export function compatibilityProjectionNeedsReconciliation(canonical, compatibil
     || (canonical.lastEventId || null) !== (compatibility.lastEventId || null);
 }
 
-async function resolveCompatibilityProjectionTarget(db, identity) {
+async function resolveCompatibilityProjectionTarget(db, identity, session) {
   const clauses = [
     ...(identity.clientId ? [{ clientId: identity.clientId }] : []),
     ...(identity.phoneNorm ? [{ phoneNorm: identity.phoneNorm }] : []),
@@ -315,21 +316,27 @@ async function resolveCompatibilityProjectionTarget(db, identity) {
   ];
   const query = clauses.length === 1 ? clauses[0] : { $or: clauses };
   const candidates = await db.collection(PLAYER_RATING_COLLECTIONS.compatibilityState)
-    .find(query)
+    .find(query, { session })
     .limit(4)
     .toArray();
   return selectCompatibilityProjectionTarget(candidates, identity);
 }
 
 export async function projectIdentityState(db, identity, nowIso, dryRun, pendingEvents = []) {
-  const current = await loadStateForIdentity(db, identity);
+  return dryRun
+    ? writeIdentityProjection(db, identity, nowIso, true, pendingEvents)
+    : runRatingTransaction(db, session => writeIdentityProjection(db, identity, nowIso, false, pendingEvents, session));
+}
+
+async function writeIdentityProjection(db, identity, nowIso, dryRun, pendingEvents, session) {
+  const current = await loadStateForIdentity(db, identity, session);
   const mergedIdentity = {
     playerKey: identity.clientId ? `client:${identity.clientId}` : (current?.playerKey || identity.playerKey),
     clientId: identity.clientId || current?.clientId || null,
     phoneNorm: identity.phoneNorm || current?.phoneNorm || null,
     name: identity.name || current?.name || "Игрок",
   };
-  const persistedEvents = await loadEventsForIdentity(db, mergedIdentity);
+  const persistedEvents = await loadEventsForIdentity(db, mergedIdentity, session);
   const events = [...new Map([
     ...persistedEvents,
     ...pendingEvents.filter((event) => eventMatchesIdentity(event, mergedIdentity)),
@@ -337,6 +344,7 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
   if (current?.fprLevelFrontier) Object.assign(mergedIdentity, { playerKey: current.playerKey, clientId: current.clientId, phoneNorm: current.phoneNorm });
   const replay = replayPlayerRatingEvents(events);
   if (!replay) return { changed: false, reason: "NO_BASELINE", identity: mergedIdentity };
+  const lastEvent = events.find(event => event.id === replay.lastEventId);
 
   const next = {
     schemaVersion: PLAYER_RATING_LEDGER_SCHEMA_VERSION,
@@ -366,6 +374,9 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
     lastEventId: replay.lastEventId,
     lastEventType: replay.lastEventType,
     lastEventAt: replay.lastEventAt,
+    lastSource: lastEvent?.source?.kind ?? lastEvent?.source?.domain ?? null,
+    lastChangedBy: lastEvent?.actor ?? null,
+    lastDelta: lastEvent?.change?.delta ?? null,
     projectedBy: PLAYER_RATING_WORKER_VERSION,
     projectedAt: nowIso,
     updatedAt: nowIso,
@@ -379,9 +390,9 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
     await db.collection(PLAYER_RATING_COLLECTIONS.state).updateOne(
       stateFilter,
       { $set: next, $setOnInsert: { createdAt: nowIso } },
-      { upsert: true },
+      { upsert: true, session },
     );
-    const { filter: compatibilityFilter } = await resolveCompatibilityProjectionTarget(db, mergedIdentity);
+    const { filter: compatibilityFilter } = await resolveCompatibilityProjectionTarget(db, mergedIdentity, session);
     await db.collection(PLAYER_RATING_COLLECTIONS.compatibilityState).updateOne(
       compatibilityFilter,
       {
@@ -393,7 +404,7 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
         },
         $setOnInsert: { createdAt: nowIso },
       },
-      { upsert: true },
+      { upsert: true, session },
     );
   }
   return { changed, identity: mergedIdentity, state: next, events: events.length };
@@ -402,39 +413,44 @@ export async function projectIdentityState(db, identity, nowIso, dryRun, pending
 async function reconcileCompatibilityProjection(db, nowIso, dryRun) {
   const states = await db.collection(PLAYER_RATING_COLLECTIONS.state).find({}).toArray();
   let changed = 0;
-  for (const state of states) {
-    const { filter, existing } = await resolveCompatibilityProjectionTarget(db, state);
-    if (!compatibilityProjectionNeedsReconciliation(state, existing)) continue;
-    changed += 1;
-    if (dryRun) continue;
-    await db.collection(PLAYER_RATING_COLLECTIONS.compatibilityState).updateOne(
-      filter,
-      {
-        $set: {
-          schemaVersion: state.schemaVersion,
-          ownership: state.ownership,
-          playerKey: state.playerKey,
-          clientId: state.clientId || null,
-          phoneNorm: state.phoneNorm || null,
-          name: state.name,
-          ratingNumeric: state.ratingNumeric,
-          rating: state.rating,
-          baseline: state.baseline,
-          identityAliases: state.identityAliases,
-          lastEventId: state.lastEventId,
-          lastEventType: state.lastEventType,
-          lastEventAt: state.lastEventAt,
-          projectedBy: PLAYER_RATING_WORKER_VERSION,
-          projectedAt: nowIso,
-          updatedAt: nowIso,
-          compatibilityProjection: true,
-          canonicalCollection: PLAYER_RATING_COLLECTIONS.state,
-          compatibilityUpdatedAt: nowIso,
+  for (const snapshot of states) {
+    const reconcile = async session => {
+      const state = await loadStateForIdentity(db, snapshot, session);
+      if (!state) return false;
+      const { filter, existing } = await resolveCompatibilityProjectionTarget(db, state, session);
+      if (!compatibilityProjectionNeedsReconciliation(state, existing)) return false;
+      if (dryRun) return true;
+      await db.collection(PLAYER_RATING_COLLECTIONS.compatibilityState).updateOne(
+        filter,
+        {
+          $set: {
+            schemaVersion: state.schemaVersion,
+            ownership: state.ownership,
+            playerKey: state.playerKey,
+            clientId: state.clientId || null,
+            phoneNorm: state.phoneNorm || null,
+            name: state.name,
+            ratingNumeric: state.ratingNumeric,
+            rating: state.rating,
+            baseline: state.baseline,
+            identityAliases: state.identityAliases,
+            lastEventId: state.lastEventId,
+            lastEventType: state.lastEventType,
+            lastEventAt: state.lastEventAt,
+            projectedBy: PLAYER_RATING_WORKER_VERSION,
+            projectedAt: nowIso,
+            updatedAt: nowIso,
+            compatibilityProjection: true,
+            canonicalCollection: PLAYER_RATING_COLLECTIONS.state,
+            compatibilityUpdatedAt: nowIso,
+          },
+          $setOnInsert: { createdAt: state.createdAt || nowIso },
         },
-        $setOnInsert: { createdAt: state.createdAt || nowIso },
-      },
-      { upsert: true },
-    );
+        { upsert: true, session },
+      );
+      return true;
+    };
+    if (dryRun ? await reconcile() : await runRatingTransaction(db, reconcile)) changed += 1;
   }
   return { scanned: states.length, changed };
 }
@@ -508,6 +524,11 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
     .map((event) => String(event._id)));
   const newEvents = [];
   const identities = new Map();
+  const preimages = new Map();
+  async function readPreimage(identity) {
+    if (!preimages.has(identity.playerKey)) preimages.set(identity.playerKey, await loadStateForIdentity(db, identity));
+    return preimages.get(identity.playerKey);
+  }
   let finalized = 0;
   let reopened = 0;
   let startOverrides = 0;
@@ -535,6 +556,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
       const playerKey = buildPlayerRatingKey({ clientId, phoneNorm, fallback: player.participantId });
       if (!playerKey) continue;
       const identity = { playerKey, clientId, phoneNorm, name: toStr(player.name) || "Игрок" };
+      const currentState = await readPreimage(identity);
       const canonicalBefore = await resolveCanonicalRatingBefore(db, identity, occurredAt, newEvents);
       const event = buildTournamentStartOverrideEvent({
         tournamentId,
@@ -548,7 +570,6 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
         identities.set(playerKey, identity);
         continue;
       }
-      const currentState = await loadStateForIdentity(db, identity);
       if (!currentState) {
         const bootstrap = buildBootstrapEvent({ event, createdAt: nowIso });
         if (bootstrap) newEvents.push(bootstrap);
@@ -564,6 +585,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
       const playerKey = buildPlayerRatingKey({ clientId, phoneNorm });
       if (!playerKey) continue;
       const identity = { playerKey, clientId, phoneNorm, name: toStr(standing?.name) || "Игрок" };
+      const currentState = await readPreimage(identity);
       if (getTournamentRatingExclusion(tournament, clientId, "level")) {
         const events = [
           ...await loadEventsForIdentity(db, identity),
@@ -638,7 +660,6 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
           allTournamentEvents.push(compensation);
         }
       }
-      const currentState = await loadStateForIdentity(db, identity);
       if (!currentState) {
         const bootstrap = buildBootstrapEvent({ event, createdAt: nowIso });
         if (bootstrap) newEvents.push(bootstrap);
@@ -650,21 +671,27 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
     }
   }
 
-  if (!dryRun && newEvents.length > 0) {
-    await db.collection(PLAYER_RATING_COLLECTIONS.events).bulkWrite(
-      newEvents.map((event) => ({
-        updateOne: {
-          filter: { _id: event.id },
-          update: { $setOnInsert: event },
-          upsert: true,
-        },
-      })),
-      { ordered: true },
-    );
-  }
   const projections = [];
   for (const identity of identities.values()) {
-    const projected = await projectIdentityState(db, identity, nowIso, dryRun, dryRun ? newEvents : []);
+    const eventsForPlayer = newEvents.filter(event => eventMatchesIdentity(event, identity));
+    const projected = dryRun ? await projectIdentityState(db, identity, nowIso, true, eventsForPlayer)
+      : await runRatingTransaction(db, async session => {
+        const planned = preimages.get(identity.playerKey);
+        const current = await loadStateForIdentity(db, identity, session);
+        if (planned?.lastEventId !== current?.lastEventId || planned?.ratingNumeric !== current?.ratingNumeric
+          || planned?.playerKey !== current?.playerKey || planned?.clientId !== current?.clientId) {
+          throw new Error('TOURNAMENT_RATING_PLAN_STALE');
+        }
+        if (eventsForPlayer.length) {
+          await db.collection(PLAYER_RATING_COLLECTIONS.events).bulkWrite(
+            eventsForPlayer.map(event => ({
+              updateOne: { filter: { _id: event.id }, update: { $setOnInsert: event }, upsert: true }
+            })),
+            { ordered: true, session }
+          );
+        }
+        return writeIdentityProjection(db, identity, nowIso, false, [], session);
+      });
     projections.push(projected);
     await enqueueProjection(db, projected, nowIso, dryRun);
   }

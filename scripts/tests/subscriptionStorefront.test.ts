@@ -535,10 +535,10 @@ test('provider rejections keep their own reason and status code', async () => {
   );
 });
 
-test('training link shows RA and Academy while ordinary storefront keeps its catalogue', () => {
+test('review group 3: ordinary storefront omits Academy while the training link remains unchanged', () => {
   assert.deepEqual(storefrontPlanKeysForSearch('?plans=ra,academy'), ['ra', 'academy']);
-  assert.deepEqual(storefrontPlanKeysForSearch(''), ['friendship', 'ra', 'academy', 'energy5']);
-  assert.deepEqual(storefrontPlanKeysForSearch('?plans=unknown'), ['friendship', 'ra', 'academy', 'energy5']);
+  assert.deepEqual(storefrontPlanKeysForSearch(''), ['friendship', 'ra', 'energy5']);
+  assert.deepEqual(storefrontPlanKeysForSearch('?plans=unknown'), ['friendship', 'ra', 'energy5']);
 });
 
 test('atlanty page keeps two discounted direct options and drops the 2-hour placeholder', () => {

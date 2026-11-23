@@ -8,7 +8,7 @@ export const PLAYER_RATING_COLLECTIONS = {
 } as const;
 
 export const PLAYER_RATING_LEDGER_SCHEMA_VERSION = 1;
-export const PLAYER_RATING_WORKER_VERSION = "rating-worker-v1.0.14";
+export const PLAYER_RATING_WORKER_VERSION = "rating-worker-v1.0.15";
 
 export interface PlayerRatingIdentity {
   playerKey: string;
@@ -83,15 +83,52 @@ function roundRatingDelta(value: number): number {
   return Math.round(value * 100000) / 100000;
 }
 
-export function ratingGradeFromNumeric(value: unknown): string {
-  const rating = toFiniteRating(value) ?? 1;
-  if (rating >= 6) return "A";
-  if (rating >= 5) return "B+";
-  if (rating >= 4.2) return "B";
-  if (rating >= 3.5) return "C+";
-  if (rating >= 3) return "C";
-  if (rating >= 2.5) return "D+";
-  return "D";
+export const PLAYER_RATING_BANDS = [
+  { grade: "A", min: 5.5, max: 7 },
+  { grade: "B+", min: 4.7, max: 5.5 },
+  { grade: "B", min: 4, max: 4.7 },
+  { grade: "C+", min: 3.5, max: 4 },
+  { grade: "C", min: 3, max: 3.5 },
+  { grade: "D+", min: 2, max: 3 },
+  { grade: "D", min: 1, max: 2 },
+] as const;
+
+export type PlayerRatingBand = typeof PLAYER_RATING_BANDS[number];
+
+function ratingBandForNumber(rating: number): PlayerRatingBand {
+  return PLAYER_RATING_BANDS.find((band) => rating >= band.min) ?? PLAYER_RATING_BANDS[6];
+}
+
+export function ratingGradeFromNumeric(value: unknown): PlayerRatingBand["grade"] {
+  return ratingBandForNumber(roundPlayerRating(toFiniteRating(value) ?? 1)).grade;
+}
+
+export function ratingSublevelsForBand({ grade, min, max }: PlayerRatingBand) {
+  const width = (max - min) / 4;
+  const boundaries = [min, ...[1, 2, 3].map((step) => roundPlayerRating(min + step * width)), max];
+  const [letter, plus = ""] = grade;
+  return ([1, 2, 3, 4] as const).map((index) => ({
+    index,
+    label: letter + (index === 1 ? "" : String(index - 1)) + plus,
+    min: boundaries[index - 1],
+    max: boundaries[index],
+  }));
+}
+
+export function ratingSublevelFromNumeric(value: number) {
+  const rating = roundPlayerRating(toFiniteRating(value) ?? 1);
+  const band = ratingBandForNumber(rating);
+  const steps = ratingSublevelsForBand(band);
+  return steps.find((step) => rating < step.max) ?? steps[3];
+}
+
+export function ratingGradesForChange(before: unknown, after: unknown) {
+  const beforeNumeric = toFiniteRating(before);
+  const afterNumeric = toFiniteRating(after);
+  return {
+    gradeBefore: beforeNumeric == null ? null : ratingGradeFromNumeric(beforeNumeric),
+    gradeAfter: afterNumeric == null ? null : ratingGradeFromNumeric(afterNumeric),
+  };
 }
 
 export function buildPlayerRatingKey(input: {
@@ -122,8 +159,9 @@ function parseOccurredAt(event: PlayerRatingEventDocument): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function isBaselineEvent(event: PlayerRatingEventDocument): boolean {
-  return event.eventType === "RATING_INITIAL_IMPORTED"
+export function isPlayerRatingBaselineEvent(event: PlayerRatingEventDocument): boolean {
+  return event.eventType === "RATING_INITIAL_ASSIGNED"
+    || event.eventType === "RATING_INITIAL_IMPORTED"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_VIVA"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_TOURNAMENT"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_GAME_RESULT"
@@ -134,6 +172,19 @@ export function eventAppliesToCanonicalState(event: PlayerRatingEventDocument): 
   return event?.source?.applyToState !== false;
 }
 
+export function isManualRatingTarget(event: PlayerRatingEventDocument): boolean {
+  if (event.eventType !== "RATING_MANUALLY_CHANGED" || event.source.kind !== "ADMIN_MANUAL") return false;
+  const alignment = event.source.gradeAlignment as Record<string, unknown> | undefined;
+  const letterOnly = alignment != null
+    && typeof alignment.previousEventId === "string" && alignment.previousEventId.length > 0
+    && alignment.previousEventId === event.source.expectedLastEventId
+    && typeof alignment.clientId === "string" && alignment.clientId === event.player.clientId
+    && alignment.previousGrade === event.change.gradeBefore
+    && event.change.gradeBefore !== event.change.gradeAfter
+    && event.change.delta === 0 && event.change.before === event.change.after;
+  return !letterOnly;
+}
+
 export function replayPlayerRatingEvents(
   events: PlayerRatingEventDocument[],
 ): PlayerRatingReplayState | null {
@@ -142,7 +193,7 @@ export function replayPlayerRatingEvents(
     if (timeDiff !== 0) return timeDiff;
     return left.id.localeCompare(right.id);
   });
-  const baselines = ordered.filter((event) => isBaselineEvent(event) && toFiniteRating(event.change.after) != null);
+  const baselines = ordered.filter((event) => isPlayerRatingBaselineEvent(event) && toFiniteRating(event.change.after) != null);
   const baseline = baselines.at(-1);
   if (!baseline) return null;
 
@@ -151,11 +202,12 @@ export function replayPlayerRatingEvents(
   let lastEvent = baseline;
   let appliedEvents = 0;
   for (const event of ordered) {
-    if (event.id === baseline.id || isBaselineEvent(event)) continue;
+    if (event.id === baseline.id || isPlayerRatingBaselineEvent(event)) continue;
     if (parseOccurredAt(event) < baselineAtTs) continue;
-    const delta = toFiniteRating(event.change.delta);
-    if (delta == null) continue;
-    ratingNumeric += delta;
+    const useTarget = isManualRatingTarget(event);
+    const value = toFiniteRating(useTarget ? event.change.after : event.change.delta);
+    if (value == null) continue;
+    ratingNumeric = useTarget ? value : ratingNumeric + value;
     appliedEvents += 1;
     lastEvent = event;
   }
@@ -278,6 +330,10 @@ export function buildGameResultRatingEvent(input: {
     },
     source: {
       domain: "GAME_RESULT",
+      kind: "GAME",
+      eventId: input.gameId,
+      resultRef: { id: input.resultId, revision: input.scoreRevision },
+      reason: input.supersedesResultId ? "RESULT_CORRECTED" : "RESULT_APPLIED",
       sourceId: input.gameId,
       gameId: input.gameId,
       resultId: input.resultId,
@@ -331,6 +387,10 @@ export function buildGameResultCompensationEvent(input: {
     },
     source: {
       ...input.event.source,
+      kind: "GAME",
+      eventId: input.event.source.gameId ?? input.event.source.sourceId,
+      resultRef: { id: input.correctionResultId, revision: input.scoreRevision },
+      reason: "RESULT_REVERTED",
       correctionResultId: input.correctionResultId,
       correctionScoreRevision: input.scoreRevision,
       compensatesEventId: input.event.id,
@@ -371,6 +431,7 @@ export function buildTournamentRatingEvent(input: {
   occurredAt?: string;
   createdAt?: string;
   previousEventId?: string | null;
+  protocolId?: string;
 }): PlayerRatingEventDocument | null {
   const clientId = toStringOrNull(input.standing.id ?? input.standing.clientId);
   const phoneNorm = normalizeRatingPhone(input.phoneNorm ?? input.standing.phoneNorm ?? input.standing.phone);
@@ -387,6 +448,8 @@ export function buildTournamentRatingEvent(input: {
     finishedAt: input.finishedAt,
     standing: input.standing,
   });
+  const position = toFiniteRating(input.standing.place ?? input.standing.position);
+  const points = toFiniteRating(input.standing.points);
   const correctionSuffix = input.previousEventId
     ? `:${hashParts([input.previousEventId])}`
     : "";
@@ -414,6 +477,10 @@ export function buildTournamentRatingEvent(input: {
     },
     source: {
       domain: "TOURNAMENT",
+      kind: "TOURNAMENT",
+      eventId: input.tournamentId,
+      resultRef: { id: input.protocolId || input.tournamentId, revision },
+      reason: input.previousEventId ? "PROTOCOL_CORRECTED" : "PROTOCOL_FINALIZED",
       sourceId: input.tournamentId,
       tournamentId: input.tournamentId,
       sourceRevision: revision,
@@ -423,6 +490,8 @@ export function buildTournamentRatingEvent(input: {
         before: tournamentBefore,
         delta: tournamentDelta,
         after: tournamentAfter,
+        ...(position !== null ? { position } : {}),
+        ...(points !== null ? { points } : {}),
       },
     },
     change: {
@@ -525,6 +594,11 @@ export function buildTournamentCompensationEvent(input: {
 }): PlayerRatingEventDocument | null {
   const delta = toFiniteRating(input.event.change.delta);
   if (delta == null) return null;
+  const source = input.event.source;
+  const eventSourceId = toStringOrNull(source.tournamentId ?? source.sourceId);
+  const resultId = toStringOrNull(source.fprProtocolId) ?? eventSourceId;
+  const resultRevision = toStringOrNull(source.sourceRevision);
+  const originalResult = source.resultRef ?? (resultId && resultRevision ? { id: resultId, revision: resultRevision } : null);
   const eventId = `rating_evt:tournament_compensation:${hashParts([
     input.event.id,
     input.reason,
@@ -548,7 +622,11 @@ export function buildTournamentCompensationEvent(input: {
       name: "Rating worker",
     },
     source: {
-      ...input.event.source,
+      ...source,
+      kind: "TOURNAMENT",
+      eventId: eventSourceId,
+      ...(originalResult ? { resultRef: originalResult } : {}),
+      reason: input.reason,
       compensationReason: input.reason,
       compensatesEventId: input.event.id,
       sourceRevision: hashParts([input.event.id, input.reason, input.occurredAt]),
@@ -557,8 +635,7 @@ export function buildTournamentCompensationEvent(input: {
       before: input.event.change.after,
       delta: roundRatingDelta(-delta),
       after: input.event.change.before,
-      gradeBefore: input.event.change.gradeAfter,
-      gradeAfter: input.event.change.gradeBefore,
+      ...ratingGradesForChange(input.event.change.after, input.event.change.before),
     },
     projectionIntent: { viva: "REQUIRED_DURING_MIGRATION" },
   };

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   buildGameResultBaselineEvent,
+  ratingGradeFromNumeric,
   replayPlayerRatingEvents,
 } from "../../src/services/player-rating/ledger.ts";
 import {
@@ -188,6 +189,9 @@ test("game result apply plan is deterministic and contains four immutable events
   assert.deepEqual(first.eventIds, repeated.eventIds);
   assert.equal(new Set(first.eventIds).size, 4);
   assert.equal(first.applyEvents.every((event) => event.source.domain === "GAME_RESULT"), true);
+  assert.deepEqual(first.applyEvents[0]?.source.resultRef, { id: "res-1", revision: 1 });
+  assert.equal(first.applyEvents[0]?.source.kind, "GAME");
+  assert.equal(first.applyEvents[0]?.source.eventId, result().gameId);
 });
 
 test("correction-time plan compensates the old result and preserves later deltas", () => {
@@ -397,11 +401,60 @@ test("result player collection and game roster projection are identity-safe", ()
   assert.equal(collectResultPlayers(result()).length, 4);
   const projected = applyRatingImpactToGameRoster(
     players.map((player) => ({ id: player.id, phone: player.phoneNorm, ratingNumeric: 3 })),
-    [{ id: "p1", phoneNorm: players[0].phoneNorm, after: 3.25, gradeAfter: "C" }],
+    [{ id: "p1", phoneNorm: players[0].phoneNorm, after: 2.3, gradeAfter: "D" }],
   );
 
-  assert.equal(projected[0].ratingNumeric, 3.25);
+  assert.equal(projected[0].ratingNumeric, 2.3);
+  assert.equal(projected[0].rating, "D+");
   assert.equal(projected[1].ratingNumeric, 3);
+});
+
+test("worker recovery aligns grades for uninserted events in a legacy prepared plan", async () => {
+  const nowIso = "2026-07-31T12:00:00.000Z";
+  const queuedResult = result({
+    resultModelVersion: 2,
+    ratingEnabled: true,
+    status: "PENDING_REVIEW",
+    lifecycleState: "PENDING_REVIEW",
+    ratingWork: {
+      generation: 1,
+      desiredState: "APPLIED",
+      status: "RUNNING",
+      leaseOwner: "worker-1",
+    },
+  });
+  const plan = buildGameResultRatingPlan({ result: queuedResult, ratingRows: ratingRows(), nowIso });
+  for (const event of plan.applyEvents) event.change.gradeAfter = "A";
+  for (const impact of plan.ratingImpact) impact.gradeAfter = "A";
+  queuedResult.ratingWork.preparedPlan = plan;
+  const db = new MemoryDb();
+  const alreadyInserted = plan.applyEvents[0];
+  const baselines = ratingRows().map((row) => buildGameResultBaselineEvent({
+    resultId: "res-1",
+    occurredAt: "2026-07-31T11:59:59.999Z",
+    player: { id: row.clientId, phoneNorm: row.phoneNorm, name: row.name },
+    ratingNumeric: row.ratingNumeric,
+    createdAt: nowIso,
+  }));
+  assert.ok(baselines.every(Boolean));
+  db.collections.set("rating_events", new MemoryCollection([...baselines, alreadyInserted]));
+  db.collections.set("player_rating_state", new MemoryCollection(ratingRows()));
+  db.collections.set(GAME_RESULT_COLLECTIONS.results, new MemoryCollection([queuedResult]));
+
+  const completion = await processClaimedGameResultJob(db as any, {
+    result: structuredClone(queuedResult), owner: "worker-1", nowIso,
+  });
+  assert.equal(completion.status, "APPLIED");
+  const events = db.collection("rating_events").docs;
+  assert.deepEqual(events.find((event) => event.id === alreadyInserted.id), alreadyInserted);
+  for (const event of plan.applyEvents.slice(1)) {
+    const change = events.find((candidate) => candidate.id === event.id)?.change;
+    assert.equal(change?.after, event.change.after);
+    assert.equal(change?.gradeAfter, ratingGradeFromNumeric(event.change.after));
+  }
+  const stored = db.collection(GAME_RESULT_COLLECTIONS.results).docs[0];
+  assert.deepEqual(stored.ratingImpact.map((impact: any) => impact.gradeAfter),
+    plan.ratingImpact.map((impact) => ratingGradeFromNumeric(impact.after)));
 });
 
 test("worker apply, crash retry, and dispute revert remain idempotent end to end", async () => {
@@ -486,4 +539,109 @@ test("worker apply, crash retry, and dispute revert remain idempotent end to end
     db.collection(GAME_RESULT_COLLECTIONS.results).docs[0].ratingWork.status,
     "REVERTED",
   );
+});
+
+const localReplicaUri = process.env.FPR_LEVEL_TEST_MONGO_URI;
+test("physical replica set retries an automatic game after a concurrent CUP manual level", {
+  skip: !localReplicaUri, timeout: 20_000,
+}, async () => {
+  assert.match(localReplicaUri!, /^mongodb:\/\/127\.0\.0\.1:\d+\//);
+  const { MongoClient } = await import("mongodb");
+  const { randomUUID } = await import("node:crypto");
+  const client = new MongoClient(localReplicaUri!);
+  const db = client.db("test_rating_concurrency_" + randomUUID().replaceAll("-", ""));
+  const queued = result({
+    ratingWork: { jobKey: "synthetic-apply", generation: 1, desiredState: "APPLIED",
+      status: "RUNNING", attempts: 1, leaseOwner: "synthetic-worker" },
+  });
+  const baselineTime = "2026-07-31T10:00:00.000Z";
+  const concurrentTime = "2026-07-31T12:00:01.000Z";
+  const rows = ratingRows();
+  const fixture = rows.map(row => {
+    const event = buildGameResultBaselineEvent({
+      resultId: "synthetic-import", occurredAt: baselineTime,
+      player: { id: row.clientId }, ratingNumeric: row.ratingNumeric,
+    })!;
+    return { event, row: { ...row, lastEventId: event.id, lastEventAt: baselineTime } };
+  });
+  try {
+    await client.connect();
+    await db.collection("player_rating_state").insertMany(fixture.map(item => item.row));
+    await db.collection("rating_events").insertMany(fixture.map(item => item.event));
+    await db.collection("lk_game_results").insertOne(queued);
+    await db.createCollection("player_ratings");
+    await db.createCollection("lk_game_rating_events");
+    await db.createCollection("rating_projection_outbox");
+    const getCollection = db.collection.bind(db);
+    // Abort after all four projected state/outbox writes, just before completing the result.
+    const aborted = await processClaimedGameResultJob({
+      client,
+      collection(name: string) {
+        const collection = getCollection(name);
+        if (name === GAME_RESULT_COLLECTIONS.lifecycleEvents) {
+          collection.updateOne = async () => { throw new Error("synthetic transaction interruption"); };
+        }
+        return collection;
+      },
+    }, {
+      result: queued, owner: "synthetic-worker", nowIso: "2026-07-31T12:00:00.000Z",
+    });
+    assert.equal(aborted.status, "RETRYABLE");
+    assert.equal(await db.collection("rating_projection_outbox").countDocuments({}), 0);
+    assert.equal(await db.collection("player_ratings").countDocuments({}), 0);
+    assert.equal(await db.collection("rating_events").countDocuments({}), fixture.length);
+    await db.collection("lk_game_results").updateOne({ id: queued.id }, { $set: { ratingWork: queued.ratingWork } });
+    const first = fixture[0]!;
+    const manual = {
+      ...first.event, _id: "synthetic-manual", id: "synthetic-manual", idempotencyKey: "synthetic-manual",
+      occurredAt: concurrentTime, eventType: "RATING_MANUALLY_CHANGED",
+      source: { kind: "ADMIN_MANUAL", domain: "ADMIN_MANUAL" },
+      change: { before: first.row.ratingNumeric, after: 4.7, delta: 1.6, gradeBefore: "C", gradeAfter: "B+" },
+    };
+    let raced = false;
+    const workerDb = {
+      client,
+      collection(name: string) {
+        const collection = getCollection(name);
+        if (name === "player_rating_state" && !raced) {
+          const find = collection.find.bind(collection);
+          collection.find = ((...args: Parameters<typeof find>) => {
+            const cursor = find(...args);
+            const read = cursor.toArray.bind(cursor);
+            cursor.toArray = async () => {
+              const snapshot = await read();
+              if (!raced) {
+                raced = true;
+                await client.withSession(session => session.withTransaction(async () => {
+                  await db.collection("rating_events").insertOne(manual, { session });
+                  await db.collection("player_rating_state").updateOne({ playerKey: first.row.playerKey },
+                    { $set: { ratingNumeric: 4.7, lastEventId: manual.id, lastEventAt: concurrentTime } }, { session });
+                }));
+              }
+              return snapshot;
+            };
+            return cursor;
+          }) as typeof collection.find;
+        }
+        return collection;
+      },
+    };
+    const applied = await processClaimedGameResultJob(workerDb, {
+      result: queued, owner: "synthetic-worker", nowIso: "2026-07-31T12:00:00.000Z",
+    });
+    assert.equal(raced, true);
+    assert.equal(applied.status, "APPLIED");
+    const gameEvent = await db.collection("rating_events").findOne({ "player.key": first.row.playerKey, "source.kind": "GAME" });
+    assert.equal(gameEvent?.change.before, 4.7);
+    assert.ok(Date.parse(gameEvent?.occurredAt) > Date.parse(concurrentTime));
+    const current = await db.collection("player_rating_state").findOne({ playerKey: first.row.playerKey });
+    assert.equal(current?.ratingNumeric, gameEvent?.change.after);
+    assert.equal(await db.collection("rating_events").countDocuments({ "source.kind": "ADMIN_MANUAL" }), 1);
+    assert.equal(await db.collection("rating_events").countDocuments({ "source.kind": "GAME" }), 4);
+    assert.equal(await db.collection("rating_projection_outbox").countDocuments({}), 4);
+  } finally {
+    // This database was created for this test on the loopback replica set.
+    await db.dropDatabase();
+    await client.close();
+  }
 });
