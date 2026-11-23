@@ -53,7 +53,7 @@ const oldEnv = ['RETAINED_FIRST=one\n', 'RETAINED_SECOND=two\n'];
 retained.forEach((file, index) => write(file, oldEnv[index]));
 write(control, 'off\n');
 write(credential, 'fixture-tournament-token\n');
-const graphs = Object.fromEntries(['source', 'candidate', 'pilot'].map(name =>
+const graphs = Object.fromEntries(['source', 'candidate', 'pilot', 'successor'].map(name =>
   [name, JSON.stringify([{ id: name, type: 'tab' }]) + '\n']));
 const selectGraph = name => write(graph, graphs[name] ?? '[]\n');
 const env = {
@@ -74,6 +74,7 @@ const env = {
 const encode = values => Object.entries(values).map(([key, value]) => key + "='" + value + "'\n").join('');
 const v2 = { schema: 2, sourceSha256: hash(graphs.source), candidateSha256: hash(graphs.candidate), retainedEnvSha256: oldEnv.map(hash) };
 const v3 = { ...v2, schema: 3, pilotSha256: hash(graphs.pilot), pilotEnvSha256: hash(encode(env)) };
+const v4 = { ...v3, schema: 4, pilotSuccessorSha256: hash(graphs.successor) };
 const manifest = value => write(policy, JSON.stringify(value) + '\n');
 const run = (file, args = [], extraEnv = {}) => spawnSync(file, args, {
   encoding: 'utf8', env: { ...process.env, ...extraEnv }, timeout: 4000,
@@ -84,9 +85,9 @@ function expectRefusal(result, code) {
   assert.equal(result.stdout, '');
   assert.match(result.stderr, new RegExp(code + '\\n$'));
 }
-function checkLaunch(name, tournamentOwner, pilot) {
+function checkLaunch(name, tournamentOwner, pilot, profile = name, controlMode = 'off') {
   selectGraph(name);
-  assert.equal(rawSelect().stdout, name);
+  assert.equal(rawSelect().stdout, profile);
   const result = run(launcher, [], { TOURNAMENT_OWNER_RECOVERY_ONLY: 'true' });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), {
@@ -94,7 +95,7 @@ function checkLaunch(name, tournamentOwner, pilot) {
     tournamentRecoveryOnly: name === 'candidate' ? 'true' : null,
     tournamentOwner,
     cup: 'http://127.0.0.1:3000/api',
-    pilot: pilot ? 'true' : null, create: pilot ? 'false' : null, control: pilot ? 'off' : null,
+    pilot: pilot ? 'true' : null, create: pilot ? 'false' : null, control: pilot ? controlMode : null,
   });
 }
 manifest(v2);
@@ -146,6 +147,9 @@ fs.unlinkSync(pilotEnv);
 fs.renameSync(pilotEnv + '.fixture', pilotEnv);
 selectGraph('unknown');
 expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+selectGraph('successor');
+expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+manifest(v4);
 for (const name of Object.keys(graphs)) {
   selectGraph(name);
   write(retained[0], 'RETAINED_FIRST=unapproved\n');
@@ -155,4 +159,24 @@ for (const name of Object.keys(graphs)) {
 checkLaunch('pilot', true, true);
 checkLaunch('candidate', true, false);
 checkLaunch('source', false, false);
-console.log('PASS: both retained graphs, closed pilot, rollback, credential isolation and drift checks');
+write(control, 'preview\n');
+checkLaunch('pilot', true, true, 'pilot', 'preview');
+checkLaunch('successor', true, true, 'pilot', 'preview');
+expectRefusal(rawSelect('read-candidate-token'), 'INVOCATION_INVALID');
+expectRefusal(rawSelect('select', { LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED: 'true' }), 'PILOT_ENV_INHERITED_OVERRIDE');
+write(pilotEnv, '# drift\n' + encode(env));
+expectRefusal(rawSelect(), 'PILOT_ENV_HASH_MISMATCH');
+write(pilotEnv, encode(env));
+for (const invalid of [
+  v3, { ...v4, pilotSuccessorSha256: undefined }, { ...v4, pilotSuccessorSha256: [v4.pilotSuccessorSha256] },
+  { ...v4, pilotSuccessorSha256: v4.pilotSuccessorSha256.toUpperCase() },
+  { ...v4, pilotSuccessorSha256: v4.sourceSha256 }, { ...v4, pilotSuccessorSha256: v4.candidateSha256 },
+  { ...v4, pilotSuccessorSha256: v4.pilotSha256 }, { ...v4, secondSuccessorSha256: hash('unknown') },
+]) {
+  manifest(invalid);
+  expectRefusal(rawSelect(), invalid === v3 ? 'UNREVIEWED_GRAPH_SHA' : 'PROFILES_INVALID');
+}
+manifest(v4);
+selectGraph('unknown');
+expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+console.log('PASS: retained graphs, exact pilot successor, open tournament mode, rollback, credential isolation and drift checks');

@@ -95,11 +95,12 @@ function verifyPilotEnv(expectedSha256) {
 function select() {
   const raw = readProtected(path.join(directory, 'profiles.json'), { privateFile: true, limit: 4096 });
   const profiles = JSON.parse(raw.toString('utf8'));
-  const hasPilot = profiles?.schema === 3;
-  const keys = hasPilot
-    ? 'candidateSha256,pilotEnvSha256,pilotSha256,retainedEnvSha256,schema,sourceSha256'
-    : 'candidateSha256,retainedEnvSha256,schema,sourceSha256';
-  if (!profiles || Object.keys(profiles).sort().join(',') !== keys
+  const hasPilotSuccessor = profiles?.schema === 4;
+  const hasPilot = hasPilotSuccessor || profiles?.schema === 3;
+  const keys = ['candidateSha256', 'retainedEnvSha256', 'schema', 'sourceSha256'];
+  if (hasPilot) keys.push('pilotEnvSha256', 'pilotSha256');
+  if (hasPilotSuccessor) keys.push('pilotSuccessorSha256');
+  if (!profiles || Object.keys(profiles).sort().join(',') !== keys.sort().join(',')
     || (!hasPilot && profiles.schema !== 2) || !shaPattern.test(profiles.sourceSha256)
     || !shaPattern.test(profiles.candidateSha256) || profiles.sourceSha256 === profiles.candidateSha256
     || !Array.isArray(profiles.retainedEnvSha256) || profiles.retainedEnvSha256.length !== retainedEnvFiles.length
@@ -109,6 +110,11 @@ function select() {
   if (hasPilot && (typeof profiles.pilotSha256 !== 'string' || typeof profiles.pilotEnvSha256 !== 'string'
     || !shaPattern.test(profiles.pilotSha256) || !shaPattern.test(profiles.pilotEnvSha256)
     || [profiles.sourceSha256, profiles.candidateSha256].includes(profiles.pilotSha256))) {
+    refuse('PROFILES_INVALID');
+  }
+  if (hasPilotSuccessor && (typeof profiles.pilotSuccessorSha256 !== 'string'
+    || !shaPattern.test(profiles.pilotSuccessorSha256)
+    || [profiles.sourceSha256, profiles.candidateSha256, profiles.pilotSha256].includes(profiles.pilotSuccessorSha256))) {
     refuse('PROFILES_INVALID');
   }
   for (const [index, filename] of retainedEnvFiles.entries()) {
@@ -122,7 +128,8 @@ function select() {
   const digest = sha256(bytes);
   if (digest === profiles.sourceSha256) return 'source';
   if (digest === profiles.candidateSha256) return 'candidate';
-  if (hasPilot && digest === profiles.pilotSha256) {
+  if (hasPilot && (digest === profiles.pilotSha256
+    || (hasPilotSuccessor && digest === profiles.pilotSuccessorSha256))) {
     verifyPilotEnv(profiles.pilotEnvSha256);
     return 'pilot';
   }
