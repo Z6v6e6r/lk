@@ -15,7 +15,6 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
   const inFlight = useRef<number | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
   const generation = useRef(0);
-  const levelProfileRef = useRef<UserProfileType | null>(null);
   useEffect(() => {
     generation.current += 1;
     activeRequest.current?.abort(); inFlight.current = null;
@@ -24,7 +23,6 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
   }, [targetKey]);
 
   const checkLevel = useCallback(async (event: unknown, expectedClientId?: string | null) => {
-    levelProfileRef.current = null;
     if (!hasLevelRestriction(event)) return true;
     if (inFlight.current !== null) return false;
     setAllowedLevel(getEventAllowedLevelLabel(event));
@@ -53,7 +51,6 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
       if (!Number.isFinite(current.level.ratingNumeric) || current.level.ratingNumeric == null || current.level.ratingNumeric < 1 || current.level.ratingNumeric > 7) {
         setPrompt("unavailable"); return false;
       }
-      levelProfileRef.current = current;
       setPrompt(null); return true;
     } catch {
       if (started === generation.current) setPrompt("unavailable");
@@ -92,5 +89,5 @@ export function useLevelOnboardingGate(targetKey: string | null | undefined) {
       </div>
     </Modal>
   ) : null;
-  return { checkLevel, levelOnboardingDialog, levelProfileRef };
+  return { checkLevel, levelOnboardingDialog };
 }
