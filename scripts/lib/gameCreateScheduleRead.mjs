@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gameCreateServiceTable } from "./gameCreatePreparationSource.mjs";
 import { extractSubscriptionPricePreviewSource } from "./subscriptionPricePreviewSources.mjs";
+import { createVivaFetch } from "./vivaUserAgent.mjs";
 
 const vivaOrigin = "https://api.vivacrm.ru";
 const lk1Origin = "https://padlhub.su";
@@ -366,6 +367,7 @@ export async function readGameCreateSchedule(
 
   const deadline = AbortSignal.timeout(15000);
   const combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  const fetchProvider = createVivaFetch(fetchImpl);
   const read = (
     url,
     method = "GET",
@@ -374,7 +376,7 @@ export async function readGameCreateSchedule(
     signal = combined,
   ) =>
     readJson(
-      fetchImpl,
+      fetchProvider,
       url,
       method,
       authorization,
@@ -383,6 +385,16 @@ export async function readGameCreateSchedule(
       body,
       priceRead,
     );
+  const readResidencyStatus = async (slot) => {
+    const status = await read(
+      lk1Origin + "/lk/residency/status",
+      "GET",
+      undefined,
+      false,
+      AbortSignal.any([combined, AbortSignal.timeout(4500)]),
+    ).catch(() => undefined);
+    return lifecycleResidency(status, slot, now());
+  };
   try {
     const master =
       vivaOrigin +
@@ -444,17 +456,9 @@ export async function readGameCreateSchedule(
       )
         throw error;
       // The price denial and the account's residency status are independent reads.
-      const status = await read(
-        lk1Origin + "/lk/residency/status",
-        "GET",
-        undefined,
-        false,
-        AbortSignal.any([combined, AbortSignal.timeout(4500)]),
-      ).catch(() => undefined);
-      const observedAt = now();
-      const evidence = lifecycleResidency(status, slot, observedAt) ?? {
+      const evidence = (await readResidencyStatus(slot)) ?? {
         status: "UNAVAILABLE",
-        observedAt,
+        observedAt: now(),
       };
       return {
         wholeCourtMinor: null,
@@ -543,6 +547,13 @@ export async function readGameCreateSchedule(
       }
     } catch {
       // Availability and the independently quoted base price remain visible.
+    }
+    if (residency.status === "UNAVAILABLE") {
+      const evidence = await readResidencyStatus(slot);
+      if (evidence) {
+        residency = { status: evidence.status };
+        expiresAt = Math.min(expiresAt, evidence.observedAt + 30000);
+      }
     }
     if (expiresAt <= now()) throw upstreamUnavailable();
     return {

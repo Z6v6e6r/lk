@@ -32,7 +32,12 @@ test("asks Viva for the LK1-owned schedule and binds a quote to a current availa
   const fetchImpl = async (raw, options) => {
     const url = new URL(raw);
     calls.push([url.origin, url.pathname, options.method]);
-    assert.equal(options.headers.Authorization, auth);
+    const headers = new Headers(options.headers);
+    assert.equal(headers.get("authorization"), auth);
+    assert.equal(
+      headers.get("user-agent"),
+      url.hostname === "api.vivacrm.ru" ? "PadlHub-LK/1.0" : null,
+    );
     assert.equal(options.redirect, "error");
     if (url.pathname.endsWith("/timeslots")) {
       assert.equal(url.hostname, "api.vivacrm.ru");
@@ -242,6 +247,51 @@ test("rejects competing or malformed Viva slot groups", async () => {
   ]) {
     await assert.rejects(readGrouped(payload), (error) => error.status === 503);
   }
+});
+
+test("an incomplete subscription list preserves the base quote and reads the verified LK1 status", async () => {
+  const payload = grouped([
+    [fragment("07:00", "07:30"), fragment("07:30", "08:00")],
+  ]);
+  const {
+    slots: [selection],
+  } = await readGrouped(payload);
+  const status = {
+    schemaVersion: 1,
+    state: "NONE",
+    source: "VIVA_OWNED_SUBSCRIPTIONS",
+    validFrom: null,
+    validUntil: null,
+    observedAt: new Date(clock - 1000).toISOString(),
+  };
+  const paths = [];
+  const result = await readGameCreateSchedule(
+    { ...request, query: { ...request.query, slotId: selection.id } },
+    {
+      now: () => clock,
+      fetchImpl: async (raw) => {
+        const url = new URL(raw);
+        paths.push(url.pathname.split("/").at(-1));
+        if (url.pathname.endsWith("/timeslots")) return Response.json(payload);
+        if (url.pathname.endsWith("/price"))
+          return Response.json({
+            [url.searchParams.get("subServiceIds")]: {
+              calculation: {
+                fixture: { basePrice: { valueFrom: 4000 }, impacts: [] },
+              },
+            },
+          });
+        if (url.hostname === "api.vivacrm.ru") return Response.json([]);
+        assert.equal(url.href, "https://padlhub.su/lk/residency/status");
+        return Response.json(status);
+      },
+    },
+  );
+  assert.equal(result.wholeCourtMinor, 400000);
+  assert.equal(result.shareMinor, 100000);
+  assert.deepEqual(result.residency, { status: "NOT_APPLICABLE" });
+  assert.equal(Date.parse(result.expiresAt), Date.parse(status.observedAt) + 30000);
+  assert.deepEqual(paths, ["timeslots", "price", "subscriptions", "status"]);
 });
 
 test("price denial leaves exact amounts unknown and preserves only verified LK1 status", async () => {
