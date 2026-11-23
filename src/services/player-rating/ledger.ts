@@ -159,8 +159,9 @@ function parseOccurredAt(event: PlayerRatingEventDocument): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function isBaselineEvent(event: PlayerRatingEventDocument): boolean {
-  return event.eventType === "RATING_INITIAL_IMPORTED"
+export function isPlayerRatingBaselineEvent(event: PlayerRatingEventDocument): boolean {
+  return event.eventType === "RATING_INITIAL_ASSIGNED"
+    || event.eventType === "RATING_INITIAL_IMPORTED"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_VIVA"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_TOURNAMENT"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_GAME_RESULT"
@@ -171,6 +172,19 @@ export function eventAppliesToCanonicalState(event: PlayerRatingEventDocument): 
   return event?.source?.applyToState !== false;
 }
 
+export function isManualRatingTarget(event: PlayerRatingEventDocument): boolean {
+  if (event.eventType !== "RATING_MANUALLY_CHANGED" || event.source.kind !== "ADMIN_MANUAL") return false;
+  const alignment = event.source.gradeAlignment as Record<string, unknown> | undefined;
+  const letterOnly = alignment != null
+    && typeof alignment.previousEventId === "string" && alignment.previousEventId.length > 0
+    && alignment.previousEventId === event.source.expectedLastEventId
+    && typeof alignment.clientId === "string" && alignment.clientId === event.player.clientId
+    && alignment.previousGrade === event.change.gradeBefore
+    && event.change.gradeBefore !== event.change.gradeAfter
+    && event.change.delta === 0 && event.change.before === event.change.after;
+  return !letterOnly;
+}
+
 export function replayPlayerRatingEvents(
   events: PlayerRatingEventDocument[],
 ): PlayerRatingReplayState | null {
@@ -179,7 +193,7 @@ export function replayPlayerRatingEvents(
     if (timeDiff !== 0) return timeDiff;
     return left.id.localeCompare(right.id);
   });
-  const baselines = ordered.filter((event) => isBaselineEvent(event) && toFiniteRating(event.change.after) != null);
+  const baselines = ordered.filter((event) => isPlayerRatingBaselineEvent(event) && toFiniteRating(event.change.after) != null);
   const baseline = baselines.at(-1);
   if (!baseline) return null;
 
@@ -188,11 +202,12 @@ export function replayPlayerRatingEvents(
   let lastEvent = baseline;
   let appliedEvents = 0;
   for (const event of ordered) {
-    if (event.id === baseline.id || isBaselineEvent(event)) continue;
+    if (event.id === baseline.id || isPlayerRatingBaselineEvent(event)) continue;
     if (parseOccurredAt(event) < baselineAtTs) continue;
-    const delta = toFiniteRating(event.change.delta);
-    if (delta == null) continue;
-    ratingNumeric += delta;
+    const useTarget = isManualRatingTarget(event);
+    const value = toFiniteRating(useTarget ? event.change.after : event.change.delta);
+    if (value == null) continue;
+    ratingNumeric = useTarget ? value : ratingNumeric + value;
     appliedEvents += 1;
     lastEvent = event;
   }
@@ -315,6 +330,10 @@ export function buildGameResultRatingEvent(input: {
     },
     source: {
       domain: "GAME_RESULT",
+      kind: "GAME",
+      eventId: input.gameId,
+      resultRef: { id: input.resultId, revision: input.scoreRevision },
+      reason: input.supersedesResultId ? "RESULT_CORRECTED" : "RESULT_APPLIED",
       sourceId: input.gameId,
       gameId: input.gameId,
       resultId: input.resultId,
@@ -368,6 +387,10 @@ export function buildGameResultCompensationEvent(input: {
     },
     source: {
       ...input.event.source,
+      kind: "GAME",
+      eventId: input.event.source.gameId ?? input.event.source.sourceId,
+      resultRef: { id: input.correctionResultId, revision: input.scoreRevision },
+      reason: "RESULT_REVERTED",
       correctionResultId: input.correctionResultId,
       correctionScoreRevision: input.scoreRevision,
       compensatesEventId: input.event.id,
@@ -408,6 +431,7 @@ export function buildTournamentRatingEvent(input: {
   occurredAt?: string;
   createdAt?: string;
   previousEventId?: string | null;
+  protocolId?: string;
 }): PlayerRatingEventDocument | null {
   const clientId = toStringOrNull(input.standing.id ?? input.standing.clientId);
   const phoneNorm = normalizeRatingPhone(input.phoneNorm ?? input.standing.phoneNorm ?? input.standing.phone);
@@ -424,6 +448,8 @@ export function buildTournamentRatingEvent(input: {
     finishedAt: input.finishedAt,
     standing: input.standing,
   });
+  const position = toFiniteRating(input.standing.place ?? input.standing.position);
+  const points = toFiniteRating(input.standing.points);
   const correctionSuffix = input.previousEventId
     ? `:${hashParts([input.previousEventId])}`
     : "";
@@ -451,6 +477,10 @@ export function buildTournamentRatingEvent(input: {
     },
     source: {
       domain: "TOURNAMENT",
+      kind: "TOURNAMENT",
+      eventId: input.tournamentId,
+      resultRef: { id: input.protocolId || input.tournamentId, revision },
+      reason: input.previousEventId ? "PROTOCOL_CORRECTED" : "PROTOCOL_FINALIZED",
       sourceId: input.tournamentId,
       tournamentId: input.tournamentId,
       sourceRevision: revision,
@@ -460,6 +490,8 @@ export function buildTournamentRatingEvent(input: {
         before: tournamentBefore,
         delta: tournamentDelta,
         after: tournamentAfter,
+        ...(position !== null ? { position } : {}),
+        ...(points !== null ? { points } : {}),
       },
     },
     change: {
@@ -562,6 +594,11 @@ export function buildTournamentCompensationEvent(input: {
 }): PlayerRatingEventDocument | null {
   const delta = toFiniteRating(input.event.change.delta);
   if (delta == null) return null;
+  const source = input.event.source;
+  const eventSourceId = toStringOrNull(source.tournamentId ?? source.sourceId);
+  const resultId = toStringOrNull(source.fprProtocolId) ?? eventSourceId;
+  const resultRevision = toStringOrNull(source.sourceRevision);
+  const originalResult = source.resultRef ?? (resultId && resultRevision ? { id: resultId, revision: resultRevision } : null);
   const eventId = `rating_evt:tournament_compensation:${hashParts([
     input.event.id,
     input.reason,
@@ -585,7 +622,11 @@ export function buildTournamentCompensationEvent(input: {
       name: "Rating worker",
     },
     source: {
-      ...input.event.source,
+      ...source,
+      kind: "TOURNAMENT",
+      eventId: eventSourceId,
+      ...(originalResult ? { resultRef: originalResult } : {}),
+      reason: input.reason,
       compensationReason: input.reason,
       compensatesEventId: input.event.id,
       sourceRevision: hashParts([input.event.id, input.reason, input.occurredAt]),

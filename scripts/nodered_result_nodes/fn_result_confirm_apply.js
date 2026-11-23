@@ -113,6 +113,9 @@ const buildRatingLedgerMutations = ({
     actor: actorDoc,
     source: {
       domain: 'GAME_RESULT',
+      kind: 'GAME',
+      eventId: toStr(gameId),
+      resultRef: { id: toStr(resultId), revision: Number(resultRevision || 1) },
       sourceId: toStr(gameId),
       gameId: toStr(gameId),
       resultId: toStr(resultId),

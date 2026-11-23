@@ -1,7 +1,5 @@
-import { replayPlayerRatingEvents, roundPlayerRating, type PlayerRatingEventDocument } from "./ledger.ts";
-
-const BASELINES = new Set(["RATING_INITIAL_IMPORTED", "RATING_BOOTSTRAPPED_FROM_VIVA", "RATING_BOOTSTRAPPED_FROM_TOURNAMENT",
-  "RATING_BOOTSTRAPPED_FROM_GAME_RESULT", "RATING_TOURNAMENT_CANONICAL_RECONCILED"]);
+import { isManualRatingTarget, isPlayerRatingBaselineEvent, replayPlayerRatingEvents, roundPlayerRating,
+  type PlayerRatingEventDocument } from "./ledger.ts";
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const generated = (event: PlayerRatingEventDocument) => event.source.fprReconciliation === true;
 const fpr = (event: PlayerRatingEventDocument) => typeof event.source.fprProtocolId === "string";
@@ -18,12 +16,13 @@ function rawLedgerRating(input: PlayerRatingEventDocument[]) {
     if (!Number.isFinite(left) || !Number.isFinite(right)) throw new Error("FPR_REPLAY_INVALID_TIME");
     return left - right || a.id.localeCompare(b.id);
   });
-  const baseline = ordered.filter(e => BASELINES.has(e.eventType) && finite(e.change.after)).at(-1);
+  const baseline = ordered.filter(e => isPlayerRatingBaselineEvent(e) && finite(e.change.after)).at(-1);
   if (!baseline) throw new Error("FPR_REPLAY_BASELINE_MISSING");
   let raw = baseline.change.after!;
   for (const event of ordered) {
-    if (event.id === baseline.id || BASELINES.has(event.eventType) || Date.parse(event.occurredAt) < Date.parse(baseline.occurredAt)) continue;
-    if (finite(event.change.delta)) raw += event.change.delta;
+    if (event.id === baseline.id || isPlayerRatingBaselineEvent(event) || Date.parse(event.occurredAt) < Date.parse(baseline.occurredAt)) continue;
+    if (isManualRatingTarget(event) && finite(event.change.after)) raw = event.change.after;
+    else if (finite(event.change.delta)) raw += event.change.delta;
   }
   return raw;
 }
@@ -73,7 +72,7 @@ export function replayFprRatingTargets(input: PlayerRatingEventDocument[]) {
   for (const event of ordered) {
     if (!fpr(event) && event.source.compensatesEventId && finite(event.change.delta)) {
       rating += event.change.delta;
-    } else if (BASELINES.has(event.eventType) || ["TOURNAMENT", "TOURNAMENT_START"].includes(String(event.source.domain))) {
+    } else if (isManualRatingTarget(event) || isPlayerRatingBaselineEvent(event) || ["TOURNAMENT", "TOURNAMENT_START"].includes(String(event.source.domain))) {
       if (!finite(event.change.after)) throw new Error("FPR_REPLAY_TARGET_MISSING");
       rating = event.change.after;
     } else if (finite(event.change.delta)) {
