@@ -87,6 +87,8 @@ test('kids academy permits only a proven visit pack while the monetary preview r
   const normalize = value => typeof value === 'string' ? value.trim().toLowerCase() : null;
   const excludes = new Function('isObj', 'normalizeId', collect + '\nreturn kidsTrainingExcludesSubscription;')(isObj, normalize);
   const pack = '4d43f97e-c71e-450b-8b99-02db47b4a64f';
+  const piterPack = '707b5c25-86e3-4ce7-a509-03fee3d193f1';
+  const piterStudio = '1ea77cbf-bc36-49a1-96d6-f35c216a409b';
   const expected = 'KIDS_TRAINING_SUBSCRIPTION_UNAVAILABLE';
   const fresh = between(hooks, 'if (kidsTrainingExcludesSubscription(exercise, selectedOwned)) {', 'const proTrainingEnergyAllowed');
   const recheck = between(booking, '  if (kidsTrainingExcludesSubscription(exercise, ownedSubscriptions)) {\n    return prepareFailedUpdate',
@@ -115,6 +117,15 @@ test('kids academy permits only a proven visit pack while the monetary preview r
         assert.deepEqual(run(excludes, status, {}, exercise, deny), child ? [409, expected] : undefined);
       }
       assert.equal(run(excludes, status, {}, exercise, [{ product: { id: pack } }]), undefined);
+      const piter = { ...exercise, studioId: piterStudio };
+      const localSubscription = [{ productId: piterPack }];
+      assert.equal(run(excludes, status, {}, piter, localSubscription), undefined);
+      for (const notPiter of [exercise, { ...exercise, studioId: undefined },
+        { ...exercise, studioId: [piterStudio] }, { ...piter, studio: { id: 'conflict' } }]) {
+        assert.deepEqual(run(excludes, status, {}, notPiter, localSubscription), child ? [409, expected] : undefined);
+      }
+      assert.deepEqual(run(excludes, status, {}, piter, [{ productId: piterPack, templateId: pack }]),
+        child ? [409, expected] : undefined);
     }
   }
 });

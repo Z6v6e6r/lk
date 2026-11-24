@@ -317,7 +317,7 @@ if (exerciseDirectionId(exercise) === 7108) {
 // actor-bound ownership below, since Viva may omit it from visit eligibility.
 const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
 if (kidsTrainingExcludesSubscription(exercise, selectedOwned)) {
-  return finishError(ctx, 409, "На детские тренировки действуют разовая оплата и абонемент «Падел.Дети».", {
+  return finishError(ctx, 409, "На эту детскую тренировку можно записаться разово или по подходящему детскому абонементу.", {
     code: "KIDS_TRAINING_SUBSCRIPTION_UNAVAILABLE",
   });
 }
