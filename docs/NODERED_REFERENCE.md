@@ -135,8 +135,15 @@ is changed by this increment.
 
 - `GET /lk/subscriptions/product?subId=<instance>` requires the user's Bearer.
   The existing `apiFetchSubscriptioName` signature remains compatible but ignores
-  phone and returns `{sertName}`. It verifies end-user profile and current owned
-  subscriptions even on a hit. Wrong owner is rejected; phone is never authority.
+  phone and returns `{sertName, productId}`. It verifies end-user profile and current
+  owned subscriptions even on a hit. Wrong owner is rejected. The phone is never authority.
+  For kids training, LK uses this catalogue ID only to identify an instance already
+  present in the exercise's eligible list. The server rechecks eligibility before booking.
+  For standard kids directions 2468, 2975 and 3163, «Питер.Дети»
+  (product `707b5c25-86e3-4ce7-a509-03fee3d193f1`) is also allowed at the exact
+  «Питер» studio (`1ea77cbf-bc36-49a1-96d6-f35c216a409b`). «Падел.Дети»
+  remains available where Viva offers it. Direction 7260 retains the existing
+  PRO checkout policy.
 - Collection `lk_subscription_product_identity` uses deterministic unique `_id`
   keys: `[instance, tenant, verified-client, instance]`, `[product, tenant, product]`,
   and `[lock, tenant, verified-client, instance]`. The existing MongoDB client is

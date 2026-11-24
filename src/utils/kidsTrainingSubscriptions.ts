@@ -1,6 +1,7 @@
-import { GROUP_SCHEDULE_KIDS_ACADEMY_DIRECTION_IDS } from "./groupScheduleModel.ts";
+import { GROUP_SCHEDULE_KIDS_ACADEMY_DIRECTION_IDS, GROUP_SCHEDULE_PITER_STUDIO_ID } from "./groupScheduleModel.ts";
 
 export const PADEL_KIDS_PRODUCT_ID = "4d43f97e-c71e-450b-8b99-02db47b4a64f";
+export const PITER_KIDS_PRODUCT_ID = "707b5c25-86e3-4ce7-a509-03fee3d193f1";
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -18,6 +19,13 @@ export function isKidsAcademyTraining(value: unknown): boolean {
     id === directionId || id === String(directionId));
 }
 
+export function isPiterKidsAcademyTraining(value: unknown): boolean {
+  const exercise = asRecord(value);
+  if (!exercise || !isKidsAcademyTraining(exercise)) return false;
+  const studioIds = [asRecord(exercise.studio)?.id, exercise.studioId].filter(id => id != null);
+  return studioIds.length > 0 && studioIds.every(id => normalizeProductId(id) === GROUP_SCHEDULE_PITER_STUDIO_ID);
+}
+
 type SubscriptionProduct = { source: string; id: string; raw?: unknown };
 
 function subscriptionProductIds(product: SubscriptionProduct): unknown[] {
@@ -32,31 +40,30 @@ function subscriptionProductIds(product: SubscriptionProduct): unknown[] {
   ].filter(id => id != null && id !== "");
 }
 
-export function isPadelKidsProduct(product: SubscriptionProduct): boolean {
+function normalizeProductId(value: unknown): string | null {
+  return typeof value === "string" ? value.trim().toLowerCase() : null;
+}
+
+function isAllowedKidsProductId(id: string | null, allowPiterKids: boolean): boolean {
+  return id === PADEL_KIDS_PRODUCT_ID || (allowPiterKids && id === PITER_KIDS_PRODUCT_ID);
+}
+
+export function isKidsTrainingProduct(product: SubscriptionProduct, allowPiterKids = false): boolean {
   if (product.source !== "subscription" && product.source !== "client-subscription") return false;
-  const ids = subscriptionProductIds(product);
-  return ids.length > 0 && ids.every(id =>
-    typeof id === "string" && id.trim().toLowerCase() === PADEL_KIDS_PRODUCT_ID);
+  const ids = subscriptionProductIds(product).map(normalizeProductId);
+  const [id] = ids;
+  return id != null && isAllowedKidsProductId(id, allowPiterKids) && ids.every(alias => alias === id);
 }
 
-
-// Some older Viva eligibility rows include only the instance ID. Enrich them only
-// with an exact match from this user's subscription list.
-export function resolvePadelKidsVisits<T extends SubscriptionProduct>(
-  eligible: T[],
-  owned: unknown[],
-): T[] {
-  return eligible.flatMap(product => {
-    if (isPadelKidsProduct(product)) return [product];
-    if (product.source !== "client-subscription" || subscriptionProductIds(product).length) return [];
-    const matches = owned.map(asRecord).filter(row => row?.subscriptionId === product.id);
-    const [match] = matches;
-    return matches.length === 1 && match && isPadelKidsProduct({ ...product, raw: match })
-      ? [{ ...product, raw: { ...asRecord(product.raw), productId: PADEL_KIDS_PRODUCT_ID } }]
-      : [];
-  });
+export function needsKidsTrainingIdentity(product: SubscriptionProduct): boolean {
+  return product.source === "client-subscription" && subscriptionProductIds(product).length === 0;
 }
 
-export function needsPadelKidsIdentity(products: SubscriptionProduct[]): boolean {
-  return products.some(product => product.source === "client-subscription" && !subscriptionProductIds(product).length);
+// The caller resolves this catalogue ID for the exact eligible instance via the authenticated gateway.
+export function withKidsTrainingIdentity<T extends SubscriptionProduct>(
+  product: T, productId: unknown, allowPiterKids = false,
+): T {
+  const id = normalizeProductId(productId);
+  if (!needsKidsTrainingIdentity(product) || !isAllowedKidsProductId(id, allowPiterKids)) return product;
+  return { ...product, raw: { ...asRecord(product.raw), productId: id } };
 }

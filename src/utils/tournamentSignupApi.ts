@@ -1,4 +1,4 @@
-import { isKidsAcademyTraining, isPadelKidsProduct, needsPadelKidsIdentity, resolvePadelKidsVisits } from "./kidsTrainingSubscriptions";
+import { isKidsAcademyTraining, isKidsTrainingProduct, isPiterKidsAcademyTraining, needsKidsTrainingIdentity, withKidsTrainingIdentity } from "./kidsTrainingSubscriptions";
 import { isSpanishTrainingExercise } from "./spanishTrainingExclusion";
 import {
   API_BASE,
@@ -1686,26 +1686,29 @@ function pickSubscriptionLookupId(value: unknown) {
 async function resolveClientSubscriptionProductNames(
   products: TournamentVivaProduct[],
   clientPhone: string | null | undefined,
+  kidsOnly = false,
+  allowPiterKids = false,
 ) {
   const phone = String(clientPhone || "").trim();
-  if (!phone || products.length === 0) return products;
 
   const resolved = await Promise.all(products.map(async (product) => {
-    if (product.source !== "client-subscription") return product;
+    if (product.source !== "client-subscription" || !phone) return product;
+    if (kidsOnly && !isKidsTrainingProduct(product, allowPiterKids) && !needsKidsTrainingIdentity(product)) return product;
     const lookupId = pickSubscriptionLookupId(product.raw);
     if (!lookupId) return product;
 
-    const nameResult = await apiFetchSubscriptioName(lookupId, phone);
-    const resolvedName = nameResult.data?.sertName?.trim();
-    if (!resolvedName) return product;
-
-    return {
-      ...product,
-      name: resolvedName,
-    };
+    const nameResult = await apiFetchSubscriptioName(lookupId, phone, {
+      requireProductId: kidsOnly && needsKidsTrainingIdentity(product),
+    });
+    if (nameResult.error || !nameResult.data) return product;
+    const identified = kidsOnly && lookupId === product.id
+      ? withKidsTrainingIdentity(product, nameResult.data.productId, allowPiterKids)
+      : product;
+    const name = typeof nameResult.data.sertName === "string" ? nameResult.data.sertName.trim() : "";
+    return name ? { ...identified, name } : identified;
   }));
 
-  return resolved;
+  return kidsOnly ? resolved.filter(product => isKidsTrainingProduct(product, allowPiterKids)) : resolved;
 }
 
 function collectComparableIds(value: unknown, keys: string[], seen = new Set<unknown>()): Set<string> {
@@ -2628,6 +2631,7 @@ export async function apiFetchTournamentVivaCheckout(
   const studio = pickNestedRecord(exercise, ["studio"]);
   const childTournament = isChildTournamentExercise(exercise);
   const kidsAcademyTraining = isKidsAcademyTraining(exercise) || isKidsAcademyTraining(options.tournament);
+  const allowPiterKids = kidsAcademyTraining && isPiterKidsAcademyTraining(exercise);
   const customPricing = childTournament || kidsAcademyTraining
     ? null
     : resolveTournamentCustomPricing([exercise, options.tournament], options.skinPriceLabel);
@@ -2662,17 +2666,11 @@ export async function apiFetchTournamentVivaCheckout(
     }),
   ]);
 
-  const eligibleSubscriptions = childTournament ? [] : filterClientSubscriptionsForExercise(
+  const clientSubscriptions = childTournament ? [] : filterClientSubscriptionsForExercise(
     normalizeVivaProducts(pickFirstArray(exercise, ["availableClientSubscriptions"]), "client-subscription"),
     exerciseId,
     exercise,
   );
-  const ownership = kidsAcademyTraining && needsPadelKidsIdentity(eligibleSubscriptions)
-    ? await apiFetchSubscriptions({ includeFinished: true, size: 1000 })
-    : null;
-  const clientSubscriptions = kidsAcademyTraining
-    ? resolvePadelKidsVisits(eligibleSubscriptions, ownership?.error ? [] : extractItems(ownership?.data))
-    : eligibleSubscriptions;
   const clientOneTimes = normalizeVivaProducts(
     pickFirstArray(exercise, ["availableClientOneTimes"]),
     "client-one-time",
@@ -2680,7 +2678,7 @@ export async function apiFetchTournamentVivaCheckout(
   const oneTimes = oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time");
   const subscriptions = subscriptionsResult && !subscriptionsResult.error
     ? normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription")
-      .filter(product => !kidsAcademyTraining || isPadelKidsProduct(product)) : [];
+      .filter(product => !kidsAcademyTraining || isKidsTrainingProduct(product, allowPiterKids)) : [];
   const category = resolveSubscriptionCategoryDailyLimitCategoryFromEvent(exercise);
   if (!childTournament && !kidsAcademyTraining && LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED && (category === "group_training" || category === "tournament")) {
     // A display candidate only: the gateway re-reads the same actor-owned
@@ -2699,6 +2697,8 @@ export async function apiFetchTournamentVivaCheckout(
   const resolvedClientSubscriptions = await resolveClientSubscriptionProductNames(
     clientSubscriptions,
     profileResult.data.phone,
+    kidsAcademyTraining,
+    allowPiterKids,
   );
 
   return {
@@ -2804,6 +2804,7 @@ export async function apiFetchTournamentVivaPublicCheckout(
   const studio = pickNestedRecord(exercise, ["studio"]);
   const childTournament = isChildTournamentExercise(exercise);
   const kidsAcademyTraining = isKidsAcademyTraining(exercise) || isKidsAcademyTraining(options.tournament);
+  const allowPiterKids = kidsAcademyTraining && isPiterKidsAcademyTraining(exercise);
   const customPricing = childTournament || kidsAcademyTraining
     ? null
     : resolveTournamentCustomPricing([exercise, options.tournament], options.skinPriceLabel);
@@ -2839,7 +2840,7 @@ export async function apiFetchTournamentVivaPublicCheckout(
   const oneTimes = oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time");
   const subscriptions = subscriptionsResult && !subscriptionsResult.error
     ? normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription")
-      .filter(product => !kidsAcademyTraining || isPadelKidsProduct(product)) : [];
+      .filter(product => !kidsAcademyTraining || isKidsTrainingProduct(product, allowPiterKids)) : [];
 
   if (exerciseResult.error && oneTimes.length === 0 && subscriptions.length === 0) {
     return {
@@ -3361,9 +3362,9 @@ export async function apiCreateTournamentVivaTransaction(
   if ((isKidsAcademyTraining(params.exercise) || isKidsAcademyTraining(params.tournament))
     && (params.product.groupDiscountQuote || params.product.tournamentDiscountQuote
       || params.product.lk1MoneyDiscountCandidate || params.product.isCustomTournamentEnergy
-      || (["subscription", "client-subscription"].includes(params.product.source) && !isPadelKidsProduct(params.product)))) {
+      || (["subscription", "client-subscription"].includes(params.product.source) && !isKidsTrainingProduct(params.product, isPiterKidsAcademyTraining(params.exercise))))) {
     return { data: null, error: { status: 409,
-      message: "На детские тренировки действуют разовая оплата и абонемент «Падел.Дети»." }, status: 409 };
+      message: "На эту детскую тренировку можно записаться разово или по подходящему детскому абонементу." }, status: 409 };
   }
   const trialGroupTarget = TRIAL_GROUP_CHECKOUT_ENABLED
     && (isTrialGroupTraining(params.exercise) || isTrialGroupTraining(params.tournament));
