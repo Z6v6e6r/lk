@@ -68,6 +68,9 @@ export function sanitizeSubscriptionSnapshot(value: unknown): SubscriptionRespon
 }
 
 export function sanitizeSubscriptionName(value: unknown): SubscriptionName | null {
-  return record(value) && typeof value.sertName === "string" && value.sertName.trim()
-    ? { sertName: value.sertName } : null;
+  if (!record(value) || typeof value.sertName !== "string" || !value.sertName.trim()) return null;
+  const productId = typeof value.productId === "string"
+    && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.productId)
+    ? value.productId.toLowerCase() : undefined;
+  return { sertName: value.sertName, ...(productId ? { productId } : {}) };
 }
