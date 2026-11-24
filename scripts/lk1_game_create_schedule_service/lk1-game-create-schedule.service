@@ -8,6 +8,7 @@ StartLimitBurst=3
 [Service]
 Type=exec
 WorkingDirectory=/opt/padlhub/lk1-game-create-schedule/current
+EnvironmentFile=/etc/padlhub/lk1-game-create-schedule-public.env
 ExecStart=/usr/local/bin/node /opt/padlhub/lk1-game-create-schedule/current/scripts/lk1_game_create_schedule_service/server.mjs
 DynamicUser=yes
 NoNewPrivileges=yes

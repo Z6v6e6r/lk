@@ -1,6 +1,9 @@
 import { createGameCreateScheduleServer } from "../game-create-schedule-qa.mjs";
+import { createScheduleDelegationVerifier } from "./verify-delegation.mjs";
 
-const server = createGameCreateScheduleServer();
+const server = createGameCreateScheduleServer({
+  verifyDelegation: createScheduleDelegationVerifier(process.env),
+});
 server.headersTimeout = 5_000;
 server.requestTimeout = 18_000;
 server.maxRequestsPerSocket = 100;

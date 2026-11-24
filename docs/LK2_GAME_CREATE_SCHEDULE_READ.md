@@ -6,7 +6,9 @@ checks as the QA endpoint. It does not load or restart Node-RED.
 
 Timeweb calls the tracked #491 GET path through the exact nginx location. The
 location accepts only the confirmed Timeweb LK2 egress address. The LK2
-backend forwards its short-lived Viva user token. The reader passes it to the
+backend signs the exact GET query with its RS256 actor-delegation key and
+forwards its short-lived Viva user token. The reader verifies the signature,
+scope, tenant, actor, session, correlation and bearer hash before passing it to the
 existing Viva read endpoints and returns only availability or a quote to LK2.
 The underlying Viva timeslot read and LK1 price preview use POST as their
 provider protocol. The public endpoint accepts only GET. It never reserves
@@ -27,10 +29,12 @@ a court, opens checkout or confirms a payment.
   the exact target vhost and that the loopback port is free. Capture the
   nginx and service preimages, preserve the vhost security headers and validate
   the candidate with `nginx -t`.
-- Establish that the allowlisted address is dedicated to the LK2 backend and
-  that no shared proxy or untrusted workload can originate requests through it.
-  The current bundle forwards a session-bound bearer inside that boundary.
-  Keep the route disabled if dedicated caller isolation cannot be verified.
+- Supply the existing delegation issuer, audience, key ID and public PEM as
+  `LK2_BOOKED_OPERATION_DELEGATION_*` in the root-owned
+  `/etc/padlhub/lk1-game-create-schedule-public.env`. Verify the public key
+  fingerprint against the LK2 issuer. Keep the signing key in LK2 API custody.
+- From the allowed Timeweb IP check that a bearer alone, a modified query and
+  a signature for another scope all fail before the first Viva read.
 - Under explicit activation authority, start the read process, verify loopback,
   then apply only the exact nginx location using the existing nginx custody
   procedure. Timeweb unauthenticated GET should return 401. An authenticated
