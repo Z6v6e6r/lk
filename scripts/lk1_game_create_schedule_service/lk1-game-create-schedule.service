@@ -1,0 +1,29 @@
+[Unit]
+Description=LK1 game creation schedule reader
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/padlhub/lk1-game-create-schedule/current
+ExecStart=/usr/local/bin/node /opt/padlhub/lk1-game-create-schedule/current/scripts/lk1_game_create_schedule_service/server.mjs
+DynamicUser=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
