@@ -77,6 +77,14 @@ const v3 = { ...v2, schema: 3, pilotSha256: hash(graphs.pilot), pilotEnvSha256: 
 const v4 = { ...v3, schema: 4, pilotSuccessorSha256: hash(graphs.successor) };
 const v5 = { ...v4, schema: 5, pilotQuoteSha256: hash(graphs.quote) };
 const v6 = { ...v5, schema: 6, pilotKidsBookingSha256: hash(graphs['kids-booking']) };
+const ra497Sha256 = '83b9182d12e206a05051d2c666743cbdb8c6f6bfdd48e946bed72a4fa6eaaa08';
+const raPacket = process.argv[2];
+if (raPacket) {
+  const reviewed = fs.readFileSync(raPacket);
+  assert.equal(hash(reviewed), ra497Sha256, 'RA release graph does not match the reviewed bytes');
+  graphs.ra497 = reviewed;
+}
+const v7 = { ...v6, schema: 7, pilotRa497Sha256: ra497Sha256 };
 const manifest = value => write(policy, JSON.stringify(value) + '\n');
 const run = (file, args = [], extraEnv = {}) => spawnSync(file, args, {
   encoding: 'utf8', env: { ...process.env, ...extraEnv }, timeout: 4000,
@@ -234,3 +242,33 @@ expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
 manifest(v5);
 checkLaunch('successor', true, true, 'pilot', 'preview');
 console.log('PASS: all retained launcher profiles, exact kids booking graph, rollback and fail-closed guards');
+
+
+manifest(v7);
+checkLaunch('source', false, false);
+checkLaunch('candidate', true, false);
+for (const name of ['pilot', 'successor', 'quote', 'kids-booking']) {
+  checkLaunch(name, true, true, 'pilot', 'preview');
+}
+selectGraph('unknown');
+expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+for (const value of [undefined, hash('arbitrary reviewed-looking graph'), v6.pilotKidsBookingSha256, [ra497Sha256]]) {
+  manifest({ ...v7, pilotRa497Sha256: value });
+  expectRefusal(rawSelect(), 'PROFILES_INVALID');
+}
+manifest({ ...v7, pilotKidsBookingSha256: ra497Sha256 });
+expectRefusal(rawSelect(), 'PROFILES_INVALID');
+manifest({ ...v7, extraSha256: hash('unreviewed') });
+expectRefusal(rawSelect(), 'PROFILES_INVALID');
+if (raPacket) {
+  manifest(v6);
+  selectGraph('ra497');
+  expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+  manifest(v7);
+  checkLaunch('ra497', true, true, 'pilot', 'preview');
+  expectRefusal(rawSelect('read-candidate-token'), 'INVOCATION_INVALID');
+  expectRefusal(rawSelect('select', { LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED: 'true' }), 'PILOT_ENV_INHERITED_OVERRIDE');
+}
+manifest(v6);
+checkLaunch('kids-booking', true, true, 'pilot', 'preview');
+console.log('PASS: exact RA approval, retained profiles, unrelated graph refusal, and schema 6 rollback');
