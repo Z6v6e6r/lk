@@ -2,16 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { directRecoveryPrefix, patchDirectRecoveryBody, verifyDirectTopology } from '../patch_direct_checkout_recovery.mjs';
+import { directRecoveryPrefix, liveRaRecoveryPrefix, patchDirectRecoveryBody, verifyDirectTopology } from '../patch_direct_checkout_recovery.mjs';
 const common=fs.readFileSync(new URL('../nodered_direct_checkout_recovery_nodes/common.js',import.meta.url),'utf8');
-const tools=new Function('Buffer',common+'; return { dcrSha,dcrFacts,dcrOwner,dcrDomain,DCR_PRODUCT,DCR_RA_PRODUCT };')(Buffer);
+const tools=new Function('Buffer',common.replace('__DIRECT_CHECKOUT_LIVE_RA__','false')+'; return { dcrSha,dcrFacts,dcrOwner,dcrDomain,DCR_PRODUCT,DCR_RA_PRODUCT };')(Buffer);
 const id='00000000-0000-4000-8000-000000000001',client='00000000-0000-4000-8000-000000000002',operationId='00000000-0000-4000-8000-000000000003';
 const phone='+'+'7'+'9000000000';
 const transaction={id,status:'UNPAID',client:{id:client,phone},products:[{id:tools.DCR_PRODUCT,type:'SUBSCRIPTION',count:1,cost:1980000,discount:0,used:false,refunded:false}],sum:1980000,discount:0,toPay:1980000,deposit:0,createDate:'2026-10-31T00:00:00Z',paymentDueDate:'2026-10-31T00:20:00Z',processingStatus:null,possibleDoublePayment:false,receiptPending:false,acquiringAuthCode:null,acquiringRrnCode:null,paymentMethod:'WIDGET',paymentLegs:[{source:'CARD',amountKopecks:1980000}],purchasedServices:[],receipts:[],executedSurcharges:[],paidByOtherSaleBookingIds:[],transactionRefunds:[],cardPaymentInfo:{paymentId:'fixture-payment-1',paymentUrl:'https://pay.vivacrm.ru/SYNTHETICcheckout000000000',status:'REJECTED',declineOutcome:'EXPIRED',declineReason:'OTHER',declineMessage:null}};
 const sha=s=>crypto.createHash('sha256').update(s).digest('hex'),domain=tools.dcrDomain(tools.DCR_PRODUCT);
 const proof={ownerBinding:sha(domain+id+'\0'+client+'\0'+tools.dcrOwner(transaction).phone),paymentBinding:sha(domain+id+'\0'+transaction.cardPaymentInfo.paymentId+'\0'+transaction.cardPaymentInfo.paymentUrl),legsBinding:sha(domain+id+'\0'+JSON.stringify({paymentMethod:transaction.paymentMethod,paymentLegs:transaction.paymentLegs,discountMinor:transaction.discount,toPayMinor:transaction.toPay})),createdAt:transaction.createDate,expiresAt:transaction.paymentDueDate};
 const config={schemaVersion:1,productId:tools.DCR_PRODUCT,cutoff:'2026-11-01T12:00:00.000Z',observedAt:'2026-11-01T12:26:00.000Z',operationId,proofs:{[sha(domain+id)]:proof}};
-const run=(kind,msg,settings={},configs=[config])=>new Function('msg','env','Buffer',directRecoveryPrefix(kind,...configs)+'; return "legacy";')(msg,{get:key=>settings[key]??({VIVA_SERVICE_USERNAME:'fixture-user',VIVA_SERVICE_PASSWORD:'fixture-password',VIVA_SERVICE_CLIENT_ID:'fixture-client'})[key]},Buffer);
+const run=(kind,msg,settings={},configs=[config],liveRa=false,storage=new Map())=>new Function('msg','env','Buffer','context',
+ (liveRa?liveRaRecoveryPrefix:directRecoveryPrefix)(kind,...configs)+'; return "legacy";')(
+ msg,{get:key=>settings[key]??({VIVA_SERVICE_USERNAME:'fixture-user',VIVA_SERVICE_PASSWORD:'fixture-password',VIVA_SERVICE_CLIENT_ID:'fixture-client'})[key]},Buffer,
+ {get:key=>storage.get(key),set:(key,value)=>storage.set(key,value)});
 const incoming=body=>({_msgid:'fixture',req:{headers:{authorization:'Bearer '+'u'.repeat(32)}},res:{fixture:true},payload:body});
 function start(){const prepared=run('prepare',incoming({directCheckoutRecoveryVersion:1,transactionId:id}))[0];assert.deepEqual(prepared.payload,[{_id:{$in:[]}}]);assert.deepEqual(prepared.query,{_id:{$in:[]}});prepared.payload=[];return run('resolve',prepared)[0];}
 function reply(request,payload,status=200){return {...request,payload,statusCode:status,responseUrl:request.url};}
@@ -32,7 +35,7 @@ test('exact bounded closure uses current actor and terminal card with no writes 
  assert.ok(!JSON.stringify(response.payload).includes(phone));assert.equal(response._directCheckoutRecovery,undefined);assert.equal(response.url,undefined);
 });
 test('unsupported present version, malformed ID and missing credentials never fall into legacy',()=>{
- for(const body of [{directCheckoutRecoveryVersion:null,transactionId:id},{directCheckoutRecoveryVersion:2,transactionId:id},{directCheckoutRecoveryVersion:1,transactionId:'foreign'},{directCheckoutRecoveryVersion:1,transactionId:id,clientPhone:phone}]){const result=run('prepare',incoming(body));assert.equal(result[0],null);assert.equal(result[1].statusCode,400);assert.equal(result[2],null);}
+ for(const body of [{directCheckoutRecoveryVersion:null,transactionId:id},{directCheckoutRecoveryVersion:3,transactionId:id},{directCheckoutRecoveryVersion:1,transactionId:'foreign'},{directCheckoutRecoveryVersion:1,transactionId:id,clientPhone:phone}]){const result=run('prepare',incoming(body));assert.equal(result[0],null);assert.equal(result[1].statusCode,400);assert.equal(result[2],null);}
  const noAuth=incoming({directCheckoutRecoveryVersion:1,transactionId:id});delete noAuth.req.headers.authorization;assert.equal(run('prepare',noAuth)[1].statusCode,401);
  assert.equal(run('prepare',incoming({paymentRef:'legacy'})),'legacy');assert.equal(run('resolve',{payload:[]}),'legacy');assert.equal(run('router',{payload:{}}),'legacy');
 });
@@ -129,4 +132,81 @@ test('RA uses its own frozen proof and preserves Friendship 2.0 on the same endp
  }
  const candidate = run('prepare', incoming({directCheckoutRecoveryVersion: 1, transactionId: raId}))[0];
  assert.equal(run('resolve', candidate, {}, [config])[1].statusCode, 404);
+});
+
+
+test('live RA recovery verifies exact recent full-price and promo invoices beyond the frozen cutoff', () => {
+ const live = (kind, msg, storage) => run(kind, msg, {}, [config], true, storage);
+ const tx = structuredClone(transaction);
+ tx.transactionFormat = 'SUBSCRIPTION';
+ const due = new Date(Date.now() - 10 * 60_000).toISOString();
+ tx.createDate = new Date(Date.now() - 30 * 60_000).toISOString();
+ tx.paymentDueDate = due;
+ tx.products = [{ ...tx.products[0], id: tools.DCR_RA_PRODUCT, cost: 2380000, discount: 238000 }];
+ tx.sum = 2380000;
+ tx.discount = 238000;
+ tx.toPay = 2142000;
+ tx.paymentLegs = [{ source: 'CARD_ONLINE', amountKopecks: tx.toPay }];
+ const input = incoming({ directCheckoutRecoveryVersion: 2, transactionId: id });
+ assert.equal(run('prepare', input)[1].statusCode, 400);
+ const prepared = live('prepare', input)[0];
+ const profile = live('resolve', { ...prepared, payload: [] })[0];
+ assert.equal(profile.method, 'GET');
+ assert.equal(profile._directCheckoutRecovery.productId, tools.DCR_RA_PRODUCT);
+ const auth = live('router', reply(profile, { id: client, phone }))[0];
+ const read = live('router', reply(auth, { access_token: 's'.repeat(32) }))[0];
+ const result = live('router', reply(read, tx));
+ assert.ok(result.every((v,i)=>i===2||v===null));
+ assert.equal(result[2].statusCode, 200);
+ assert.equal(result[2].payload.directCheckoutClosure.version, 2);
+ assert.equal(result[2].payload.directCheckoutClosure.transactionId, id);
+ assert.equal(result[2].payload.directCheckoutClosure.productId, tools.DCR_RA_PRODUCT);
+ assert.equal(result[2].payload.directCheckoutClosure.operationId, undefined);
+ assert.ok(!JSON.stringify(result[2].payload).includes(tx.cardPaymentInfo.paymentUrl));
+ const fullPrice = structuredClone(tx);
+ fullPrice.discount = fullPrice.products[0].discount = 0;
+ fullPrice.toPay = fullPrice.paymentLegs[0].amountKopecks = fullPrice.sum;
+ assert.equal(live('router', reply(read, fullPrice))[2].statusCode, 200);
+ for (const mut of [
+  t=>{t.id = '00000000-0000-4000-8000-000000000099'},
+  t=>{t.client.id = '00000000-0000-4000-8000-000000000099'},
+  t=>{t.client.phone = phone.replace(/0$/, '1')},
+  t=>{t.products[0].id = tools.DCR_PRODUCT},
+  t=>{t.products[0].id = '3b4806f1-6f9a-46df-a7d7-45075b4e7274'},
+  t=>{t.status = 'PAID'}, t=>{t.processingStatus = 'PENDING'},
+  t=>{t.receipts.push({})}, t=>{t.purchasedServices.push({})}, t=>{t.refundedAt = due},
+  t=>{t.cardPaymentInfo.status = 'WAITING'}, t=>{t.cardPaymentInfo.declineOutcome = 'DECLINED'},
+  t=>{t.paymentLegs[0].amountKopecks--}, t=>{t.paymentLegs.push({source:'CASH',amountKopecks:1})},
+  t=>{t.paymentMethod = 'SMS'}, t=>{t.transactionFormat = 'SERVICE'},
+  t=>{t.paymentLegs[0].paid = true}, t=>{t.currency = 'USD'}, t=>{t.toPay++}, t=>{t.discount++},
+  t=>{t.paymentDueDate = new Date(Date.now() + 60_000).toISOString()},
+  t=>{t.paymentDueDate = '2026-01-01T00:00:00Z'},
+  t=>{t.createDate = due},
+ ]) {
+  const unsafe = structuredClone(tx);
+  mut(unsafe);
+  const denied = live('router', reply(read, unsafe));
+  assert.ok(denied.every((v,i)=>i===2||v===null));
+  assert.equal(denied[2].statusCode, 409);
+ }
+});
+
+
+test('new RA provider reads have a bounded process-wide admission budget', () => {
+ const store = new Map();
+ const runLive = (kind, msg) => run(kind, msg, {}, [config], true, store);
+ const input = incoming({directCheckoutRecoveryVersion: 2, transactionId: id});
+ const prepared = runLive('prepare', input)[0];
+ const clock = Date.now;
+ try {
+  Date.now = () => prepared._directCheckoutRecovery.startedAt;
+  for (let i = 0; i < 6; i++) assert.ok(runLive('resolve', prepared)[0]);
+  const denied = runLive('resolve', prepared);
+  assert.equal(denied[0], null);
+  assert.equal(denied[1].statusCode, 429);
+  Date.now = () => prepared._directCheckoutRecovery.startedAt + 1000;
+  assert.ok(runLive('resolve', prepared)[0]);
+ } finally {
+  Date.now = clock;
+ }
 });
