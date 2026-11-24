@@ -54,6 +54,17 @@ const tournamentAdmissionRefusal = (ctx) => {
     }, { $set: { "tournamentAbort.cleanupComplete": true } });
   }
   const code = ctx.tournamentAdmissionRefusalCode;
+  const rejoin = tournamentAdmissionGenderRejoinIds(ctx.operationId);
+  if (rejoin && !ctx.tournamentAbortRecovery && !ctx.tournamentAdmission && !ctx.tournamentDispatchGranted
+    && ctx.step === "tournament_admission_guard_read" && ctx.caller === "http"
+    && ctx.action === "book" && ctx.category === "tournament" && ctx.managedAction === "BOOK_TOURNAMENT"
+    && tournamentAdmissionGenderCode(code)) {
+    ctx.tournamentGenderRejoin = JSON.stringify([ctx.operationKey, ctx.operationId, ctx.tenantKey,
+      ctx.actorClientId, ctx.clientSubscriptionId, ctx.exerciseId, ctx.lk1?.fingerprint, rejoin.next]);
+    return finishError(ctx, 409, "Предыдущая попытка завершена. Нажмите «Записаться» снова.", {
+      code: "SUBSCRIPTION_BOOKING_RELEASED", operationId: ctx.operationId, nextOperationId: rejoin.next,
+    });
+  }
   if (!ctx.tournamentAbortRecovery && !ctx.tournamentAdmission && !ctx.tournamentDispatchGranted
     && ctx.step === "tournament_admission_guard_read"
     && ctx.caller === "http" && ctx.action === "book" && ctx.category === "tournament"
@@ -65,6 +76,28 @@ const tournamentAdmissionRefusal = (ctx) => {
   return finishError(ctx, ctx.tournamentAbortRecovery ? 409 : 403, "Запись не соответствует правилам турнира.", {
     code: ctx.tournamentAdmissionRefusalCode || "TOURNAMENT_ADMISSION_REJECTED",
   });
+};
+const tournamentAdmissionGenderCode = code => code === "PLAYER_GENDER_REQUIRED" || code === "GENDER_NOT_ALLOWED";
+const tournamentAdmissionGenderRejoinIds = operationId => {
+  const match = typeof operationId === "string"
+    && /^(lk-subscription-[a-z0-9]+)(?::rejoin:([1-9]\d{0,2}))?$/.exec(operationId);
+  if (!match) return null;
+  const generation = Number(match[2] || "0");
+  return { next: `${match[1]}:rejoin:${generation + 1}`,
+    previous: generation > 1 ? `${match[1]}:rejoin:${generation - 1}` : generation ? match[1] : null,
+    root: match[1] };
+};
+const tournamentAdmissionGenderRefused = row => {
+  const ids = tournamentAdmissionGenderRejoinIds(row?.operationId);
+  return !!ids && row.category === "tournament" && row.state === "FAILED"
+    && row.failure?.rawCode === "TOURNAMENT_ADMISSION_REJECTED"
+    && tournamentAdmissionGenderCode(row.failure.admissionCode)
+    && Number.isFinite(Date.parse(row.failedAt))
+    && row.tournamentAdmission === undefined && row.tournamentProviderPhase === undefined
+    && row.tournamentAbort === undefined && row.precreatedEntitlementReserved === undefined
+    && row.upstreamAttemptedAt === undefined && tournamentAdmissionHasNoEffect(row)
+    && (!ids.previous || (row.rejoinPredecessor?.rootOperationId === ids.root
+      && row.rejoinPredecessor?.operationId === ids.previous));
 };
 const tournamentAdmissionTerminal = (ctx, row) => row?._id === ctx.operationKey && row.operationId === ctx.operationId
   && row.actorClientId === ctx.actorClientId && row.exerciseId === ctx.exerciseId
