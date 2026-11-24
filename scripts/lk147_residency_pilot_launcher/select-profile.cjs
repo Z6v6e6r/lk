@@ -12,6 +12,8 @@ const retainedEnvFiles = [
   '/etc/phab-traffic/subscriptions-residency-node-red.env',
   '/etc/phab-traffic/subscriptions-residency-node-red-flags.env',
 ];
+// This admission is scoped to the exact reviewed RA #497 graph on 147.
+const ra497Sha256 = '83b9182d12e206a05051d2c666743cbdb8c6f6bfdd48e946bed72a4fa6eaaa08';
 const shaPattern = /^[a-f0-9]{64}$/;
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const stable = (a, b) =>
@@ -95,7 +97,8 @@ function verifyPilotEnv(expectedSha256) {
 function select() {
   const raw = readProtected(path.join(directory, 'profiles.json'), { privateFile: true, limit: 4096 });
   const profiles = JSON.parse(raw.toString('utf8'));
-  const hasPilotKidsBooking = profiles?.schema === 6;
+  const hasPilotRa497 = profiles?.schema === 7;
+  const hasPilotKidsBooking = hasPilotRa497 || profiles?.schema === 6;
   const hasPilotQuote = hasPilotKidsBooking || profiles?.schema === 5;
   const hasPilotSuccessor = hasPilotQuote || profiles?.schema === 4;
   const hasPilot = hasPilotSuccessor || profiles?.schema === 3;
@@ -104,6 +107,7 @@ function select() {
   if (hasPilotSuccessor) keys.push('pilotSuccessorSha256');
   if (hasPilotQuote) keys.push('pilotQuoteSha256');
   if (hasPilotKidsBooking) keys.push('pilotKidsBookingSha256');
+  if (hasPilotRa497) keys.push('pilotRa497Sha256');
   if (!profiles || Object.keys(profiles).sort().join(',') !== keys.sort().join(',')
     || (!hasPilot && profiles.schema !== 2) || !shaPattern.test(profiles.sourceSha256)
     || !shaPattern.test(profiles.candidateSha256) || profiles.sourceSha256 === profiles.candidateSha256
@@ -133,6 +137,11 @@ function select() {
       profiles.pilotSuccessorSha256, profiles.pilotQuoteSha256].includes(profiles.pilotKidsBookingSha256))) {
     refuse('PROFILES_INVALID');
   }
+  if (hasPilotRa497 && (profiles.pilotRa497Sha256 !== ra497Sha256
+    || [profiles.sourceSha256, profiles.candidateSha256, profiles.pilotSha256, profiles.pilotSuccessorSha256,
+      profiles.pilotQuoteSha256, profiles.pilotKidsBookingSha256].includes(profiles.pilotRa497Sha256))) {
+    refuse('PROFILES_INVALID');
+  }
   for (const [index, filename] of retainedEnvFiles.entries()) {
     const env = readProtected(filename, { privateFile: true, privateDirectory: false, limit: 1024 * 1024 });
     if (sha256(env) !== profiles.retainedEnvSha256[index]) refuse('RETAINED_ENV_HASH_MISMATCH');
@@ -147,7 +156,8 @@ function select() {
   if (hasPilot && (digest === profiles.pilotSha256
     || (hasPilotSuccessor && digest === profiles.pilotSuccessorSha256)
     || (hasPilotQuote && digest === profiles.pilotQuoteSha256)
-    || (hasPilotKidsBooking && digest === profiles.pilotKidsBookingSha256))) {
+    || (hasPilotKidsBooking && digest === profiles.pilotKidsBookingSha256)
+    || (hasPilotRa497 && digest === profiles.pilotRa497Sha256))) {
     verifyPilotEnv(profiles.pilotEnvSha256);
     return 'pilot';
   }
