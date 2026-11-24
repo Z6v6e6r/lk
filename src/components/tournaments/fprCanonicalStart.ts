@@ -29,6 +29,7 @@ export function formatFprStartError(error: { message?: string; raw?: unknown } |
   const player = players.find(p => p.id === data?.playerId);
   if (!player) return error?.message || "Не удалось загрузить стартовые уровни ЦУП";
   const reasons: Record<string,string> = {
+    FPR_START_LEVEL_REQUIRED: "У игрока нет уровня. Пройдите онбординг или назначьте уровень в ЦУП.",
     FPR_START_IDENTITY_CONFLICT: "В ЦУП неоднозначная привязка игрока.",
     FPR_START_HISTORY_INVALID: "История рейтинга требует проверки; стартовый уровень не заменён.",
     FPR_START_INVALID_LEVEL: "В ЦУП некорректный числовой уровень.",

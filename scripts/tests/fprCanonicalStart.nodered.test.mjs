@@ -97,3 +97,46 @@ test('bootstrap graph patch is exact and preserves unrelated nodes and old read 
  assert.deepEqual(after.at(-1).libs,[{var:'nodeChildProcess',module:'child_process'}]);
  assert.throws(()=>patchFprStartBootstrap(Buffer.from(JSON.stringify([...flow,{id:'foreign'}])),contract,sources),/PREIMAGE/);
 });
+
+test('CUP-only start cuts the legacy PUT edge and preserves current auth and read paths', async () => {
+  const { patchFprStartCupOnly } = await import('../patch_fpr_start_cup_only.mjs');
+  const { hash } = await import('../patch_fpr_start_bootstrap.mjs');
+  const authorize = {
+    id: 'cup_level_authorize', type: 'function', outputs: 3,
+    wires: [['cup_level_dispatch'], ['cup_level_response'], ['c831f19741603796']],
+    func: `const ctx = msg._cupLevel;
+const fail = (statusCode, error) => [null, {statusCode, error}];
+if (msg.statusCode !== 200) return fail(401, 'AUTH_TOKEN_INVALID');
+if (ctx.operation === 'fprMirror') {
+  return [null, null, msg];
+}
+if (ctx.operation === 'initialize') {
+  if (ctx.body.clientId !== msg.payload.id) return fail(403, 'LEVEL_FORBIDDEN');
+}
+return [msg, null];`,
+  };
+  const initialize = { id: 'fpr_canonical_bootstrap_20261106', type: 'function', func: 'return msg;' };
+  const put = { id: 'c831f19741603796', type: 'function', func: 'return msg;' };
+  const flow = [authorize, initialize, put];
+  const bytes = Buffer.from(JSON.stringify(flow));
+  const contract = {
+    sourceSha256: hash(bytes),
+    nodes: Object.fromEntries([authorize, initialize].map(node => [node.id, hash(JSON.stringify(node))])),
+  };
+  const after = JSON.parse(patchFprStartCupOnly(bytes, contract, 'return null;'));
+  assert.deepEqual(after[0].wires, [authorize.wires[0], authorize.wires[1], []]);
+  assert.deepEqual(after[2], put);
+  const run = new Function('msg', after[0].func);
+  const request = (operation, statusCode = 200, clientId = 'actor') => ({
+    statusCode, payload: { id: 'actor' }, _cupLevel: { operation, body: { clientId } },
+  });
+  assert.deepEqual(run(request('fprMirror')), [null, { statusCode: 409, error: 'TOURNAMENT_START_LEVEL_USE_CUP' }]);
+  assert.equal(run(request('fprMirror', 401))[1].statusCode, 401);
+  assert.equal(run(request('initialize', 200, 'other-player'))[1].statusCode, 403);
+  for (const operation of ['initialize', 'self', 'read']) {
+    const msg = request(operation);
+    assert.deepEqual(run(msg), [msg, null]);
+  }
+  assert.throws(() => patchFprStartCupOnly(bytes, { ...contract, nodes: {} }, 'return null;'), /NODE_PREIMAGE/);
+  assert.throws(() => patchFprStartCupOnly(Buffer.from('[]'), contract, 'return null;'), /SOURCE_PREIMAGE/);
+});

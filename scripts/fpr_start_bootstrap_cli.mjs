@@ -2,7 +2,6 @@
 import fs from 'node:fs';import crypto from 'node:crypto';import {createRequire} from 'node:module';
 /* global __FPR_START_WORKER_HASHES__ */
 import {prepareFprStarts} from './lib/fprStartBootstrap.mjs';
-import {createFprVivaStartReader} from './lib/fprStartVivaLevel.mjs';
 import {withRatingDataLock,RATING_DATA_LOCK} from './lib/ratingDataLock.mjs';
 let client;
 try{
@@ -27,7 +26,7 @@ try{
   if(!['clientId','playerKey'].every(k=>indexes.some(i=>i.unique&&Object.keys(i.key).length===1&&i.key[k]===1&&(!i.partialFilterExpression||JSON.stringify(i.partialFilterExpression)===JSON.stringify({[k]:{$type:'string'}})))))throw Error('FPR_START_INDEXES_REQUIRED');}
  const indexes=await db.collection('rating_events').indexes();
  if(!indexes.some(i=>i.unique&&Object.keys(i.key).length===1&&i.key.idempotencyKey===1&&!i.partialFilterExpression))throw Error('FPR_START_INDEXES_REQUIRED');
- const result=await prepareFprStarts(db,client,input.clientIds,input.actorId,createFprVivaStartReader(),{dryRun:input.dryRun===true,
+ const result=await prepareFprStarts(db,client,input.clientIds,input.actorId,{dryRun:input.dryRun===true,
   withWriteLock:work=>withRatingDataLock(work,{path:RATING_DATA_LOCK,waitSeconds:10,busyError:'FPR_START_BUSY'})});
  console.log(JSON.stringify({ok:true,...result}));
 }catch(e){console.log(JSON.stringify({ok:false,error:/^FPR_START_[A-Z_]+$/.test(e.message)?e.message:'FPR_START_UNAVAILABLE',
