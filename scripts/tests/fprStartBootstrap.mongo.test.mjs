@@ -16,11 +16,14 @@ test('atomic initial default1, existing full precision, compatibility import, hi
  await db.collection('rating_events').createIndex({idempotencyKey:1},{unique:true});
  const existing={_id:'existing',clientId:'existing',playerKey:'client:existing',ownership:'CUP_CANONICAL',ratingNumeric:4.03664,lastEventId:'unchanged'};
  await db.collection('player_rating_state').insertOne(existing);
- await db.collection('player_ratings').insertOne({_id:'compat',clientId:'import',ratingNumeric:3.12345,name:'Synthetic'});
+ await db.collection('player_ratings').insertOne({_id:'compat',clientId:'import',ratingNumeric:3.12345,name:'  Тестовый\t  Игрок '});
  await db.collection('rating_events').insertOne(baseline('recover',2.34567));
  const first=await initializeFprStarts(db,client,['existing','unrated','import','recover'],'host',now);
  assert.equal(first.initialized.length,3);assert.deepEqual(first.states.map(s=>s.ratingNumeric),[4.03664,1,3.12345,2.34567]);
  assert.deepEqual(await db.collection('player_rating_state').findOne({_id:'existing'}),existing);
+ const imported=await db.collection('player_rating_state').findOne({clientId:'import'});
+ assert.equal(imported.name,'  Тестовый\t  Игрок ');
+ assert.equal(imported.nameSearch,'тестовый игрок');
  assert.equal(await db.collection('rating_events').countDocuments(),3);
  assert.equal(await db.collection('rating_projection_outbox').countDocuments({fprProjection:true}),3);
  assert.equal((await initializeFprStarts(db,client,['unrated','import','recover'],'host',now)).initialized.length,0);

@@ -492,6 +492,9 @@ test("worker apply, crash retry, and dispute revert remain idempotent end to end
   });
   assert.equal(first.status, "APPLIED");
   assert.equal(db.collection("rating_events").docs.length, 8);
+  for (const row of db.collection("player_rating_state").docs) {
+    assert.equal(row.nameSearch, String(row.name).trim().toLocaleLowerCase('ru-RU').replace(/\s+/g, ' '));
+  }
   const appliedRatings = db.collection("player_rating_state").docs
     .map((row) => row.ratingNumeric)
     .sort();
