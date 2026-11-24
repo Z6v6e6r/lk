@@ -61,6 +61,11 @@ function toStringOrNull(value: unknown): string | null {
   return normalized || null;
 }
 
+/** Matches the CUP player-rating search normalization. */
+export function normalizeRatingPlayerName(value: unknown): string {
+  return String(value ?? '').trim().toLocaleLowerCase('ru-RU').replace(/\s+/g, ' ');
+}
+
 export function normalizeRatingPhone(value: unknown): string | null {
   const digits = String(value ?? "").replace(/\D/g, "");
   if (!digits) return null;

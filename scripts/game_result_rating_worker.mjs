@@ -10,6 +10,7 @@ import {
   PLAYER_RATING_COLLECTIONS,
   PLAYER_RATING_LEDGER_SCHEMA_VERSION,
   buildGameResultBaselineEvent,
+  normalizeRatingPlayerName,
   ratingGradeFromNumeric,
   ratingGradesForChange,
   toFiniteRating,
@@ -275,13 +276,15 @@ async function projectIdentity(db, { identity, current, result, nowIso, session 
     throw new GameResultRatingError("RATING_REPLAY_FAILED", `No replay baseline for ${identity.playerKey}`, identity, true);
   }
   const lastEvent = events.find((event) => event.id === replay.lastEventId) || null;
+  const name = identity.name || current?.name || "Игрок";
   const state = {
     schemaVersion: PLAYER_RATING_LEDGER_SCHEMA_VERSION,
     ownership: "CUP_CANONICAL",
     playerKey: identity.clientId ? `client:${identity.clientId}` : identity.playerKey,
     clientId: identity.clientId || current?.clientId || null,
     phoneNorm: identity.phoneNorm || current?.phoneNorm || null,
-    name: identity.name || current?.name || "Игрок",
+    name,
+    nameSearch: normalizeRatingPlayerName(name),
     ratingNumeric: replay.ratingNumeric,
     rating: replay.rating,
     baseline: {

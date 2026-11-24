@@ -49,6 +49,7 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
       const after = await db.collection('player_rating_state').findOne({ _id: old._id });
       const expected = context.ratings.get('synthetic-source').standings.find(p => p.id === 'p0').ratingAfter + 0.03;
       assert.equal(after.ratingNumeric, Number(expected.toFixed(5)), 'later game is preserved');
+      assert.equal(after.nameSearch, 'synthetic');
       const fencedSource = await db.collection('tournaments').findOne({ _id: document._id });
       assert.equal(fencedSource.fprLevelLedgerFence.policy, 'fpr-ordinary-level-v1');
       delete fencedSource.fprLevelLedgerFence;
@@ -80,8 +81,10 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
       for (const reader of [loadEventsForIdentity, loadIdentityEvents]) {
         assert.equal(replayPlayerRatingEvents(await reader(db, identity)).ratingNumeric, projected.ratingNumeric);
       }
-      await projectIdentityState(db, identity, now, false);
-      assert.deepEqual((await db.collection('player_rating_state').findOne({ clientId: 'p4' })).identityAliases.playerKeys, ['phone:70000000001']);
+      await projectIdentityState(db, { ...identity, name: '  Тестовый  Игрок ' }, now, false);
+      const refreshed = await db.collection('player_rating_state').findOne({ clientId: 'p4' });
+      assert.deepEqual(refreshed.identityAliases.playerKeys, ['phone:70000000001']);
+      assert.equal(refreshed.nameSearch, 'тестовый игрок');
       const nextGame = { ...game, _id: 'alias-next-game', id: 'alias-next-game', idempotencyKey: 'alias-next-game',
         occurredAt: '2026-11-06T09:00:00Z', createdAt: '2026-11-06T09:00:00Z', player: { ...initial.player, key: 'client:p4', clientId: 'p4' },
         change: { ...game.change, delta: 0.02 } };

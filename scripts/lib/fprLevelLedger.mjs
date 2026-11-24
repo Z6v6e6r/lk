@@ -238,8 +238,10 @@ export async function buildFprPlayerPlan(db, clientId, context, nowIso, session)
   const replay = calculated.replay;
   if (!replay) throw new Error('FPR_LEVEL_REPLAY_MISSING');
   const name = current?.name || [...context.ratings.values()].flatMap(x => x.standings).find(p => p.id === clientId)?.name || 'Игрок';
+  // Module-only FPR upgrades can run with a historical ledger.ts, so keep this CUP normalization local.
+  const nameSearch = String(name).trim().toLocaleLowerCase('ru-RU').replace(/\s+/g, ' ');
   const next = { ...current, schemaVersion: 1, ownership: 'CUP_CANONICAL', playerKey: current?.playerKey || `client:${clientId}`,
-    clientId: current?.clientId || clientId, phoneNorm: current?.phoneNorm || null, name,
+    clientId: current?.clientId || clientId, phoneNorm: current?.phoneNorm || null, name, nameSearch,
     ratingNumeric: replay.ratingNumeric, rating: replay.rating,
     baseline: { eventId: replay.baselineEventId, at: replay.baselineAt,
       ratingNumeric: [...existingEvents, ...calculated.events].find(e => e.id === replay.baselineEventId)?.change.after ?? null },

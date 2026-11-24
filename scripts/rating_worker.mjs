@@ -31,6 +31,7 @@ import {
   buildTournamentRatingRevision,
   buildTournamentStartOverrideEvent,
   eventAppliesToCanonicalState,
+  normalizeRatingPlayerName,
   normalizeRatingPhone,
   ratingGradeFromNumeric,
   replayPlayerRatingEvents,
@@ -353,6 +354,7 @@ async function writeIdentityProjection(db, identity, nowIso, dryRun, pendingEven
     clientId: mergedIdentity.clientId,
     phoneNorm: mergedIdentity.phoneNorm,
     name: mergedIdentity.name,
+    nameSearch: normalizeRatingPlayerName(mergedIdentity.name),
     ratingNumeric: replay.ratingNumeric,
     rating: replay.rating,
     baseline: {
@@ -430,6 +432,7 @@ async function reconcileCompatibilityProjection(db, nowIso, dryRun) {
             clientId: state.clientId || null,
             phoneNorm: state.phoneNorm || null,
             name: state.name,
+            nameSearch: normalizeRatingPlayerName(state.name),
             ratingNumeric: state.ratingNumeric,
             rating: state.rating,
             baseline: state.baseline,

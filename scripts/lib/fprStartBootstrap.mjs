@@ -1,4 +1,4 @@
-import { replayPlayerRatingEvents, ratingGradeFromNumeric } from '../../src/services/player-rating/ledger.ts';
+import { normalizeRatingPlayerName, replayPlayerRatingEvents, ratingGradeFromNumeric } from '../../src/services/player-rating/ledger.ts';
 import { planFprRatingReconciliation } from '../../src/services/player-rating/fprRatingReplay.ts';
 import { buildFprProjectionOutbox, fprLevelHash } from './fprLevelLedger.mjs';
 const arr=v=>Array.isArray(v)?v:[];
@@ -99,7 +99,9 @@ export async function initializeFprStarts(db,client,ids,actorId,now=new Date().t
         }
         if(!replay||!valid(replay.ratingNumeric))fail('FPR_START_HISTORY_INVALID',id);
         const history=event?[event]:events,baseline=history.find(e=>e.id===replay.baselineEventId);
-        const state={schemaVersion:1,ownership:'CUP_CANONICAL',playerKey:key,clientId:canonicalId,phoneNorm:compat?.phoneNorm||null,name:compat?.name||baseline?.player?.name||'Игрок',
+        const name = compat?.name || baseline?.player?.name || 'Игрок';
+        const state={schemaVersion:1,ownership:'CUP_CANONICAL',playerKey:key,clientId:canonicalId,phoneNorm:compat?.phoneNorm||null,
+          name,nameSearch:normalizeRatingPlayerName(name),
           ratingNumeric:replay.ratingNumeric,rating:replay.rating,identityAliases:{clientIds:aliases,phoneNorms:phones,playerKeys:keys},
           baseline:{eventId:replay.baselineEventId,at:replay.baselineAt,ratingNumeric:baseline?.change.after},
           lastEventId:replay.lastEventId,lastEventType:replay.lastEventType,lastEventAt:replay.lastEventAt,
