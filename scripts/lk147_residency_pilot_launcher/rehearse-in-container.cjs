@@ -85,9 +85,17 @@ if (raPacket) {
   graphs.ra497 = reviewed;
 }
 const v7 = { ...v6, schema: 7, pilotRa497Sha256: ra497Sha256 };
+const genderRetrySha256 = '6812c12a5d51fa51713a9b368353dd2ab5afe2110889c3fa9a8e0c82dd4d6da7';
+const retryPacket = process.argv[3];
+if (retryPacket) {
+  const reviewed = fs.readFileSync(retryPacket);
+  assert.equal(hash(reviewed), genderRetrySha256, 'LK1 retry graph does not match the reviewed bytes');
+  graphs.genderRetry = reviewed;
+}
+const v8 = { ...v7, schema: 8, genderRetrySha256 };
 const manifest = value => write(policy, JSON.stringify(value) + '\n');
 const run = (file, args = [], extraEnv = {}) => spawnSync(file, args, {
-  encoding: 'utf8', env: { ...process.env, ...extraEnv }, timeout: 4000,
+  encoding: 'utf8', env: { ...process.env, ...extraEnv }, timeout: 12000,
 });
 const rawSelect = (command = 'select', extraEnv = {}) => run('/usr/local/bin/node', [selector, command], extraEnv);
 function expectRefusal(result, code) {
@@ -272,3 +280,23 @@ if (raPacket) {
 manifest(v6);
 checkLaunch('kids-booking', true, true, 'pilot', 'preview');
 console.log('PASS: exact RA approval, retained profiles, unrelated graph refusal, and schema 6 rollback');
+
+manifest(v8);
+for (const name of ['pilot', 'successor', 'quote', 'kids-booking']) {
+  checkLaunch(name, true, true, 'pilot', 'preview');
+}
+if (raPacket) checkLaunch('ra497', true, true, 'pilot', 'preview');
+selectGraph('unknown');
+expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+for (const value of [undefined, hash('arbitrary graph'), ra497Sha256]) {
+  manifest({ ...v8, genderRetrySha256: value });
+  expectRefusal(rawSelect(), 'PROFILES_INVALID');
+}
+if (retryPacket) {
+  manifest(v7);
+  selectGraph('genderRetry');
+  expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+  manifest(v8);
+  checkLaunch('genderRetry', true, true, 'pilot', 'preview');
+}
+console.log('PASS: exact LK1 retry hash, previous admitted graphs, and rejection of unrelated graphs');
