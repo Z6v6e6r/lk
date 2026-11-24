@@ -170,7 +170,7 @@ test('live RA recovery verifies exact recent full-price and promo invoices beyon
  for (const mut of [
   t=>{t.id = '00000000-0000-4000-8000-000000000099'},
   t=>{t.client.id = '00000000-0000-4000-8000-000000000099'},
-  t=>{t.client.phone = '+79000000001'},
+  t=>{t.client.phone = phone.replace(/0$/, '1')},
   t=>{t.products[0].id = tools.DCR_PRODUCT},
   t=>{t.products[0].id = '3b4806f1-6f9a-46df-a7d7-45075b4e7274'},
   t=>{t.status = 'PAID'}, t=>{t.processingStatus = 'PENDING'},
