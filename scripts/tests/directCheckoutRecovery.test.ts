@@ -42,7 +42,7 @@ async function guardFixture() {
  let mutate=()=>{};
  const window={localStorage:{getItem:(k:string)=>storage.get(k)??null,setItem:(k:string,v:string)=>storage.set(k,v),removeItem:(k:string)=>storage.delete(k)}};
  const navigator={locks:{request:async(k:string,_options:unknown,fn:(lock:object|null)=>unknown)=>{if(active.has(k))return fn(null);active.add(k);try{if(k===zeroKey)lockMutation();return await fn({});}finally{active.delete(k);}}}};
- const api=load('components/subscription-storefront/promoCodeAttempt.ts',{checkoutSessionToken:()=>viva,isDirectRecoveryProduct:(id: string) => id === product,parseZeroAttempt,legacyZeroOffersForProduct:()=>['friendship-two-hours'],readAuthToken:()=>actor,readSubscriptionPromoTransactionPaid:async()=>false,apiConfirmTournamentSubscriptionPurchase:async()=>({}),readClosedDirectCheckout:async(p:string,id:string,current:()=>boolean)=>{calls.proof++;assert.equal(p,product);assert.equal(id,transaction);assert.ok(active.has(key));mutate();return closed&&current();}},{window,navigator});
+ const api=load('components/subscription-storefront/promoCodeAttempt.ts',{...directProducts,checkoutSessionToken:()=>viva,isDirectRecoveryProduct:(id: string) => id === product,parseZeroAttempt,legacyZeroOffersForProduct:()=>['friendship-two-hours'],readAuthToken:()=>actor,readSubscriptionPromoTransactionPaid:async()=>false,apiConfirmTournamentSubscriptionPurchase:async()=>({}),readClosedDirectCheckout:async(p:string,id:string,current:()=>boolean)=>{calls.proof++;assert.equal(p,product);assert.equal(id,transaction);assert.ok(active.has(key));mutate();return closed&&current();}},{window,navigator});
  const key=await api.subscriptionPromoAttemptKey(product,phone);
  const shared={kind:'ordinary',transactionId:transaction,paymentRef:ref};
  const zero={key:'friendship-two-hours',paymentRef:ref,transactionId:transaction,state:'pending'};
@@ -75,4 +75,66 @@ test('Viva-only actor drift during awaited offer lock retains shared and Zero gu
  const f = await guardFixture(); f.setLockMutation(() => f.changeViva());
  await assert.rejects(f.buy()); assert.equal(f.calls.proof, 1); assert.equal(f.calls.create, 0);
  assert.ok(f.storage.has(f.key)); assert.ok(f.storage.has(zeroKey));
+});
+
+
+test('RA asks for version 2 and releases an old promo marker only with exact fresh RA closure', async () => {
+ let requestCount = 0;
+ const response = closure();
+ Object.assign(response.directCheckoutClosure, { version: 2, productId: ra, operationId: undefined });
+ const recovery = load('components/subscription-storefront/directCheckoutRecovery.ts', {
+  ...directProducts, checkoutSessionToken: () => 'actor', getServ2Origin: () => 'https://fixture.invalid',
+  request: async (_: string, options: {body: string}) => {
+   requestCount++;
+   assert.deepEqual(JSON.parse(options.body), { directCheckoutRecoveryVersion: 2, transactionId: transaction });
+   return { status: 200, error: null, data: response };
+  },
+ });
+ const rows = new Map<string, string>();
+ const ownKey = await guardFixture().then(f => f.api.subscriptionPromoAttemptKey(ra, phone));
+ rows.set(ownKey, JSON.stringify({ transactionId: transaction }));
+ const promo = load('components/subscription-storefront/promoCodeAttempt.ts', {
+  ...directProducts, checkoutSessionToken: () => 'actor', readAuthToken: () => 'actor',
+  isDirectRecoveryProduct: (id: string) => id === ra,
+  legacyZeroOffersForProduct: () => [], readSubscriptionPromoTransactionPaid: async () => false,
+  readClosedDirectCheckout: recovery.readClosedDirectCheckout,
+ }, {
+  window: {localStorage: { getItem: (k: string) => rows.get(k) ?? null, removeItem: (k: string) => rows.delete(k) }},
+  navigator: {locks: {request: async (_: string, __: unknown, callback: (lock: object) => unknown) => callback({})}},
+ });
+ Object.assign(response.directCheckoutClosure, { productId: product });
+ await assert.rejects(promo.withSubscriptionPromoLock(ra, phone, () => assert.fail('foreign product unblocked'), true));
+ assert.equal(rows.has(ownKey), true);
+ Object.assign(response.directCheckoutClosure, { productId: ra });
+ assert.equal(await promo.withSubscriptionPromoLock(ra, phone, () => 'create after click', true), 'create after click');
+ assert.equal(rows.has(ownKey), false);
+ assert.equal(requestCount, 2);
+ rows.set(ownKey, '{}');
+ await assert.rejects(promo.withSubscriptionPromoLock(ra, phone, () => assert.fail('unknown attempt unblocked'), true));
+ assert.equal(rows.get(ownKey), '{}');
+ assert.equal(requestCount, 2);
+});
+
+test('RA keeps frozen recovery on explicit older-server rejection only', async () => {
+ const versions: number[] = [];
+ let refusal = {status: 400, error: {raw: {code: 'INVALID_CHECKOUT_RECOVERY'}}, data: null};
+ const api = load('components/subscription-storefront/directCheckoutRecovery.ts', {
+  ...directProducts, checkoutSessionToken: () => 'actor', getServ2Origin: () => 'https://fixture.invalid',
+  request: async (_: string, options: {body: string}) => {
+   const version = JSON.parse(options.body).directCheckoutRecoveryVersion;
+   versions.push(version);
+   if (version === 2) return refusal;
+   const proof = closure();
+   proof.directCheckoutClosure.productId = ra;
+   return {status: 200, error: null, data: proof};
+  },
+ });
+ assert.equal(await api.readClosedDirectCheckout(ra, transaction, () => true), true);
+ assert.deepEqual(versions, [2, 1]);
+ for (const [status, code] of [[429, 'CHECKOUT_RECOVERY_BUSY'], [409, 'CHECKOUT_RECOVERY_UNAVAILABLE'], [400, 'OTHER']] as const) {
+  versions.length = 0;
+  refusal = {status, error: {raw: {code}}, data: null};
+  assert.equal(await api.readClosedDirectCheckout(ra, transaction, () => true), false);
+  assert.deepEqual(versions, [2]);
+ }
 });

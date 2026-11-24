@@ -1,3 +1,4 @@
+import { TOURNAMENT_SUBSCRIPTION_DIRECT_PRODUCT_IDS } from '../../utils/tournamentSubscriptionCatalog';
 import { checkoutSessionToken } from './zeroCheckoutSession';
 import { isDirectRecoveryProduct, readClosedDirectCheckout } from './directCheckoutRecovery';
 import { parseZeroAttempt } from './zeroCheckoutCustody';
@@ -66,8 +67,11 @@ export async function hasSubscriptionPromoAttempt(productId: string, phone: stri
       // A completed prior purchase no longer blocks a later renewal.
       return !await releaseProvenPaid();
     }
+    // Direct promo purchases have always stored only a transaction ID. A
+    // related ordinary Zero Block marker is checked separately above.
+    const directPromo = productId === TOURNAMENT_SUBSCRIPTION_DIRECT_PRODUCT_IDS.ra && record?.kind === undefined;
     if (allowClosedRelease && navigator.locks && checkoutActor && !locallyPaid && isDirectRecoveryProduct(productId)
-      && record?.kind === 'ordinary' && record.paid !== true && typeof transactionId === 'string') {
+      && (record?.kind === 'ordinary' || directPromo) && record?.paid !== true && typeof transactionId === 'string') {
       // The caller holds the account/product lock. Never adopt an explicit different transaction.
       if (represented.some(row => { const zero = parseZeroAttempt(row.raw, row.key.replace('padlhub_zero_checkout_attempt_v1:', '')); return zero?.transactionId && zero.transactionId !== transactionId; })) return true;
       const unchanged = () => readAuthToken() === actor && checkoutSessionToken() === checkoutActor && window.localStorage.getItem(key) === raw

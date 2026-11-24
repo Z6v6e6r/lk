@@ -62,3 +62,43 @@ prefixes and carries forward the frozen Friendship 2.0 configuration. Compare
 the two-function delta, rehearse the confirmation route and its inverse, then
 follow the reviewed release contract. Publish the storefront after backend
 confirmation readback.
+
+## Live verification for the standard RA invoice
+
+Version 2 of `POST /lk/tournaments/summer-subscription/confirm` accepts only
+`{ directCheckoutRecoveryVersion: 2, transactionId }`. The version itself
+selects standard RA. No product, phone, payment amount, or provider URL is taken
+from the browser. The handler resolves the current Viva profile first, then reads
+the exact admin transaction and verifies the same owner, standard RA product,
+matching totals and one WIDGET card leg. Full-price and discounted invoices use
+the same checks. A terminal expiry, the existing grace period and absence of
+payment, processing, issuance, refund or receipt evidence are required. The
+route admits at most six new version-2 checks per second per Node-RED process.
+It returns fresh proof of that invoice's closure without returning a provider
+link, phone number or credential.
+
+RA card recovery and the promo button can lift a marker only for the stored,
+exact transaction under the existing actor/product and offer locks. A promo
+marker without a transaction ID remains pending. Reconciliation does not create
+an invoice. A dedicated user action must confirm a fresh quote before sending a
+new purchase. This closes a known attempt in this browser; it does not infer
+the status of a different invoice or provide cross-device purchase deduplication.
+
+Prepare from a fresh 147 workspace with both original frozen proof sets:
+
+```sh
+node scripts/patch_direct_checkout_recovery.mjs --enable-ra-live \
+  /absolute/fresh-live-workspace /absolute/new-candidate.json
+```
+
+The patcher verifies the three function prefixes, legacy suffixes, shared
+transport and wires. The candidate changes only those three function bodies
+and preserves both frozen version-1 proof sets. The initial install and
+`--extend-ra` modes keep version 2 disabled. Publish the verified backend
+before the storefront. A storefront that encounters an explicit v1 protocol
+rejection can use the existing frozen check; timeout, throttle and denial do not
+trigger a second provider lookup. Verify an expired standard RA purchase with
+and without a discount, an active or paid invoice, a second actor, a concurrent
+tab and a lost response before activation. Rollback must preserve the original
+v1 recovery path and the exact browser markers, so an unresolved payment
+continues to block another create.

@@ -2,7 +2,8 @@ if (Object.prototype.hasOwnProperty.call(msg, '_directCheckoutRecovery')) {
   const ctx=msg._directCheckoutRecovery;
   const respond=(status,payload)=>dcrResponse(msg,status,payload,2,5);
   const unavailable=()=>respond(409,{ok:false,code:'CHECKOUT_RECOVERY_UNAVAILABLE'});
-  if(!dcrObject(ctx)||ctx.version!==1||!dcrProduct(ctx.productId)||!dcrUUID(ctx.transactionId)||!Number.isSafeInteger(ctx.startedAt)
+  if(!dcrObject(ctx)||(ctx.version!==1 && !(DCR_LIVE_RA_ENABLED && ctx.version===2))||!dcrProduct(ctx.productId)
+    ||ctx.version===2&&ctx.productId!==DCR_RA_PRODUCT||!dcrUUID(ctx.transactionId)||!Number.isSafeInteger(ctx.startedAt)
     ||Date.now()<ctx.startedAt||Date.now()-ctx.startedAt>15000||msg.error||Number(msg.statusCode)!==200
     ||msg.responseUrl!==ctx.expectedUrl||!dcrObject(msg.payload))return unavailable();
   const data=msg.payload;
@@ -24,9 +25,12 @@ if (Object.prototype.hasOwnProperty.call(msg, '_directCheckoutRecovery')) {
   }
   if(ctx.stage==='TRANSACTION') {
     const t=dcrObject(data.data)?data.data:data;
-    if(t.id!==ctx.transactionId||!dcrFacts(t,ctx.actor,ctx.proof,ctx.cutoff,Date.now(),ctx.productId))return unavailable();
-    return respond(200,{ok:true,directCheckoutClosure:{version:1,productId:ctx.productId,transactionId:ctx.transactionId,
-      state:'PROVIDER_CARD_EXPIRED_UNPAID',operationId:ctx.operationId,paid:false,closed:true,verifiedAt:new Date().toISOString()}});
+    const now=Date.now();
+    if(t.id!==ctx.transactionId)return unavailable();
+    const closed=ctx.version===2?dcrExpiredInvoice(t,ctx.actor,now,DCR_RA_PRODUCT,true):dcrFacts(t,ctx.actor,ctx.proof,ctx.cutoff,now,ctx.productId);
+    if(!closed)return unavailable();
+    return respond(200,{ok:true,directCheckoutClosure:{version:ctx.version,productId:ctx.productId,transactionId:ctx.transactionId,
+      state:'PROVIDER_CARD_EXPIRED_UNPAID',...(ctx.version===1?{operationId:ctx.operationId}:{}),paid:false,closed:true,verifiedAt:new Date(now).toISOString()}});
   }
   return unavailable();
 }

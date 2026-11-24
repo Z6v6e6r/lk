@@ -11,6 +11,12 @@ const installedPrefix = {
   resolve: 'fecef9101c089ec54c571a1c31515a4b1cf0169cdacb4a2da9f0b526f04dba91',
   router: '34180ac4e483bcd00c4456e59098e683d894b571781c77c4c06ec38d777ec322',
 };
+// Normalized prefixes of the reviewed frozen-proof generation, before version 2.
+const installedFrozenPrefix = {
+  prepare: 'b66ca795a6e4079563459849d8a76e3ef9283dd182aad9ad810915fd646e6592',
+  resolve: '58f0f7dd6a572cab612686e6a1ce27546050fb2caf52c7b7196cad47f8962db9',
+  router: '9b76abe384a3953bae5966c43763846ddff5bd9ead6fb7ec8390e7a223d10c93',
+};
 const directory = new URL('./nodered_direct_checkout_recovery_nodes/', import.meta.url);
 export const DIRECT_RECOVERY_NODES = {
   prepare: { id: '1da9af2cb4f7db52', outputs: 3, preimage: '99bfb856eaef7891ac1fdd88c2421b12859527adb8011778bba5ee0e954a4873' },
@@ -61,20 +67,28 @@ export function validateDirectProofs(config) {
   }
   return config;
 }
-export function directRecoveryPrefix(kind,...configs) {
+function recoveryPrefix(kind, liveRa, configs) {
   if (!DIRECT_RECOVERY_NODES[kind]) throw Error('Unknown recovery stage');
-  const common = fs.readFileSync(new URL('common.js',directory),'utf8');
+  const common = fs.readFileSync(new URL('common.js',directory),'utf8').replace('__DIRECT_CHECKOUT_LIVE_RA__', String(liveRa));
   let block = fs.readFileSync(new URL(kind+'.js',directory),'utf8');
   if (kind === 'resolve') block = block.replace('__DIRECT_CHECKOUT_PROOFS__', JSON.stringify(configs.map(validateDirectProofs)));
   return '// BEGIN bounded direct checkout recovery '+kind+'\n'+common+'\n'+block+'// END bounded direct checkout recovery '+kind+'\n';
 }
+export function directRecoveryPrefix(kind, ...configs) {
+  return recoveryPrefix(kind, false, configs);
+}
+
+export function liveRaRecoveryPrefix(kind, ...configs) {
+  return recoveryPrefix(kind, true, configs);
+}
+
 export function patchDirectRecoveryBody(kind,body,config,expected=DIRECT_RECOVERY_NODES[kind]?.preimage) {
   if (sha(body)!==expected || body.includes('// BEGIN bounded direct checkout recovery')) throw Error('Direct recovery source preimage drift');
   const result=directRecoveryPrefix(kind,config)+body;
   new Function('msg','env','global','node','flow',result);
   return result;
 }
-function readInstalledStage(kind, body) {
+function readInstalledStage(kind, body, requireRa = false) {
   const end = '// END bounded direct checkout recovery ' + kind + '\n';
   const split = body.indexOf(end);
   if (split < 0) throw Error('Installed direct recovery prefix missing: ' + kind);
@@ -83,13 +97,18 @@ function readInstalledStage(kind, body) {
   const match = kind === 'resolve' ? /,(config|configs)=(\{[^\n]+\}|\[[^\n]+\]);/.exec(prefix) : null;
   const saved = match ? JSON.parse(match[2]) : null;
   const configs = Array.isArray(saved) ? saved : saved ? [saved] : [];
-  if (kind === 'resolve' && (configs.length !== 1 || configs[0]?.productId !== FRIENDSHIP_TWO_HOURS)) {
-    throw Error('Installed Friendship 2.0 proof set missing');
-  }
+  if (kind === 'resolve' && (configs.length !== (requireRa ? 2 : 1) || configs[0]?.productId !== FRIENDSHIP_TWO_HOURS
+    || requireRa && configs[1]?.productId !== RA)) throw Error('Installed checkout proof sets mismatch');
+  configs.forEach(validateDirectProofs);
   const normalized = match ? prefix.replace(match[0], ',config=__DIRECT_CHECKOUT_PROOFS__;') : prefix;
   const historical = (!match || match[1] === 'config') && sha(normalized) === installedPrefix[kind];
-  if (!historical && prefix !== directRecoveryPrefix(kind, ...configs)) throw Error('Installed direct recovery prefix drift: ' + kind);
-  return { suffix, config: configs.length ? validateDirectProofs(configs[0]) : null };
+  const frozen = sha(normalized) === installedFrozenPrefix[kind];
+  const reviewed = frozen || historical && (!requireRa || kind === 'prepare');
+  if (!reviewed && prefix !== directRecoveryPrefix(kind, ...configs)) {
+    throw Error('Installed direct recovery prefix drift: ' + kind);
+  }
+  if (requireRa && sha(suffix)!==DIRECT_RECOVERY_NODES[kind].preimage) throw Error('Direct recovery legacy suffix drift: ' + kind);
+  return { suffix, config: configs[0] ?? null, configs };
 }
 
 export function extendDirectRecovery(flow, raConfig) {
@@ -113,17 +132,44 @@ export function extendDirectRecovery(flow, raConfig) {
   return flow.map(item => replacement.has(item.id) ? {...item,func:replacement.get(item.id)} : item);
 }
 
+export function enableLiveRaRecovery(flow) {
+  verifyDirectTopology(flow);
+  const stages = new Map();
+  for (const [kind, spec] of Object.entries(DIRECT_RECOVERY_NODES)) {
+    const node = flow.find(item => item.id === spec.id);
+    if (node?.type !== 'function' || node.outputs !== spec.outputs) throw Error('Direct recovery node contract drift');
+    stages.set(kind, readInstalledStage(kind, node.func, true));
+  }
+  const configs = stages.get('resolve').configs;
+  const replacements = new Map();
+  for (const [kind, stage] of stages) {
+    const func = liveRaRecoveryPrefix(kind, ...configs) + stage.suffix;
+    new Function('msg','env','global','node','flow',func);
+    replacements.set(DIRECT_RECOVERY_NODES[kind].id, func);
+  }
+  return flow.map(node => replacements.has(node.id) ? { ...node, func: replacements.get(node.id) } : node);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const args = process.argv.slice(2);
   const extend = args[0] === '--extend-ra';
-  const [workspace,proofPath,output] = extend ? args.slice(1) : args;
-  if (!workspace || !proofPath || !output || fs.existsSync(output)) throw Error('Usage: [--extend-ra] <fresh live workspace> <private frozen proofs> <new candidate>');
-  const st=fs.lstatSync(proofPath);
-  if (!st.isFile() || st.isSymbolicLink() || st.nlink!==1 || (st.mode&0o777)!==0o600 || st.uid!==process.getuid()) throw Error('Unsafe private proof file');
-  const config=validateDirectProofs(JSON.parse(fs.readFileSync(proofPath,'utf8'))),verified=verifyWorkspace(workspace);
+  const liveRa = args[0] === '--enable-ra-live';
+  const [workspace, proofPath, output] = liveRa ? [args[1], null, args[2]] : extend ? args.slice(1) : args;
+  if (!workspace || !output || (!liveRa && !proofPath) || fs.existsSync(output)) {
+    throw Error('Usage: --enable-ra-live <fresh live workspace> <new candidate> OR [--extend-ra] <fresh live workspace> <private frozen proofs> <new candidate>');
+  }
+  let config;
+  if (proofPath) {
+    const st=fs.lstatSync(proofPath);
+    if (!st.isFile() || st.isSymbolicLink() || st.nlink!==1 || (st.mode&0o777)!==0o600 || st.uid!==process.getuid()) throw Error('Unsafe private proof file');
+    config=validateDirectProofs(JSON.parse(fs.readFileSync(proofPath,'utf8')));
+  }
+  const verified=verifyWorkspace(workspace);
   const source=JSON.parse(fs.readFileSync(path.join(verified.workspace,'input/source.flow.json'),'utf8'));
   let flow;
-  if (extend) {
+  if (liveRa) {
+    flow=enableLiveRaRecovery(source);
+  } else if (extend) {
     flow=extendDirectRecovery(source,config);
   } else {
     if (config.productId !== FRIENDSHIP_TWO_HOURS) throw Error('Initial overlay requires Friendship 2.0');
@@ -137,5 +183,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   }
   fs.writeFileSync(output,JSON.stringify(flow,null,2)+'\n',{mode:0o600,flag:'wx'});
   const changedNodeIds=flow.filter((node,index)=>node!==source[index]).map(node=>node.id);
-  console.log(JSON.stringify({changedNodeIds,proofSetSha256:sha(JSON.stringify(config)),proofCount:Object.keys(config.proofs).length,candidateSha256:sha(fs.readFileSync(output))}));
+  console.log(JSON.stringify({changedNodeIds,...(config?{proofSetSha256:sha(JSON.stringify(config)),proofCount:Object.keys(config.proofs).length}:{}),candidateSha256:sha(fs.readFileSync(output))}));
 }

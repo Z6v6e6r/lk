@@ -18,6 +18,7 @@ function dcrSha(text) {
   return state.map(x=>x.toString(16).padStart(8,'0')).join('');
 }
 const DCR_PRODUCT = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';
+const DCR_LIVE_RA_ENABLED = __DIRECT_CHECKOUT_LIVE_RA__;
 const DCR_RA_PRODUCT = 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759';
 const dcrDomain = productId => 'direct-checkout-closure:v1\0iSkq6G\0' + productId + '\0';
 const dcrProduct = id => id === DCR_PRODUCT || id === DCR_RA_PRODUCT;
@@ -33,28 +34,39 @@ function dcrOwner(t) {
   const phones=values.map(dcrPhone),phone=phones[0];
   return dcrUUID(id)&&phone&&phones.every(x=>x===phone)?{id,phone}:null;
 }
-function dcrFacts(t,actor,proof,cutoff,now,productId = DCR_PRODUCT) {
-  if(!dcrProduct(productId)||!dcrObject(t)||!dcrUUID(t.id)||!dcrObject(actor)||!dcrObject(proof)||!dcrDate(cutoff))return false;
-  const id=t.id,owner=dcrOwner(t),line=t.products?.[0],card=t.cardPaymentInfo,domain=dcrDomain(productId);
+function dcrExpiredInvoice(t,actor,now,productId,liveRa=false) {
+  if(!dcrProduct(productId)||!dcrObject(t)||!dcrUUID(t.id)||!dcrObject(actor))return false;
+  const id=t.id,owner=dcrOwner(t),line=t.products?.[0],card=t.cardPaymentInfo;
   if(dcrExact([t.id,t.uuid,t.transactionId])!==id||dcrExact([t.status,t.state,t.paymentStatus,t.transactionStatus])!=='UNPAID')return false;
-  if(!owner||owner.id!==actor.id||owner.phone!==actor.phone||dcrSha(domain+id+'\0'+owner.id+'\0'+owner.phone)!==proof.ownerBinding)return false;
+  if(!owner||owner.id!==actor.id||owner.phone!==actor.phone)return false;
   if(!Array.isArray(t.products)||t.products.length!==1||!dcrObject(line)||dcrExact([line.id,line.uuid,line.productId,line.product?.id,t.productId])!==productId||line.type!=='SUBSCRIPTION'||line.count!==1)return false;
-  if(line.cost!==(productId===DCR_RA_PRODUCT?2380000:1980000)||!Number.isSafeInteger(line.discount)||line.discount<0||line.discount>=line.cost
+  const costValid=liveRa?Number.isSafeInteger(line.cost)&&line.cost>0:line.cost===(productId===DCR_RA_PRODUCT?2380000:1980000);
+  if(!costValid||!Number.isSafeInteger(line.discount)||line.discount<0||line.discount>=line.cost
     ||t.sum!==line.cost||t.discount!==line.discount||t.toPay!==line.cost-line.discount||t.deposit!==0)return false;
   for(const key of ['paymentDate','paidAt','refundDate','refundedAt','refundSum','refundedAmount','paidAmount','paidAmountMinor','paidAmountKopecks','clientSubscriptionId'])if(t[key])return false;
   if(t.paid===true||line.used===true||line.refunded===true||line.clientSubscriptionId||t.clientSubscription?.id||line.clientSubscription?.id)return false;
   if(!dcrObject(card)||Object.keys(card).some(k=>!['paymentId','paymentUrl','status','declineOutcome','declineReason','declineMessage'].includes(k)))return false;
   if(card.status!=='REJECTED'||card.declineOutcome!=='EXPIRED'||card.declineReason!=='OTHER'||card.declineMessage!==null||typeof card.paymentId!=='string'||!/^[a-zA-Z0-9-]{1,100}$/.test(card.paymentId))return false;
   if(typeof card.paymentUrl!=='string'||!/^https:\/\/pay\.vivacrm\.ru\/[A-Za-z0-9_/?=&.%~-]+$/.test(card.paymentUrl)||card.paymentUrl.length>4096)return false;
-  if(dcrSha(domain+id+'\0'+card.paymentId+'\0'+card.paymentUrl)!==proof.paymentBinding)return false;
-  if(!['SMS','WIDGET','CARD'].includes(t.paymentMethod)||!Array.isArray(t.paymentLegs)||dcrSha(domain+id+'\0'+JSON.stringify({paymentMethod:t.paymentMethod,paymentLegs:t.paymentLegs,discountMinor:t.discount,toPayMinor:t.toPay}))!==proof.legsBinding)return false;
-  if(productId===DCR_RA_PRODUCT && (t.paymentMethod!=='WIDGET'||t.discount!==0||t.paymentLegs.length!==1
+  if(!['SMS','WIDGET','CARD'].includes(t.paymentMethod)||!Array.isArray(t.paymentLegs))return false;
+  if(productId===DCR_RA_PRODUCT && (t.paymentMethod!=='WIDGET'||!liveRa&&t.discount!==0||t.paymentLegs.length!==1
     ||t.paymentLegs[0]?.source!=='CARD_ONLINE'||t.paymentLegs[0]?.amountKopecks!==t.toPay))return false;
+  if(liveRa && (t.transactionFormat !== 'SUBSCRIPTION'
+    || (t.currency != null && t.currency !== 'RUB')
+    || Object.keys(t.paymentLegs[0]).some(key => !['source','amountKopecks'].includes(key))))return false;
   if(t.processingStatus!==null||t.possibleDoublePayment!==false||t.receiptPending!==false||t.acquiringAuthCode||t.acquiringRrnCode)return false;
   for(const key of ['purchasedServices','receipts','executedSurcharges','paidByOtherSaleBookingIds','transactionRefunds'])if(!Array.isArray(t[key])||t[key].length)return false;
   for(const key of ['cardPaymentStatus','payments','cardPayments','paymentAttempts','payment','paymentInfo'])if(t[key]!=null)return false;
-  if(!dcrDate(t.createDate)||!dcrDate(t.paymentDueDate)||t.createDate!==proof.createdAt||t.paymentDueDate!==proof.expiresAt||Date.parse(t.createDate)>=Date.parse(cutoff))return false;
+  if(!dcrDate(t.createDate)||!dcrDate(t.paymentDueDate)||Date.parse(t.paymentDueDate)<Date.parse(t.createDate))return false;
   return now>=Math.max(Date.parse(t.paymentDueDate),Date.parse(t.createDate)+25*60000)+60000;
+}
+function dcrFacts(t,actor,proof,cutoff,now,productId=DCR_PRODUCT) {
+  if(!dcrObject(proof)||!dcrDate(cutoff)||!dcrExpiredInvoice(t,actor,now,productId))return false;
+  const domain=dcrDomain(productId)+t.id, card=t.cardPaymentInfo;
+  return dcrSha(domain+'\0'+actor.id+'\0'+actor.phone)===proof.ownerBinding
+    && dcrSha(domain+'\0'+card.paymentId+'\0'+card.paymentUrl)===proof.paymentBinding
+    && dcrSha(domain+'\0'+JSON.stringify({paymentMethod:t.paymentMethod,paymentLegs:t.paymentLegs,discountMinor:t.discount,toPayMinor:t.toPay}))===proof.legsBinding
+    && t.createDate===proof.createdAt && t.paymentDueDate===proof.expiresAt && Date.parse(t.createDate)<Date.parse(cutoff);
 }
 function dcrResponse(msg,status,payload,index,count) {
   const output=Array(count).fill(null);
