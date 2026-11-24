@@ -41,11 +41,21 @@ export function createGameCreateScheduleServer(options = {}) {
       const bearer = req.headers.authorization;
       if (!/^Bearer [A-Za-z\d._~-]{20,12000}$/.test(bearer ?? ""))
         return send(401, { code: "GAME_CREATE_SCHEDULE_AUTH_REQUIRED" });
+      const verifiedActor = options.verifyDelegation?.({
+        delegation: req.headers["x-subscription-actor-delegation"],
+        url,
+        bearer,
+        correlationId,
+      });
+      if (options.verifyDelegation && !verifiedActor)
+        return send(401, { code: "GAME_CREATE_SCHEDULE_AUTH_REQUIRED" });
       const now = Date.now();
       for (const [key, entry] of limits) {
         if (entry.until <= now) limits.delete(key);
       }
-      const key = createHash("sha256").update(bearer).digest("hex");
+      const key = verifiedActor
+        ? verifiedActor.tenantId + ":" + verifiedActor.sub
+        : createHash("sha256").update(bearer).digest("hex");
       const existing = limits.get(key);
       if ((existing?.count ?? 0) >= 24 || (!existing && limits.size >= 128))
         return send(429, { code: "GAME_CREATE_SCHEDULE_RATE_LIMITED" });
