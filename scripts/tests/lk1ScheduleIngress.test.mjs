@@ -20,6 +20,7 @@ test("schedule ingress has one exact GET and strips incoming credentials other t
   assert.match(location, /proxy_cache off;/);
   assert.match(location, /add_header Cache-Control "private, no-store" always;/);
   assert.match(location, /access_log off;/);
+  assert.match(location, /error_log \/dev\/null;/);
 });
 
 test("separate systemd process binds loopback using an immutable release directory", () => {
