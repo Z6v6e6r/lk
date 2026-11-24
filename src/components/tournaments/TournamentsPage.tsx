@@ -18,8 +18,6 @@ import {
   apiFetchPadelLiveRatings,
   apiFetchProfile,
   apiFetchTournamentHistory,
-  apiFetchTournamentParticipants,
-  apiRefreshTournamentParticipants,
   apiFetchTournamentBroadcastState,
   isTournamentExerciseCategory,
   apiSaveOnboardingLevel,
@@ -46,6 +44,8 @@ import type {
 import { TENANT_KEY } from "../../consts/api_config";
 import {
   apiFetchTournamentMechanicsSourceList,
+  apiFetchTournamentMechanicsRoster,
+  apiRefreshTournamentMechanicsRoster,
   apiRefreshTournamentMechanicsFromViva,
 } from "../../utils/tournamentSignupApi";
 import {
@@ -1548,6 +1548,8 @@ type TournamentParticipantEntry = ParticipantEntry & {
   bookingId: string | null;
   clientId: string | null;
   isOrganizerSlot?: boolean;
+  confirmationPending?: boolean;
+  paymentStatus?: ExerciseBooking["paymentStatus"];
 };
 
 type TournamentRosterMode = "bookings" | "manual";
@@ -2322,8 +2324,7 @@ function TournamentDetailsModal({
         setError(null);
       }
 
-      const result = await apiFetchTournamentParticipants(activeParticipantExerciseId, {
-        retries: 0,
+      const result = await apiFetchTournamentMechanicsRoster(activeParticipantExerciseId, {
         signal: controller.signal,
       });
       if (stopped || controller.signal.aborted) return;
@@ -2400,8 +2401,7 @@ function TournamentDetailsModal({
     setError(null);
     setParticipantLoadNotice(null);
 
-    const result = await apiFetchTournamentParticipants(nextTournamentId, {
-      retries: 0,
+    const result = await apiFetchTournamentMechanicsRoster(nextTournamentId, {
       signal: controller.signal,
     });
     if (controller.signal.aborted) return;
@@ -2471,9 +2471,7 @@ function TournamentDetailsModal({
       message: "Запрашиваем актуальный состав в Viva…",
     });
 
-    const result = await apiRefreshTournamentParticipants(requestedExerciseId, {
-      signal: controller.signal,
-    });
+    const result = await apiRefreshTournamentMechanicsRoster(requestedExerciseId, controller.signal);
     if (controller.signal.aborted) return;
     if (participantActionControllerRef.current === controller) {
       participantActionControllerRef.current = null;
@@ -2596,13 +2594,15 @@ function TournamentDetailsModal({
   const baseParticipantEntries = useMemo((): TournamentParticipantEntry[] => {
     return normalizeTournamentParticipantBookings(participants).map((participant, idx) => ({
       id: participant.client?.id ?? participant.id ?? `participant-${idx}`,
-      bookingId: participant.id ?? null,
+      bookingId: participant.mechanicsRosterOnly ? null : participant.id ?? null,
       clientId: participant.client?.id ?? null,
       name: getClientName(participant, idx),
       photo: participant.client?.photo ?? null,
       phone: null,
       spot: participant.spot ?? null,
       rating: participant.rating ?? null,
+      confirmationPending: participant.confirmationPending,
+      paymentStatus: participant.paymentStatus,
     }));
   }, [participants]);
 
@@ -3752,6 +3752,12 @@ function TournamentDetailsModal({
                               <div className="tournament-participant-note">
                                 Тренер / организатор занимает свободный слот
                               </div>
+                            )}
+                            {participant.confirmationPending && (
+                              <div className="tournament-participant-note">ЦУП проверяет подтверждение</div>
+                            )}
+                            {participant.paymentStatus === "PAID" && (
+                              <div className="tournament-participant-note">Оплачено</div>
                             )}
                             {ratingSaveErrors[participant.id] && (
                               <div className="tournament-participant-note error">

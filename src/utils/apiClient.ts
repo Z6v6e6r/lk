@@ -2884,6 +2884,9 @@ export interface ExerciseBooking {
   client?: ExerciseBookingClient;
   rating?: string;
   ratingSource?: string | null;
+  mechanicsRosterOnly?: boolean;
+  confirmationPending?: boolean;
+  paymentStatus?: "PAID" | "UNPAID";
 }
 
 export interface TournamentHistoryParticipant {
