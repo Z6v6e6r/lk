@@ -53,7 +53,7 @@ const oldEnv = ['RETAINED_FIRST=one\n', 'RETAINED_SECOND=two\n'];
 retained.forEach((file, index) => write(file, oldEnv[index]));
 write(control, 'off\n');
 write(credential, 'fixture-tournament-token\n');
-const graphs = Object.fromEntries(['source', 'candidate', 'pilot', 'successor', 'quote'].map(name =>
+const graphs = Object.fromEntries(['source', 'candidate', 'pilot', 'successor', 'quote', 'kids-booking'].map(name =>
   [name, JSON.stringify([{ id: name, type: 'tab' }]) + '\n']));
 const selectGraph = name => write(graph, graphs[name] ?? '[]\n');
 const env = {
@@ -76,6 +76,7 @@ const v2 = { schema: 2, sourceSha256: hash(graphs.source), candidateSha256: hash
 const v3 = { ...v2, schema: 3, pilotSha256: hash(graphs.pilot), pilotEnvSha256: hash(encode(env)) };
 const v4 = { ...v3, schema: 4, pilotSuccessorSha256: hash(graphs.successor) };
 const v5 = { ...v4, schema: 5, pilotQuoteSha256: hash(graphs.quote) };
+const v6 = { ...v5, schema: 6, pilotKidsBookingSha256: hash(graphs['kids-booking']) };
 const manifest = value => write(policy, JSON.stringify(value) + '\n');
 const run = (file, args = [], extraEnv = {}) => spawnSync(file, args, {
   encoding: 'utf8', env: { ...process.env, ...extraEnv }, timeout: 4000,
@@ -206,4 +207,30 @@ selectGraph('unknown');
 expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
 manifest(v4);
 checkLaunch('successor', true, true, 'pilot', 'preview');
-console.log('PASS: retained graphs, exact pilot quote graph, rollback, credential isolation and drift checks');
+manifest(v5);
+selectGraph('kids-booking');
+expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+manifest(v6);
+checkLaunch('source', false, false);
+checkLaunch('candidate', true, false);
+for (const name of ['pilot', 'successor', 'quote', 'kids-booking']) {
+  checkLaunch(name, true, true, 'pilot', 'preview');
+}
+expectRefusal(rawSelect('read-candidate-token'), 'INVOCATION_INVALID');
+expectRefusal(rawSelect('select', { LK_RESIDENCY_LIFECYCLE_CREATE_ENABLED: 'true' }), 'PILOT_ENV_INHERITED_OVERRIDE');
+write(pilotEnv, '# drift\n' + encode(env));
+expectRefusal(rawSelect(), 'PILOT_ENV_HASH_MISMATCH');
+write(pilotEnv, encode(env));
+for (const value of [undefined, [v6.pilotKidsBookingSha256], v6.pilotKidsBookingSha256.toUpperCase(),
+  v6.sourceSha256, v6.candidateSha256, v6.pilotSha256, v6.pilotSuccessorSha256, v6.pilotQuoteSha256]) {
+  manifest({ ...v6, pilotKidsBookingSha256: value });
+  expectRefusal(rawSelect(), 'PROFILES_INVALID');
+}
+manifest({ ...v6, extraSha256: hash('unreviewed') });
+expectRefusal(rawSelect(), 'PROFILES_INVALID');
+manifest(v6);
+selectGraph('unknown');
+expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+manifest(v5);
+checkLaunch('successor', true, true, 'pilot', 'preview');
+console.log('PASS: all retained launcher profiles, exact kids booking graph, rollback and fail-closed guards');
