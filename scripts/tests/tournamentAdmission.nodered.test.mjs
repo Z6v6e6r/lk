@@ -21,11 +21,11 @@ function response(ctx, status, payload) {
   return step(ctx, payload, { statusCode: status, url: ctx.tournamentAdmissionRequestedUrl,
     responseUrl: ctx.tournamentAdmissionRequestedUrl, method: 'POST', followRedirects: false, maxRedirects: 0 });
 }
-function refused(extra = {}) {
+function refused(extra = {}, code = 'LEVEL_NOT_ALLOWED') {
   const ctx = context(extra);
   step(ctx, { acknowledged: true, insertedId: 'op-key' });
   assert.equal(ctx.step, 'tournament_admission');
-  const result = response(ctx, 403, { code: 'LEVEL_NOT_ALLOWED' });
+  const result = response(ctx, 403, { code });
   return { ctx, ...result };
 }
 
@@ -82,6 +82,38 @@ test('a durable level refusal remains terminal through the managed HTTP finalize
   }
   const contradictory = { ...denial, payload: { ...denial.payload, details: { code: 'PLAYER_LEVEL_UNKNOWN' } } };
   assert.equal(finalize(contradictory)[1].statusCode, 202);
+});
+test('a durable LK1 gender refusal offers one successor after the prior visit guard is released', () => {
+  for (const code of ['PLAYER_GENDER_REQUIRED', 'GENDER_NOT_ALLOWED']) {
+    const operationId = 'lk-subscription-synthetic';
+    const { ctx, msg } = refused({ operationId, caller: 'http', managedAction: 'BOOK_TOURNAMENT' }, code);
+    const row = { ...context({ operationId }), _id: 'op-key', ...msg.payload[1].$set };
+    step(ctx, {});
+    step(ctx, [row]);
+    ctx.lk1 = { fingerprint: 'original-quote' };
+    const guard = { _id: 'lk1-daily-visit:["fixture","subscription","2026-11-18"]',
+      kind: 'LK1_DAILY_VISIT_V1', ownerOperationKey: 'op-key', ownerOperationId: operationId };
+    assert.equal(step(ctx, [guard]).msg.payload[1].$set.admissionRelease.operationId, operationId);
+    step(ctx, {});
+    guard.admissionRelease = { operationKey: 'op-key', operationId };
+    const denial = step(ctx, [guard]).msg;
+    const [, result] = finalize(denial);
+    assert.equal(result.statusCode, 409);
+    assert.deepEqual(result.payload.details, {
+      code: 'SUBSCRIPTION_BOOKING_RELEASED', operationId, nextOperationId: operationId + ':rejoin:1',
+    });
+    const forged = { ...denial, _subscriptionBooking: { ...ctx, tournamentGenderRejoin: undefined } };
+    assert.equal(finalize(forged)[1].statusCode, 202);
+    const predicate = new Function(source.slice(source.indexOf('const tournamentAdmissionGenderCode'),
+      source.indexOf('const tournamentAdmissionTerminal')) +
+      source.slice(source.indexOf('const tournamentAdmissionEffectFields'), source.indexOf('const tournamentAdmissionDurableUpdate')) +
+      '\nreturn tournamentAdmissionGenderRefused;')();
+    assert.equal(predicate(row), true);
+    for (const unsafe of [{ state: 'RELEASED' }, { upstreamAttemptedAt: row.failedAt }, { tournamentAdmission: {} },
+      { lk1: { transactionAttemptedAt: row.failedAt } }, { operationId: operationId + ':rejoin:2' }]) {
+      assert.equal(predicate({ ...row, ...unsafe }), false);
+    }
+  }
 });
 test('timeout is unknown and releases nothing; forged owner actor never authorizes preaccept', () => {
   for (const kind of ['timeout', 'wrong-actor']) {

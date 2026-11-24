@@ -505,6 +505,7 @@ const lk1SafeCancelledUnpaidSuccessor = operation => {
       && operation.rejoinPredecessor?.operationId === previousId));
 };
 const lk1HttpReleaseAllowsRejoin = operation => {
+  if (typeof tournamentAdmissionGenderRefused === "function" && tournamentAdmissionGenderRefused(operation)) return true;
   if (lk1SafeCancelledUnpaidSuccessor(operation)) return true;
   const identity = lk1HttpRejoinIdentity(operation.operationId);
   const previous = lk1HttpRejoinPrevious(operation.operationId);
@@ -525,7 +526,7 @@ if (ctx.step === "lk1_http_rejoin_predecessor_find") {
   const previous = msg.payload[0];
   ctx.lk1Rejoin = { operationId: previousId, rootOperationId: lk1HttpRejoinIdentity(ctx.operationId).base,
     bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey || previous.lk1.seatRelease?.jobKey,
-    releasedAt: previous.releasedAt };
+    releasedAt: previous.releasedAt ?? previous.failedAt };
   delete ctx.lk1IngressReplay;
   ctx.step = "lk1_profile_continue";
 }

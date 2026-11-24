@@ -1,3 +1,13 @@
+if (responseStatus === 409 && ctx?.step === "tournament_admission_guard_read"
+  && ctx.caller === "http" && ctx.action === "book" && ctx.category === "tournament"
+  && ctx.managedAction === "BOOK_TOURNAMENT"
+  && !ctx.tournamentAbortRecovery && !ctx.tournamentAdmission && !ctx.tournamentDispatchGranted
+  && payload.details?.code === "SUBSCRIPTION_BOOKING_RELEASED"
+  && payload.details.operationId === ctx.operationId && typeof payload.details.nextOperationId === "string"
+  && ctx.tournamentGenderRejoin === JSON.stringify([ctx.operationKey, ctx.operationId, ctx.tenantKey,
+    ctx.actorClientId, ctx.clientSubscriptionId, ctx.exerciseId, ctx.lk1?.fingerprint, payload.details.nextOperationId])) {
+  return [null, msg];
+}
 if (responseStatus === 403 && ctx?.step === "tournament_admission_guard_read"
   && ctx.caller === "http" && ctx.action === "book" && ctx.category === "tournament"
   && ctx.managedAction === "BOOK_TOURNAMENT"

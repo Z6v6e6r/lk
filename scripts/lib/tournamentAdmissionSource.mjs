@@ -17,6 +17,18 @@ export function patchTournamentAdmissionFinalizeSource(source) {
   const managedFinalizer = 'if (ctx?.lk1) {';
   return once(source, managedFinalizer, read('level_refusal_finalize.js') + '\n' + managedFinalizer);
 }
+/** Apply the LK1 retry to an installed owner without rebuilding other live booking policies. */
+export function updateInstalledTournamentGenderRetry(source, finalizer, previousAdmission, previousFinalizer) {
+  if (!previousFinalizer.trim() || !previousAdmission.trim()) throw Error('Empty tournament retry preimage');
+  source = updateTournamentAdmissionCopay(source, previousAdmission);
+  source = once(source, '  if (lk1SafeCancelledUnpaidSuccessor(operation)) return true;',
+    '  if (typeof tournamentAdmissionGenderRefused === "function" && tournamentAdmissionGenderRefused(operation)) return true;\n'
+    + '  if (lk1SafeCancelledUnpaidSuccessor(operation)) return true;');
+  source = once(source, '    releasedAt: previous.releasedAt };\n  delete ctx.lk1IngressReplay;\n  ctx.step = "lk1_profile_continue";',
+    '    releasedAt: previous.releasedAt ?? previous.failedAt };\n  delete ctx.lk1IngressReplay;\n  ctx.step = "lk1_profile_continue";');
+  finalizer = once(finalizer, previousFinalizer.trim(), read('level_refusal_finalize.js').trim());
+  return { source, finalizer };
+}
 // Apply LAST to a composed booking owner, including the daily guard. Never regenerate a live graph.
 export function patchTournamentAdmissionSource(source) {
   if (source.includes('const tournamentAdmissionGate =')) throw Error('Tournament admission already installed');
