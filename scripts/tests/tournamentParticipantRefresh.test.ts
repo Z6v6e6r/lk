@@ -110,6 +110,8 @@ test("manual refresh replaces the visible roster only with a confirmed server sn
   assert.equal(shouldApplyTournamentParticipantRefreshRoster("stale_if_error", null), false);
   assert.equal(shouldApplyTournamentParticipantRefreshRoster("overload", null), false);
   assert.equal(shouldApplyTournamentParticipantRefreshRoster("unavailable", null), false);
+  assert.equal(shouldApplyTournamentParticipantRefreshRoster("cooldown", null), false);
+  assert.equal(shouldApplyTournamentParticipantRefreshRoster("cooldown", "2026-08-04T14:00:00.000Z"), true);
 
   const source = fs.readFileSync(
     "src/components/tournaments/TournamentsPage.tsx",
@@ -186,7 +188,7 @@ test("modal polling is scoped, abortable, idle-aware and does not block backgrou
   assert.match(source, /if \(!isOpen \|\| !participantExerciseId \|\| rosterMode !== "bookings"\)/);
   assert.match(
     source,
-    /apiFetchTournamentParticipants\(activeParticipantExerciseId, \{\s*retries: 0,\s*signal: controller\.signal,/,
+    /apiFetchTournamentMechanicsRoster\(activeParticipantExerciseId, \{\s*signal: controller\.signal,/,
   );
   assert.match(source, /activeController\?\.abort\(\);/);
   assert.match(source, /window\.clearTimeout\(timerId\);/);
@@ -233,6 +235,6 @@ test("manual participant refresh is authenticated, observable and retry-free", (
   );
   assert.match(
     pageSource,
-    /!participantExerciseId\s*\|\| !canRefreshParticipantsFromViva\s*\|\| rosterMode !== "bookings"[\s\S]*apiRefreshTournamentParticipants\(requestedExerciseId/,
+    /!participantExerciseId\s*\|\| !canRefreshParticipantsFromViva\s*\|\| rosterMode !== "bookings"[\s\S]*apiRefreshTournamentMechanicsRoster\(requestedExerciseId/,
   );
 });

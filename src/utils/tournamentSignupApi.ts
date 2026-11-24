@@ -11,6 +11,8 @@ import {
 import {
   apiFetchSubscriptionDailyLimitBookings,
   apiFetchSubscriptions,
+  apiFetchTournamentParticipants,
+  apiRefreshTournamentParticipants,
   apiFetchSubscriptioName,
   apiReleaseSubscriptionBookingClaim,
   apiCancelBooking,
@@ -18,8 +20,11 @@ import {
   getServ2Origin,
   request,
   type ApiResult,
+  type ExerciseBooking,
+  type TournamentParticipantsRefreshResult,
   type UserProfileType,
 } from "./apiClient";
+import { isStableTournamentClientId } from "./tournamentRosterSearch";
 import { readAuthToken } from "./authTokenStorage";
 import { SubscriptionRejoinTracker } from "./subscriptionRejoin";
 import { isTrialGroupTraining, trialGroupCheckoutOperationId, clearTrialGroupCheckoutOperations } from "./trialGroupTraining";
@@ -2211,6 +2216,81 @@ export async function apiRefreshTournamentMechanicsFromViva(
         }
       : null,
   };
+}
+
+async function requestTournamentMechanicsRoster(
+  exerciseId: string, refresh: boolean, signal?: AbortSignal,
+): Promise<ApiResult<TournamentParticipantsRefreshResult>> {
+  const method = refresh ? "POST" : "GET";
+  const result = await request<unknown>(
+    `/tournaments/${encodeURIComponent(exerciseId)}/mechanics-roster`,
+    {
+      ...buildTournamentApiRequestOptions({ allowFallback: false }),
+      method,
+      auth: true,
+      headers: phabHeaders(),
+      retries: 0,
+      cacheTtlMs: 0,
+      signal,
+    },
+  );
+  const { status, error } = result;
+  if (error) return { status, error, data: null };
+  const payload = isRecord(result.data) ? result.data : null;
+  if (payload?.exerciseId !== exerciseId.toLowerCase() || !Array.isArray(payload.participants)
+    || typeof payload.fetchedAt !== "string" || !Number.isFinite(Date.parse(payload.fetchedAt))) {
+    return { status, error: { status, message: "ЦУП вернул некорректный состав турнира" }, data: null };
+  }
+  const participants: ExerciseBooking[] = [];
+  for (const row of payload.participants) {
+    if (!isRecord(row) || !isStableTournamentClientId(row.id)
+      || (row.vivaBookingId !== undefined && !isStableTournamentClientId(row.vivaBookingId))
+      || typeof row.name !== "string" || !row.name.trim()) {
+      return { status, error: { status, message: "ЦУП вернул некорректные данные участника" }, data: null };
+    }
+    participants.push({
+      id: typeof row.vivaBookingId === "string" ? row.vivaBookingId : row.id,
+      spot: typeof row.spot === "number" ? row.spot : undefined,
+      client: {
+        id: row.id,
+        firstName: row.name,
+        photo: typeof row.avatarUrl === "string" ? row.avatarUrl : undefined,
+      },
+      rating: typeof row.levelLabel === "string" ? row.levelLabel : undefined,
+      mechanicsRosterOnly: typeof row.vivaBookingId !== "string",
+      confirmationPending: row.confirmationPending === true,
+      paymentStatus: row.paymentStatus === "PAID" || row.paymentStatus === "UNPAID" ? row.paymentStatus : undefined,
+    });
+  }
+  return {
+    status,
+    error: null,
+    data: {
+      exerciseId, participants, refreshedAt: payload.fetchedAt,
+      refreshed: refresh && payload.refreshed !== false,
+      reason: payload.refreshed === false ? "cooldown" : "refreshed",
+      retryAfterMs: typeof payload.retryAfterMs === "number" ? payload.retryAfterMs : null,
+    },
+  };
+}
+
+function isUnlinkedMechanicsRoster(result: ApiResult<unknown>) {
+  const raw = result.error?.raw;
+  return result.status === 404 && isRecord(raw) && raw.code === "TOURNAMENT_ROSTER_UNLINKED";
+}
+
+export async function apiFetchTournamentMechanicsRoster(
+  exerciseId: string, options: { signal?: AbortSignal },
+): Promise<ApiResult<ExerciseBooking[]>> {
+  const { signal } = options;
+  const result = await requestTournamentMechanicsRoster(exerciseId, false, signal);
+  if (!isUnlinkedMechanicsRoster(result)) return { ...result, data: result.data?.participants ?? null };
+  return apiFetchTournamentParticipants(exerciseId, { retries: 0, signal });
+}
+
+export async function apiRefreshTournamentMechanicsRoster(exerciseId: string, signal?: AbortSignal) {
+  const result = await requestTournamentMechanicsRoster(exerciseId, true, signal);
+  return isUnlinkedMechanicsRoster(result) ? apiRefreshTournamentParticipants(exerciseId, { signal }) : result;
 }
 
 export async function apiFetchTournamentSignupDetail(

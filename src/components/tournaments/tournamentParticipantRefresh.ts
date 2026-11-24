@@ -28,7 +28,8 @@ export function shouldApplyTournamentParticipantRefreshRoster(
   refreshedAt: string | null | undefined,
 ) {
   return reason === "refreshed"
-    || (reason === "stale_if_error" && Boolean(String(refreshedAt || "").trim()));
+    || ((reason === "stale_if_error" || reason === "cooldown")
+      && Number.isFinite(Date.parse(refreshedAt ?? "")));
 }
 
 export type TournamentParticipantRefreshOutcome =
@@ -69,6 +70,8 @@ export function buildTournamentParticipantRosterFingerprint(
     lastName: normalizeFingerprintValue(participant.client?.lastName),
     middleName: normalizeFingerprintValue(participant.client?.middleName),
     rating: normalizeFingerprintValue(participant.rating),
+    confirmationPending: participant.confirmationPending === true,
+    paymentStatus: participant.paymentStatus ?? null,
     spot: Number.isFinite(participant.spot) ? Number(participant.spot) : null,
   }));
 
