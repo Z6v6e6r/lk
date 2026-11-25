@@ -2,7 +2,7 @@
 const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "confirm", { sourceHash: "a956766184f16afb4b6185fd5956776ba7a98c00140a44f207e4b470ebccf324", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "confirm", { sourceHash: "17734b68120ad12cf9295e3b06e6c5e57b2dda6d352e6b9be681fd80ac281dc8", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });

@@ -457,21 +457,24 @@ export function patchPaymentRouter(source) {
   ctx.step = "claim_read";`,
     "payment claim write acknowledgement",
   );
+  // The surcharge successor shares the same claim writer inside a function.
+  // Keep the earlier top-level claim layout valid for reviewed older preimages.
+  const indent = next.includes("const claimVerifiedTransaction = (ctx, status) => {") ? "  " : "";
   next = replaceOnce(
     next,
-    `    $setOnInsert: {
-      transactionId: ctx.transactionId,`,
-    `    $setOnInsert: {
-      tenantKey: ctx.tenantKey,
-      transactionId: ctx.transactionId,`,
+    `${indent}    $setOnInsert: {
+${indent}      transactionId: ctx.transactionId,`,
+    `${indent}    $setOnInsert: {
+${indent}      tenantKey: ctx.tenantKey,
+${indent}      transactionId: ctx.transactionId,`,
     "tenant-bound payment claim write",
   );
   next = replaceOnce(
     next,
-    `  { upsert: true },
-];`,
-    `  { upsert: true, writeConcern: { w: "majority", j: true }, maxTimeMS: 5000 },
-];`,
+    `${indent}  { upsert: true },
+${indent}];`,
+    `${indent}  { upsert: true, writeConcern: { w: "majority", j: true }, maxTimeMS: 5000 },
+${indent}];`,
     "durable payment claim write",
   );
   return next;
