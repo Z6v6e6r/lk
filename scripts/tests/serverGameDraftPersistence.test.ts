@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import ts from "typescript";
 import {
   isExactServerGameDraftReadback,
   persistServerGameDraftWithReadback,
@@ -189,7 +191,7 @@ const paidSurcharge = {
       clientId: surchargeBinding.clientId, transactionId: surchargeBinding.transactionId }],
   } },
 };
-const absent = { data: null, status: 200, error: { message: "empty", raw: { code: "GAME_PAYMENT_LOOKUP_EMPTY" } } };
+const absent = { data: null, status: 200, error: null, missing: true } as const;
 
 test("surcharge recovery reuses an exact paid card before attempting any draft write", async () => {
   const result = await persistServerGameDraftWithReadback(paymentRef, payload, [bookingId], {
@@ -215,6 +217,10 @@ test("surcharge recovery writes one draft after proved absence and resumes via d
 test("surcharge recovery never writes on mismatch, unknown absence or stale wizard owner", async () => {
   for (const existing of [
     ok({ ...paidSurcharge, booking: { ...paidSurcharge.booking, exerciseId: "other" } }),
+    ok({ ...paidSurcharge, metadata: { ...paidSurcharge.metadata, paymentRef: "another-payment-ref",
+      splitPayment: { ...paidSurcharge.metadata.splitPayment,
+        payments: paidSurcharge.metadata.splitPayment.payments.map(payment => ({ ...payment, paymentRef: "another-payment-ref" })) },
+    } }),
     ok({ ...paidSurcharge, payment: { ...paidSurcharge.payment, amount: 2100 } }),
     ok(null),
     { data: null, status: 409, error: { message: "collision" } },
@@ -225,5 +231,32 @@ test("surcharge recovery never writes on mismatch, unknown absence or stale wiza
       lookupDraft: async () => existing,
     }, { ...surchargeBinding, canWrite: () => existing !== absent });
     assert.equal(result.record, null);
+  }
+});
+
+test("the surcharge lookup requires a complete union and reports separate alias collisions", async () => {
+  const source = fs.readFileSync("src/utils/serverGameDraftPersistence.ts", "utf8");
+  const ast = ts.createSourceFile("serverGameDraftPersistence.ts", source, ts.ScriptTarget.ES2022, true);
+  const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "lookupSplitSurchargeDraft");
+  assert.ok(fn);
+  const js = ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const alias = { ...paidSurcharge, id: "other-alias" };
+  for (const data of [
+    { games: [], complete: false, total: 0 },
+    { games: [], complete: true, total: 1 },
+    { games: [paidSurcharge, alias], complete: true, total: 2 },
+    { games: [alias], complete: true, total: 1 },
+    { games: [], complete: true, total: 0 },
+  ]) {
+    const lookup = new Function("apiFetchPadelGamesByBookingReferences", js + "\nreturn lookupSplitSurchargeDraft;")(
+      async (ref: string, ids: string[]) => {
+        assert.equal(ref, paymentRef);
+        assert.deepEqual(ids, [bookingId]);
+        return { data, status: 200, error: null };
+      },
+    );
+    const result = await lookup(paymentRef, [bookingId]);
+    assert.equal(result.missing === true, data.complete && data.total === 0);
+    assert.equal(result.data, data.games.length === 1 ? alias : null);
   }
 });

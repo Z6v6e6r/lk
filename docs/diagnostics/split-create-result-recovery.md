@@ -46,7 +46,9 @@ the canonical reference when tabs used different local references.
 
 After recovery, LK resumes with the original reference and the settings from the
 active wizard. For a subscription with a surcharge, the browser checks for an
-existing card before creating a draft. An outstanding payment can open only the
+existing card by both booking and payment reference before creating a draft. A
+conflicting alias or incomplete lookup leaves the attempt pending. An outstanding
+payment can open only the
 original, still-valid checkout after the draft is read back. A paid surcharge
 returns the original amount, transaction and paid time with no checkout URL.
 

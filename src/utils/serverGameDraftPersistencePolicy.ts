@@ -5,7 +5,8 @@ import type {
 
 export interface ServerGameDraftApiResult {
   data: PadelGameRecord | null;
-  error: { message: string; raw?: unknown } | null;
+  error: { message: string } | null;
+  missing?: true;
   status: number | null;
 }
 
@@ -138,10 +139,9 @@ export async function persistServerGameDraftWithReadback(
   if (splitSurcharge) {
     const existing = await dependencies.lookupDraft(paymentRef, bookingIds);
     if (isExpectedDraft(existing.data)) return { record: existing.data, error: null };
-    // The combined read returns HTTP 200 with an empty list for absence.
-    // Collisions, transport errors and mismatching records cannot authorize a write.
-    const raw = existing.error?.raw as { code?: unknown } | undefined;
-    if (existing.status !== 200 || existing.data || raw?.code !== "GAME_PAYMENT_LOOKUP_EMPTY") {
+    // Only complete independent reads by booking and payment reference can
+    // establish absence. A combined query could hide a conflicting alias.
+    if (existing.status !== 200 || existing.data || existing.error || existing.missing !== true) {
       return { record: null, error: existing.error?.message || "Найденная игра не соответствует исходной операции" };
     }
   }

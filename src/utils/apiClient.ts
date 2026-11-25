@@ -8525,7 +8525,6 @@ export async function apiFetchPadelGameByPaymentRef(
   }
 
   let lastStatus: ApiStatus = 200;
-  let provedEmpty = false;
   let lastRequestError: ApiError | null = null;
   let lastRequestErrorStatus: ApiStatus = 200;
   for (const query of lookupQueries) {
@@ -8543,11 +8542,6 @@ export async function apiFetchPadelGameByPaymentRef(
     }
 
     const records = extractPadelGameRecordList(response.data);
-    const empty = Array.isArray(response.data)
-      ? response.data.length === 0
-      : isRecord(response.data) && Array.isArray(response.data.games)
-        && response.data.games.length === 0 && response.data.total === 0;
-    provedEmpty = response.status === 200 && empty;
     if (records.length > 1) {
       return {
         data: null as PadelGameRecord | null,
@@ -8566,11 +8560,7 @@ export async function apiFetchPadelGameByPaymentRef(
 
   return {
     data: null as PadelGameRecord | null,
-    error: lastRequestError ?? {
-      status: lastStatus,
-      message: "Игра по paymentRef не найдена",
-      ...(provedEmpty ? { raw: { code: "GAME_PAYMENT_LOOKUP_EMPTY" } } : {}),
-    },
+    error: lastRequestError ?? { status: lastStatus, message: "Игра по paymentRef не найдена" },
     status: lastRequestError ? lastRequestErrorStatus : lastStatus,
   };
 }
