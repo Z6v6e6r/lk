@@ -88,3 +88,41 @@ test("gateway forwards a vetted query once and never follows payment redirects",
   assert.equal((await fetch(local + `/lk-pilot/${version}/release.json`)).status, 200);
   assert.equal((await fetch(local + `/lk-pilot/${"b".repeat(24)}/release.json`)).status, 404);
 });
+
+test("gateway gives an exact game subscription quote more time and aborts abandoned reads", async (t) => {
+  const deadlines = [];
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, "timeout", ms => {
+    deadlines.push(ms);
+    return timeout(ms);
+  });
+  let activate;
+  const activated = new Promise(resolve => { activate = resolve; });
+  let abort;
+  const aborted = new Promise(resolve => { abort = resolve; });
+  const pageOrigin = "https://padlhub.ru";
+  const server = createPilotServer({ directory: tmpdir(), pageOrigin, forward: async (url, init) => {
+    if (url.href === quotes) return Response.json({ quotes: [] });
+    activate();
+    await new Promise(resolve => init.signal.addEventListener("abort", resolve, { once: true }));
+    abort();
+    return Response.json({});
+  }});
+  t.after(() => server.close());
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const endpoint = `http://127.0.0.1:${server.address().port}/lk-pilot-api`;
+  const headers = { origin: pageOrigin, "x-lk-pilot-target": quotes, "content-type": "application/json" };
+  const response = await fetch(endpoint, { method:"POST", headers, body: JSON.stringify({
+    target: { targetKind: "EXISTING_GAME", gameId: "fixture", startsAt: "2026-11-27T12:00:00+03:00", durationMinutes: 120 },
+  }) });
+  assert.equal(response.status, 200);
+  await response.json();
+  const request = new AbortController();
+  const pending = fetch(endpoint, { signal: request.signal, headers: { ...headers, "x-lk-pilot-target": lk+"/lk/games?public=true" } });
+  const rejected = assert.rejects(pending, { name: "AbortError" });
+  await activated;
+  request.abort();
+  await Promise.all([rejected, aborted]);
+  assert.deepEqual(deadlines, [29_000, 8_000]);
+});

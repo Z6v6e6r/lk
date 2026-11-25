@@ -19,6 +19,15 @@ export const money = (minor: number) => new Intl.NumberFormat("ru-RU", {
   style: "currency", currency: "RUB", maximumFractionDigits: 2,
 }).format(minor / 100);
 
+function confirmedGameDiscount(quote: SubscriptionPricePreview): string | null {
+  if (!quote.discounted || quote.amountMinor === null || !quote.basePriceMinor) return null;
+  const base = quote.basePriceMinor;
+  const discount = Math.round((base - quote.amountMinor) * 100 / base);
+  return discount > 0 && discount < 100 && base - Math.floor(base * discount / 100) === quote.amountMinor
+    ? `Скидка ${discount}% на запись`
+    : "Применена скидка подписки";
+}
+
 export function gameBookingOptions(
   subscriptions: readonly { subscriptionId: string; name: string }[],
   previews: Readonly<Record<string, SubscriptionPricePreview>>,
@@ -38,7 +47,7 @@ export function gameBookingOptions(
       ? "Участие по подписке без доплаты"
       : freeMinutes > 0 && quote.paidMinutes > 0
         ? `${freeMinutes} мин бесплатно · доплата за ${quote.paidMinutes} мин`
-        : quote.discounted ? "Применена скидка подписки" : null;
+        : confirmedGameDiscount(quote);
     options.push({ id: subscriptionId, name, amountMinor: quote.amountMinor, basePriceMinor: quote.basePriceMinor, benefit });
   }
   return { options, explanations: [...new Set(explanations)] };

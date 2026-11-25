@@ -16,7 +16,9 @@ const replacements: Record<string, Record<string, string>> = {
       regularDetail={splitPaymentSelected ? \`Моя доля 1/\${splitShareCount} стоимости\` : "Оплата всего корта без применения льгот"}
       terms={splitPaymentSelected ? undefined : "Стоимость оплачивается полностью за всех игроков. Льготы не расходуются."}
       {...(splitPaymentSelected ? gameBookingOptions(splitSubscriptionPaymentOptions, publicSplitPricePreview.bySubscriptionId, duration) : {})}
-      loading={splitPaymentSelected && splitSubscriptionsLoading} />`,
+      loading={splitPaymentSelected && (splitSubscriptionsLoading || publicSplitPricePreview.state === "checking")}
+      onRefresh={splitPaymentSelected && splitHasSubscriptionPaymentOptions && publicSplitPricePreview.state === "unavailable"
+        ? publicSplitPricePreview.refresh : undefined} />`,
     "team-card game-create-payment-method-card": "<></>",
   },
   "GroupSchedulePage.tsx": {

@@ -60,3 +60,18 @@ test("event methods use the server's discount and suppress expired quotes", () =
   ]);
   assert.deepEqual(result.explanations, ["Подписка с лимитом · Лимит исчерпан"]);
 });
+
+test("second game with a confirmed discounted quarter shows 30% and 2,800 rubles", () => {
+  const quote: SubscriptionPricePreview = {
+    state: "available", label: "По подписке", detail: "Доплата за 120 мин",
+    amountMinor: 280_000, basePriceMinor: 400_000, paidMinutes: 120, discounted: true,
+  };
+  const result = gameBookingOptions([{ subscriptionId: "owned", name: "Дружба 2.0" }], { owned: quote }, 120);
+  assert.deepEqual(result.options, [{
+    id: "owned", name: "Дружба 2.0", amountMinor: 280_000, basePriceMinor: 400_000,
+    benefit: "Скидка 30% на запись",
+  }]);
+  const ambiguous = gameBookingOptions([{ subscriptionId: "owned", name: "Дружба 2.0" }],
+    { owned: { ...quote, amountMinor: 280_001 } }, 120);
+  assert.equal(ambiguous.options[0]?.benefit, "Применена скидка подписки");
+});

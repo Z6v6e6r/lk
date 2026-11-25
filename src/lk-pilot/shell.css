@@ -5,3 +5,15 @@
 .lk-pilot-head a { flex: 0 0 auto; border-radius: 10px; padding: 6px 10px; color: #53477b; font-size: 13px; text-decoration: none; }
 .lk-pilot-head a[aria-current='page'] { background: #f0e7ff; color: #3c2690; font-weight: 600; }
 .lk-pilot-session { margin: 0; padding: 10px 16px; background: #f0e7ff; color: #3c2690; font-size: 13px; }
+
+html[data-preview-skin='lk2']:has(.lk-pilot .game-create-summary-card--review),
+html[data-preview-skin='lk2'] body:has(.lk-pilot .game-create-summary-card--review),
+#allrecords:has(.lk-pilot .game-create-summary-card--review) {
+  overflow: clip visible;
+}
+
+.lk-pilot .game-create-summary-card--review {
+  position: sticky;
+  top: max(8px, env(safe-area-inset-top, 0px));
+  z-index: 2;
+}

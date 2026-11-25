@@ -43,7 +43,7 @@ function storeComparisonQuote(category: ComparisonCategory, snapshot: string, sc
 
 export function BookingOptions({
   title, amountMinor, options = [], loading = false, category, regularLabel = "Полная цена",
-  regularDetail, terms = "Можно выбрать один способ записи.", explanations = [],
+  regularDetail, terms = "Можно выбрать один способ записи.", explanations = [], onRefresh,
 }: {
   title: string;
   amountMinor: number | null;
@@ -54,6 +54,7 @@ export function BookingOptions({
   regularDetail?: string;
   terms?: string;
   explanations?: string[];
+  onRefresh?: () => void;
 }) {
   const groupId = useId();
   const scope = usePilotComparisonScope();
@@ -92,13 +93,18 @@ export function BookingOptions({
           </label>
         ))}
       </fieldset>
-      {!choices.length && <p role="status">{loading ? "Проверяем стоимость…" : "Стоимость пока не подтверждена."}</p>}
+      {(loading || !choices.length) && (
+        <p role="status">{loading ? "Проверяем стоимость…" : "Стоимость пока не подтверждена."}</p>
+      )}
       {explanations.length > 0 && (
-        <details className="matrix-unavailable">
+        <details className="matrix-unavailable" open={options.length === 0}>
           <summary>Применимость льгот</summary>
           <ul>{explanations.map((explanation) => <li key={explanation}>{explanation}</li>)}</ul>
         </details>
       )}
+      {onRefresh && <button className="game-summary-edit-button" type="button" onClick={onRefresh}>
+        Обновить стоимость по подпискам
+      </button>}
       <footer className="matrix-booking-footer">
         <button className="matrix-confirm" type="button" disabled>
           {!selected ? "Записаться" : selected.amountMinor === 0 ? "Записаться бесплатно"

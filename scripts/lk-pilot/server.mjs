@@ -90,9 +90,17 @@ export function createPilotServer({ directory, pageOrigin, forward }) {
         headers["x-padlhub-auth-source"] = "lk-keycloak";
         headers["x-padlhub-tenant-key"] = "iSkq6G";
       }
-      const upstream = await requestUpstream(target, {
-        method, headers, body, redirect: "manual", signal: AbortSignal.timeout(8000),
+      // The Node-RED quote pipeline has its own 28-second deadline. Keep the
+      // short timeout for every other upstream and forward each request once.
+      const isSubscriptionQuote = method === "POST" && target.origin === "https://padlhub.su"
+        && target.pathname === "/lk/subscriptions/game-price-preview";
+      if (response.destroyed) return;
+      const downstream = new AbortController();
+      response.once("close", () => {
+        if (!response.writableEnded) downstream.abort();
       });
+      const signal = AbortSignal.any([downstream.signal, AbortSignal.timeout(isSubscriptionQuote ? 29_000 : 8_000)]);
+      const upstream = await requestUpstream(target, { method, headers, body, redirect: "manual", signal });
       if (upstream.status >= 300 && upstream.status < 400) return error(response, 502, "LK_PILOT_UPSTREAM_REDIRECT");
       if (!(upstream.headers.get("content-type") ?? "").includes("application/json")) {
         return error(response, 502, "LK_PILOT_UPSTREAM_RESPONSE");
@@ -100,6 +108,8 @@ export function createPilotServer({ directory, pageOrigin, forward }) {
       const data = await upstream.text();
       response.writeHead(upstream.status, { "content-type": "application/json" }).end(data);
     } catch (failure) {
+      if (response.destroyed) return;
+      if (failure.name === "TimeoutError") return error(response, 504, "LK_PILOT_UPSTREAM_TIMEOUT");
       if (failure.code === "ENOENT") return error(response, 404, "LK_PILOT_ARTIFACT_NOT_FOUND");
       error(response, 502, "LK_PILOT_UNAVAILABLE");
     }
