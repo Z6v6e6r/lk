@@ -16,6 +16,8 @@ const retainedEnvFiles = [
 const ra497Sha256 = '83b9182d12e206a05051d2c666743cbdb8c6f6bfdd48e946bed72a4fa6eaaa08';
 // The LK1 retry release changes only the subscription booking router and finalizer.
 const genderRetrySha256 = '6812c12a5d51fa51713a9b368353dd2ab5afe2110889c3fa9a8e0c82dd4d6da7';
+// CUP staff leave extends only the exact reviewed primary LK1 graph.
+const cupStaffLeaveSha256 = '704bf9e3cf3392a47aca5c5bf5cc66c1acf3d7a755cf5da5f7cb3ffecff05c2d';
 const shaPattern = /^[a-f0-9]{64}$/;
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const stable = (a, b) =>
@@ -99,7 +101,8 @@ function verifyPilotEnv(expectedSha256) {
 function select() {
   const raw = readProtected(path.join(directory, 'profiles.json'), { privateFile: true, limit: 4096 });
   const profiles = JSON.parse(raw.toString('utf8'));
-  const hasGenderRetry = profiles?.schema === 8;
+  const hasCupStaffLeave = profiles?.schema === 9;
+  const hasGenderRetry = hasCupStaffLeave || profiles?.schema === 8;
   const hasPilotRa497 = hasGenderRetry || profiles?.schema === 7;
   const hasPilotKidsBooking = hasPilotRa497 || profiles?.schema === 6;
   const hasPilotQuote = hasPilotKidsBooking || profiles?.schema === 5;
@@ -112,6 +115,7 @@ function select() {
   if (hasPilotKidsBooking) keys.push('pilotKidsBookingSha256');
   if (hasPilotRa497) keys.push('pilotRa497Sha256');
   if (hasGenderRetry) keys.push('genderRetrySha256');
+  if (hasCupStaffLeave) keys.push('cupStaffLeaveSha256');
   if (!profiles || Object.keys(profiles).sort().join(',') !== keys.sort().join(',')
     || (!hasPilot && profiles.schema !== 2) || !shaPattern.test(profiles.sourceSha256)
     || !shaPattern.test(profiles.candidateSha256) || profiles.sourceSha256 === profiles.candidateSha256
@@ -152,6 +156,12 @@ function select() {
       .includes(profiles.genderRetrySha256))) {
     refuse('PROFILES_INVALID');
   }
+  if (hasCupStaffLeave && (profiles.cupStaffLeaveSha256 !== cupStaffLeaveSha256
+    || [profiles.sourceSha256, profiles.candidateSha256, profiles.pilotSha256, profiles.pilotSuccessorSha256,
+      profiles.pilotQuoteSha256, profiles.pilotKidsBookingSha256, profiles.pilotRa497Sha256, profiles.genderRetrySha256]
+      .includes(profiles.cupStaffLeaveSha256))) {
+    refuse('PROFILES_INVALID');
+  }
   for (const [index, filename] of retainedEnvFiles.entries()) {
     const env = readProtected(filename, { privateFile: true, privateDirectory: false, limit: 1024 * 1024 });
     if (sha256(env) !== profiles.retainedEnvSha256[index]) refuse('RETAINED_ENV_HASH_MISMATCH');
@@ -168,7 +178,8 @@ function select() {
     || (hasPilotQuote && digest === profiles.pilotQuoteSha256)
     || (hasPilotKidsBooking && digest === profiles.pilotKidsBookingSha256)
     || (hasPilotRa497 && digest === profiles.pilotRa497Sha256)
-    || (hasGenderRetry && digest === profiles.genderRetrySha256))) {
+    || (hasGenderRetry && digest === profiles.genderRetrySha256)
+    || (hasCupStaffLeave && digest === profiles.cupStaffLeaveSha256))) {
     verifyPilotEnv(profiles.pilotEnvSha256);
     return 'pilot';
   }

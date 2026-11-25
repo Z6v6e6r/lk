@@ -93,6 +93,14 @@ if (retryPacket) {
   graphs.genderRetry = reviewed;
 }
 const v8 = { ...v7, schema: 8, genderRetrySha256 };
+const cupStaffLeaveSha256 = '704bf9e3cf3392a47aca5c5bf5cc66c1acf3d7a755cf5da5f7cb3ffecff05c2d';
+const cupStaffLeavePacket = process.argv[4];
+if (cupStaffLeavePacket) {
+  const reviewed = fs.readFileSync(cupStaffLeavePacket);
+  assert.equal(hash(reviewed), cupStaffLeaveSha256, 'CUP staff leave graph does not match the reviewed bytes');
+  graphs.cupStaffLeave = reviewed;
+}
+const v9 = { ...v8, schema: 9, cupStaffLeaveSha256 };
 const manifest = value => write(policy, JSON.stringify(value) + '\n');
 const run = (file, args = [], extraEnv = {}) => spawnSync(file, args, {
   encoding: 'utf8', env: { ...process.env, ...extraEnv }, timeout: 12000,
@@ -300,3 +308,25 @@ if (retryPacket) {
   checkLaunch('genderRetry', true, true, 'pilot', 'preview');
 }
 console.log('PASS: exact LK1 retry hash, previous admitted graphs, and rejection of unrelated graphs');
+
+
+manifest(v9);
+for (const name of ['pilot', 'successor', 'quote', 'kids-booking']) {
+  checkLaunch(name, true, true, 'pilot', 'preview');
+}
+if (raPacket) checkLaunch('ra497', true, true, 'pilot', 'preview');
+if (retryPacket) checkLaunch('genderRetry', true, true, 'pilot', 'preview');
+selectGraph('unknown');
+expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+for (const value of [undefined, hash('arbitrary graph'), genderRetrySha256]) {
+  manifest({ ...v9, cupStaffLeaveSha256: value });
+  expectRefusal(rawSelect(), 'PROFILES_INVALID');
+}
+if (cupStaffLeavePacket) {
+  manifest(v8);
+  selectGraph('cupStaffLeave');
+  expectRefusal(rawSelect(), 'UNREVIEWED_GRAPH_SHA');
+  manifest(v9);
+  checkLaunch('cupStaffLeave', true, true, 'pilot', 'preview');
+}
+console.log('PASS: exact CUP staff leave hash, rollback graph, and rejection of unrelated graphs');
