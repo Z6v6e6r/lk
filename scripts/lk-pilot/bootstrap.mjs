@@ -1,4 +1,5 @@
 /* global document, HTMLFormElement, location, window, XMLHttpRequest */
+import { normalizedPilotQuery, pilotLocalStorage } from "./isolation.mjs";
 
 import { readPilotTarget } from "./policy.mjs";
 
@@ -16,15 +17,6 @@ function installPilotTransport(apiUrl, nativeFetch) {
       typeof input === "string" ? new URL(input, location.href) : input,
       init,
     );
-    // Keep routine Viva session refresh on the original issuer, outside the proxy.
-    if (request.url === "https://kc.vivacrm.ru/realms/clients/protocol/openid-connect/token"
-      && request.method === "POST" && request.headers.get("content-type") === "application/x-www-form-urlencoded") {
-      const params = new URLSearchParams(await request.clone().text());
-      if (params.getAll("grant_type").length === 1 && params.get("grant_type") === "refresh_token"
-        && params.getAll("client_id").length === 1 && params.get("client_id") === "widget") {
-        return nativeFetch(request, { redirect: "error" });
-      }
-    }
     const target = forward(request.url, request.method);
     if (!target) return new Response(JSON.stringify({ code: "LK_PILOT_REQUEST_BLOCKED" }), {
       status: 403,
@@ -110,6 +102,12 @@ async function start() {
   const integrity = manifest.assets?.[file];
   if (!/^sha384-[A-Za-z0-9+/]{64}$/.test(integrity)) throw new Error("Missing pilot artifact integrity");
 
+  const query = normalizedPilotQuery(location.search);
+  const canonical = pilotPath + (query ? "?" + query : "");
+  if (location.pathname + location.search + location.hash !== canonical) {
+    window.history.replaceState(null, "", canonical);
+  }
+  Object.defineProperty(window, "localStorage", { value: pilotLocalStorage(window.localStorage) });
   installPilotTransport(new URL("/lk-pilot-api", assetBase), nativeFetch);
   installPilotNavigation();
   const base = assetBase.href.replace(/\/$/, "");

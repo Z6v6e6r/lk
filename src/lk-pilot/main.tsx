@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { AuthProvider } from "../context/AuthContext";
+import { PilotSession } from "./PilotSession";
 import { BookingOptions, comparisonCategories, readComparisonQuote } from "./BookingOptions";
 import { AppErrorBoundary } from "../components/UI/AppErrorBoundary";
 import { OverlayScopeProvider } from "../context/OverlayScopeContext";
@@ -76,7 +76,7 @@ document.addEventListener("click", (event) => {
 
 createRoot(root).render(
   <AppErrorBoundary module="main"><OverlayScopeProvider value={false}>
-    <AuthProvider authMode="viva">
+    <PilotSession>
       <div className="lk-pilot">
         <header className="lk-pilot-head">
           <p>Тестовый ЛК · запись и оплата отключены</p>
@@ -89,6 +89,6 @@ createRoot(root).render(
         </header>
         <BookingScreen key={screen + (eventId ?? "")} />
       </div>
-    </AuthProvider>
+    </PilotSession>
   </OverlayScopeProvider></AppErrorBoundary>,
 );

@@ -4,3 +4,4 @@
 .lk-pilot-head nav { display: flex; gap: 6px; flex-wrap: wrap; }
 .lk-pilot-head a { flex: 0 0 auto; border-radius: 10px; padding: 6px 10px; color: #53477b; font-size: 13px; text-decoration: none; }
 .lk-pilot-head a[aria-current='page'] { background: #f0e7ff; color: #3c2690; font-weight: 600; }
+.lk-pilot-session { margin: 0; padding: 10px 16px; background: #f0e7ff; color: #3c2690; font-size: 13px; }

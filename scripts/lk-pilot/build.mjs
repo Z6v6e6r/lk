@@ -46,7 +46,7 @@ for (const [asset, config] of Object.entries(artifacts)) {
   });
 }
 
-for (const file of ["bootstrap.mjs", "policy.mjs"]) {
+for (const file of ["bootstrap.mjs", "isolation.mjs", "policy.mjs"]) {
   await cp(path.join(repo, "scripts/lk-pilot", file), path.join(output, file));
 }
 
@@ -69,7 +69,7 @@ const bootstrapIntegrity = "sha384-" + createHash("sha384").update(
 ).digest("base64");
 const tildaHead = [
   '<meta name="robots" content="noindex, nofollow">',
-  `<meta http-equiv="Content-Security-Policy" content="connect-src ${assetOrigin}/lk-pilot/ ${assetOrigin}/lk-pilot-api https://kc.vivacrm.ru/realms/clients/protocol/openid-connect/token; script-src 'unsafe-inline' ${assetOrigin}/lk-pilot/ https://static.tildacdn.com https://static.tildacdn.pub; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'">`,
+  `<meta http-equiv="Content-Security-Policy" content="connect-src ${assetOrigin}/lk-pilot/ ${assetOrigin}/lk-pilot-api; script-src 'unsafe-inline' ${assetOrigin}/lk-pilot/ https://static.tildacdn.com https://static.tildacdn.pub; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'">`,
 ].join("\n") + "\n";
 const tildaBlock = [
   '<div id="root">Загружаем тестовый ЛК…</div>',
