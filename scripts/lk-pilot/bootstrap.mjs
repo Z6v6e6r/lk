@@ -1,3 +1,5 @@
+/* global document, HTMLFormElement, location, window, XMLHttpRequest */
+
 import { readPilotTarget } from "./policy.mjs";
 
 const pilotPath = "/lk_pilot";
