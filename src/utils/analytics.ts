@@ -88,6 +88,7 @@ const MAX_PENDING_EVENTS = 100;
 const CLICK_DEDUPE_MS = 350;
 const ANALYTICS_DISABLE_TTL_MS = 10 * 60 * 1000;
 const NON_RETRYABLE_HTTP_STATUSES = new Set([400, 401, 403, 404, 405, 410, 413, 415, 422]);
+const ANALYTICS_DISABLED = import.meta.env?.VITE_LK_READ_ONLY_PILOT === "true";
 const ANALYTICS_ERRORS_ONLY = String(
   import.meta.env.VITE_ANALYTICS_ERRORS_ONLY ?? "true",
 ).toLowerCase() !== "false";
@@ -477,6 +478,7 @@ async function flushPendingEvents() {
 }
 
 export function identifyAnalyticsUser(payload: IdentifyAnalyticsUserPayload) {
+  if (ANALYTICS_DISABLED) return;
   if (isLkIdleRequestPaused()) return;
   let changed = false;
   const nextContext: AnalyticsUserContext = { ...userContext };
@@ -563,6 +565,7 @@ export function trackAnalyticsEvent(
   payload: AnalyticsPayload = {},
   _options?: { preferBeacon?: boolean },
 ) {
+  if (ANALYTICS_DISABLED) return;
   if (isLkIdleRequestPaused()) return;
   const eventName = trimString(event);
   if (!eventName) return;
@@ -611,6 +614,7 @@ export function trackWidgetOpenOnce(payload: AnalyticsPayload = {}) {
 }
 
 export function trackCabinetVisit(payload: AnalyticsPayload = {}) {
+  if (ANALYTICS_DISABLED) return 0;
   const counters = readVisitCounters();
   const { key, type } = getVisitorKey();
   const nextVisitCount = (counters[key] ?? 0) + 1;
@@ -631,6 +635,7 @@ export function trackClientError(
   context: AnalyticsPayload = {},
   _options?: { handled?: boolean; severity?: "error" | "warning" },
 ) {
+  if (ANALYTICS_DISABLED) return;
   try {
     const stage = source.startsWith("api.") ? "api_request"
       : source === "window.resource_error" ? "asset_load"
@@ -769,6 +774,7 @@ function installConsoleErrorTracking() {
 }
 
 export function installGlobalErrorTracking() {
+  if (ANALYTICS_DISABLED) return;
   if (typeof window === "undefined") return;
   // Every LK entrypoint calls this during bootstrap. The idle guard itself is
   // shared through window, so separately bundled overlays install it only once.
@@ -921,6 +927,7 @@ function trackClick(event: MouseEvent) {
 
 export function useGlobalClickAnalytics() {
   useEffect(() => {
+    if (ANALYTICS_DISABLED) return;
     if (typeof document === "undefined" || typeof window === "undefined") {
       return;
     }

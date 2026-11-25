@@ -1,3 +1,4 @@
+import { getLkPilotAssetBase } from "./lkPilotAssetBase.ts";
 type ImportMetaEnvLike = ImportMeta & {
   env?: Record<string, string | undefined>;
 };
@@ -196,6 +197,9 @@ function extractProjectRelativePath(pathname: string): string | null {
 }
 
 export function resolveLkAssetBaseUrls(seedValues: Array<string | URL | null | undefined>): string[] {
+  const pilotBase = getLkPilotAssetBase();
+  if (pilotBase) return [pilotBase];
+
   const seedBaseUrls = dedupeBaseUrls(seedValues);
   const activeBaseUrl = getActiveLkBaseUrl();
   const windowBaseUrls = getWindowBaseUrls();
