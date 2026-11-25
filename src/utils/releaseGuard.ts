@@ -1,3 +1,4 @@
+import { getLkPilotAssetBase } from "./lkPilotAssetBase.ts";
 import { getBundleVersion } from "./bundleVersion";
 import { buildLkAssetFileCandidates, resolveLkAssetBaseUrlFromScript } from "./lkAssetBaseUrls";
 import { isLkIdleRequestPaused } from "./lkIdleDataGuard";
@@ -205,6 +206,7 @@ async function resolveLatestVersion(candidates: string[]): Promise<string | null
 }
 
 export function ensureFreshRelease(options: ReleaseGuardOptions) {
+  if (getLkPilotAssetBase()) return;
   if (typeof window === "undefined" || typeof document === "undefined" || typeof fetch !== "function") {
     return;
   }

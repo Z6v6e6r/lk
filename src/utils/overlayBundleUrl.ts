@@ -1,3 +1,4 @@
+import { getLkPilotAssetBase } from "./lkPilotAssetBase.ts";
 const PROD_LK_ASSET_BASE_URL = "https://padlhub.su/lk";
 const DEV_LK_ASSET_BASE_URL = "https://lk-reserve.89-108-64-209.sslip.io/lk";
 
@@ -17,7 +18,7 @@ export function resolveLkAssetBaseUrl(
   configuredUrl: string | undefined,
   isDevReleaseChannel: boolean,
 ): string {
-  return resolveReleaseChannelUrl(
+  return getLkPilotAssetBase() ?? resolveReleaseChannelUrl(
     configuredUrl,
     PROD_LK_ASSET_BASE_URL,
     DEV_LK_ASSET_BASE_URL,
@@ -30,6 +31,9 @@ export function resolveOverlayBundleUrl(
   bundleName: string,
   isDevReleaseChannel: boolean,
 ): string {
+  const pilotBase = getLkPilotAssetBase();
+  if (pilotBase) return `${pilotBase}/${bundleName}.js`;
+
   const normalizedConfiguredUrl = configuredUrl?.trim();
   if (normalizedConfiguredUrl) return normalizedConfiguredUrl;
 
