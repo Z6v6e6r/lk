@@ -14,7 +14,7 @@ export type PilotScreen = keyof typeof pilotScreens;
 export function pilotHref(screen: PilotScreen, params: URLSearchParams = new URLSearchParams()): string {
   const query = new URLSearchParams(params);
   query.set("screen", screen);
-  return `/lk_pilot?${query}`;
+  return `/lk-test?${query}`;
 }
 
 function validEventId(value: string | null): string | null {
@@ -53,7 +53,7 @@ export function resolvePilotNavigation(raw: unknown, current: string): string | 
     params.set("eventId", gameId);
     return pilotHref("game-join", params);
   }
-  if (url.pathname === "/lk_pilot") {
+  if (url.pathname === "/lk-test") {
     if (!url.searchParams.has("screen")) return pilotHref("game-list", params);
     const screen = readPilotScreen(url.searchParams);
     return pilotHref(screen.screen, params);

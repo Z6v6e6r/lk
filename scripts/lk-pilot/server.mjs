@@ -37,7 +37,7 @@ export function createPilotServer({ directory, pageOrigin, forward }) {
       response.setHeader("Vary", "Origin");
       if (requestOrigin === pageOrigin) response.setHeader("Access-Control-Allow-Origin", pageOrigin);
 
-      if (request.method === "GET" && url.pathname === "/lk_pilot" && localPage) {
+      if (request.method === "GET" && url.pathname === "/lk-test" && localPage) {
         const page = await readFile(path.join(directory, "local.html"));
         response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page);
         return;

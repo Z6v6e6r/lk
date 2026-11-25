@@ -8,9 +8,9 @@ const repo = fileURLToPath(new URL("../../", import.meta.url));
 const artifacts = { "booking.js": "scripts/lk-pilot/vite.config.ts" };
 
 const rawOut = process.argv[2];
-const pageUrl = new URL(process.argv[3] ?? "https://padlhub.ru/lk_pilot");
+const pageUrl = new URL(process.argv[3] ?? "https://padlhub.ru/lk-test");
 const output = rawOut && path.resolve(rawOut);
-if (!output || pageUrl.pathname !== "/lk_pilot" || pageUrl.search || pageUrl.hash
+if (!output || pageUrl.pathname !== "/lk-test" || pageUrl.search || pageUrl.hash
   || pageUrl.username || pageUrl.password
   || (pageUrl.origin !== "https://padlhub.ru" && !["127.0.0.1", "localhost"].includes(pageUrl.hostname))) {
   throw new Error("Usage: node scripts/lk-pilot/build.mjs NEW_OUTPUT_DIRECTORY [PILOT_PAGE_URL]");

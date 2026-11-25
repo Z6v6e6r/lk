@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { pilotScreens, readPilotScreen, resolvePilotNavigation } from "../../src/lk-pilot/routes.ts";
 
-const page = "https://padlhub.ru/lk_pilot";
+const page = "https://padlhub.ru/lk-test";
 
 test("pilot has the eight exact #339 windows and refuses fixture IDs", () => {
   assert.deepEqual(Object.keys(pilotScreens).sort(), [
@@ -17,7 +17,7 @@ test("navigation preserves selected public event and date without accepting exte
   const next = resolvePilotNavigation("/game_join?joinGame=id-1&date=2026-11-25&authMode=viva&paymentRef=sample", page);
   assert.ok(next);
   const target = new URL(next, page);
-  assert.equal(target.pathname, "/lk_pilot");
+  assert.equal(target.pathname, "/lk-test");
   assert.equal(target.searchParams.get("screen"), "game-join");
   assert.equal(target.searchParams.get("eventId"), "id-1");
   assert.equal(target.searchParams.get("authMode"), "viva");

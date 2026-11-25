@@ -2,7 +2,7 @@
 
 import { readPilotTarget } from "./policy.mjs";
 
-const pilotPath = "/lk_pilot";
+const pilotPath = "/lk-test";
 
 function installPilotTransport(apiUrl, nativeFetch) {
   function forward(input, method) {
