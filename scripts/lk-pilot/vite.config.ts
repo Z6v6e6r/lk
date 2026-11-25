@@ -8,14 +8,16 @@ const replacements: Record<string, Record<string, string>> = {
     "details-action-row details-join-action-row": `<BookingOptions category="game" title="Запись на игру"
       amountMinor={minorFromRubles(detailsSplitShareAmount)} regularLabel="Разовое участие"
       regularDetail={isDetailsSplitPaymentGame ? \`Моя доля 1/\${detailsSplitShareCount} стоимости\` : undefined}
-      {...gameBookingOptions(detailsSplitSubscriptionOptions, detailsJoinPricePreview.bySubscriptionId, detailsDurationMinutes)}
+      {...gameBookingOptions(detailsSplitSubscriptionOptions, detailsJoinPricePreview.bySubscriptionId, detailsDurationMinutes,
+        detailsSplitSubscriptions)}
       loading={detailsSplitSubscriptionsLoading} />`,
     "game-payment-stack": `<BookingOptions category="game" title="Создание игры"
       amountMinor={minorFromRubles(basePaymentAmount, splitPaymentSelected ? splitShareCount : 1)}
       regularLabel={splitPaymentSelected ? "Разовое участие" : "Полная оплата корта"}
       regularDetail={splitPaymentSelected ? \`Моя доля 1/\${splitShareCount} стоимости\` : "Оплата всего корта без применения льгот"}
       terms={splitPaymentSelected ? undefined : "Стоимость оплачивается полностью за всех игроков. Льготы не расходуются."}
-      {...(splitPaymentSelected ? gameBookingOptions(splitSubscriptionPaymentOptions, publicSplitPricePreview.bySubscriptionId, duration) : {})}
+      {...(splitPaymentSelected ? gameBookingOptions(splitSubscriptionPaymentOptions, publicSplitPricePreview.bySubscriptionId, duration,
+        splitSubscriptions) : {})}
       loading={splitPaymentSelected && (splitSubscriptionsLoading || publicSplitPricePreview.state === "checking")}
       onRefresh={splitPaymentSelected && splitHasSubscriptionPaymentOptions && publicSplitPricePreview.state === "unavailable"
         ? publicSplitPricePreview.refresh : undefined} />`,

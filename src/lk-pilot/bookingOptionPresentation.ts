@@ -1,4 +1,5 @@
 import type { SubscriptionPricePreview } from "../components/games/subscriptionPricePreview";
+import { resolveSubscriptionCategoryDailyLimitPlanKey } from "../utils/subscriptionCategoryDailyLimit.ts";
 import type { SubscriptionEventDiscountQuote } from "../utils/groupSubscriptionDiscount";
 
 export type BookingOption = {
@@ -32,14 +33,20 @@ export function gameBookingOptions(
   subscriptions: readonly { subscriptionId: string; name: string }[],
   previews: Readonly<Record<string, SubscriptionPricePreview>>,
   durationMinutes: number,
+  ownedSubscriptions: readonly { subscriptionId: string }[] = [],
 ) {
   const options: BookingOption[] = [];
   const explanations: string[] = [];
+  const ownedById = new Map(ownedSubscriptions.map(subscription => [subscription.subscriptionId.trim(), subscription]));
   for (const { subscriptionId, name } of subscriptions) {
     const quote = previews[subscriptionId];
     if (!quote || quote.state === "checking") continue;
+    const plan = resolveSubscriptionCategoryDailyLimitPlanKey(ownedById.get(subscriptionId));
+    const displayName = plan === "friendship_two_hours" || /^(?:падел[.\s]+)?дружба\s*2\.0$/iu.test(name.trim())
+      ? "По подписке Дружба2.0"
+      : name === "Абонемент" ? "По подписке" : name;
     if (quote.state !== "available" || quote.amountMinor === null) {
-      explanations.push(`${name} · ${quote.label}`);
+      explanations.push(`${displayName} · ${quote.label}`);
       continue;
     }
     const freeMinutes = durationMinutes - quote.paidMinutes;
@@ -48,7 +55,7 @@ export function gameBookingOptions(
       : freeMinutes > 0 && quote.paidMinutes > 0
         ? `${freeMinutes} мин бесплатно · доплата за ${quote.paidMinutes} мин`
         : confirmedGameDiscount(quote);
-    options.push({ id: subscriptionId, name, amountMinor: quote.amountMinor, basePriceMinor: quote.basePriceMinor, benefit });
+    options.push({ id: subscriptionId, name: displayName, amountMinor: quote.amountMinor, basePriceMinor: quote.basePriceMinor, benefit });
   }
   return { options, explanations: [...new Set(explanations)] };
 }
