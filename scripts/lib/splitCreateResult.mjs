@@ -9,8 +9,10 @@ export function createSplitCreateResultProtocol() {
     ? new Date(instant(value) + 3 * 60 * 60_000).toISOString().slice(0, 19) + '+03:00' : null;
   const cancelled = row => [row?.isCancelled, row?.cancelled, row?.canceled, row?.archived].some(v => v === true)
     || /CANCEL|FAIL|REFUND|REJECT|VOID|EXPIRE|ARCHIVE/i.test(String(row?.status || ''));
-  const matches = (values, expected) => values.filter(v => v != null).length > 0
-    && values.filter(v => v != null).every(v => v === expected);
+  const agrees = (values, expected) => values.every(v => v == null || v === expected);
+  const matches = (values, expected) => values.some(v => v != null) && agrees(values, expected);
+  const isSubscriptionSurcharge = op => op.lk1.decision.subscriptionVisitCount === 1
+    && op.lk1.decision.benefit.finalPriceMinor > 0;
   const reply = (s, state, code, status = 202) => ({ state: null, effect: { kind: 'reply', status,
     body: { schemaVersion: 1, recovery: 'SPLIT_CREATE_RESULT_V1', operationId: s?.binding?.operationId || null,
       state, code } } });
@@ -56,6 +58,8 @@ export function createSplitCreateResultProtocol() {
     const amount = d.benefit.finalPriceMinor, checkout = q.checkout, intent = q.transactionIntent;
     if (amount === 0) return !checkout && !q.transactionId && !q.transactionAttemptedAt && !q.visitJob;
     if (!receipt) return false; // Legacy paid rows do not preserve the original payment window.
+    if (isSubscriptionSurcharge(op) && (!uuid(intent?.productId)
+      || t.currency !== 'RUB' || d.benefit.currency !== 'RUB')) return false;
     const safeUrl = typeof checkout?.paymentUrl === 'string' && checkout.paymentUrl.length <= 2048
       && /^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::443)?(?:[/?#][^\s]*)?$/i.test(checkout.paymentUrl);
     return record(checkout) && record(intent) && safeUrl
@@ -63,6 +67,46 @@ export function createSplitCreateResultProtocol() {
       && checkout.transactionId === q.transactionId && Number.isFinite(instant(q.transactionAttemptedAt))
       && intent.bookingId === op.bookingId && intent.actorClientId === s.actor
       && intent.studioId === t.stationId && intent.chargeMinor === amount;
+  }
+  // A subscription booking can carry the subscription purchase transaction.
+  // The surcharge is a different transaction bound to that booking via its product.
+  function surchargeSettlement(s, event, now) {
+    const tx = event.body, op = s.op, intent = op.lk1.transactionIntent;
+    const product = Array.isArray(tx?.products) && tx.products.length === 1 ? tx.products[0] : null;
+    const exactBookingList = ids => Array.isArray(ids) && ids.length === 1 && ids[0] === op.bookingId;
+    if (event.status !== 200 || !record(tx) || !record(product)
+      || tx.id !== op.lk1.transactionId || tx.client?.id !== s.actor || tx.toPay !== intent.chargeMinor
+      || product.id !== intent.productId || !exactBookingList(product.paymentBookingIds)
+      || !agrees([tx.transactionId], op.lk1.transactionId)
+      || !agrees([tx.clientId, tx.client?.uuid], s.actor)
+      || !agrees([tx.bookingId, product.bookingId, product.clientBookingId], op.bookingId)
+      || !agrees([tx.exerciseId, tx.exercise?.id, product.linkedExerciseId, product.originalExerciseId], op.exerciseId)
+      || !agrees([tx.toPayMinor], intent.chargeMinor) || !agrees([tx.currency], 'RUB')
+      || ![tx.bookingIds, tx.paymentBookingIds, product.bookingIds].every(ids => ids == null || exactBookingList(ids))
+      || (product.pricingDetails != null && (!Array.isArray(product.pricingDetails)
+        || !product.pricingDetails.every(row => record(row) && agrees([row.bookingId, row.clientBookingId], op.bookingId))))
+      || !agrees([tx.state, tx.paymentStatus, tx.transactionStatus?.transactionStatus ?? tx.transactionStatus], tx.status)
+      || tx.possibleDoublePayment || product.refunded
+      || (tx.transactionRefunds != null && (!Array.isArray(tx.transactionRefunds) || tx.transactionRefunds.length > 0))) return null;
+    const cards = [tx.cardPaymentInfo, tx.cardPaymentStatus, tx.transactionStatus?.cardPaymentStatus].filter(v => v != null);
+    const noRefund = v => !v.refund && !v.refundedAt && !v.refundDate
+      && agrees([v.refundSum, v.refundedAmountMinor], 0);
+    if (!cards.every(record) || ![tx, ...cards].every(noRefund)) return null;
+    const paidAt = instant(tx.paymentDate);
+    if (tx.status === 'PAID' && paidAt >= instant(op.lk1.transactionAttemptedAt) && paidAt <= now
+      && cards.every(card => card.status == null || ['CONFIRMED', 'PAID'].includes(card.status))) {
+      return { state: 'PAID', paidAt: new Date(paidAt).toISOString() };
+    }
+    const due = tx.paymentDueDate == null ? Infinity : instant(tx.paymentDueDate);
+    const urls = [tx.paymentUrl, tx.paymentLink, ...cards.flatMap(card => [card.paymentUrl, card.paymentLink])];
+    if (tx.status === 'UNPAID' && tx.processingStatus == null && tx.receiptPending !== true
+      && [tx, ...cards].every(v => v.paid !== true && v.isPaid !== true && !v.paymentDate && !v.paidAt
+        && agrees([v.deposit, v.paidAmount, v.paidAmountMinor, v.paidAmountKopecks], 0)
+        && (v.receipts == null || (Array.isArray(v.receipts) && v.receipts.length === 0)))
+      && cards.every(card => card.status == null || ['NEW', 'UNPAID'].includes(card.status))
+      && matches(urls, op.lk1.checkout.paymentUrl)
+      && now < Math.min(instant(op.createReceipt.deadlineAt), due)) return { state: 'PAYMENT_REQUIRED', paidAt: null };
+    return null;
   }
   const bookingPage = s => http(s, 'bookings', `/api/v1/exercises/${encodeURIComponent(s.op.exerciseId)}/bookings?showCancelled=true&page=${s.page}&size=200`);
   function begin(input, now) {
@@ -93,6 +137,7 @@ export function createSplitCreateResultProtocol() {
         || JSON.stringify(op.createReceipt) !== JSON.stringify(s.op.createReceipt)) return pending(s, 'SPLIT_CREATE_RESULT_CHANGED');
       const amount = op.lk1.decision.benefit.finalPriceMinor;
       const checkout = op.lk1.checkout;
+      const settlementState = s.settlement?.state ?? (amount ? 'PAYMENT_REQUIRED' : 'CONFIRMED');
       // Whitelist only. No actor data, quote, credentials, raw provider row or headers.
       return { state: null, effect: { kind: 'reply', status: 200, body: {
         schemaVersion: 1, recovery: 'SPLIT_CREATE_RESULT_V1', state: 'CONFIRMED', mode: 'create',
@@ -101,11 +146,18 @@ export function createSplitCreateResultProtocol() {
         clientSubscriptionId: s.binding.clientSubscriptionId, studioId: s.binding.studioId, roomId: s.binding.roomId,
         fromTime: s.binding.fromTime, toTime: s.binding.toTime,
         exerciseId: op.exerciseId, bookingId: op.bookingId, spot: s.booking.spot || null,
-        selectedPaymentMode: 'subscription', settlementState: amount ? 'PAYMENT_REQUIRED' : 'CONFIRMED',
+        selectedPaymentMode: 'subscription', settlementState,
+        ...(settlementState === 'PAID' ? { paidAt: s.settlement.paidAt } : {}),
         toPayMinor: amount, toPay: amount / 100,
         // Nominal participant share is the stored target tariff, never the organizer's benefit/surcharge.
         shareAmountMinor: op.lk1.target.basePriceMinor, shareAmount: op.lk1.target.basePriceMinor / 100,
-        paymentUrl: checkout?.paymentUrl || null, transactionId: checkout?.transactionId || null,
+        paymentUrl: settlementState === 'PAID' ? null : checkout?.paymentUrl || null,
+        transactionId: checkout?.transactionId || null,
+        ...(isSubscriptionSurcharge(op) ? {
+          clientId: s.actor, productId: op.lk1.transactionIntent.productId,
+          maxClientsCount: op.lk1.createPayload.maxClientsCount,
+          totalAmount: op.lk1.target.basePriceMinor * op.lk1.createPayload.maxClientsCount / 100,
+        } : {}),
         subscriptionVisitCount: op.lk1.decision.subscriptionVisitCount,
         deadlineAt: op.createReceipt?.deadlineAt || null,
         assembleDeadlineAt: new Date(instant(s.binding.fromTime) - 24 * 60 * 60_000).toISOString(),
@@ -117,8 +169,15 @@ export function createSplitCreateResultProtocol() {
       if (event.status !== 200 || !record(x) || x.id !== s.op.exerciseId || cancelled(x)
         || ![x.isCancelled, x.cancelled, x.canceled].includes(false)
         || !matches([x.studioId, x.studio?.id], b.studioId) || !matches([x.roomId, x.room?.id], b.roomId)
-        || instant(x.timeFrom) !== instant(b.fromTime) || instant(x.timeTo) !== instant(b.toTime)) return pending(s, 'SPLIT_CREATE_RESULT_EXERCISE_UNVERIFIED');
+        || instant(x.timeFrom) !== instant(b.fromTime) || instant(x.timeTo) !== instant(b.toTime)
+        || (isSubscriptionSurcharge(s.op) && x.maxClientsCount !== s.op.lk1.createPayload.maxClientsCount)) {
+        return pending(s, 'SPLIT_CREATE_RESULT_EXERCISE_UNVERIFIED');
+      }
       return bookingPage({ ...s, page: 0, rows: [] });
+    }
+    if (s.stage === 'surcharge') {
+      const settlement = surchargeSettlement(s, event, now);
+      return settlement ? find({ ...s, settlement }, 'operation_recheck') : pending(s, 'SPLIT_CREATE_RESULT_SURCHARGE_UNVERIFIED');
     }
     if (s.stage === 'bookings') {
       const b = event.body, rows = Array.isArray(b) ? b : b?.content;
@@ -136,11 +195,15 @@ export function createSplitCreateResultProtocol() {
         || !matches([x.clientId, x.client?.id, x.client?.clientId], s.actor)
         || (x.exerciseId && x.exerciseId !== s.op.exerciseId)
         || (x.exercise?.id && x.exercise.id !== s.op.exerciseId)
-        || (s.op.lk1.decision.benefit.finalPriceMinor === 0 && s.op.lk1.decision.subscriptionVisitCount === 1
+        || (s.op.lk1.decision.subscriptionVisitCount === 1
           && (x.clientSubscriptionId !== s.binding.clientSubscriptionId || x.paymentType !== 'SUBSCRIPTION'))
-        || (s.op.lk1.decision.benefit.finalPriceMinor > 0 && (x.clientSubscriptionId || x.paymentType !== 'ON_PLACE'))
+        || (s.op.lk1.decision.benefit.finalPriceMinor > 0 && s.op.lk1.decision.subscriptionVisitCount === 0
+          && (x.clientSubscriptionId || x.paymentType !== 'ON_PLACE'))
         || (x.clientSubscriptionId && x.clientSubscriptionId !== s.binding.clientSubscriptionId)) return pending(s, 'SPLIT_CREATE_RESULT_BOOKING_UNVERIFIED');
-      return find({ ...s, booking: { spot: Number.isSafeInteger(x.spot) ? x.spot : null }, rows: undefined }, 'operation_recheck');
+      const verified = { ...s, booking: { spot: Number.isSafeInteger(x.spot) ? x.spot : null }, rows: undefined };
+      return isSubscriptionSurcharge(s.op)
+        ? http(verified, 'surcharge', `/api/v1/transactions/${encodeURIComponent(s.op.lk1.transactionId)}`)
+        : find(verified, 'operation_recheck');
     }
     return pending(s, 'SPLIT_CREATE_RESULT_STAGE_INVALID');
   }

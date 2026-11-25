@@ -5,6 +5,8 @@ import test from 'node:test';
 import ts from 'typescript';
 import { bookingEndIso, moscowBookingEndIso } from '../../src/utils/bookingEndTime.ts';
 import { isRequestTimeoutError, runWithAbortTimeout } from '../../src/utils/requestTimeout.ts';
+import { isPersistedGamePaymentTerminal } from '../../src/utils/paymentSyncDraftRecovery.ts';
+import { isSplitSurchargeGameReadback } from '../../src/utils/serverGameDraftPersistencePolicy.ts';
 
 const source = fs.readFileSync('src/components/games/GamesPage.tsx', 'utf8');
 const file = ts.createSourceFile('GamesPage.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -32,6 +34,7 @@ function harness(stage) {
     cardPayloads: [], completed: [], step: null };
   const context = {
     AbortController, Promise, Date, Math, Set, isRequestTimeoutError, runWithAbortTimeout,
+    isPersistedGamePaymentTerminal, isSplitSurchargeGameReadback,
     CLUB_ON_SITE_BOOKING: false, clubBookingOnly: false,
     subscriptionUsageShadowEnabled: false, studioId: 'studio', selectedDate: new Date('2030-01-01'),
     courtId: 'court', time: '20:00', duration: 60, selectedSlotId: 'slot', studioMasterServiceId: 'master',
@@ -77,7 +80,7 @@ function harness(stage) {
     apiCreatePadelGameRecord: async payload => { state.cardPayloads.push(payload); return { data: { id: 'pay_original', status: 'PAID' } }; },
     buildInviteFallbackUrl: () => '/synthetic-invite', resolveGameInviteUrl: () => '/synthetic-invite',
     upsertGameRecordInStores: () => {}, runPaidGameCommunityMembershipAndPublication: async () => {},
-    setGameRecordId: () => {}, setGameRecordStatus: () => {}, setInviteLink: () => {}, setGamePaymentUrl: () => {},
+    setGameRecordId: () => {}, setGameRecordStatus: () => {}, setInviteLink: value => { state.invite = value; }, setGamePaymentUrl: () => {},
     setGamePaid: () => {}, setGameSnapshot: () => {}, setConfirmCancelUnpaidGame: () => {},
     mergeMatchSnapshots: () => ({}), buildMatchSnapshotFromPayload: () => ({}), buildMatchSnapshotFromRecord: () => ({}),
     pushCabinetFlashNotice: () => {}, setStep: value => { state.step = value; },
@@ -221,6 +224,93 @@ test('late confirmed result completes one LK card with original paymentRef and d
   assert.deepEqual(h.state.completed, ['original-operation']);
   assert.equal(h.state.step, 'details');
   assert.equal(h.state.error, null);
+});
+
+function recoveredSurcharge(h, settled, { mismatch = false, existing = false, plainFallback = false } = {}) {
+  const ref = 'original-ref', operationId = 'lk-split-create-synthetic', bookingId = 'synthetic-booking';
+  const exerciseId = 'synthetic-exercise', transactionId = 'synthetic-transaction';
+  const checkout = 'https://checkout.example.test/original';
+  const buildRecord = (payload, paid) => ({
+    ...payload, id: 'pay_original', status: paid ? 'PAID' : 'PAYMENT_PENDING',
+    payment: { ...payload.payment, paymentUrl: null, paid },
+    metadata: { ...payload.metadata, splitPayment: { ...payload.metadata.splitPayment,
+      payments: payload.metadata.splitPayment.payments.map(p => ({ ...p, paymentUrl: null,
+        status: paid ? 'PAID' : 'PAYMENT_PENDING' })) } },
+  });
+  h.state.redirects = []; h.state.drafts = []; h.state.sync = [];
+  h.context.apiCreatePadelSplitGamePayment = async (_params, options) => {
+    h.state.writes++; options.onRecovery();
+    return { data: { paymentRef: ref, operationId, exerciseId, bookingId, transactionId, productId: 'synthetic-product',
+      selectedPaymentMode: plainFallback ? 'one_time' : 'subscription', subscriptionVisitCount: 1,
+      settlementState: settled ? 'PAID' : 'PAYMENT_REQUIRED', paymentUrl: settled ? null : checkout,
+      toPay: 210, toPayMinor: 21000, shareAmount: 900, shareAmountMinor: 90000,
+      raw: plainFallback ? {} : { recovery: 'SPLIT_CREATE_RESULT_V1' },
+    } };
+  };
+  h.context.savePendingPaidGameDraft = () => {};
+  h.context.persistServerGameDraftBeforeRedirect = async (paymentRef, payload, bookingIds, binding) => {
+    h.state.drafts.push({ paymentRef, payload, bookingIds, binding });
+    return { record: buildRecord(payload, existing) };
+  };
+  h.context.processPendingPaymentSyncQueue = async options => {
+    h.state.sync.push(options);
+    const paid = buildRecord(h.state.drafts[0].payload, true);
+    if (mismatch) paid.metadata.splitPayment.payments[0].transactionId = 'other-transaction';
+    return { resolved: [{ paymentRef: ref, record: paid }] };
+  };
+  h.context.enqueuePendingPaymentSync = () => {};
+  h.context.navigateToExternalUrl = value => { h.state.redirects.push(value); return true; };
+  return { ref, operationId, checkout };
+}
+
+test('paid surcharge recovered after a lost response saves its original settings and immediately opens the verified invite', async () => {
+  const h = harness('slot');
+  const f = recoveredSurcharge(h, true);
+  h.context.isPrivate = true;
+  const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await pending;
+  assert.equal(h.state.writes, 1);
+  assert.equal(h.state.cardPayloads.length, 0, 'no client-trusted paid write');
+  assert.equal(h.state.drafts.length, 1);
+  const draft = h.state.drafts[0];
+  assert.equal(draft.paymentRef, f.ref);
+  assert.equal(draft.payload.status, 'PAYMENT_PENDING');
+  assert.equal(draft.payload.payment.paid, false);
+  assert.equal(draft.payload.settings.isPrivate, true);
+  assert.equal(draft.payload.metadata.gameTitle, 'Synthetic game');
+  assert.equal(draft.payload.metadata.participantComment, 'Synthetic comment');
+  assert.equal(draft.payload.metadata.splitPayment.createOperationId, f.operationId);
+  assert.equal(draft.payload.metadata.splitPayment.shareAmountMinor, 90000);
+  assert.equal(h.state.sync[0].forcePaymentRef, f.ref);
+  assert.deepEqual(h.state.redirects, []);
+  assert.deepEqual(h.state.completed, [f.operationId]);
+  assert.equal(h.state.step, 'details');
+  assert.equal(h.state.invite, '/synthetic-invite');
+});
+
+test('a recovered draft opens only the original unpaid checkout, while full-price fallback stays on the ordinary flow', async () => {
+  for (const plainFallback of [false, true]) {
+    const h = harness('slot');
+    const f = recoveredSurcharge(h, false, { plainFallback });
+    const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await pending;
+    assert.equal(h.state.drafts.length, 1);
+    assert.equal(h.state.drafts[0].binding?.operationId, plainFallback ? undefined : f.operationId);
+    assert.equal(h.state.drafts[0].payload.metadata.splitPayment.createOperationId, plainFallback ? undefined : f.operationId);
+    assert.deepEqual(h.state.redirects, [f.checkout]);
+    assert.deepEqual(h.state.sync, []);
+    assert.equal(h.state.invite, undefined);
+  }
+});
+
+test('a competing settled card is reused and a wrong transaction cannot enable an invite or payment redirect', async () => {
+  for (const existing of [false, true]) {
+    const h = harness('slot');
+    recoveredSurcharge(h, true, { existing, mismatch: true });
+    const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await pending;
+    assert.deepEqual(h.state.redirects, []);
+    assert.equal(h.state.sync.length, existing ? 0 : 1);
+    assert.equal(h.state.invite, existing ? '/synthetic-invite' : undefined);
+    assert.equal(h.context.gameCreationPending, !existing);
+  }
 });
 
 test('auth change during LK card persistence prevents publication, completion and navigation', async () => {

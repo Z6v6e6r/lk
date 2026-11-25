@@ -13,8 +13,11 @@ Viva bearer. The query contains only the opaque operation ID. The reader:
 2. Reads the exact tenant/actor/operation key with majority read concern.
 3. Validates the stored CREATE fingerprint, subscription, court, time, duration,
    decision, original receipt and any paid checkout.
-4. GETs the live exercise and complete bounded exercise-bookings pages. Cancelled,
-   contradictory, foreign or incomplete evidence cannot become success.
+4. GETs the live exercise and complete bounded exercise-bookings pages. For an
+   operation that used one subscription visit and charged a surcharge, the active
+   owner booking must still be on that subscription. The reader separately checks
+   the surcharge transaction and its exact product, payer, amount and booking link.
+   The transaction on the booking may belong to the subscription purchase.
 5. Re-reads the same confirmed operation with majority concern and checks the
    version/quote/receipt before returning the whitelisted result.
 
@@ -41,10 +44,22 @@ limited to the active page. Corrupt/oversized journals fail closed. The active-p
 another tab's unrelated pending attempt. The server-owned stored receipt supplies
 the canonical reference when tabs used different local references.
 
-After confirmation the existing LK upsert is resumed with the original reference,
-title and participant comment. A failed card save retains the attempt; its next
-check does not create another Viva event. Unresolved recovery shows a neutral
-status and a check action, rather than a subscription refusal.
+After recovery, LK resumes with the original reference and the settings from the
+active wizard. For a subscription with a surcharge, the browser checks for an
+existing card before creating a draft. An outstanding payment can open only the
+original, still-valid checkout after the draft is read back. A paid surcharge
+returns the original amount, transaction and paid time with no checkout URL.
+
+For the paid case the browser resumes the canonical payment confirmation using
+the saved draft. Its backend reads the same owner-authenticated result endpoint on
+loopback, matches the exact draft and claims the transaction through the existing
+claim and revision-checked write. The browser displays the invitation once it has
+read back the matching paid card. Closing the wizard discards its form state. The
+opaque attempt journal does not act as an unattended publisher.
+
+A failed card save or confirmation retains the attempt. The next check uses the
+same operation. If the evidence is incomplete or the unpaid checkout has expired,
+the result remains pending.
 
 ## Price, reference and deadline compatibility
 
@@ -97,7 +112,14 @@ existing deployment lock/lease and the dependent cancellation-worker generation
 pins. Coordinate the worker's existing re-attestation procedure; never weaken its
 drift guard. Use the existing reviewed-flow mechanism and separately authorized
 deployment procedure. Apply/verify the backend before publishing the frontend.
-An older backend yields pending/unknown; the client never falls back to POST.
+For an existing reader, pass `--update-reader <reviewed handler SHA256>` to the
+same preparation script. That mode checks the existing route and read-only graph
+and replaces only the function body. The game-payment confirmation graph must include
+`fn_game_payment_confirm_router.js` and its existing claim and readback nodes.
+The mixed branch uses the reader on the same Node-RED instance
+(`127.0.0.1:1880` on the LK host). Validate both backend paths together.
+An older reader yields pending for the mixed booking. The browser never repeats
+the provider CREATE after the ambiguous response.
 
 Stop signals are wrong binding, changed source, unexpected effects, broken CORS,
 worker drift, malformed receipt, incorrect tariff/deadline or stale-owner completion.
@@ -109,11 +131,15 @@ payment or data-repair authority.
 ## Verification
 
 - `splitCreateResult.test.mjs`: identities, quote/receipt/checkout, live readback,
-  cancellation/release fence, unknown results, redaction and exact composition.
+  cancellation/release fence, mixed paid and unpaid provider evidence, unknown
+  results, redaction and exact composition.
 - `splitCreateRecovery.test.ts`: one original POST, GET-only recovery, preserved
   refs/reload/quota behavior, strict results, bounded reads and session/abort guards.
 - `gameCreateButtonPreparation.test.mjs`: real extracted callbacks, busy/pending
-  UI, title/comment/tariff preservation, one LK upsert and stale-owner suppression.
+  UI, title/comment/tariff preservation, one LK draft, paid invite and stale-owner suppression.
+- `gamePaymentConfirmation.nodered.test.ts` and `serverGameDraftPersistence.test.ts`:
+  exact mixed settlement, transaction claim, durable readback, no downgrade of an
+  already paid card and rejection of mismatched evidence.
 - `splitCreateResultRuntime.test.mjs`: Node-RED 4.0.9, real HTTP nodes with a
   fixture-only loopback rewrite, synthetic majority-find adapter, CORS, injected
   crypto, scoped transport catch, action-specific receipt and inverse restoration.

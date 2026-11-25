@@ -2,26 +2,26 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { createSplitCreateResultProtocol } from '../lib/splitCreateResult.mjs';
-import { composeSplitCreateResultFlow, splitCreateResultNode, SPLIT_CREATE_RESULT_IDS } from '../lib/splitCreateResultFlow.mjs';
+import { buildSplitCreateResultNodes, composeSplitCreateResultFlow, updateSplitCreateResultReader, splitCreateResultNode, SPLIT_CREATE_RESULT_IDS } from '../lib/splitCreateResultFlow.mjs';
 import { splitCreateTiming, SPLIT_CREATE_TIMING_TARGETS, SPLIT_CREATE_RECEIPT_ANCHOR, SPLIT_CREATE_RECEIPT_FIELD } from '../lib/splitCreateTiming.mjs';
 
 const id = n => `11111111-1111-4111-8111-${String(n).padStart(12, '0')}`;
 const now = Date.parse('2035-01-01T09:00:00Z');
-function fixture(amount = 0) {
+function fixture(amount = 0, mixed = false) {
   const binding = { operationId: 'lk-split-create-synthetic', paymentRef: 'synthetic-ref',
     clientSubscriptionId: id(2), studioId: id(3), roomId: id(4),
-    fromTime: '2035-01-02T07:00:00+03:00', toTime: '2035-01-02T08:00:00+03:00' };
+    fromTime: '2035-01-02T07:00:00+03:00', toTime: mixed ? '2035-01-02T08:30:00+03:00' : '2035-01-02T08:00:00+03:00' };
   const target = { eventId: id(5), category: 'GAME', stationId: id(3), roomId: id(4),
-    startsAt: binding.fromTime, durationMinutes: 60, basePriceMinor: 75000 };
+    startsAt: binding.fromTime, durationMinutes: mixed ? 90 : 60, basePriceMinor: 75000, currency: 'RUB' };
   const createPayload = { directionId: 4588, typeId: 1613, timeFrom: binding.fromTime,
     timeTo: binding.toTime, roomId: id(4), maxClientsCount: 4, trainers: [], requirements: '' };
   const quote = { rule: { planKey: 'synthetic-plan' }, purchaseDate: '2035-01-01', target, createPayload,
-    decision: { eligible: true, subscriptionVisitCount: amount ? 0 : 1, benefit: { finalPriceMinor: amount } } };
+    decision: { eligible: true, subscriptionVisitCount: amount && !mixed ? 0 : 1, benefit: { finalPriceMinor: amount, currency: 'RUB' } } };
   quote.fingerprint = JSON.stringify({ tenantKey: 'iSkq6G', actorClientId: id(1), clientSubscriptionId: id(2),
     action: 'CREATE_GAME', rule: quote.rule, purchaseDate: quote.purchaseDate, createPayload,
     target: { ...target, eventId: `preflight:${binding.operationId}` } });
-  if (amount) Object.assign(quote, { transactionId: id(7), transactionAttemptedAt: new Date(now).toISOString(),
-    transactionIntent: { bookingId: id(6), actorClientId: id(1), studioId: id(3), chargeMinor: amount },
+  if (amount) Object.assign(quote, { transactionId: id(7), transactionAttemptedAt: new Date(now - 5 * 60000).toISOString(),
+    transactionIntent: { bookingId: id(6), actorClientId: id(1), studioId: id(3), chargeMinor: amount, productId: id(8) },
     checkout: { transactionId: id(7), toPayMinor: amount, paymentUrl: 'https://payments.example.test/synthetic' } });
   const op = { _id: `lk1-product:${JSON.stringify(['iSkq6G', id(1), binding.operationId])}`,
     tenantKey: 'iSkq6G', actorClientId: id(1), operationId: binding.operationId, clientSubscriptionId: id(2),
@@ -30,10 +30,14 @@ function fixture(amount = 0) {
       assembleDeadlineAt: new Date(Date.parse(binding.fromTime) - 24 * 60 * 60000).toISOString() },
     confirmedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), lk1: quote };
   const exercise = { id: id(5), studio: { id: id(3) }, room: { id: id(4) },
-    timeFrom: binding.fromTime, timeTo: binding.toTime, canceled: false };
+    timeFrom: binding.fromTime, timeTo: binding.toTime, canceled: false, maxClientsCount: 4 };
   const booking = { id: id(6), client: { id: id(1), phone: 'PRIVATE_PHONE' }, isCancelled: false,
-    paymentType: amount ? 'ON_PLACE' : 'SUBSCRIPTION', ...(amount ? {} : { clientSubscriptionId: id(2) }), spot: 1 };
-  return { binding, op, exercise, booking };
+    paymentType: amount && !mixed ? 'ON_PLACE' : 'SUBSCRIPTION',
+    ...(!amount || mixed ? { clientSubscriptionId: id(2), transactionId: id(10) } : {}), spot: 1 };
+  const transaction = { id: id(7), client: { id: id(1) }, status: 'UNPAID', toPay: amount,
+    products: [{ id: id(8), paymentBookingIds: [id(6)], linkedExerciseId: null }],
+    cardPaymentInfo: { status: 'NEW', paymentUrl: quote.checkout?.paymentUrl } };
+  return { binding, op, exercise, booking, transaction };
 }
 function run(f, mutate = () => {}) {
   const p = createSplitCreateResultProtocol(), effects = [];
@@ -44,7 +48,7 @@ function run(f, mutate = () => {}) {
     const stage = next.state.stage;
     let body = stage === 'profile' ? { id: id(1) } : ['operation', 'operation_recheck'].includes(stage)
       ? [structuredClone(f.op)] : stage === 'exercise' ? structuredClone(f.exercise)
-        : { content: [structuredClone(f.booking)], last: true, number: 0, totalElements: 1 };
+        : stage === 'surcharge' ? structuredClone(f.transaction) : { content: [structuredClone(f.booking)], last: true, number: 0, totalElements: 1 };
     const event = { status: 200, body };
     mutate(stage, event, next.state);
     next = p.step(next.state, event, now + count);
@@ -73,6 +77,63 @@ test('paid overage returns only the persisted bound checkout', () => {
   assert.equal(r.body.toPayMinor, 75000);
   assert.equal(r.body.settlementState, 'PAYMENT_REQUIRED');
 });
+test('a 90-minute subscription booking reuses its exact unpaid surcharge after the original CREATE was lost', () => {
+  const f = fixture(70000, true);
+  const result = run(f);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.settlementState, 'PAYMENT_REQUIRED');
+  assert.equal(result.body.paymentUrl, f.op.lk1.checkout.paymentUrl);
+  assert.equal(result.body.transactionId, id(7));
+  assert.equal(result.body.maxClientsCount, 4);
+  assert.equal(result.body.totalAmount, 3000);
+  assert.equal(result.body.toPayMinor, 70000);
+  assert.equal(result.body.shareAmountMinor, 75000);
+  assert.deepEqual(result.effects.slice(-3).map(e => e.kind), ['http', 'find', 'reply']);
+  assert.equal(result.effects.at(-3).path, '/api/v1/transactions/' + id(7));
+  assert.ok(result.effects.filter(e => e.kind === 'http').every(e => e.method === 'GET'));
+});
+
+test('a paid surcharge returns the original paid time and never the old checkout, even after its deadline', () => {
+  const f = fixture(21000, true);
+  f.op.createReceipt.deadlineAt = new Date(now - 60_000).toISOString();
+  f.transaction.status = 'PAID';
+  f.transaction.cardPaymentInfo.status = 'CONFIRMED';
+  f.transaction.paymentDate = new Date(now - 120_000).toISOString();
+  const result = run(f);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.settlementState, 'PAID');
+  assert.equal(result.body.paidAt, f.transaction.paymentDate);
+  assert.equal(result.body.paymentUrl, null);
+  assert.equal(result.body.transactionId, f.transaction.id);
+  assert.doesNotMatch(JSON.stringify(result.body), /payments.example|purchaseDate|PRIVATE_PHONE/);
+});
+
+for (const [name, change] of Object.entries({
+  'wrong surcharge transaction': f => { f.transaction.id = id(9); },
+  'wrong payer': f => { f.transaction.client.id = id(9); },
+  'wrong product': f => { f.transaction.products[0].id = id(9); },
+  'wrong booking': f => { f.transaction.products[0].paymentBookingIds = [id(9)]; },
+  'extra booking': f => { f.transaction.products[0].paymentBookingIds.push(id(9)); },
+  'wrong exercise': f => { f.transaction.products[0].linkedExerciseId = id(9); },
+  'wrong amount': f => { f.transaction.toPay++; },
+  'wrong currency': f => { f.transaction.currency = 'EUR'; },
+  'contradictory payment state': f => { f.transaction.paymentStatus = 'PAID'; },
+  'payment in progress': f => { f.transaction.processingStatus = 'PROCESSING'; },
+  'rejected checkout': f => { f.transaction.cardPaymentInfo.status = 'REJECTED'; },
+  'different checkout': f => { f.transaction.cardPaymentInfo.paymentUrl += '/different'; },
+  'partially paid checkout': f => { f.transaction.paidAmount = 100; },
+  'unknown transaction': f => { f.transaction.status = 'PROCESSING'; },
+  'expired checkout': f => { f.op.createReceipt.deadlineAt = new Date(now - 1000).toISOString(); },
+  'refunded payment': f => { f.transaction.refundSum = f.transaction.toPay; },
+  'wrong capacity': f => { f.exercise.maxClientsCount = 2; },
+  'wrong booking payment mode': f => { f.booking.paymentType = 'ON_PLACE'; },
+})) test(`mixed create: ${name} stays pending without a checkout`, () => {
+  const f = fixture(70000, true); change(f);
+  const result = run(f);
+  assert.equal(result.status, 202);
+  assert.equal(result.body.paymentUrl, undefined);
+});
+
 for (const [name, change] of Object.entries({
   'foreign actor': f => { f.op.actorClientId = id(9); },
   'foreign tenant': f => { f.op.tenantKey = 'foreign'; },
@@ -186,4 +247,27 @@ test('legacy free rows keep no invented payment deadline; legacy paid rows remai
   assert.equal(r.body.referenceSource, 'LEGACY_OPERATION'); assert.equal(r.body.deadlineAt, null);
   const paid = fixture(10000); delete paid.op.createReceipt;
   assert.equal(run(paid).status, 202);
+});
+
+test('installed-reader update changes only the numbered handler and rejects a mismatched preimage or graph', () => {
+  const flow = [
+    { id: 'tab', type: 'tab' },
+    { id: 'lk_subscription_booking_find_20260804', type: 'mongodb4', clientNode: 'db', wires: [[]] },
+    { id: 'db', type: 'mongodb4-client', dbName: 'games' },
+    ...buildSplitCreateResultNodes('tab', 'db'),
+  ];
+  const handler = flow.find(node => node.id === SPLIT_CREATE_RESULT_IDS.handler);
+  handler.func = 'return null; // synthetic installed source';
+  const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+  const before = Buffer.from(JSON.stringify(flow));
+  const contract = updateSplitCreateResultReader(before, sha(before), sha(handler.func));
+  const after = JSON.parse(contract.candidateBytes);
+  const changed = after.filter((node, index) => JSON.stringify(node) !== JSON.stringify(flow[index]));
+  assert.equal(changed.length, 1);
+  assert.equal(changed[0].id, handler.id);
+  assert.match(changed[0].func, /SPLIT_CREATE_RESULT_SURCHARGE_UNVERIFIED/);
+  assert.throws(() => updateSplitCreateResultReader(before, sha(before), '0'.repeat(64)), /handler preimage/);
+  flow.find(node => node.id === SPLIT_CREATE_RESULT_IDS.find).operation = 'updateOne';
+  const wrongGraph = Buffer.from(JSON.stringify(flow));
+  assert.throws(() => updateSplitCreateResultReader(wrongGraph, sha(wrongGraph), sha(handler.func)), /graph mismatch/);
 });

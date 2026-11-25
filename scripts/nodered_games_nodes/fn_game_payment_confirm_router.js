@@ -8,6 +8,7 @@ const lkDiagnostic = (fields = {}) => {
 lkDiagnostic({ code: "STAGE_ENTER" });
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
+const SPLIT_CREATE_RESULT_URL = "http://127.0.0.1:1880/lk/games/split/create-result";
 const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
 const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
@@ -139,6 +140,7 @@ const requestTransaction = (ctx) => {
 const finishVerified = (ctx, status) => {
   const nowIso = new Date().toISOString();
   const record = clone(ctx.record);
+  const confirmedPaidAt = ctx.paidAt || nowIso;
   const metadata = record.metadata && typeof record.metadata === "object" ? record.metadata : {};
   const split = metadata.splitPayment && typeof metadata.splitPayment === "object" ? metadata.splitPayment : {};
   const payments = asArray(split.payments).map((item) => {
@@ -146,7 +148,8 @@ const finishVerified = (ctx, status) => {
     return {
       ...item,
       status: "PAID",
-      paidAt: toStr(item.paidAt) || nowIso,
+      paidAt: ctx.paidAt || toStr(item.paidAt) || confirmedPaidAt,
+      ...(ctx.paidAt ? { paymentUrl: null } : {}),
       transactionStatus: status,
       transactionStatusCheckedAt: nowIso,
       transactionStatusSource: "viva_transaction_readback",
@@ -164,7 +167,8 @@ const finishVerified = (ctx, status) => {
       ...(record.payment || {}),
       paymentRef: ctx.paymentRef,
       paid: true,
-      paidAt: toStr(record.payment?.paidAt) || nowIso,
+      paidAt: ctx.paidAt || toStr(record.payment?.paidAt) || confirmedPaidAt,
+      ...(ctx.paidAt ? { paymentUrl: null } : {}),
     },
     metadata: {
       ...metadata,
@@ -194,6 +198,10 @@ const finishVerified = (ctx, status) => {
   delete verifiedMsg.url;
   delete verifiedMsg.statusCode;
   delete verifiedMsg.headers;
+  delete verifiedMsg.requestTimeout;
+  delete verifiedMsg.followRedirects;
+  delete verifiedMsg.maxRedirects;
+  delete verifiedMsg.responseUrl;
   return [null, verifiedMsg, null, null, null, null];
 };
 const requestToken = (ctx) => {
@@ -222,6 +230,31 @@ const requestToken = (ctx) => {
   ].map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join("&");
   ctx.step = "token_lookup";
   return [msg, null, null, null];
+};
+
+const claimVerifiedTransaction = (ctx, status) => {
+  const claimId = `viva_transaction:${ctx.transactionId}`;
+  const claimCreatedAt = new Date().toISOString();
+  ctx.step = "claim_write";
+  ctx.claimId = claimId;
+  ctx.transactionStatus = status;
+  msg._gamePaymentConfirmCtx = ctx;
+  msg.payload = [
+    { _id: claimId },
+    {
+      $setOnInsert: {
+        transactionId: ctx.transactionId,
+        bookingId: ctx.bookingId,
+        exerciseId: ctx.exerciseId,
+        clientId: ctx.clientId || null,
+        gameId: ctx.record.id,
+        paymentRef: ctx.paymentRef,
+        createdAt: claimCreatedAt,
+      },
+    },
+    { upsert: true },
+  ];
+  return [null, null, null, null, msg, null];
 };
 
 const ctx = msg._gamePaymentConfirmCtx && typeof msg._gamePaymentConfirmCtx === "object"
@@ -276,9 +309,8 @@ if (ctx.step === "draft_lookup") {
   if (!tenantKey || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || !expectedUpdatedAt) {
     return fail(ctx, 409, "GAME_PAYMENT_STALE_GUARD_REQUIRED", "Черновик не содержит свежую tenant/revision identity");
   }
-  const split = record?.metadata?.splitPayment && typeof record.metadata.splitPayment === "object"
-    ? record.metadata.splitPayment
-    : {};
+  const metadata = record.metadata || {};
+  const split = metadata.splitPayment && typeof metadata.splitPayment === "object" ? metadata.splitPayment : {};
   const payment = asArray(split.payments).find((item) => (
     item
     && typeof item === "object"
@@ -307,7 +339,69 @@ if (ctx.step === "draft_lookup") {
     clientId,
     amountMinor: Math.round(amountMinor),
   });
+  if (split.createOperationId != null) {
+    const operationId = split.createOperationId;
+    const auth = msg.req?.headers?.authorization;
+    if (metadata.source !== "games_split_widget" || split.selectedPaymentMode !== "subscription"
+      || typeof operationId !== "string" || !/^lk-split-create-[a-z0-9]{1,100}$/.test(operationId)
+      || !split.clientSubscriptionId || !split.productId || !record.booking?.studioId || !record.booking?.roomId
+      || record.organizer?.id !== clientId || record.archived === true || recordStatus !== "PAYMENT_PENDING"
+      || !Number.isSafeInteger(ctx.amountMinor) || ctx.amountMinor <= 0
+      || Math.round(Number(record.payment?.amount) * 100) !== ctx.amountMinor
+      || Math.round(Number(payment?.amount) * 100) !== ctx.amountMinor) {
+      return fail(ctx, 409, "GAME_PAYMENT_EVIDENCE_MISMATCH", "Данные операции создания игры не совпали");
+    }
+    if (typeof auth !== "string" || auth.length > 16384 || !/^Bearer [^\s]+$/.test(auth)) {
+      return fail(ctx, 401, "GAME_PAYMENT_CONFIRM_AUTH_REQUIRED", "Для подтверждения оплаты войдите в личный кабинет");
+    }
+    Object.assign(ctx, { step: "split_create_settlement", operationId });
+    msg.method = "GET";
+    msg.url = SPLIT_CREATE_RESULT_URL + "?operationId=" + encodeURIComponent(operationId);
+    msg.headers = { Authorization: auth, Accept: "application/json", "Cache-Control": "no-store" };
+    msg.requestTimeout = 9000;
+    msg.followRedirects = false;
+    msg.maxRedirects = 0;
+    msg.payload = null;
+    return [msg, null, null, null, null, null];
+  }
   return requestToken(ctx);
+}
+
+if (ctx.step === "split_create_settlement") {
+  const proof = msg.payload;
+  const httpStatus = Number(msg.statusCode);
+  if (httpStatus === 202) {
+    return fail(ctx, 409, "GAME_PAYMENT_PENDING", "Проверяем оплату исходной игры");
+  }
+  if (![200, 401, 403].includes(httpStatus)) {
+    return fail(ctx, 503, "GAME_PAYMENT_PROVIDER_READ_FAILED", "Не удалось проверить исходную операцию");
+  }
+  if (httpStatus !== 200) {
+    return fail(ctx, httpStatus, "GAME_PAYMENT_CONFIRM_AUTH_REQUIRED", "Для подтверждения оплаты войдите в личный кабинет");
+  }
+  const { booking, metadata } = ctx.record;
+  const split = metadata.splitPayment;
+  const at = Date.parse(proof?.paidAt);
+  if (proof?.schemaVersion !== 1 || proof.recovery !== "SPLIT_CREATE_RESULT_V1"
+    || proof.state !== "CONFIRMED" || proof.mode !== "create" || proof.referenceSource !== "STORED_RECEIPT"
+    || proof.selectedPaymentMode !== "subscription" || proof.subscriptionVisitCount !== 1
+    || proof.operationId !== ctx.operationId || proof.paymentRef !== ctx.paymentRef || proof.transactionId !== ctx.transactionId
+    || proof.clientId !== ctx.clientId || proof.bookingId !== ctx.bookingId || proof.exerciseId !== ctx.exerciseId
+    || proof.toPayMinor !== ctx.amountMinor || proof.clientSubscriptionId !== split.clientSubscriptionId
+    || proof.productId !== split.productId
+    || proof.studioId !== booking.studioId || proof.roomId !== booking.roomId
+    || Date.parse(proof.fromTime) !== Date.parse(booking.timeFromIso) || Date.parse(proof.toTime) !== Date.parse(booking.timeToIso)
+    || proof.maxClientsCount !== ctx.record.invite?.maxPlayers || proof.maxClientsCount !== split.shareCount) {
+    return fail(ctx, 409, "GAME_PAYMENT_EVIDENCE_MISMATCH", "Исходная операция не соответствует черновику игры");
+  }
+  if (proof.settlementState === "PAYMENT_REQUIRED") {
+    return fail(ctx, 409, "GAME_PAYMENT_PENDING", "Платёж ещё не подтверждён Viva");
+  }
+  if (proof.settlementState !== "PAID" || proof.paymentUrl !== null || !Number.isFinite(at) || at > Date.now()) {
+    return fail(ctx, 409, "GAME_PAYMENT_EVIDENCE_MISMATCH", "Не удалось подтвердить оплату исходной игры");
+  }
+  ctx.paidAt = new Date(at).toISOString();
+  return claimVerifiedTransaction(ctx, "PAID");
 }
 
 if (ctx.step === "token_lookup") {
@@ -369,25 +463,4 @@ if (status !== "PAID") {
     { transactionStatus: status || null },
   );
 }
-const claimId = `viva_transaction:${ctx.transactionId}`;
-const claimCreatedAt = new Date().toISOString();
-ctx.step = "claim_write";
-ctx.claimId = claimId;
-ctx.transactionStatus = status;
-msg._gamePaymentConfirmCtx = ctx;
-msg.payload = [
-  { _id: claimId },
-  {
-    $setOnInsert: {
-      transactionId: ctx.transactionId,
-      bookingId: ctx.bookingId,
-      exerciseId: ctx.exerciseId,
-      clientId: ctx.clientId || null,
-      gameId: ctx.record.id,
-      paymentRef: ctx.paymentRef,
-      createdAt: claimCreatedAt,
-    },
-  },
-  { upsert: true },
-];
-return [null, null, null, null, msg, null];
+return claimVerifiedTransaction(ctx, status);

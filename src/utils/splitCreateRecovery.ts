@@ -8,6 +8,7 @@ export interface SplitCreateResultBinding {
   roomId: string;
   fromTime: string;
   toTime: string;
+  maxClientsCount?: number;
 }
 type Result = ApiResult<unknown>;
 export const SPLIT_CREATE_RECOVERY_DELAYS_MS = [0, 1200, 2200, 3500, 5000] as const;
@@ -26,7 +27,7 @@ export function isAmbiguousSplitCreate(result: Result): boolean {
 export function confirmedSplitCreateResult(value: unknown, binding: SplitCreateResultBinding): boolean {
   if (!record(value) || value.schemaVersion !== 1 || value.recovery !== 'SPLIT_CREATE_RESULT_V1'
     || value.state !== 'CONFIRMED' || value.mode !== 'create' || value.selectedPaymentMode !== 'subscription'
-    || !Object.entries(binding).filter(([key]) => key !== 'paymentRef').every(([key, expected]) => value[key] === expected)
+    || !Object.entries(binding).every(([key, expected]) => ['paymentRef', 'maxClientsCount'].includes(key) || value[key] === expected)
     || !(value.referenceSource === 'STORED_RECEIPT' && typeof value.paymentRef === 'string'
         && /^[A-Za-z0-9._:-]{1,200}$/.test(value.paymentRef)
       || value.referenceSource === 'LEGACY_OPERATION' && value.paymentRef === null && value.toPayMinor === 0)
@@ -36,9 +37,19 @@ export function confirmedSplitCreateResult(value: unknown, binding: SplitCreateR
     || value.shareAmountMinor < 0 || value.shareAmountMinor > 1_000_000 || value.shareAmount !== value.shareAmountMinor / 100
     || value.toPayMinor < 0 || value.toPayMinor > 1_000_000 || value.toPay !== value.toPayMinor / 100) return false;
   if (value.toPayMinor === 0) return value.settlementState === 'CONFIRMED' && !value.paymentUrl && !value.transactionId;
+  if (!uuid(value.transactionId)) return false;
+  const mixed = value.subscriptionVisitCount === 1;
+  if (mixed && (!uuid(value.clientId) || !uuid(value.productId)
+    || (value.maxClientsCount !== 2 && value.maxClientsCount !== 4)
+    || (binding.maxClientsCount !== undefined && value.maxClientsCount !== binding.maxClientsCount)
+    || value.totalAmount !== value.shareAmount * value.maxClientsCount)) return false;
+  if (value.settlementState === 'PAID') {
+    return mixed && value.paymentUrl === null
+      && typeof value.paidAt === 'string' && Number.isFinite(Date.parse(value.paidAt));
+  }
   try {
     const url = new URL(String(value.paymentUrl));
-    return value.settlementState === 'PAYMENT_REQUIRED' && uuid(value.transactionId)
+    return value.settlementState === 'PAYMENT_REQUIRED'
       && url.protocol === 'https:' && !url.username && !url.password;
   } catch { return false; }
 }

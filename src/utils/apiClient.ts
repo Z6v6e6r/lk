@@ -3977,6 +3977,7 @@ export interface PadelSplitPaymentResult {
   operationId?: string | null;
   gameId?: string | null;
   settlementState?: string | null;
+  subscriptionVisitCount?: number | null;
   paymentUrl: string | null;
   toPay: number;
   toPayMinor: number | null;
@@ -8524,6 +8525,7 @@ export async function apiFetchPadelGameByPaymentRef(
   }
 
   let lastStatus: ApiStatus = 200;
+  let provedEmpty = false;
   let lastRequestError: ApiError | null = null;
   let lastRequestErrorStatus: ApiStatus = 200;
   for (const query of lookupQueries) {
@@ -8541,6 +8543,11 @@ export async function apiFetchPadelGameByPaymentRef(
     }
 
     const records = extractPadelGameRecordList(response.data);
+    const empty = Array.isArray(response.data)
+      ? response.data.length === 0
+      : isRecord(response.data) && Array.isArray(response.data.games)
+        && response.data.games.length === 0 && response.data.total === 0;
+    provedEmpty = response.status === 200 && empty;
     if (records.length > 1) {
       return {
         data: null as PadelGameRecord | null,
@@ -8559,7 +8566,11 @@ export async function apiFetchPadelGameByPaymentRef(
 
   return {
     data: null as PadelGameRecord | null,
-    error: lastRequestError ?? { status: lastStatus, message: "Игра по paymentRef не найдена" },
+    error: lastRequestError ?? {
+      status: lastStatus,
+      message: "Игра по paymentRef не найдена",
+      ...(provedEmpty ? { raw: { code: "GAME_PAYMENT_LOOKUP_EMPTY" } } : {}),
+    },
     status: lastRequestError ? lastRequestErrorStatus : lastStatus,
   };
 }
@@ -8972,6 +8983,7 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
     operationId: pickString(data, ["operationId"]) ?? null,
     gameId: pickString(data, ["gameId"]) ?? null,
     settlementState: pickString(data, ["settlementState"]) ?? null,
+    subscriptionVisitCount: pickNumeric(data, ["subscriptionVisitCount"]) ?? null,
     paymentUrl: extractPaymentUrl(data),
     toPay,
     toPayMinor,
@@ -9365,6 +9377,7 @@ async function requestPadelSplitCreateWithPendingPoll(
     clientSubscriptionId: params.clientSubscriptionId || "", studioId: params.studioId, roomId: params.roomId,
     fromTime: `${params.date}T${params.fromTime}:00+03:00`,
     toTime: moscowBookingEndIso(params.date, params.fromTime, params.toTime),
+    maxClientsCount: params.maxClientsCount ?? params.shareCount,
   };
   const query = new URLSearchParams({ operationId: binding.operationId });
   const recovered = await recoverSplitCreateResult(binding, (remainingMs) => runWithAbortTimeout(remainingMs,

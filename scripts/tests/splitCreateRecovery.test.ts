@@ -32,6 +32,19 @@ test('recovery accepts only a fully bound, explicit and consistent success', () 
   assert.equal(confirmedSplitCreateResult({ ...paid, paymentUrl: 'javascript:alert(1)' }, binding), false);
 });
 
+test('a paid mixed recovery keeps the original positive amount and accepts no stale checkout', () => {
+  const expected = { ...binding, maxClientsCount: 4 };
+  const result = { ...success(), subscriptionVisitCount: 1, clientId: id(1), productId: id(8),
+    maxClientsCount: 4, totalAmount: 3000, toPayMinor: 21000, toPay: 210, transactionId: id(7),
+    settlementState: 'PAID', paidAt: '2035-01-01T09:05:00Z' };
+  assert.equal(confirmedSplitCreateResult(result, expected), true);
+  assert.equal(hasDeterministicSubscriptionDecision({ ...result, raw: result }, 'subscription'), true);
+  for (const change of [
+    { paidAt: 'bad' }, { subscriptionVisitCount: 0 }, { maxClientsCount: 2 }, { totalAmount: 210 },
+    { productId: null }, { transactionId: null }, { paymentUrl: 'https://example.test/expired' },
+  ]) assert.equal(confirmedSplitCreateResult({ ...result, ...change }, expected), false);
+});
+
 test('bounded reads recover pending/failed status attempts without accepting an unbound result', async () => {
   let calls = 0;
   const r = await recoverSplitCreateResult(binding, async () => {

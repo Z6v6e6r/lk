@@ -5,7 +5,7 @@ import type {
 
 export interface ServerGameDraftApiResult {
   data: PadelGameRecord | null;
-  error: { message: string } | null;
+  error: { message: string; raw?: unknown } | null;
   status: number | null;
 }
 
@@ -82,11 +82,44 @@ export function isExactServerGameDraftReadback(
   return expectedBookingIds.every((bookingId) => actualBookingIds.has(bookingId));
 }
 
+export interface SplitSurchargeDraftBinding {
+  exerciseId: string;
+  transactionId: string;
+  operationId: string;
+  clientId: string | null;
+  amountMinor: number;
+  canWrite: () => boolean;
+}
+
+export function isSplitSurchargeGameReadback(
+  record: PadelGameRecord | null | undefined,
+  paymentRef: string,
+  bookingIds: string[],
+  binding: SplitSurchargeDraftBinding,
+): record is PadelGameRecord {
+  if (!isExactServerGameDraftReadback(record, paymentRef, bookingIds) || bookingIds.length !== 1) return false;
+  const split = record.metadata?.splitPayment as Record<string, unknown> | undefined;
+  const payments = Array.isArray(split?.payments) ? split.payments as Array<Record<string, unknown>> : [];
+  const organizerPayments = payments.filter(item => item?.role === "ORGANIZER" && item.paymentRef === paymentRef);
+  const payment = organizerPayments[0];
+  const paid = record.status === "PAID" || record.status === "PAYED";
+  return record.archived !== true && (paid || record.status === "PAYMENT_PENDING")
+    && (record.booking?.exerciseId || record.booking?.vivaExerciseId) === binding.exerciseId
+    && Boolean(binding.clientId) && record.organizer?.id === binding.clientId
+    && split?.createOperationId === binding.operationId
+    && organizerPayments.length === 1 && payment.transactionId === binding.transactionId
+    && payment.clientId === binding.clientId && payment.bookingId === bookingIds[0]
+    && payment.amountMinor === binding.amountMinor && record.payment?.amount === binding.amountMinor / 100
+    && (paid ? record.payment.paid === true && payment.status === "PAID" && !record.payment.paymentUrl && !payment.paymentUrl
+      : record.payment.paid !== true && payment.status === "PAYMENT_PENDING");
+}
+
 export async function persistServerGameDraftWithReadback(
   paymentRefRaw: string,
   payload: PadelGameRecordPayload,
   bookingIdsRaw: string[],
   dependencies: ServerGameDraftPersistenceDependencies,
+  splitSurcharge?: SplitSurchargeDraftBinding,
 ): Promise<ServerGameDraftPersistenceResult> {
   const paymentRef = paymentRefRaw.trim();
   const bookingIds = uniqueStrings(bookingIdsRaw);
@@ -99,6 +132,24 @@ export async function persistServerGameDraftWithReadback(
   }));
   const readbackDelaysMs = dependencies.readbackDelaysMs ?? DEFAULT_READBACK_DELAYS_MS;
 
+  const isExpectedDraft = (record: PadelGameRecord | null): record is PadelGameRecord => splitSurcharge
+    ? isSplitSurchargeGameReadback(record, paymentRef, bookingIds, splitSurcharge)
+    : isExactServerGameDraftReadback(record, paymentRef, bookingIds);
+  if (splitSurcharge) {
+    const existing = await dependencies.lookupDraft(paymentRef, bookingIds);
+    if (isExpectedDraft(existing.data)) return { record: existing.data, error: null };
+    // The combined read returns HTTP 200 with an empty list for absence.
+    // Collisions, transport errors and mismatching records cannot authorize a write.
+    const raw = existing.error?.raw as { code?: unknown } | undefined;
+    if (existing.status !== 200 || existing.data || raw?.code !== "GAME_PAYMENT_LOOKUP_EMPTY") {
+      return { record: null, error: existing.error?.message || "Найденная игра не соответствует исходной операции" };
+    }
+  }
+
+  if (splitSurcharge && !splitSurcharge.canWrite()) {
+    return { record: null, error: "Проверка создания игры остановлена" };
+  }
+
   // The split/create request has already created Viva state. Never repeat a
   // draft write after an ambiguous transport result; recover only by readback.
   const writeResult = await dependencies.createDraft(payload, { retries: 0, keepalive: true });
@@ -108,7 +159,7 @@ export async function persistServerGameDraftWithReadback(
   for (const delayMs of readbackDelaysMs) {
     if (delayMs > 0) await wait(delayMs);
     const lookupResult = await dependencies.lookupDraft(paymentRef, bookingIds);
-    if (isExactServerGameDraftReadback(lookupResult.data, paymentRef, bookingIds)) {
+    if (isExpectedDraft(lookupResult.data)) {
       return { record: lookupResult.data, error: null };
     }
     lastLookupError = lookupResult.error?.message || lastLookupError;

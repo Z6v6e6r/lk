@@ -6,6 +6,7 @@ import {
 import {
   persistServerGameDraftWithReadback,
   type ServerGameDraftPersistenceResult,
+  type SplitSurchargeDraftBinding,
 } from "./serverGameDraftPersistencePolicy";
 
 export {
@@ -18,6 +19,7 @@ export async function persistServerGameDraftBeforeRedirect(
   paymentRefRaw: string,
   payload: PadelGameRecordPayload,
   bookingIdsRaw: string[] = [],
+  splitSurcharge?: SplitSurchargeDraftBinding,
 ): Promise<ServerGameDraftPersistenceResult> {
   return persistServerGameDraftWithReadback(paymentRefRaw, payload, bookingIdsRaw, {
     createDraft: apiCreatePadelGameDraft,
@@ -26,5 +28,5 @@ export async function persistServerGameDraftBeforeRedirect(
       bookingIds,
       { mode: "combined" },
     ),
-  });
+  }, splitSurcharge);
 }

@@ -425,3 +425,78 @@ test("provider evidence already bound to another game is rejected", () => {
   assert.equal(out[1], null);
   assert.equal(out[2]?.payload?.code, "GAME_PAYMENT_EVIDENCE_REPLAY");
 });
+
+const splitReceiptOperation = "lk-split-create-synthetic";
+const mixedDraft = {
+  ...draft,
+  booking: { ...draft.booking, timeFromIso: "2026-08-30T11:30:00+03:00", timeToIso: "2026-08-30T13:00:00+03:00" },
+  metadata: { ...draft.metadata, splitPayment: { ...draft.metadata.splitPayment,
+    selectedPaymentMode: "subscription", clientSubscriptionId: "synthetic-subscription", shareCount: 4,
+    createOperationId: splitReceiptOperation, productId: "synthetic-surcharge",
+  } },
+};
+function requestMixedSettlement(authorization?: string) {
+  return runFunction(routerFile, {
+    payload: [mixedDraft], req: { headers: authorization ? { authorization } : {} },
+    _gamePaymentConfirmCtx: { step: "draft_lookup", paymentRef: draft.payment.paymentRef },
+  });
+}
+const mixedProof = {
+  schemaVersion: 1, recovery: "SPLIT_CREATE_RESULT_V1", state: "CONFIRMED", mode: "create", referenceSource: "STORED_RECEIPT",
+  selectedPaymentMode: "subscription", subscriptionVisitCount: 1, settlementState: "PAID",
+  paidAt: "2026-08-26T09:05:00Z", operationId: splitReceiptOperation, paymentUrl: null,
+  paymentRef: draft.payment.paymentRef, transactionId: "transaction-1", bookingId: "booking-1",
+  exerciseId: "exercise-1", clientId: draft.organizer.id, clientSubscriptionId: "synthetic-subscription",
+  productId: "synthetic-surcharge",
+  studioId: draft.booking.studioId, roomId: draft.booking.roomId, fromTime: mixedDraft.booking.timeFromIso,
+  toTime: mixedDraft.booking.timeToIso, maxClientsCount: 4, toPayMinor: 37500,
+};
+
+test("mixed subscription surcharge uses owner-authenticated GET proof, then the existing transaction claim and durable ack", () => {
+  assert.equal(requestMixedSettlement()[2]?.statusCode, 401);
+  const request = requestMixedSettlement("Bearer synthetic-owner")[0];
+  assert.equal(request?.method, "GET");
+  assert.equal(request?.url, "http://127.0.0.1:1880/lk/games/split/create-result?operationId=" + splitReceiptOperation);
+  assert.equal(request?.headers.Authorization, "Bearer synthetic-owner");
+  assert.equal(request?.followRedirects, false);
+  const claimed = runFunction(routerFile, { ...request, statusCode: 200, payload: mixedProof })[4];
+  assert.equal(claimed?._gamePaymentConfirmCtx?.step, "claim_write");
+  const claimRead = runFunction(routerFile, { ...claimed, payload: { acknowledged: true } })[5];
+  const verified = runFunction(routerFile, {
+    ...claimRead, payload: [{ ...claimed?.payload?.[1].$setOnInsert }],
+  })[1];
+  assert.ok(verified);
+  assert.equal(verified.payload.payment.paidAt, "2026-08-26T09:05:00.000Z");
+  assert.equal(verified.payload.payment.paymentUrl, null);
+  assert.equal(verified.payload.metadata.splitPayment.payments[0].transactionId, "transaction-1");
+  assert.equal(verified.payload.metadata.splitPayment.payments[0].status, "PAID");
+  assert.equal(verified.headers, undefined);
+  const create = runFunction(createFile, { ...verified, req: { path: "/lk/games/payment/confirm", query: {} } })[0];
+  assert.ok(create);
+  const readback = runFunction(writeAckFile, {
+    ...create, payload: { acknowledged: true, matchedCount: 1 },
+  })[0];
+  const result = runFunction(writeAckFile, { ...readback, payload: [create._recordForResponse] })[1];
+  assert.equal(result?.statusCode, 200);
+  assert.equal(result?.payload?.status, "PAID");
+});
+
+test("mixed surcharge rejects unpaid, foreign, expired and uncertain proof before claiming the transaction", () => {
+  const cases = [
+    { statusCode: 202, payload: { state: "PENDING_CONFIRMATION" } },
+    { statusCode: 404, payload: {} },
+    ...[
+      { settlementState: "PAYMENT_REQUIRED" }, { clientId: "other-owner" }, { bookingId: "other-booking" },
+      { exerciseId: "other-exercise" }, { transactionId: "other-transaction" }, { toPayMinor: 1 },
+      { paymentRef: "other-ref" }, { productId: "other-product" }, { maxClientsCount: 2 },
+      { paymentUrl: "https://example.test/old-checkout" },
+      { paidAt: "invalid" },
+    ].map(fields => ({ statusCode: 200, payload: { ...mixedProof, ...fields } })),
+  ];
+  for (const evidence of cases) {
+    const out = runFunction(routerFile, { ...requestMixedSettlement("Bearer synthetic-owner")[0], ...evidence });
+    assert.equal(out[4], null);
+    assert.equal(out[1], null);
+    assert.ok(out[2]?.statusCode >= 400);
+  }
+});

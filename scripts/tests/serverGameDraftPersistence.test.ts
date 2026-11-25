@@ -168,3 +168,62 @@ test("draft persistence fails closed when readback never matches", async () => {
   assert.equal(result.record, null);
   assert.match(result.error ?? "", /не подтвердил сохранение/i);
 });
+
+const surchargeBinding = {
+  exerciseId: "synthetic-exercise",
+  transactionId: "synthetic-transaction",
+  operationId: "lk-split-create-synthetic",
+  clientId: payload.organizer.id,
+  amountMinor: 180000,
+  canWrite: () => true,
+};
+const paidSurcharge = {
+  ...record,
+  status: "PAID",
+  organizer: { ...payload.organizer, photo: null, rating: null },
+  booking: { ...record.booking, exerciseId: surchargeBinding.exerciseId },
+  payment: { amount: 1800, paymentUrl: null, paid: true },
+  metadata: { ...record.metadata, splitPayment: {
+    createOperationId: surchargeBinding.operationId,
+    payments: [{ role: "ORGANIZER", status: "PAID", paymentRef, bookingId, amountMinor: surchargeBinding.amountMinor,
+      clientId: surchargeBinding.clientId, transactionId: surchargeBinding.transactionId }],
+  } },
+};
+const absent = { data: null, status: 200, error: { message: "empty", raw: { code: "GAME_PAYMENT_LOOKUP_EMPTY" } } };
+
+test("surcharge recovery reuses an exact paid card before attempting any draft write", async () => {
+  const result = await persistServerGameDraftWithReadback(paymentRef, payload, [bookingId], {
+    createDraft: async () => assert.fail("would overwrite existing paid card"),
+    lookupDraft: async () => ok(paidSurcharge),
+  }, surchargeBinding);
+  assert.equal(result.record, paidSurcharge);
+});
+
+test("surcharge recovery writes one draft after proved absence and resumes via durable readback", async () => {
+  let reads = 0;
+  let writes = 0;
+  const result = await persistServerGameDraftWithReadback(paymentRef, payload, [bookingId], {
+    createDraft: async () => { writes++; return { data: null, error: { message: "response lost" }, status: null }; },
+    lookupDraft: async () => ++reads === 1 ? absent : ok(paidSurcharge),
+    readbackDelaysMs: [0],
+  }, surchargeBinding);
+  assert.equal(result.record, paidSurcharge);
+  assert.equal(writes, 1);
+  assert.equal(reads, 2);
+});
+
+test("surcharge recovery never writes on mismatch, unknown absence or stale wizard owner", async () => {
+  for (const existing of [
+    ok({ ...paidSurcharge, booking: { ...paidSurcharge.booking, exerciseId: "other" } }),
+    ok({ ...paidSurcharge, payment: { ...paidSurcharge.payment, amount: 2100 } }),
+    ok(null),
+    { data: null, status: 409, error: { message: "collision" } },
+    absent,
+  ]) {
+    const result = await persistServerGameDraftWithReadback(paymentRef, payload, [bookingId], {
+      createDraft: async () => assert.fail("unsafe draft write"),
+      lookupDraft: async () => existing,
+    }, { ...surchargeBinding, canWrite: () => existing !== absent });
+    assert.equal(result.record, null);
+  }
+});

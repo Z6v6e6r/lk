@@ -33,14 +33,22 @@ test('real Node-RED GET recovery, CORS, crypto libs, receipt guards and inverse;
       confirmedAt: '2035-01-01T09:00:00Z', updatedAt: '2035-01-01T09:00:00Z',
       createReceipt: { schemaVersion: 1, paymentRef: 'original-ref', deadlineAt: '2035-01-01T09:25:00Z', assembleDeadlineAt: '2035-01-01T04:00:00Z' } };
     let cancelled = false, failTransport = false, providerReads = 0, providerWrites = 0, dbReads = 0;
+    let transactionStatus = 'UNPAID', checkout = null;
+    const readPaths = [];
     const logs = [];
     const provider = http.createServer((req, res) => {
       if (req.method !== 'GET') { providerWrites++; res.writeHead(405); res.end(); return; }
       if (failTransport) { req.socket.destroy(); return; }
-      providerReads++; res.setHeader('Content-Type', 'application/json');
-      const body = req.url.endsWith('/profile') ? { id: req.headers.authorization === 'Bearer synthetic-foreign' ? uid(9) : uid(1) }
+      providerReads++; readPaths.push(req.url); res.setHeader('Content-Type', 'application/json');
+      const body = req.url === '/api/v1/transactions/' + uid(7) ? {
+        id: uid(7), status: transactionStatus, client: { id: uid(1) }, toPay: 21000,
+        products: [{ id: uid(8), paymentBookingIds: [uid(6)] }],
+        cardPaymentInfo: { status: transactionStatus === 'PAID' ? 'CONFIRMED' : 'NEW', paymentUrl: checkout },
+        paymentDate: transactionStatus === 'PAID' ? new Date(Date.now() - 60_000).toISOString() : null,
+      } : req.url.endsWith('/profile') ? { id: req.headers.authorization === 'Bearer synthetic-foreign' ? uid(9) : uid(1) }
         : req.url.includes('/bookings?') ? { content: [{ id: uid(6), client: { id: uid(1) }, clientSubscriptionId: uid(2), paymentType: 'SUBSCRIPTION', isCancelled: cancelled, spot: 1 }], number: 0, last: true, totalElements: 1 }
-          : { id: uid(5), studio: { id: uid(3) }, room: { id: uid(4) }, canceled: false, timeFrom: createPayload.timeFrom, timeTo: createPayload.timeTo };
+          : { id: uid(5), studio: { id: uid(3) }, room: { id: uid(4) }, canceled: false,
+            maxClientsCount: 4, timeFrom: createPayload.timeFrom, timeTo: createPayload.timeTo };
       res.end(JSON.stringify(body));
     });
     const app = express(), server = http.createServer(app);
@@ -105,6 +113,38 @@ test('real Node-RED GET recovery, CORS, crypto libs, receipt guards and inverse;
       candidate.find(n => n.id === ids.handler).wires[0] = ['fixture-loopback'];
       candidate.push({ id: 'fixture-loopback', type: 'function', z: 'tab', x: 0, y: 0, outputs: 1,
         func: `if (msg.method !== 'GET' || !msg.url.startsWith('https://api.vivacrm.ru/')) throw Error('NETWORK_SCOPE'); msg.url = 'http://127.0.0.1:${provider.address().port}/' + msg.url.slice('https://api.vivacrm.ru/'.length); return msg;`, wires: [[ids.http]] });
+      const confirmation = fs.readFileSync('scripts/nodered_games_nodes/fn_game_payment_confirm_router.js', 'utf8');
+      const fixtureNode = (id, type, more) => ({ id, type, z: 'tab', x: 0, y: 0, ...more });
+      candidate.push(
+        fixtureNode('confirm-in', 'http in', { method: 'post', url: '/fixture/confirm', wires: [['confirm-draft']] }),
+        fixtureNode('confirm-draft', 'function', { outputs: 1, wires: [['confirm-router']], func: `
+          msg._gamePaymentConfirmCtx = { step: 'draft_lookup', paymentRef: 'original-ref' };
+          msg.payload = [{
+            id: 'synthetic-game', tenantKey: 'fixture', revision: 1, updatedAt: new Date().toISOString(), status: 'PAYMENT_PENDING',
+            organizer: { id: '${uid(1)}' }, payment: { amount: 210, paymentRef: 'original-ref' },
+            invite: { maxPlayers: 4 },
+            booking: { studioId: '${uid(3)}', roomId: '${uid(4)}', exerciseId: '${uid(5)}',
+              timeFromIso: '2035-01-02T07:00:00+03:00', timeToIso: '2035-01-02T08:30:00+03:00' },
+            metadata: { source: 'games_split_widget', splitPayment: { selectedPaymentMode: 'subscription', shareCount: 4,
+              clientSubscriptionId: '${uid(2)}', productId: '${uid(8)}', createOperationId: '${opId}',
+              payments: [{ role: 'ORGANIZER', paymentRef: 'original-ref', clientId: '${uid(1)}', bookingId: '${uid(6)}',
+                transactionId: '${uid(7)}', amount: 210, amountMinor: 21000 }] } },
+          }];
+          return msg;` }),
+        fixtureNode('confirm-router', 'function', { outputs: 6, func: confirmation,
+          wires: [['confirm-loopback'], [], ['probe-response'], [], ['confirm-claim-probe'], []] }),
+        fixtureNode('confirm-loopback', 'function', { outputs: 1, wires: [['confirm-http']], func: `
+          const prefix = 'http://127.0.0.1:1880/lk/games/split/create-result?operationId=';
+          if (msg.method !== 'GET' || msg.url !== prefix + '${opId}' || msg.followRedirects !== false) throw Error('NETWORK_SCOPE');
+          msg.url = '${base}' + msg.url.slice('http://127.0.0.1:1880'.length);
+          return msg;` }),
+        fixtureNode('confirm-http', 'http request', { method: 'use', ret: 'obj', wires: [['confirm-router']] }),
+        fixtureNode('confirm-claim-probe', 'function', { outputs: 1, wires: [['probe-response']], func: `
+          msg.statusCode = 200;
+          msg.headers = { 'Content-Type': 'application/json' };
+          msg.payload = { claim: msg.payload[0]._id, step: msg._gamePaymentConfirmCtx.step };
+          return msg;` }),
+      );
       await admin('POST', { rev: (await admin('GET')).rev, flows: source });
       const unchanged = RED.nodes.getNode('probe-response');
       await admin('POST', { rev: (await admin('GET')).rev, flows: candidate });
@@ -121,6 +161,38 @@ test('real Node-RED GET recovery, CORS, crypto libs, receipt guards and inverse;
       assert.equal(r.status, 200, JSON.stringify(logs)); assert.equal(result.state, 'CONFIRMED');
       assert.equal(result.paymentRef, 'original-ref'); assert.equal(result.shareAmount, 750); assert.equal(result.toPay, 0);
       assert.equal(dbReads, 2); assert.equal(providerReads, 3); assert.equal(providerWrites, 0);
+      checkout = 'https://payment.example.test/original';
+      target.currency = 'RUB';
+      createPayload.timeTo = '2035-01-02T08:30+03:00';
+      target.durationMinutes = 90;
+      q.decision.benefit = { finalPriceMinor: 21000, currency: 'RUB' };
+      q.fingerprint = JSON.stringify({ tenantKey: 'iSkq6G', actorClientId: uid(1), clientSubscriptionId: uid(2),
+        action: 'CREATE_GAME', rule: q.rule, purchaseDate: q.purchaseDate, createPayload,
+        target: { ...target, eventId: `preflight:${opId}` } });
+      Object.assign(q, { transactionId: uid(7), transactionAttemptedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+        transactionIntent: { bookingId: uid(6), actorClientId: uid(1), studioId: uid(3), chargeMinor: 21000, productId: uid(8) },
+        checkout: { transactionId: uid(7), toPayMinor: 21000, paymentUrl: checkout } });
+      const unpaid = await fetchLocal(endpoint, { headers: auth });
+      assert.equal(unpaid.status, 200, JSON.stringify(logs));
+      assert.equal((await unpaid.json()).paymentUrl, checkout);
+      transactionStatus = 'PAID';
+      const paid = await fetchLocal(endpoint, { headers: auth });
+      assert.equal(paid.status, 200, JSON.stringify(logs));
+      const paidBody = await paid.json();
+      assert.equal(paidBody.settlementState, 'PAID');
+      assert.equal(paidBody.paymentUrl, null);
+      assert.equal(paidBody.toPayMinor, 21000);
+      assert.equal(paidBody.transactionId, uid(7));
+      assert.equal(readPaths.filter(path => path === '/api/v1/transactions/' + uid(7)).length, 2);
+      const confirmationResponse = await fetchLocal('/fixture/confirm', { method: 'POST', headers: auth });
+      assert.equal(confirmationResponse.status, 200, JSON.stringify(logs));
+      assert.deepEqual(await confirmationResponse.json(), { claim: 'viva_transaction:' + uid(7), step: 'claim_write' });
+      const wrongActor = await fetchLocal('/fixture/confirm', {
+        method: 'POST', headers: { Authorization: 'Bearer synthetic-foreign' },
+      });
+      assert.equal(wrongActor.status, 409);
+      assert.equal((await wrongActor.json()).code, 'GAME_PAYMENT_PENDING');
+      assert.equal(providerWrites, 0);
       assert.equal((await fetchLocal(endpoint, { headers: { Authorization: 'Bearer synthetic-foreign' } })).status, 202);
       cancelled = true; assert.equal((await fetchLocal(endpoint, { headers: auth })).status, 202);
       failTransport = true;

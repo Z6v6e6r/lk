@@ -97,3 +97,34 @@ export function composeSplitCreateResultFlow(liveBytes, expectedSha256) {
   validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
   return { candidateBytes, contract, nodes };
 }
+
+// The installed GET reader already owns the route. Only replace its protocol
+// after checking both the source preimage and the existing read-only graph.
+export function updateSplitCreateResultReader(liveBytes, expectedSha256, expectedHandlerSha256) {
+  if (!/^[a-f0-9]{64}$/.test(expectedSha256) || sha(liveBytes) !== expectedSha256
+    || !/^[a-f0-9]{64}$/.test(expectedHandlerSha256)) throw Error('Split result flow preimage mismatch');
+  const flow = JSON.parse(liveBytes);
+  const byId = new Map(flow.map(node => [node.id, node]));
+  const handler = byId.get(SPLIT_CREATE_RESULT_IDS.handler);
+  const ownerFind = byId.get('lk_subscription_booking_find_20260804');
+  if (byId.size !== flow.length || handler?.type !== 'function' || typeof handler.func !== 'string' || sha(handler.func) !== expectedHandlerSha256
+    || ownerFind?.type !== 'mongodb4' || !ownerFind.clientNode
+    || byId.get(handler.z)?.type !== 'tab' || byId.get(handler.z)?.disabled) throw Error('Split result handler preimage mismatch');
+
+  const routes = flow.filter(node => node.type === 'http in' && node.url === SPLIT_CREATE_RESULT_PATH && node.method === 'get');
+  if (routes.length !== 1 || routes[0].id !== SPLIT_CREATE_RESULT_IDS.get) throw Error('Split result route collision');
+  const fields = ['type', 'z', 'url', 'method', 'wires', 'scope', 'outputs', 'clientNode', 'collection', 'operation'];
+  for (const expected of buildSplitCreateResultNodes(handler.z, ownerFind.clientNode)) {
+    const current = byId.get(expected.id);
+    if (!current || fields.some(key => JSON.stringify(current[key]) !== JSON.stringify(expected[key]))) {
+      throw Error('Split result reader graph mismatch');
+    }
+  }
+
+  handler.func = splitCreateResultFunctionSource();
+  const candidateBytes = Buffer.from(JSON.stringify(flow, null, 2) + '\n');
+  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId: 'split-create-result-surcharge',
+    allowedChanges: [{ id: handler.id, fields: ['func'] }], allowedAdditionIds: [] });
+  validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
+  return { candidateBytes, contract, nodes: [] };
+}
