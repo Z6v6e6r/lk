@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import {
+  buildCupStaffLeaveCandidate, ids as cupDiscoveryIds, renderers as cupDiscoveryRenderers,
+} from "../prepare_cup_staff_leave_live_candidate.mjs";
+import { prepareStaffDiscoveryUnlock, finishStaffDiscoveryUnlock } from "../lib/cup_staff_leave_unlock.mjs";
 
 const run = (fileName, msg, options = {}) => {
   const source = fs.readFileSync(`scripts/nodered_games_nodes/${fileName}`, "utf8");
@@ -513,4 +517,202 @@ test("discovery cannot run in background and snapshot drift prevents local delet
   assert.equal(run("fn_split_leave_retry_select.js", { payload: [operation] })[0], null);
   routed._splitLeaveCtx.game.updatedAt = "2026-08-12T09:00:00.000Z";
   assert.equal(run("fn_split_leave_game_update.js", routed)[0], null);
+});
+
+const cupDiscoverySnapshot = '2026-11-25T08:00:00.000Z';
+const cupDiscoveryVersion = stableVersion([
+  'viva-discovery', 'game-1', 'client-2', 'exercise-1', cupDiscoverySnapshot,
+]);
+const vivaRosterRow = {
+  id: 'current-booking-2', client: { id: 'client-2' }, exerciseId: 'exercise-1', isCancelled: false,
+};
+const discoveryGraphSource = process.env.CUP_STAFF_LEAVE_SOURCE_FIXTURE;
+const discoveryGraph = discoveryGraphSource
+  ? JSON.parse(buildCupStaffLeaveCandidate(fs.readFileSync(discoveryGraphSource), 'cup-staff-leave-test').candidateBytes)
+  : null;
+const discoveryFunction = (target, fallback) => {
+  const func = discoveryGraph?.find(node => node.id === cupDiscoveryIds[target])?.func;
+  return new Function('msg', 'global', 'flow', 'env', func
+    ?? (cupDiscoveryRenderers[target]
+      ? cupDiscoveryRenderers[target](fallback && fs.readFileSync(`scripts/nodered_games_nodes/${fallback}.js`, 'utf8'))
+      : fs.readFileSync(`scripts/nodered_games_nodes/${fallback}.js`, 'utf8')));
+};
+const discoveryAuthorize = discoveryFunction('authorize');
+const discoveryRouter = discoveryFunction('router', 'fn_split_leave_router');
+const discoveryUserDir = { get: key => key === 'vivacrm_access_token' ? 'test-admin-token' : null };
+
+const discoverStaffBooking = (visitAction, { stale = false, organizer = false } = {}) => {
+  const input = command();
+  input.payload.target.bookingId = null;
+  input.payload.visitAction = visitAction;
+  input.payload.expectedMembershipVersion = stale ? 'outdated-version' : cupDiscoveryVersion;
+  const result = discoveryFunction('prepare')(input, undefined, undefined, {
+    get: key => key === 'CUP_LK_PLAYER_LEAVE_TOKEN' ? 'service-secret' : null,
+  });
+  assert.equal(result[1], null);
+  const prepared = result[0];
+  prepared.payload = [game({
+    updatedAt: cupDiscoverySnapshot,
+    organizer: { id: organizer ? 'client-2' : 'client-1' },
+    participants: [{ id: 'client-2', source: 'ADMIN', status: 'CONFIRMED' }],
+    metadata: { splitPayment: { vivaExerciseId: 'exercise-1', payments: [
+      { clientId: 'client-2', status: 'EXPIRED', bookingId: 'expired-booking', clientSubscriptionId: 'old-subscription' },
+    ] } },
+  })];
+  return discoveryAuthorize(prepared, discoveryUserDir);
+};
+const routeDiscovery = (msg, payload, statusCode = 200) => discoveryRouter(
+  { ...msg, payload, statusCode }, discoveryUserDir,
+);
+const checkVivaRoster = (msg, rows = [vivaRosterRow]) => routeDiscovery(msg, { content: rows });
+const noReturnOptions = {
+  bookingId: vivaRosterRow.id,
+  cancellationOptions: { cancellationOnly: { available: true }, subscription: { available: false } },
+};
+
+test('staff discovery rejects a stale snapshot or organizer before any Viva request', () => {
+  for (const [variant, code] of [
+    [{ stale: true }, 'STALE_MEMBERSHIP_VERSION'], [{ organizer: true }, 'ORGANIZER_TARGET_FORBIDDEN'],
+  ]) {
+    const result = discoverStaffBooking('NO_RETURN', variant);
+    assert.equal(result[0], null);
+    assert.equal(result[2], undefined);
+    assert.equal(result[1].payload.code, code);
+  }
+});
+
+test('a rejected return preference creates no operation and no-return can bind on the same snapshot', () => {
+  const [,, withReturn] = discoverStaffBooking('RETURN_VISIT');
+  const firstRead = discoveryRouter(withReturn, discoveryUserDir)[0];
+  assert.equal(firstRead.method, 'GET');
+  assert.match(firstRead.url, /\/exercises\/exercise-1\/bookings\?/);
+  const options = checkVivaRoster(firstRead)[0];
+  assert.equal(options.method, 'GET');
+  assert.match(options.url, /\/clients\/client-2\/bookings\/current-booking-2\/cancel$/);
+  const denied = routeDiscovery(options, noReturnOptions);
+  assert.equal(denied[0], null);
+  assert.equal(denied[4], null);
+  assert.equal(denied[1].statusCode, 409);
+
+  const [,, noReturn] = discoverStaffBooking('NO_RETURN');
+  const secondRead = discoveryRouter(noReturn, discoveryUserDir)[0];
+  const optionsRead = checkVivaRoster(secondRead)[0];
+  const ready = routeDiscovery(optionsRead, noReturnOptions);
+  assert.equal(ready[0], null);
+  const context = ready[4]._splitLeaveCtx;
+  assert.equal(context.operationId, withReturn._splitLeaveCtx.operationId);
+  assert.equal(context.vivaTargetMode, 'BOOKINGS');
+  assert.equal(context.preOperationDiscovery, false);
+  assert.equal(context.requestedRefundMethod, 'NONE');
+  assert.deepEqual(context.initialBookingIds, [vivaRosterRow.id]);
+  assert.equal(context.clientSubscriptionId, null);
+  assert.equal(context.subscriptionVisitCount, null);
+
+  if (!discoveryGraph) return;
+  const durableStart = discoveryFunction('start')(structuredClone(ready[4]))[0];
+  const stored = durableStart.payload[1].$setOnInsert;
+  assert.equal(stored.state, 'STARTED');
+  assert.deepEqual(stored.bookingIds, [vivaRosterRow.id]);
+  assert.deepEqual(stored.bookingDiscovery, { bookingId: vivaRosterRow.id, snapshotUpdatedAt: cupDiscoverySnapshot });
+  const operationRoute = discoveryFunction('route');
+  const wrongBinding = operationRoute({ ...structuredClone(durableStart), payload: [{ ...stored, bookingIds: ['replacement'] }] });
+  assert.equal(wrongBinding[2].statusCode, 409);
+  const correct = operationRoute({ ...structuredClone(durableStart), payload: [stored] })[0];
+  assert.equal(correct._splitLeaveCtx.preCancelVerification, true);
+  assert.equal(correct._splitLeaveCtx.step, 'start_verify_active');
+  assert.equal(correct._splitLeaveCtx.bookingDiscoveryLeaseUntil, stored.claimLeaseUntil);
+  const gate = discoveryFunction('providerGate')({ ...correct, payload: [context.game] })[0];
+  assert.equal(gate.payload[1].$set.membershipMutation.staffDiscoveryClaim, stored.claimToken);
+
+  const resume = discoveryFunction('retrySelect')({ payload: [stored] }, discoveryUserDir)[0];
+  const snapshot = structuredClone(context.game);
+  const hydrateRetry = discoveryFunction('retryHydrate');
+  const hydrated = hydrateRetry({ ...structuredClone(resume), payload: [snapshot] }, discoveryUserDir)[1];
+  assert.equal(hydrated._splitLeaveCtx.preCancelVerification, true);
+  assert.deepEqual(hydrated._splitLeaveCtx.initialBookingIds, [vivaRosterRow.id]);
+  snapshot.updatedAt = '2026-11-25T08:01:00.000Z';
+  const stale = hydrateRetry({ ...structuredClone(resume), payload: [snapshot] }, discoveryUserDir);
+  assert.equal(stale[1], null);
+  assert.equal(stale[2].payload.reason, 'staff_discovery_snapshot_changed');
+});
+
+test('staff discovery refuses ambiguous, incomplete and contradictory Viva evidence', () => {
+  for (const payload of [
+    { content: [] },
+    { content: [vivaRosterRow], last: false },
+    { content: [vivaRosterRow, { ...vivaRosterRow, id: 'other-booking' }] },
+    { content: [{ ...vivaRosterRow, clientId: 'other-client' }] },
+    { content: [{ ...vivaRosterRow, exerciseId: 'other-exercise' }] },
+    { content: [{ ...vivaRosterRow, cancelled: true }] },
+  ]) {
+    const [,, authorized] = discoverStaffBooking('NO_RETURN');
+    const activeRead = discoveryRouter(authorized, discoveryUserDir)[0];
+    const rejected = routeDiscovery(activeRead, payload);
+    assert.equal(rejected[0], null);
+    assert.equal(rejected[4], null);
+    assert.equal(rejected[1].statusCode, 409);
+  }
+});
+
+test('discovered booking must still match before cancellation and before roster update', () => {
+  const [,, authorized] = discoverStaffBooking('NO_RETURN');
+  const activeRead = discoveryRouter(authorized, discoveryUserDir)[0];
+  const options = checkVivaRoster(activeRead)[0];
+  const ready = routeDiscovery(options, noReturnOptions)[4];
+  ready._splitLeaveCtx.preCancelVerification = true;
+  ready._splitLeaveCtx.step = 'verify_active';
+  ready._splitLeaveCtx.operationState = 'STARTED';
+  ready._splitLeaveCtx.operationKey = 'game-1:staff-leave-1';
+  ready._splitLeaveCtx.bookingDiscoveryLockClaim = ready._splitLeaveCtx.claimToken;
+  ready._splitLeaveCtx.bookingDiscoveryLeaseUntil = new Date(Date.now() + 60_000).toISOString();
+  const replacement = checkVivaRoster(structuredClone(ready), [{ ...vivaRosterRow, id: 'replacement' }]);
+  assert.equal(replacement[0], null);
+  assert.equal(replacement[1], null);
+  assert.equal(replacement[5].statusCode, 409);
+  const [unlock] = prepareStaffDiscoveryUnlock(replacement[5]);
+  assert.deepEqual(unlock.payload[0], {
+    id: 'game-1',
+    'membershipMutation.operationKey': 'game-1:staff-leave-1',
+    'membershipMutation.staffDiscoveryClaim': ready._splitLeaveCtx.claimToken,
+  });
+  assert.deepEqual(unlock.payload[1], { $unset: { membershipMutation: '' } });
+  assert.equal(unlock._splitLeaveCtx, undefined);
+  const replacedClaim = finishStaffDiscoveryUnlock({ ...unlock, payload: { acknowledged: true, matchedCount: 0 } });
+  assert.equal(replacedClaim.statusCode, 409);
+  assert.equal(replacedClaim.payload.state, 'CONFLICT');
+  const current = checkVivaRoster(structuredClone(ready))[0];
+  assert.equal(current.method, 'GET');
+  const expired = structuredClone(current);
+  expired._splitLeaveCtx.bookingDiscoveryLeaseUntil = '2026-01-01T00:00:00.000Z';
+  const late = routeDiscovery(expired, noReturnOptions);
+  assert.equal(late[0], null);
+  assert.equal(late[5].statusCode, 409);
+  const otherOptions = routeDiscovery(structuredClone(current), { ...noReturnOptions, bookingId: 'other-booking' });
+  assert.equal(otherOptions[0], null);
+  assert.equal(otherOptions[5].statusCode, 409);
+  const cancel = routeDiscovery(current, noReturnOptions)[0];
+  assert.equal(cancel.method, 'PUT');
+  assert.deepEqual(cancel.payload, { refundMethod: 'NONE', cancelExercise: false });
+
+  const activeAfter = routeDiscovery(cancel, {}, 200)[0];
+  const history = checkVivaRoster(activeAfter, [])[0];
+  assert.equal(history.method, 'GET');
+  assert.match(history.url, /showCancelled=true/);
+  const uncertain = checkVivaRoster(structuredClone(history), [
+    { ...vivaRosterRow, isCancelled: undefined, status: 'CANCELLATION_PENDING' },
+  ]);
+  assert.equal(uncertain[3], null);
+  assert.equal(uncertain[0], null);
+  assert.equal(uncertain[5].statusCode, 202);
+  const [pendingUnlock] = prepareStaffDiscoveryUnlock(uncertain[5]);
+  const pending = finishStaffDiscoveryUnlock({ ...pendingUnlock, payload: { acknowledged: true, matchedCount: 1 } });
+  assert.equal(pending.statusCode, 202);
+  assert.equal(pending.payload.state, 'IN_PROGRESS');
+  const confirmed = checkVivaRoster(history, [{ ...vivaRosterRow, isCancelled: true }]);
+  assert.equal(confirmed[3]._splitLeaveCtx.vivaVerification, 'active_absent_history_cancelled');
+  const apply = discoveryFunction('update', 'fn_split_leave_game_update')(confirmed[3])[0];
+  assert.deepEqual(apply.payload[1].$set.participants, []);
+  assert.deepEqual(apply.payload[1].$set.metadata.splitPayment.payments, [
+    { clientId: 'client-2', status: 'EXPIRED', bookingId: 'expired-booking', clientSubscriptionId: 'old-subscription' },
+  ]);
 });
