@@ -55,3 +55,42 @@ for forward recovery; do not roll back code blindly while such operations exist.
 Release postchecks must verify exact client/exercise binding, provider absence,
 subscription-return evidence, local roster and unchanged historical payments.
 No merge, deployment or live data action is part of the source change.
+
+## Primary LK1 recovery profile, November 2026
+
+The November primary graph uses the organizer-handoff membership lock and newer
+leave gates. Its CUP facade already sends a snapshot version when an imported
+Viva participant has no linked booking ID in LK. The installed Node-RED staff
+authorizer predates that contract. `ADMIN` is also a projection value assigned
+when LK reads the Viva roster. It does not identify who initiated the booking.
+
+Use `scripts/prepare_cup_staff_leave_live_candidate.mjs` for this pinned primary
+graph. It makes an exact-graph candidate and contract outside Git from a fresh
+private snapshot. It does not update the Pade Prime route or use the September
+optimistic-CAS profile.
+
+```sh
+node scripts/prepare_cup_staff_leave_live_candidate.mjs \
+  /absolute/private/source.flow.json /absolute/new-private-output deployment-id
+CUP_STAFF_LEAVE_SOURCE_FIXTURE=/absolute/private/source.flow.json \
+  node --test scripts/tests/staffPlayerLeave.nodered.test.mjs
+```
+
+For the unbound staff path, read the complete exercise roster and the exact
+booking's cancellation options first. Only an explicit no-return request,
+supported by Viva, can create a durable operation. A rejected option leaves the
+same snapshot available for a corrected request. The operation stores the exact
+booking and snapshot before entering the normal membership lock. A second roster
+check and the exact cancellation-options response guard the request to Viva.
+Active absence and explicit matching cancellation history guard local removal.
+The existing linked-booking return path retains its original behavior. An unbound
+booking for which a return is requested requires separate verification.
+
+Recovery retains the original booking and snapshot. A provider failure releases
+only the lock stamped with the failed claim, keeping a newer retry's lock and
+the original response. If the outcome of a provider write is uncertain, recovery
+rechecks the exact booking and leaves the local roster alone until confirmation.
+Refreshing the live graph invalidates earlier candidate and reversal evidence.
+Recheck the unpaid cancellation worker's full-graph pin and editor state during
+release admission. This source-only profile does not execute an install, restart,
+Viva cancellation, or data repair.
