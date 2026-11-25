@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { gameBookingOptions, eventBookingOptions } from "../../src/lk-pilot/bookingOptionPresentation.ts";
 import type { SubscriptionPricePreview } from "../../src/components/games/subscriptionPricePreview.ts";
 import type { SubscriptionEventDiscountQuote } from "../../src/utils/groupSubscriptionDiscount.ts";
+import { SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS } from "../../src/utils/subscriptionCategoryDailyLimit.ts";
+import { sanitizeSubscriptionSnapshot } from "../../src/utils/subscriptionSnapshotData.ts";
 import { isolateBookingPilot } from "./vite.config.ts";
 
 test("pilot game creation keeps one payment selector and keeps game join separate", async () => {
@@ -17,6 +19,8 @@ test("pilot game creation keeps one payment selector and keeps game join separat
   assert.equal([...transformed.matchAll(/<BookingOptions\b/g)].length, 2);
   assert.equal([...transformed.matchAll(/<BookingOptions category="game" title="Создание игры"/g)].length, 1);
   assert.match(transformed, /<BookingOptions category="game" title="Запись на игру"/);
+  assert.match(transformed, /gameBookingOptions\(detailsSplitSubscriptionOptions,[^)]*,\s*detailsSplitSubscriptions\)/);
+  assert.match(transformed, /gameBookingOptions\(splitSubscriptionPaymentOptions,[^)]*,\s*splitSubscriptions\)/);
   assert.doesNotMatch(transformed, /className="team-card game-create-payment-method-card"/);
 });
 
@@ -68,10 +72,33 @@ test("second game with a confirmed discounted quarter shows 30% and 2,800 rubles
   };
   const result = gameBookingOptions([{ subscriptionId: "owned", name: "Дружба 2.0" }], { owned: quote }, 120);
   assert.deepEqual(result.options, [{
-    id: "owned", name: "Дружба 2.0", amountMinor: 280_000, basePriceMinor: 400_000,
+    id: "owned", name: "По подписке Дружба2.0", amountMinor: 280_000, basePriceMinor: 400_000,
     benefit: "Скидка 30% на запись",
   }]);
   const ambiguous = gameBookingOptions([{ subscriptionId: "owned", name: "Дружба 2.0" }],
     { owned: { ...quote, amountMinor: 280_001 } }, 120);
   assert.equal(ambiguous.options[0]?.benefit, "Применена скидка подписки");
+});
+
+test("the pilot labels the owned Friendship 2.0 product even when Viva omits its name", () => {
+  const quote: SubscriptionPricePreview = {
+    state: "available", label: "По подписке", detail: "Доплата за 120 мин",
+    amountMinor: 280_000, basePriceMinor: 400_000, paidMinutes: 120, discounted: true,
+  };
+  const owned = sanitizeSubscriptionSnapshot({ content: [
+    { subscriptionId: "v2", product: { id: SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS.friendship_two_hours } },
+    { subscriptionId: "legacy", productId: SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS.friendship },
+    { subscriptionId: "other", name: "Другая подписка" },
+  ] });
+  assert.ok(owned);
+  const result = gameBookingOptions([
+    { subscriptionId: "v2", name: "Абонемент" },
+    { subscriptionId: "legacy", name: "Абонемент" },
+    { subscriptionId: "other", name: "Другая подписка" },
+  ], { v2: quote, legacy: quote, other: quote }, 120, owned.content);
+  assert.deepEqual(result.options.map(({ name, amountMinor }) => [name, amountMinor]), [
+    ["По подписке Дружба2.0", 280_000],
+    ["По подписке", 280_000],
+    ["Другая подписка", 280_000],
+  ]);
 });
