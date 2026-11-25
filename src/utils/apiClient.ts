@@ -6191,7 +6191,7 @@ export async function apiFetchStudios() {
     `${API_BASE}/end-user/api/v1/${TENANT_KEY}/studios?size=1000`,
     {
       method: "GET",
-      auth: true,
+      auth: import.meta.env.VITE_LK_READ_ONLY_PILOT !== "true",
       retries: 1,
     },
   );

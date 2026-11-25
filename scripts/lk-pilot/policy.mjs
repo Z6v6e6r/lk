@@ -2,15 +2,19 @@ const lk = "https://padlhub.su";
 const viva = "https://api.vivacrm.ru";
 const id = "[a-zA-Z0-9_-]{1,128}";
 const provider = "/end-user/api/v[12]/iSkq6G";
+const masterServiceMetadata = new RegExp(`^/end-user/api/v1/iSkq6G/products/master-services/${id}/(meta|subServices|studios)$`);
 
 const get = [
+  [lk, /^\/lk\/onboarding\/stations$/],
   [lk, /^\/(?:seliger\/)?lk\/games$/],
   [lk, new RegExp(`^/(?:seliger/)?lk/games/${id}$`)],
   [lk, /^\/(?:seliger\/)?lk\/tournaments\/participants$/],
   [lk, new RegExp(`^/api/tournaments(?:/${id}(?:/registration/me)?)?$`)],
   [lk, /^\/(?:seliger\/)?lk\/games\/composite\/options$/],
   [viva, new RegExp(`^${provider}/(?:profile|studios|subscriptions|bookings(?:/history)?|exercises(?:/period)?|one-times/filter|products/subscriptions(?:/${id})?)$`)],
+  [viva, /^\/api\/v1\/time$/],
   [viva, new RegExp(`^${provider}/products/master-services(?:/${id}(?:/price)?)?$`)],
+  [viva, masterServiceMetadata],
   [viva, new RegExp(`^${provider}/exercises/${id}(?:/bookings)?$`)],
 ];
 const post = [
@@ -29,6 +33,11 @@ export function readPilotTarget(value, method) {
   if (url.username || url.password || url.hash || url.port) return null;
   const rules = method === "GET" ? get : method === "POST" ? post : [];
   if (!rules.some(([origin, pattern]) => url.origin === origin && pattern.test(url.pathname))) return null;
+  if (url.pathname === "/lk/onboarding/stations" && url.search) return null;
+  if (url.pathname === "/api/v1/time" && (url.searchParams.size !== 1 || !url.searchParams.get("timeZone"))) return null;
+  const metadata = url.pathname.match(masterServiceMetadata)?.[1];
+  if (metadata && url.search && (metadata !== "subServices" || url.searchParams.size !== 2
+    || !new RegExp(`^${id}$`).test(url.searchParams.get("studioId") ?? "") || url.searchParams.get("showAll") !== "true")) return null;
   const game = url.pathname.match(/^\/(?:seliger\/)?lk\/games(?:\/([^/]+))?$/);
   if (game) {
     if (game[1]) {

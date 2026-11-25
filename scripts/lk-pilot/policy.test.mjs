@@ -14,7 +14,12 @@ const quotes = lk + "/lk/subscriptions/game-price-preview";
 test("pilot opens the established browse and tariff contracts", () => {
   for (const url of [
     lk + "/lk/games?public=true&limit=20&_ts=1", lk + "/lk/games/123abc", lk + "/api/tournaments/123abc/registration/me",
-    viva + "/exercises?date=2026-11-25", viva + "/products/master-services/123abc/price",
+    lk + "/lk/onboarding/stations", lk + "/api/tournaments?date=2026-11-25",
+    viva + "/exercises?date=2026-11-25", viva + "/studios?size=1000",
+    "https://api.vivacrm.ru/api/v1/time?timeZone=Europe%2FMoscow",
+    viva + "/products/master-services/123abc/price", viva + "/products/master-services/123abc/meta",
+    viva + "/products/master-services/123abc/subServices?studioId=123&showAll=true",
+    viva + "/products/master-services/123abc/studios",
   ]) assert.ok(readPilotTarget(url, "GET"), url);
   for (const url of [quotes, viva + "/transactions/preview", viva + "/products/master-services/123abc/timeslots"]) {
     assert.ok(readPilotTarget(url, "POST"), url);
@@ -26,6 +31,11 @@ test("pilot rejects writes, side-effecting reads and unreviewed routes", () => {
     ["POST", lk + "/lk/games/split/cleanup"],
     ["POST", lk + "/lk/games/123abc/split/join"],
     ["GET", lk + "/api/tournaments?refresh=if-stale"],
+    ["GET", lk + "/lk/onboarding/stations?includeInactive=true"],
+    ["POST", lk + "/lk/onboarding/stations"],
+    ["POST", viva + "/products/master-services/123abc/subServices"],
+    ["GET", viva + "/products/master-services/123abc/subServices?studioId=123&showAll=false"],
+    ["GET", viva.replace("/v1/", "/v2/") + "/products/master-services/123abc/meta"],
     ["GET", lk + "/lk/games/by-phone?phone=70000000000"],
     ["GET", lk + "/lk/games/by-phone"],
     ["GET", lk + "/lk/games?public=true&profileId=someone"],

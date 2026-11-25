@@ -1261,7 +1261,9 @@ export default function TournamentSignupPage({
   }, [selectedDateStr]);
 
   const refreshTournamentList = useCallback(async () => {
-    await loadList({ requestRefresh: !subscriptionUsageShadowEnabled });
+    await loadList({
+      requestRefresh: !subscriptionUsageShadowEnabled && import.meta.env.VITE_LK_READ_ONLY_PILOT !== "true",
+    });
   }, [loadList, subscriptionUsageShadowEnabled]);
 
   const loadDetail = useCallback(async (tournamentId: string) => {
