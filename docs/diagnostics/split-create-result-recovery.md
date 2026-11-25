@@ -116,6 +116,10 @@ For an existing reader, pass `--update-reader <reviewed handler SHA256>` to the
 same preparation script. That mode checks the existing route and read-only graph
 and replaces only the function body. The game-payment confirmation graph must include
 `fn_game_payment_confirm_router.js` and its existing claim and readback nodes.
+The create/draft paths must persist the canonical tenant and revision and fence
+the pending draft with the unique `(tenantKey, id)` index. A legacy
+payment-reference-only upsert can overwrite a concurrent paid card and cannot
+serve as this rollout's draft writer.
 The mixed branch uses the reader on the same Node-RED instance
 (`127.0.0.1:1880` on the LK host). Validate both backend paths together.
 An older reader yields pending for the mixed booking. The browser never repeats

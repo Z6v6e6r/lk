@@ -267,7 +267,14 @@ test('installed-reader update changes only the numbered handler and rejects a mi
   assert.equal(changed[0].id, handler.id);
   assert.match(changed[0].func, /SPLIT_CREATE_RESULT_SURCHARGE_UNVERIFIED/);
   assert.throws(() => updateSplitCreateResultReader(before, sha(before), '0'.repeat(64)), /handler preimage/);
-  flow.find(node => node.id === SPLIT_CREATE_RESULT_IDS.find).operation = 'updateOne';
-  const wrongGraph = Buffer.from(JSON.stringify(flow));
-  assert.throws(() => updateSplitCreateResultReader(wrongGraph, sha(wrongGraph), sha(handler.func)), /graph mismatch/);
+  for (const [nodeId, key, value] of [
+    [SPLIT_CREATE_RESULT_IDS.find, 'operation', 'updateOne'],
+    [SPLIT_CREATE_RESULT_IDS.find, 'output', 'cursor'],
+    [SPLIT_CREATE_RESULT_IDS.http, 'ret', 'txt'],
+  ]) {
+    const wrongFlow = structuredClone(flow);
+    wrongFlow.find(node => node.id === nodeId)[key] = value;
+    const wrongGraph = Buffer.from(JSON.stringify(wrongFlow));
+    assert.throws(() => updateSplitCreateResultReader(wrongGraph, sha(wrongGraph), sha(handler.func)), /graph mismatch/);
+  }
 });

@@ -113,7 +113,8 @@ export function updateSplitCreateResultReader(liveBytes, expectedSha256, expecte
 
   const routes = flow.filter(node => node.type === 'http in' && node.url === SPLIT_CREATE_RESULT_PATH && node.method === 'get');
   if (routes.length !== 1 || routes[0].id !== SPLIT_CREATE_RESULT_IDS.get) throw Error('Split result route collision');
-  const fields = ['type', 'z', 'url', 'method', 'wires', 'scope', 'outputs', 'clientNode', 'collection', 'operation'];
+  const fields = ['type', 'z', 'url', 'method', 'wires', 'scope', 'uncaught', 'outputs', 'ret', 'senderr',
+    'clientNode', 'collection', 'operation', 'mode', 'output', 'handleDocId', 'maxTimeMS'];
   for (const expected of buildSplitCreateResultNodes(handler.z, ownerFind.clientNode)) {
     const current = byId.get(expected.id);
     if (!current || fields.some(key => JSON.stringify(current[key]) !== JSON.stringify(expected[key]))) {
