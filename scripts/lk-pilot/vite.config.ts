@@ -5,22 +5,31 @@ import cssInjectedByJs from "vite-plugin-css-injected-by-js";
 
 const replacements: Record<string, Record<string, string>> = {
   "GamesPage.tsx": {
-    "details-action-row details-join-action-row": '<BookingOptions category="game" title="Запись на игру" amountMinor={minorFromRubles(detailsSplitShareAmount)} options={fromGamePriceQuotes(detailsJoinPricePreview.bySubscriptionId)} loading={detailsSplitSubscriptionsLoading} />',
-    "game-payment-stack": '<BookingOptions category="game" title="Создание игры" amountMinor={minorFromRubles(slotPrice ?? selectedSlot?.price, splitPaymentSelected ? splitShareCount : 1)} options={splitPaymentSelected ? fromGamePriceQuotes(publicSplitPricePreview.bySubscriptionId) : []} loading={splitSubscriptionsLoading} />',
-    "team-card game-create-payment-method-card":
-      '<BookingOptions category="game" title="Моя доля" amountMinor={minorFromRubles(slotPrice ?? selectedSlot?.price, splitShareCount)} options={fromGamePriceQuotes(publicSplitPricePreview.bySubscriptionId)} loading={splitSubscriptionsLoading} />',
+    "details-action-row details-join-action-row": `<BookingOptions category="game" title="Запись на игру"
+      amountMinor={minorFromRubles(detailsSplitShareAmount)} regularLabel="Разовое участие"
+      regularDetail={isDetailsSplitPaymentGame ? \`Моя доля 1/\${detailsSplitShareCount} стоимости\` : undefined}
+      {...gameBookingOptions(detailsSplitSubscriptionOptions, detailsJoinPricePreview.bySubscriptionId, detailsDurationMinutes)}
+      loading={detailsSplitSubscriptionsLoading} />`,
+    "game-payment-stack": `<BookingOptions category="game" title="Создание игры"
+      amountMinor={minorFromRubles(basePaymentAmount, splitPaymentSelected ? splitShareCount : 1)}
+      regularLabel={splitPaymentSelected ? "Разовое участие" : "Полная оплата корта"}
+      regularDetail={splitPaymentSelected ? \`Моя доля 1/\${splitShareCount} стоимости\` : "Оплата всего корта без применения льгот"}
+      terms={splitPaymentSelected ? undefined : "Стоимость оплачивается полностью за всех игроков. Льготы не расходуются."}
+      {...(splitPaymentSelected ? gameBookingOptions(splitSubscriptionPaymentOptions, publicSplitPricePreview.bySubscriptionId, duration) : {})}
+      loading={splitPaymentSelected && splitSubscriptionsLoading} />`,
+    "team-card game-create-payment-method-card": "<></>",
   },
   "GroupSchedulePage.tsx": {
     "tournament-signup-registration group-schedule-registration group-schedule-registration--trainer":
-      '<BookingOptions category="training" key={selectedTraining.id} title={selectedTraining.title} amountMinor={null} options={[...fromStandardProducts(checkout?.oneTimes ?? []), ...fromEventPriceQuotes(currentDiscountQuotes)]} loading={discountPending} />',
+      '<BookingOptions category="training" key={selectedTraining.id} title={selectedTraining.title} amountMinor={null} {...eventBookingOptions(checkout?.oneTimes ?? [], currentDiscountQuotes)} loading={discountPending} />',
   },
   "TournamentSignupPage.tsx": {
     "tournament-signup-register-stack":
-      '<BookingOptions category="tournament" key={selectedExerciseId} title={selectedTournament?.title ?? "Запись на турнир"} amountMinor={null} options={[...fromStandardProducts(checkout?.oneTimes ?? []), ...fromEventPriceQuotes(currentDiscountQuotes)]} loading={discountPending} />',
+      '<BookingOptions category="tournament" key={selectedExerciseId} title={selectedTournament?.title ?? "Запись на турнир"} amountMinor={null} {...eventBookingOptions(checkout?.oneTimes ?? [], currentDiscountQuotes)} loading={discountPending} />',
   },
 };
 
-function isolateBookingPilot(): Plugin {
+export function isolateBookingPilot(): Plugin {
   return {
     name: "lk1-pilot-booking-slots",
     enforce: "pre",
@@ -85,7 +94,7 @@ function isolateBookingPilot(): Plugin {
       );
       const prelude = [
         'import { navigateWithinPilot, pilotHref } from "/src/lk-pilot/routes.ts";',
-        ...seen.size ? ['import { BookingOptions, minorFromRubles, fromGamePriceQuotes, fromEventPriceQuotes, fromStandardProducts } from "/src/lk-pilot/BookingOptions.tsx";'] : [],
+        ...seen.size ? ['import { BookingOptions } from "/src/lk-pilot/BookingOptions.tsx";\nimport { minorFromRubles, gameBookingOptions, eventBookingOptions } from "/src/lk-pilot/bookingOptionPresentation.ts";'] : [],
       ].join("\n");
       return prelude + "\n" + apply;
     },

@@ -50,7 +50,9 @@ function BookingScreen() {
         {comparisonCategories.map((category, index) => {
           const quote = readComparisonQuote(category, scope);
           return quote
-            ? <BookingOptions key={category} title={quote.title} amountMinor={quote.amountMinor} options={quote.options} />
+            ? <BookingOptions key={category} title={quote.title} amountMinor={quote.amountMinor} options={quote.options}
+              regularLabel={quote.regularLabel} regularDetail={quote.regularDetail}
+              terms={quote.terms} explanations={quote.explanations} />
             : <section className="matrix-payment" key={category}>
               <h2>{pilotScreens[screens[index]]}</h2>
               <p>Выберите событие, чтобы получить подтверждённую цену.</p>
