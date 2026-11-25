@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { PilotSession } from "./PilotSession";
+import { PilotSession, usePilotComparisonScope } from "./PilotSession";
 import { BookingOptions, comparisonCategories, readComparisonQuote } from "./BookingOptions";
 import { AppErrorBoundary } from "../components/UI/AppErrorBoundary";
 import { OverlayScopeProvider } from "../context/OverlayScopeContext";
@@ -26,6 +26,7 @@ const listForDetail = {
 } as const;
 
 function BookingScreen() {
+  const scope = usePilotComparisonScope();
   if (screen in listForDetail && !eventId) {
     const list = listForDetail[screen as keyof typeof listForDetail];
     return <section className="matrix-payment"><p>Выберите событие, чтобы открыть его карточку.</p><a href={pilotHref(list)}>{pilotScreens[list]}</a></section>;
@@ -47,7 +48,7 @@ function BookingScreen() {
       const screens = ["game-list", "training-booking", "tournament-booking"] as const;
       return <div className="matrix-comparison"><h1>Способы записи</h1><div>
         {comparisonCategories.map((category, index) => {
-          const quote = readComparisonQuote(category);
+          const quote = readComparisonQuote(category, scope);
           return quote
             ? <BookingOptions key={category} title={quote.title} amountMinor={quote.amountMinor} options={quote.options} />
             : <section className="matrix-payment" key={category}>

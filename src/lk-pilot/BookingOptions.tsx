@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react";
+import { usePilotComparisonScope } from "./PilotSession";
 import type { SubscriptionPricePreview } from "../components/games/subscriptionPricePreview";
 
 export type BookingOption = {
@@ -47,25 +48,27 @@ type ComparisonQuote = {
   amountMinor: number | null;
   options: BookingOption[];
   expiresAt: number;
+  scope: string;
 };
 
 function comparisonKey(category: ComparisonCategory) {
   return `lk1-pilot-comparison:${category}`;
 }
 
-export function readComparisonQuote(category: ComparisonCategory): ComparisonQuote | null {
+export function readComparisonQuote(category: ComparisonCategory, scope: string | null): ComparisonQuote | null {
+  if (!scope) return null;
   try {
     const value = JSON.parse(sessionStorage.getItem(comparisonKey(category)) ?? "null") as ComparisonQuote | null;
-    return value && value.expiresAt > Date.now() && Array.isArray(value.options) ? value : null;
+    return value && value.scope === scope && value.expiresAt > Date.now() && Array.isArray(value.options) ? value : null;
   } catch {
     return null;
   }
 }
 
-function storeComparisonQuote(category: ComparisonCategory, snapshot: string) {
+function storeComparisonQuote(category: ComparisonCategory, snapshot: string, scope: string) {
   try {
     sessionStorage.setItem(comparisonKey(category), JSON.stringify({
-      ...JSON.parse(snapshot), expiresAt: Date.now() + 15_000,
+      ...JSON.parse(snapshot), scope, expiresAt: Date.now() + 15_000,
     }));
   } catch {
     // Event prices remain available when browser storage is unavailable.
@@ -80,6 +83,7 @@ export function BookingOptions({ title, amountMinor, options = [], loading = fal
   category?: ComparisonCategory;
 }) {
   const groupId = useId();
+  const scope = usePilotComparisonScope();
   const [selection, setSelection] = useState("regular");
   const choices = [{ id: "regular", name: "Полная цена", amountMinor }, ...options]
     .filter((option) => Number.isSafeInteger(option.amountMinor) && Number(option.amountMinor) >= 0);
@@ -89,8 +93,8 @@ export function BookingOptions({ title, amountMinor, options = [], loading = fal
     title, amountMinor, options: options.map((option, index) => ({ ...option, id: `option-${index}` })),
   });
   useEffect(() => {
-    if (category && !loading && hasValidOptions) storeComparisonQuote(category, snapshot);
-  }, [category, loading, snapshot, hasValidOptions]);
+    if (category && scope && !loading && hasValidOptions) storeComparisonQuote(category, snapshot, scope);
+  }, [category, scope, loading, snapshot, hasValidOptions]);
 
   return (
     <section className="matrix-payment" aria-label={title} aria-busy={loading}>
