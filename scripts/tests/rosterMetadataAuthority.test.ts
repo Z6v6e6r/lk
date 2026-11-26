@@ -70,3 +70,21 @@ test("production roster builder uses the merge without reintroducing authority a
   assert.match(builder, /return mergeRosterMetadata\(baseMetadata,/);
   assert.doesNotMatch(builder, /organizer(?:Id|Phone|PhoneNorm):/);
 });
+
+test("paid converted open game keeps its roster and classification on ordinary PATCH", () => {
+  const metadata = { source: "cabinet_booking_convert", typeId: 1613, joinPrice: "1050" };
+  const member = { id: "participant", status: "CONFIRMED" };
+  const run = (participants: unknown[], changes = metadata) => {
+    const msg = { payload: [{ organizer, metadata, settings: { payMode: "self" },
+      participants: [member, { id: "pending", status: "PENDING" }] }],
+      _organizerGuardBody: { participants, metadata: changes } };
+    return new Function("msg", guardSource)(structuredClone(msg));
+  };
+  assert.equal(run([member, { id: "unbooked", status: "PAID" }])[1].payload.code,
+    "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  assert.equal(run([member, { id: "pending", status: "CONFIRMED" }])[1].payload.code,
+    "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  assert.equal(run([member, member])[1].payload.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  assert.deepEqual(run([member], { source: "games_widget", typeId: 0, joinPrice: "0" })[0].payload.metadata, metadata);
+  assert.ok(guard(metadata, { ...metadata, typeId: 0, typeName: "Аренда корта" })[0]);
+});

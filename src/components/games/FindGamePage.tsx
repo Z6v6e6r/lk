@@ -1,3 +1,4 @@
+import { hasPaidConvertedOpenGameJoin } from "./bookingConversionEvidence";
 import { AvatarImage } from "../UI/AvatarImage";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -888,6 +889,7 @@ function isJoinablePublicGame(
   const participantCount = countActiveParticipants(game);
   const viewerState = resolveViewerState(game, viewer);
   if (viewerState !== "none") return true;
+  if (!isSplitPaymentGame(game) && hasPaidConvertedOpenGameJoin(game.metadata)) return false;
 
   return participantCount < maxPlayers || resolveWaitlistEnabled(game);
 }

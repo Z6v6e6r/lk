@@ -516,12 +516,24 @@ const isBookingConvertCategoryAllowed = (
   || bookingConvertCategory === EXERCISE_CATEGORY_COURT_RENTAL
 );
 
-if (isCabinetBookingConvert && !isBookingConvertCategoryAllowed) {
-  const error = bookingConvertCategory
+const positiveBookingConvertJoinPrice = (
+  (typeof metadataInput.joinPrice === "number" || typeof metadataInput.joinPrice === "string")
+  && toNum(metadataInput.joinPrice) > 0
+);
+const paidOpenBookingConvert = mode === "create"
+  && bookingConvertCategory === EXERCISE_CATEGORY_OPEN_GAME
+  && positiveBookingConvertJoinPrice;
+
+if (isCabinetBookingConvert && (!isBookingConvertCategoryAllowed || paidOpenBookingConvert)) {
+  const error = paidOpenBookingConvert
+    ? "Из этой брони нельзя открыть платный набор. Для оплаты отдельных мест создайте игру с раздельной оплатой."
+    : bookingConvertCategory
     ? "Из этой брони нельзя создать сборную игру. Конвертация доступна только для открытой игры или аренды корта."
     : "Не удалось определить тип брони. Конвертация доступна только для открытой игры или аренды корта.";
-  const code = bookingConvertCategory
-    ? "BOOKING_CONVERT_CATEGORY_NOT_ALLOWED"
+  const code = paidOpenBookingConvert
+    ? "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE"
+    : bookingConvertCategory
+      ? "BOOKING_CONVERT_CATEGORY_NOT_ALLOWED"
     : "BOOKING_CONVERT_CATEGORY_UNKNOWN";
   const errMsg = Object.assign({}, msg, {
     statusCode: 409,

@@ -1,3 +1,7 @@
+import {
+  BOOKING_CONVERSION_PAID_JOIN_UNAVAILABLE,
+  hasPaidConvertedOpenGameJoin,
+} from "./bookingConversionEvidence";
 import { createJoinSubscriptionPriceTarget } from "./subscriptionPricePreview";
 import { useSubscriptionPricePreview } from "./useSubscriptionPricePreview";
 import { JoinSubscriptionOptions } from "./JoinSubscriptionOptions";
@@ -1361,6 +1365,12 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         return;
       }
 
+      if (!isSplitPaymentGame(actualGame) && hasPaidConvertedOpenGameJoin(actualGame.metadata)) {
+        setSubmitting(null);
+        setDecisionError(BOOKING_CONVERSION_PAID_JOIN_UNAVAILABLE);
+        return;
+      }
+
       if (LEGACY_ROSTER_BRIDGE_ENABLED && !isSplitPaymentGame(actualGame)) {
         const currentParticipants = dedupePlayers(actualGame.participants ?? []);
         const maxPlayers = resolveMaxPlayers(actualGame);
@@ -1987,6 +1997,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const stationLabel = game.booking?.studioName || "Станция";
   const alreadyJoined = myDecision === "JOINED";
   const splitPaymentGame = isSplitPaymentGame(game);
+  const paidConvertedJoinUnavailable = !alreadyJoined
+    && !splitPaymentGame
+    && hasPaidConvertedOpenGameJoin(game.metadata);
   const splitShareAmount = resolveSplitDisplayShareAmount({
     promoShareAmount: resolvedSplitPromoShareAmount,
     ordinaryShareAmount: resolvedSplitOrdinaryShareAmount,
@@ -2085,6 +2098,8 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
               ? "Проверяем ограничения..."
               : "Проверить присоединение без записи"}
           </button>
+        ) : paidConvertedJoinUnavailable ? (
+          <div className="game-empty" role="status">{BOOKING_CONVERSION_PAID_JOIN_UNAVAILABLE}</div>
         ) : splitPaymentGame && !alreadyJoined ? (
           <div className="game-join-split-pay-actions">
             {splitSubscriptionsLoading && (

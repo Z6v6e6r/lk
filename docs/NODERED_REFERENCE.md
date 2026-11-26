@@ -286,6 +286,22 @@ still run in CI. The changed API requires the regular typecheck/lint/build gate.
 - The existing 120-second split cleanup scheduler reconciles users who never return from Viva. A verified and atomically claimed late organizer payment promotes the durable game to `PAID`; unverified entries remain non-public.
 - Guarded candidate builder: `npm run nodered:game-payment-confirmation:patch -- --input <fresh-live-flow> --output <candidate> --report <report>`. It is pinned to an exact live preimage, preserves the route set, and never imports or deploys the candidate.
 
+## Paid open-game booking conversion
+
+The legacy LK create endpoint refuses a paid recruitment price on a converted
+Viva open-game booking. Existing converted cards remain readable. The organizer
+authority check in the legacy game PATCH preserves the stored source, exercise
+type and join price, and refuses added, duplicated or promoted participants.
+The frontend applies the same protection at publication, in search, and at
+both join entry points. Court rentals keep the regular invitation flow.
+
+Prepare the two function-body changes on a fresh private pull with
+`node scripts/prepare_paid_booking_conversion_guard.mjs <workspace> <release-id>`.
+The script checks the reviewed live preimages and writes a candidate and an
+exact graph contract in that workspace. The contract covers the legacy create
+and PATCH paths. If the canonical roster-command integration is enabled, its
+upstream join policy must also cover these converted open games before cutover.
+
 ## Что это и зачем
 
 Node-RED — визуальный инструмент автоматизации. В этом проекте он выступает бэкенд-слоем между фронтендом (личный кабинет) и базой данных (MongoDB). Потоки обрабатывают HTTP-запросы от фронта и MAX-бота.

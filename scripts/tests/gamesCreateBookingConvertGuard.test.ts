@@ -175,6 +175,17 @@ test("backend allows cabinet booking convert for a court rental", () => {
   assert.equal(response.payload?.metadata?.directionName, "Аренда корта");
 });
 
+test("backend blocks a separately priced place when converting an open-game booking", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_create.js", {
+    req: { path: "/lk/games" },
+    payload: { metadata: { source: "cabinet_booking_convert", typeId: 1613, joinPrice: "1050" } },
+  }) as unknown[];
+  assert.equal(out[0], null);
+  const response = out[1] as NodeRedFunctionResponse;
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.payload?.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+});
+
 test("backend still blocks an unknown booking category", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_create.js", {
     req: { path: "/lk/games", query: {} },

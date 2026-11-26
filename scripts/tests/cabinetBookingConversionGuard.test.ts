@@ -3,8 +3,10 @@ import fs from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 import {
+  BOOKING_CONVERSION_PAID_PUBLICATION_UNAVAILABLE,
   BOOKING_CONVERSION_UNVERIFIED,
   evaluateBookingConversionEvidence,
+  hasPaidConvertedOpenGameJoin,
 } from "../../src/components/games/bookingConversionEvidence.ts";
 import { moscowBookingEndIso } from "../../src/utils/bookingEndTime.ts";
 import type { PadelGameRecordPayload } from "../../src/utils/apiClient.ts";
@@ -111,30 +113,38 @@ const conversionCode = ts.transpileModule(`
 const organizerBooking = { id: "booking-1", isCancelled: false, visitConfirmed: false, paymentType: "ONE_TIME" };
 const organizerProfile = { id: "actor-1", phone: ["7", "999", "0000001"].join(""), name: "Organizer" };
 
-async function publishFromBooking(roster: Record<string, unknown>[], organizerDraftHasId = true) {
+async function runBookingConversion(
+  roster: Record<string, unknown>[],
+  organizerDraftHasId: boolean,
+  options: { typeId?: number; typeName?: string; joinPrice?: string } = {},
+) {
   const bookingPreset = {
     hasRequiredBookingData: true, canCreateFromPreset: true, exerciseId: "exercise-1",
     bookingId: organizerBooking.id, studioId: "studio-1", roomId: "room-1",
     date: "2030-01-01", timeFrom: "18:30", timeTo: "20:00", paid: true, amount: 7500,
+    typeId: options.typeId, typeName: options.typeName,
   };
   const exercise = {
     id: bookingPreset.exerciseId, studio: { id: bookingPreset.studioId }, room: { id: bookingPreset.roomId },
     timeFrom: "2030-01-01T18:30:00+03:00", timeTo: "2030-01-01T20:00:00+03:00",
   };
   const payloads: PadelGameRecordPayload[] = [];
+  const errors: string[] = [];
   const noop = () => {};
   const scope = {
     isBookingPresetMode: true, creatingFromBooking: false, bookingPreset,
-    setCreatingFromBooking: noop, setGameRecordError: noop, setGameRosterError: noop,
+    setCreatingFromBooking: noop, setGameRecordError: (value: string | null) => { if (value) errors.push(value); },
+    setGameRosterError: noop,
     activeGameRecordStore: null, communityGames: [], createFromBooking: bookingPreset,
     findGameRecordByBookingData: () => null, profileId: organizerProfile.id, profilePhone: organizerProfile.phone,
     participants: [{ ...organizerProfile, id: organizerDraftHasId ? organizerProfile.id : null }],
     profileName: organizerProfile.name, profilePhoto: null, profileGrade: null, profileRatingNumeric: null,
     apiFetchBookings: async () => ({ data: [{ ...organizerBooking, exercise }] }),
     apiFetchExerciseBookings: async () => ({ data: roster }),
-    BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence, moscowBookingEndIso,
+    BOOKING_CONVERSION_PAID_PUBLICATION_UNAVAILABLE, BOOKING_CONVERSION_UNVERIFIED,
+    evaluateBookingConversionEvidence, hasPaidConvertedOpenGameJoin, moscowBookingEndIso,
     effectiveRatingGame: false, isPrivate: true, waitlistEnabled: true, createMaxPlayers: 4,
-    resolvedGameFormat: "doubles", gameTitleDraft: "", gameParticipantCommentDraft: "", gameJoinPriceDraft: "",
+    resolvedGameFormat: "doubles", gameTitleDraft: "", gameParticipantCommentDraft: "", gameJoinPriceDraft: options.joinPrice ?? "",
     buildGameOptionalMetadataFields: noop, publicCreatePreciseRatingMetadata: {},
     buildCommunityAutopublishMetadataFields: noop, buildCommunityAutopublishMetadata: noop,
     apiCreatePadelGameRecord: async (payload: PadelGameRecordPayload) => {
@@ -149,9 +159,35 @@ async function publishFromBooking(roster: Record<string, unknown>[], organizerDr
   };
   const publish = new Function(...Object.keys(scope), conversionCode)(...Object.values(scope));
   await publish();
+  return { payloads, errors };
+}
+
+async function publishFromBooking(roster: Record<string, unknown>[], organizerDraftHasId = true) {
+  const { payloads, errors } = await runBookingConversion(roster, organizerDraftHasId);
+  assert.deepEqual(errors, []);
   assert.equal(payloads.length, 1);
   return payloads[0];
 }
+
+test("a paid open-game conversion stops before creating an LK game", async () => {
+  const result = await runBookingConversion([organizerBooking], true, { typeId: 1613, joinPrice: "1050" });
+  assert.deepEqual(result.payloads, []);
+  assert.deepEqual(result.errors, [BOOKING_CONVERSION_PAID_PUBLICATION_UNAVAILABLE]);
+});
+
+test("a converted court rental preserves the organizer's invitation flow", async () => {
+  const result = await runBookingConversion([organizerBooking], true, { typeName: "Аренда корта", joinPrice: "1050" });
+  assert.equal(result.payloads.length, 1);
+  assert.deepEqual(result.errors, []);
+});
+
+test("paid open-game join policy also recognizes the legacy direction, and preserves other flows", () => {
+  const converted = { source: "cabinet_booking_convert", directionId: 4588, joinPrice: 1050 };
+  assert.equal(hasPaidConvertedOpenGameJoin(converted), true);
+  assert.equal(hasPaidConvertedOpenGameJoin({ ...converted, joinPrice: "0" }), false);
+  assert.equal(hasPaidConvertedOpenGameJoin({ ...converted, source: "games_widget" }), false);
+  assert.equal(hasPaidConvertedOpenGameJoin({ ...converted, directionId: undefined, typeName: "Аренда корта" }), false);
+});
 
 test("publishing the organizer's booking with no client data uses only one place", async () => {
   const payload = await publishFromBooking([{ ...organizerBooking, client: null }], false);

@@ -1,4 +1,27 @@
+import {
+  EXERCISE_CATEGORY_OPEN_GAME,
+  resolveExerciseCategoryFromValue,
+} from "../../utils/exerciseCategory.ts";
+
 type Row = Record<string, unknown>;
+
+export const BOOKING_CONVERSION_PAID_JOIN_UNAVAILABLE =
+  "Онлайн-запись с оплатой места для этой брони недоступна.";
+
+export const BOOKING_CONVERSION_PAID_PUBLICATION_UNAVAILABLE =
+  "Из этой брони нельзя открыть платный набор. Для оплаты отдельных мест создайте игру с раздельной оплатой.";
+
+export function hasPaidConvertedOpenGameJoin(metadata: Row | null | undefined): boolean {
+  if (metadata?.source !== "cabinet_booking_convert") return false;
+  const joinPrice = metadata.joinPrice;
+  const amount = typeof joinPrice === "number"
+    ? joinPrice
+    : typeof joinPrice === "string" && /^\d+(?:[.,]\d+)?$/.test(joinPrice.trim())
+      ? Number(joinPrice.trim().replace(",", "."))
+      : NaN;
+  return Number.isFinite(amount) && amount > 0
+    && resolveExerciseCategoryFromValue(metadata) === EXERCISE_CATEGORY_OPEN_GAME;
+}
 
 export const BOOKING_CONVERSION_UNVERIFIED =
   "Не удалось проверить бронь и состав игры. Обновите записи и повторите попытку.";

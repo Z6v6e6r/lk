@@ -3,7 +3,13 @@ import { mergeRosterMetadata } from "./rosterMetadata";
 import { bookingEndIso, moscowBookingEndIso } from "../../utils/bookingEndTime";
 import { readAuthToken } from "../../utils/authTokenStorage";
 import { isRequestTimeoutError, runWithAbortTimeout } from "../../utils/requestTimeout";
-import { BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence } from "./bookingConversionEvidence";
+import {
+  BOOKING_CONVERSION_PAID_JOIN_UNAVAILABLE,
+  BOOKING_CONVERSION_PAID_PUBLICATION_UNAVAILABLE,
+  BOOKING_CONVERSION_UNVERIFIED,
+  evaluateBookingConversionEvidence,
+  hasPaidConvertedOpenGameJoin,
+} from "./bookingConversionEvidence";
 import { observeGameLeave } from "./observeGameLeave";
 import { GameBookingCancellation } from "./GameBookingCancellation";
 import { AvatarImage } from "../UI/AvatarImage";
@@ -8582,6 +8588,8 @@ export default function GamesPage({
     splitPaymentPromoConfig,
   ]);
   const isDetailsWaitlistEnabled = activeGameRecord?.invite?.waitlistEnabled ?? waitlistEnabled;
+  const paidConvertedJoinUnavailable = !isDetailsSplitPaymentGame
+    && hasPaidConvertedOpenGameJoin(activeGameRecord?.metadata);
   const canCurrentUserJoinGameInDetails = Boolean(
     !leavePendingMessage
     && gameRecordId
@@ -8594,6 +8602,7 @@ export default function GamesPage({
     && !isCurrentUserConfirmedParticipant
     && !isCurrentUserInWaitlist
     && !isDetailsSplitPaymentGame
+    && !paidConvertedJoinUnavailable
     && (detailsHasFreeSlots || isDetailsWaitlistEnabled),
   );
   const canCurrentUserCheckSplitSubscriptionsInDetails = Boolean(
@@ -11906,6 +11915,18 @@ export default function GamesPage({
         setGameSnapshot(buildMatchSnapshotFromRecord(existing));
         setConfirmCancelUnpaidGame(false);
         setStep("details");
+        return;
+      }
+
+      if (hasPaidConvertedOpenGameJoin({
+        source: "cabinet_booking_convert",
+        typeId: bookingPreset.typeId,
+        typeName: bookingPreset.typeName,
+        directionId: bookingPreset.directionId,
+        directionName: bookingPreset.directionName,
+        joinPrice: gameJoinPriceDraft,
+      })) {
+        setGameRecordError(BOOKING_CONVERSION_PAID_PUBLICATION_UNAVAILABLE);
         return;
       }
 
@@ -17442,6 +17463,8 @@ export default function GamesPage({
                     ? "Проверяем ограничения..."
                     : "Проверить присоединение без записи"}
                 </button>
+              ) : paidConvertedJoinUnavailable ? (
+                <div className="game-empty" role="status">{BOOKING_CONVERSION_PAID_JOIN_UNAVAILABLE}</div>
               ) : isDetailsSplitPaymentGame ? (
                 detailsCurrentUserPendingSplitPayment && !detailsCurrentUserPendingSplitPaymentIsExpired ? (
                   <div className="game-join-split-pay-actions">
