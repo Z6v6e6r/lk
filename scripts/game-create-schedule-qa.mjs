@@ -71,6 +71,8 @@ export function createGameCreateScheduleServer(options = {}) {
             authorization: bearer,
             correlationId,
             signal: abort.signal,
+            includeSubscriptionQuote:
+              req.headers["x-lk2-schedule-features"] === "subscription-quote",
           },
           options,
         ),

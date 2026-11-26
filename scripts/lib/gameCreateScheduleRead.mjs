@@ -332,7 +332,16 @@ function ownedResidency(payload) {
         .filter((row) => row?.status === "ACTIVE" && productIds(row).length === 0)
         .map((row) => row.subscriptionId)
     : [];
+  const activeRows = rows.filter((row) => row?.status === "ACTIVE");
+  const activeIds = activeRows.map((row) => row.clientSubscriptionId ?? row.subscriptionId ?? row.id);
+  const completeForPlans = completePage || (Array.isArray(payload) && rows.length < 100);
+  const validActiveIds = completeForPlans && activeIds.length <= 20 &&
+    activeIds.every((id) => uuid.test(id ?? "")) &&
+    new Set(activeIds.map((id) => id.toLowerCase())).size === activeIds.length;
   return {
+    activeSubscriptions: new Map(validActiveIds
+      ? activeRows.map((row, index) => [activeIds[index], new Set(productIds(row).map((id) => id.toLowerCase()))])
+      : []),
     active: rows.filter((row) => productIds(row).includes(residencyProductId)),
     complete: completePage && rows.every((row) => productIds(row).length > 0),
     legacyIds:
@@ -344,7 +353,7 @@ function ownedResidency(payload) {
   };
 }
 
-function discountedGameQuote(quote, expected, shareMinor, duration, now) {
+function eligibleGameQuote(quote, expected, shareMinor, duration, now) {
   return (
     quote?.selectionKey === expected &&
     Number.isSafeInteger(quote.evaluatedAt) &&
@@ -354,19 +363,23 @@ function discountedGameQuote(quote, expected, shareMinor, duration, now) {
     quote.expiresAt > quote.evaluatedAt &&
     quote.expiresAt - quote.evaluatedAt <= 60000 &&
     quote.basePriceMinor === shareMinor &&
-    quote.freeMinutes === 0 &&
-    quote.paidMinutes === duration &&
+    Number.isSafeInteger(quote.freeMinutes) &&
+    quote.freeMinutes >= 0 &&
+    Number.isSafeInteger(quote.paidMinutes) &&
+    quote.paidMinutes >= 0 &&
+    quote.freeMinutes + quote.paidMinutes === duration &&
     quote.status === "AVAILABLE" &&
     quote.reasonCode == null &&
     Number.isSafeInteger(quote.amountMinor) &&
-    quote.amountMinor > 0 &&
-    quote.amountMinor < shareMinor
+    quote.amountMinor >= 0 &&
+    quote.amountMinor < shareMinor &&
+    (quote.amountMinor > 0 || quote.paidMinutes === 0)
   );
 }
 
 /** LK1 owns resolution of the service and the provider reads. The selection carries no caller price. */
 export async function readGameCreateSchedule(
-  { query, authorization, correlationId, signal },
+  { query, authorization, correlationId, signal, includeSubscriptionQuote = false },
   { fetchImpl = fetch, now = Date.now } = {},
 ) {
   if (!tokenPattern.test(authorization ?? ""))
@@ -506,8 +519,9 @@ export async function readGameCreateSchedule(
     let expiresAt = observedAt + 30000;
     const shareMinor = Math.round(wholeCourtMinor / 4);
     let residency = { status: "UNAVAILABLE" };
+    let subscriptionMinor;
     try {
-      const { active: activeResidency, complete, legacyIds } = ownedResidency(
+      const { active: activeResidency, activeSubscriptions, complete, legacyIds } = ownedResidency(
         await read(
           vivaOrigin +
             vivaUserPath +
@@ -516,16 +530,18 @@ export async function readGameCreateSchedule(
       );
       if (activeResidency.length === 0 && complete) {
         residency = { status: "NOT_APPLICABLE" };
-      } else if (
-        activeResidency.length === 1 ||
-        (activeResidency.length === 0 && legacyIds.length > 0)
-      ) {
-        const [item] = activeResidency;
-        const subscriptionIds = item
-          ? [item.clientSubscriptionId ?? item.subscriptionId ?? item.id]
-          : legacyIds;
-        if (!subscriptionIds.every((id) => uuid.test(id ?? "")))
-          throw upstreamUnavailable();
+      }
+      const [item] = activeResidency;
+      const residencyIds = activeResidency.length === 1
+        ? [item.clientSubscriptionId ?? item.subscriptionId ?? item.id]
+        : activeResidency.length === 0 ? legacyIds : [];
+      if (!residencyIds.every((id) => uuid.test(id ?? "")))
+        throw upstreamUnavailable();
+      const requestedIds = includeSubscriptionQuote
+        ? [...new Set([...residencyIds, ...activeSubscriptions.keys()])]
+        : residencyIds;
+      const subscriptionIds = requestedIds.length <= 20 ? requestedIds : residencyIds;
+      if (subscriptionIds.length) {
         const target = {
           targetKind: "NEW_GAME",
           // LK1 uses slotId only to correlate this read quote with the exact tuple.
@@ -564,20 +580,44 @@ export async function readGameCreateSchedule(
           !result.quotes.every((quote) => subscriptionIds.includes(quote?.subscriptionId))
         )
           throw upstreamUnavailable();
-        const discounted = result.quotes.filter((quote) =>
-          discountedGameQuote(quote, expected, shareMinor, duration, now()),
+        const eligible = result.quotes.filter((quote) =>
+          eligibleGameQuote(quote, expected, shareMinor, duration, now()),
         );
-        // The legacy list proves ownership but does not identify the product.
-        // Only the LK1 quote can provide that binding when it is absent there.
-        const matching = discounted.filter(
-          (quote) =>
-            quote.appliedSubscriptionProductId === residencyProductId ||
-            (item && quote.appliedSubscriptionProductId === undefined),
+        // A legacy instance needs a product binding from the slot quote.
+        const matchingResidency = eligible.filter((quote) =>
+          residencyIds.includes(quote.subscriptionId) &&
+          quote.freeMinutes === 0 &&
+          quote.amountMinor > 0 &&
+          (quote.appliedSubscriptionProductId === residencyProductId ||
+            (item && quote.appliedSubscriptionProductId === undefined)),
         );
-        if (matching.length === 1 && matching[0].expiresAt > now()) {
-          const [quote] = matching;
+        if (matchingResidency.length === 1 && matchingResidency[0].expiresAt > now()) {
+          const [quote] = matchingResidency;
           residency = { status: "APPLIED", amountMinor: quote.amountMinor };
           expiresAt = Math.min(expiresAt, quote.expiresAt);
+        }
+        if (includeSubscriptionQuote) {
+          const best = eligible
+            .filter((quote) => {
+              const products = activeSubscriptions.get(quote.subscriptionId);
+              if (!products || products.has(residencyProductId)) return false;
+              const appliedProduct = quote.appliedSubscriptionProductId;
+              if (appliedProduct != null) {
+                if (!uuid.test(appliedProduct)) return false;
+                const productId = appliedProduct.toLowerCase();
+                return productId !== residencyProductId &&
+                  (products.size === 0 || (products.size === 1 && products.has(productId)));
+              }
+              // Older LK1 quotes identify Residency explicitly but may omit a plan's product ID.
+              // Positive covered minutes prove use of a plan even for a legacy owned row.
+              return products.size === 1 || (products.size === 0 && quote.freeMinutes > 0);
+            })
+            .sort((left, right) => left.amountMinor - right.amountMinor ||
+              right.expiresAt - left.expiresAt)[0];
+          if (best && best.expiresAt > now()) {
+            subscriptionMinor = best.amountMinor;
+            expiresAt = Math.min(expiresAt, best.expiresAt);
+          }
         }
       }
     } catch {
@@ -595,6 +635,7 @@ export async function readGameCreateSchedule(
       wholeCourtMinor,
       shareMinor,
       residency,
+      ...(subscriptionMinor !== undefined ? { subscriptionMinor } : {}),
       currency: "RUB",
       observedAt: new Date(observedAt).toISOString(),
       expiresAt: new Date(expiresAt).toISOString(),

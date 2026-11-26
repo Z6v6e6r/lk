@@ -18,6 +18,7 @@ test("schedule ingress has one exact GET and forwards only the signed actor cred
   assert.match(location, /if \(\$request_method != GET\) \{ return 405; \}/);
   assert.match(location, /proxy_pass http:\/\/127\.0\.0\.1:24811;/);
   assert.match(location, /proxy_pass_request_headers off;/);
+  assert.match(location, /proxy_set_header X-LK2-Schedule-Features \$http_x_lk2_schedule_features;/);
   assert.match(location, /proxy_pass_request_body off;/);
   assert.match(location, /proxy_set_header Authorization \$http_authorization;/);
   assert.match(location, /proxy_set_header X-Subscription-Actor-Delegation \$http_x_subscription_actor_delegation;/);

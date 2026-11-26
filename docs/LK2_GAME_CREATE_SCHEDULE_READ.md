@@ -14,6 +14,13 @@ The underlying Viva timeslot read and LK1 price preview use POST as their
 provider protocol. The public endpoint accepts only GET. It never reserves
 a court, opens checkout or confirms a payment.
 
+A signed slot read can request the price for a regular subscription with
+`X-LK2-Schedule-Features: subscription-quote`. This adds only the lowest
+applicable amount for the actor and exact slot, from fresh LK1 quotes for
+active owned subscriptions. The response omits the amount when LK1 cannot
+confirm it and excludes all subscription instance and product identifiers.
+An older caller without the header receives the existing quote shape.
+
 ## Release inputs
 
 - Freeze the reviewed LK1 commit and lockfile in a root-owned directory
