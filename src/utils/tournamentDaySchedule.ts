@@ -21,6 +21,7 @@ export function mergeTournamentDaySchedule(fresh: Exercise[], previous: Exercise
 export async function loadTournamentDaySchedule(input: {
   dateKey: string;
   previous: Exercise[];
+  confirmedSource?: Exercise[];
   loadExercises: () => Promise<ApiResult<Exercise[]>>;
   loadSource: () => Promise<ApiResult<Exercise[]>>;
   loadBookings: () => Promise<Exercise[]>;
@@ -32,11 +33,14 @@ export async function loadTournamentDaySchedule(input: {
   };
   let bookingItems: Exercise[] = [];
   const combine = () => {
-    const removedIds = new Set([...(responses.primary?.data ?? []), ...(responses.snapshot?.data ?? [])]
+    const refreshed = input.confirmedSource ?? [];
+    const source = responses.snapshot?.error ? [] : responses.snapshot?.data ?? [];
+    const removedIds = new Set([...(responses.primary?.data ?? []), ...source, ...refreshed]
       .filter(item => cancelled(item) || getTournamentMechanicsExerciseDateKey(item) !== input.dateKey).map(item => item.id));
+    const cupItems = mergeTournamentMechanicsExercises(refreshed, source, input.dateKey);
     const merged = mergeTournamentMechanicsExercises(
       responses.primary?.error ? [] : responses.primary?.data ?? [],
-      responses.snapshot?.error ? bookingItems : mergeTournamentMechanicsExercises(responses.snapshot?.data ?? [], bookingItems, input.dateKey),
+      mergeTournamentMechanicsExercises(cupItems, bookingItems, input.dateKey),
       input.dateKey,
     );
     const items = mergeTournamentDaySchedule(merged, input.previous.filter(item => !removedIds.has(item.id)), input.dateKey)
@@ -60,17 +64,20 @@ export async function loadTournamentDaySchedule(input: {
   };
   // A useful snapshot can be displayed immediately; an empty response cannot
   // finish the load or replace the cached day before independent sources settle.
+  if (input.confirmedSource?.length) publish();
   await Promise.allSettled([
     bounded(input.loadExercises).then(result => { responses.primary = result; publish(); }),
     bounded(input.loadSource).then(result => { responses.snapshot = result; publish(); }),
     bounded(input.loadBookings).then(result => { bookingItems = result; publish(); }),
   ]);
-  if ((!responses.primary || responses.primary.error) && (!responses.snapshot || responses.snapshot.error) && bookingItems.length === 0) {
+  const snapshotUnavailable = !responses.snapshot || Boolean(responses.snapshot.error);
+  if ((!responses.primary || responses.primary.error) && snapshotUnavailable
+    && !input.confirmedSource && bookingItems.length === 0) {
     throw new Error(responses.snapshot?.error?.message || responses.primary?.error?.message || "Не удалось загрузить список турниров");
   }
   const combined = combine();
-  if (combined.items.length === 0 && (!responses.snapshot || responses.snapshot.error)) {
+  if (combined.items.length === 0 && snapshotUnavailable && !input.confirmedSource) {
     throw new Error(responses.snapshot?.error?.message || "Не удалось проверить расписание начавшихся турниров");
   }
-  return { ...combined, partial: !responses.primary || Boolean(responses.primary.error) || !responses.snapshot || Boolean(responses.snapshot.error) };
+  return { ...combined, partial: !responses.primary || Boolean(responses.primary.error) || snapshotUnavailable };
 }

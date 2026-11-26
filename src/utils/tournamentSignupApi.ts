@@ -130,6 +130,7 @@ export interface TournamentMechanicsVivaRefreshResult {
   date: string;
   snapshotAvailable: boolean;
   tournaments: TournamentSignupSummary[];
+  removedExerciseIds: string[];
   refreshedAt: string | null;
   retryAfterMs: number | null;
   persisted: boolean | null;
@@ -2208,6 +2209,9 @@ export async function apiRefreshTournamentMechanicsFromViva(
           date: String(payload.date ?? date),
           snapshotAvailable: payload.snapshotAvailable === true,
           tournaments: normalizeTournamentSignupSummaries(payload.tournaments),
+          removedExerciseIds: Array.isArray(payload.removedExerciseIds)
+            ? payload.removedExerciseIds.filter((id): id is string => typeof id === "string")
+            : [],
           refreshedAt: pickString(payload, ["refreshedAt"]),
           retryAfterMs: pickNumber(payload, ["retryAfterMs"]),
           persisted: typeof payload.persisted === "boolean" ? payload.persisted : null,

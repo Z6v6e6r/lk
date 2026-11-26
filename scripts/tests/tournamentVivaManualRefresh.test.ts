@@ -21,14 +21,13 @@ test("manual Viva refresh is one authenticated non-fallback day mutation", () =>
   assert.match(functionSource, /JSON\.stringify\(\{\s*date\s*\}\)/);
 });
 
-test("organizer refresh reads current/past days before the future-day Viva mutation", () => {
+test("organizer refresh asks Viva for any selected day before merging the mechanics list", () => {
   const handlerSource = pageSource.match(
     /const handleVivaRefresh = useCallback\(async \(\) => \{([\s\S]*?)\n\s{2}\}, \[canHostTournaments/,
   )?.[1];
 
   assert.ok(handlerSource, "manual refresh handler must exist");
-  assert.match(handlerSource, /if \(includePastTournaments\) \{[\s\S]*loadMechanicsSchedule\(requestedDate, true, previous\)[\s\S]*return;[\s\S]*apiRefreshTournamentMechanicsFromViva\(requestedDate\)/);
-  assert.match(handlerSource, /apiRefreshTournamentMechanicsFromViva\(requestedDate\)/);
+  assert.match(handlerSource, /apiRefreshTournamentMechanicsFromViva\(requestedDate\)[\s\S]*loadMechanicsSchedule\(\s*requestedDate, includePastTournaments, previous, undefined, sourceFromRefresh/);
   assert.match(
     handlerSource,
     /const requestGeneration = scheduleRequestGenerationRef\.current \+ 1;[\s\S]*scheduleRequestGenerationRef\.current = requestGeneration/,
@@ -41,7 +40,8 @@ test("organizer refresh reads current/past days before the future-day Viva mutat
     handlerSource,
     /catch \(refreshError\) \{\s*if \(\s*selectedDateKeyRef\.current !== requestedDate\s*\|\| scheduleRequestGenerationRef\.current !== requestGeneration\s*\) \{\s*return;\s*\}/,
   );
-  assert.match(handlerSource, /buildTournamentMechanicsFallbackExercises\(result\.data\.tournaments\)/);
+  assert.match(handlerSource, /buildTournamentMechanicsFallbackExercises\(\s*result\.data\.tournaments, \{ includeCancelled: true \}/);
+  assert.match(handlerSource, /new Set\(result\.data\.removedExerciseIds\)[\s\S]*!removedIds\.has\(String\(exercise\.id\)\)/);
   assert.match(handlerSource, /setItems\(freshExercises\)/);
   assert.doesNotMatch(handlerSource, /apiFetchExercisesByVisibleDate/);
   assert.match(pageSource, /\{canHostTournaments && \(/);
