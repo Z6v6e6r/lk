@@ -1,4 +1,6 @@
+import { GAME_BOOKING_UTC_OFFSET } from "../consts/api_config";
 import type { Booking, PadelGameRecord } from "./apiClient";
+import { resolveGameBookingTimes } from "./bookingEndTime";
 
 const CALENDAR_MIME_TYPE = "text/calendar;charset=utf-8";
 const MOSCOW_UTC_OFFSET_HOURS = 3;
@@ -35,35 +37,6 @@ function formatUtcStamp(value: Date): string {
   const minutes = String(value.getUTCMinutes()).padStart(2, "0");
   const seconds = String(value.getUTCSeconds()).padStart(2, "0");
   return `${year}${month}${day}T${hours}${minutes}${seconds}Z`;
-}
-
-function buildUtcDateFromMoscow(dateRaw: string | null | undefined, timeRaw: string | null | undefined): Date | null {
-  const dateValue = trimString(dateRaw);
-  const timeValue = trimString(timeRaw);
-  if (!dateValue || !timeValue) return null;
-
-  const dateMatch = dateValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const timeMatch = timeValue.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (!dateMatch || !timeMatch) return null;
-
-  const year = Number(dateMatch[1]);
-  const month = Number(dateMatch[2]);
-  const day = Number(dateMatch[3]);
-  const hours = Number(timeMatch[1]);
-  const minutes = Number(timeMatch[2]);
-  const seconds = Number(timeMatch[3] || "0");
-  if (
-    !Number.isFinite(year)
-    || !Number.isFinite(month)
-    || !Number.isFinite(day)
-    || !Number.isFinite(hours)
-    || !Number.isFinite(minutes)
-    || !Number.isFinite(seconds)
-  ) {
-    return null;
-  }
-
-  return new Date(Date.UTC(year, month - 1, day, hours - MOSCOW_UTC_OFFSET_HOURS, minutes, seconds));
 }
 
 function parseIsoLikeToUtc(valueRaw: string | null | undefined): Date | null {
@@ -203,19 +176,13 @@ function buildBookingDraft(booking: Booking): CalendarDraft | null {
 
 function buildGameDraft(game: PadelGameRecord): CalendarDraft | null {
   const date = trimString(game.booking?.date);
-  const startAt =
-    buildUtcDateFromMoscow(date, game.booking?.timeFrom ?? null)
-    ?? parseIsoLikeToUtc(game.booking?.timeFrom ?? null);
-  let endAt =
-    buildUtcDateFromMoscow(date, game.booking?.timeTo ?? null)
-    ?? parseIsoLikeToUtc(game.booking?.timeTo ?? null);
-  if (!startAt) return null;
-  if (!endAt) {
-    const durationMinutes = Number.isFinite(game.booking?.durationMinutes)
-      ? Number(game.booking?.durationMinutes)
-      : DEFAULT_GAME_DURATION_MINUTES;
-    endAt = new Date(startAt.getTime() + durationMinutes * 60 * 1000);
-  }
+  const { startTs, endTs } = resolveGameBookingTimes(game.booking, GAME_BOOKING_UTC_OFFSET);
+  if (startTs === null) return null;
+
+  const durationMinutes = game.booking?.durationMinutes;
+  const fallbackDuration = durationMinutes && durationMinutes > 0 ? durationMinutes : DEFAULT_GAME_DURATION_MINUTES;
+  const startAt = new Date(startTs);
+  const endAt = new Date(endTs ?? startTs + fallbackDuration * 60 * 1000);
 
   const studioName = trimString(game.booking?.studioName);
   const roomName = trimString(game.booking?.roomName);

@@ -9,6 +9,8 @@ import type {
 import { BookingCard } from "./BookingCard";
 import type { ReactNode } from "react";
 import { TournamentBookingCard } from "./TournamentBookingCard";
+import { GAME_BOOKING_UTC_OFFSET } from "../../consts/api_config";
+import { resolveGameBookingTimes } from "../../utils/bookingEndTime";
 import { resolveCabinetBookingCategory } from "../../utils/exerciseCategory";
 
 const RESULT_ENTRY_GRACE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -38,19 +40,8 @@ function getBookingTimestamp(booking: Booking): number {
 }
 
 function getGameTimestamp(game: PadelGameRecord, type: "start" | "end" = "start"): number {
-  const date = game.booking?.date;
-  const rawTime =
-    type === "end"
-      ? (game.booking?.timeTo ?? game.booking?.timeFrom)
-      : (game.booking?.timeFrom ?? game.booking?.timeTo);
-  if (rawTime) {
-    const directParsed = new Date(rawTime).getTime();
-    if (Number.isFinite(directParsed)) return directParsed;
-  }
-  if (!date || !rawTime) return Number.POSITIVE_INFINITY;
-  const normalizedTime = /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : rawTime;
-  const parsed = new Date(`${date}T${normalizedTime}`).getTime();
-  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+  const { startTs, endTs } = resolveGameBookingTimes(game.booking, GAME_BOOKING_UTC_OFFSET);
+  return (type === "end" ? endTs ?? startTs : startTs ?? endTs) ?? Number.POSITIVE_INFINITY;
 }
 
 function getTodayDateKey(): string {

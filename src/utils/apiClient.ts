@@ -3256,6 +3256,10 @@ export interface PadelGameRecord {
     date: string | null;
     timeFrom: string | null;
     timeTo: string | null;
+    timeFromIso?: string | null;
+    timeToIso?: string | null;
+    startTs?: number | null;
+    endTs?: number | null;
     durationMinutes: number | null;
     studioId?: string | null;
     roomId?: string | null;
@@ -6380,6 +6384,12 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
       : dataPayload && isRecord(dataPayload.booking)
         ? dataPayload.booking
         : null;
+    const bookingFrom = bookingPayload && pickString(bookingPayload, ["timeFrom", "fromTime", "startTime"]);
+    const bookingTo = bookingPayload && pickString(bookingPayload, ["timeTo", "toTime", "endTime"]);
+    const bookingFromIso = bookingPayload && (pickString(bookingPayload, ["timeFromIso"])
+      ?? (bookingFrom && /^\d{4}-\d{2}-\d{2}[T ]/.test(bookingFrom) ? bookingFrom : null));
+    const bookingToIso = bookingPayload && (pickString(bookingPayload, ["timeToIso"])
+      ?? (bookingTo && /^\d{4}-\d{2}-\d{2}[T ]/.test(bookingTo) ? bookingTo : null));
     const paymentPayload = isRecord(payload.payment)
       ? payload.payment
       : dataPayload && isRecord(dataPayload.payment)
@@ -6574,21 +6584,17 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
                 bookingPayload.date
                 ?? bookingPayload.exerciseDate
                 ?? bookingPayload.day
-                ?? bookingPayload.timeFromIso
-                ?? bookingPayload.timeToIso,
+                ?? bookingFromIso
+                ?? bookingToIso,
               ),
-            timeFrom: normalizeTimeLabel(
-              bookingPayload.timeFrom
-              ?? bookingPayload.fromTime
-              ?? bookingPayload.startTime
-              ?? bookingPayload.timeFromIso,
-            ),
-            timeTo: normalizeTimeLabel(
-              bookingPayload.timeTo
-              ?? bookingPayload.toTime
-              ?? bookingPayload.endTime
-              ?? bookingPayload.timeToIso,
-            ),
+            timeFrom: normalizeTimeLabel(bookingFrom ?? bookingFromIso),
+            timeTo: /^24:00(?::00)?$/.test(bookingTo ?? "")
+              ? "00:00"
+              : normalizeTimeLabel(bookingTo ?? bookingToIso),
+            timeFromIso: bookingFromIso,
+            timeToIso: bookingToIso,
+            startTs: pickNumber(bookingPayload, ["startTs"]),
+            endTs: pickNumber(bookingPayload, ["endTs"]),
             durationMinutes: pickNumber(bookingPayload, [
               "durationMinutes",
               "duration",
