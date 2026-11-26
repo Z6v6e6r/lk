@@ -1,22 +1,10 @@
-import type { OnboardingLevelPayload, TournamentStartRatingChange } from "../../utils/apiClient";
+import type { TournamentStartRatingChange } from "../../utils/apiClient";
 
 interface TournamentRatingChangeActor {
   id: string;
   firstName: string;
   lastName: string;
   phone: string;
-}
-
-interface BuildTournamentRatingChangePayloadInput {
-  tournamentId: string;
-  clientId: string;
-  playerName: string;
-  playerPhone?: string | null;
-  previousRating: number | null;
-  nextRating: number;
-  levelLetter: string;
-  changedAt: string;
-  changedBy: TournamentRatingChangeActor;
 }
 
 interface TournamentStartParticipantRating {
@@ -38,39 +26,6 @@ interface BuildTournamentStartRatingChangesInput {
 
 function eventIdPart(value: string) {
   return encodeURIComponent(String(value || "unknown").trim() || "unknown").replace(/%/g, "~");
-}
-
-export function buildTournamentRatingChangePayload(
-  input: BuildTournamentRatingChangePayloadInput,
-): OnboardingLevelPayload {
-  const changedAt = new Date(input.changedAt).toISOString();
-  const changedByName = [input.changedBy.firstName, input.changedBy.lastName]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean)
-    .join(" ");
-
-  return {
-    clientId: input.clientId,
-    phone: input.playerPhone ?? null,
-    levelLetter: input.levelLetter,
-    levelNumeric: input.nextRating,
-    source: "tournament_start",
-    gameId: input.tournamentId,
-    playerName: input.playerName,
-    previousRating: input.previousRating,
-    nextRating: input.nextRating,
-    confirmedAt: changedAt,
-    changedById: input.changedBy.id,
-    changedByName: changedByName || null,
-    changedByPhone: input.changedBy.phone || null,
-    eventId: [
-      "rating_evt",
-      "tournament_start",
-      eventIdPart(input.tournamentId),
-      eventIdPart(input.clientId),
-      String(Date.parse(changedAt)),
-    ].join(":"),
-  };
 }
 
 export function buildTournamentStartRatingChanges(

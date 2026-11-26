@@ -18,16 +18,25 @@ try {
   let ready = false;
   for (let i = 0; i < 40; i++) {
     const r = spawnSync('docker', ['exec', name, 'mongosh', '--quiet', '--eval',
-      'try { rs.initiate({_id:"fprLevelTest",members:[{_id:0,host:"localhost:27017"}]}) } catch(e) {}'], { encoding: 'utf8', timeout: 10000 });
+      'try { rs.initiate({_id:"fprLevelTest",members:[{_id:0,host:"localhost:27017"}]}) } catch(e) { if (e.codeName !== "AlreadyInitialized") throw e; }'], { encoding: 'utf8', timeout: 10000 });
     if (r.status === 0) { ready = true; break; }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   if (!ready) throw new Error('Test Mongo did not start');
   const uri = `mongodb://${published}/?directConnection=true&replicaSet=fprLevelTest`;
   const client = new MongoClient(uri, { serverSelectionTimeoutMS: 15000 });
-  try { await client.connect(); await client.db('admin').command({ ping: 1 }); } finally { await client.close(); }
+  try {
+    await client.connect();
+    let writable = false;
+    for (let i = 0; i < 40; i++) {
+      const hello = await client.db('admin').command({ hello: 1 });
+      if (hello.isWritablePrimary === true) { writable = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    if (!writable) throw new Error('Test Mongo replica set did not elect a primary');
+  } finally { await client.close(); }
   const result = spawnSync(process.execPath, ['--experimental-strip-types', '--test', 'scripts/tests/fprLevelLedger.mongo.test.mjs', 'scripts/tests/fprStartBootstrap.mongo.test.mjs',
-    'scripts/tests/fprStartVivaLevel.test.mjs', 'scripts/tests/fprBootstrapRecovery.test.mjs'],
+    'scripts/tests/fprBootstrapRecovery.test.mjs'],
     { stdio: 'inherit', env: { ...process.env, FPR_LEVEL_TEST_MONGO_URI: uri } });
   if (result.status !== 0) process.exitCode = result.status || 1;
 } finally {

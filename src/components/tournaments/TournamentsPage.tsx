@@ -54,7 +54,6 @@ import {
 } from "../../utils/tournamentMechanicsExercises";
 import { filterVisibleTournamentExercises } from "./tournamentVisibility";
 import {
-  buildTournamentRatingChangePayload,
   buildTournamentStartRatingChanges,
 } from "./tournamentRatingAudit";
 import {
@@ -1674,8 +1673,6 @@ function TournamentDetailsModal({
   const [manualRatings, setManualRatings] = useState<Record<string, string>>({});
   const [savedStartRatingChanges, setSavedStartRatingChanges] =
     useState<Record<string, TournamentSavedRatingChange>>({});
-  const [ratingSaveStateById, setRatingSaveStateById] = useState<Record<string, "idle" | "saving">>({});
-  const [fprStartRatingsRevision, setFprStartRatingsRevision] = useState(0);
   const [ratingSaveErrors, setRatingSaveErrors] = useState<Record<string, string>>({});
   const [ratingEditModeById, setRatingEditModeById] = useState<Record<string, boolean>>({});
   const [refreshingRatings, setRefreshingRatings] = useState(false);
@@ -1727,7 +1724,6 @@ function TournamentDetailsModal({
       setManualOrganizerName("");
       setManualRatings({});
       setSavedStartRatingChanges({});
-      setRatingSaveStateById({});
       setRatingSaveErrors({});
       setRatingEditModeById({});
       setRefreshingRatings(false);
@@ -1775,7 +1771,6 @@ function TournamentDetailsModal({
       setManualOrganizerName("");
       setManualRatings({});
       setSavedStartRatingChanges({});
-      setRatingSaveStateById({});
       setRatingSaveErrors({});
       setRatingEditModeById({});
       setRefreshingRatings(false);
@@ -1828,7 +1823,6 @@ function TournamentDetailsModal({
     setManualOrganizerName("");
     setManualRatings({});
     setSavedStartRatingChanges({});
-    setRatingSaveStateById({});
     setRatingSaveErrors({});
     setRatingEditModeById({});
     setRefreshingRatings(false);
@@ -1979,7 +1973,7 @@ function TournamentDetailsModal({
           clientId: participant.clientId,
           name: participant.name,
           phone: participant.phone ?? null,
-          previousRating: savedChange?.previousRating ?? parseTournamentRatingValue(participant.rating),
+          previousRating: savedChange ? savedChange.previousRating : parseTournamentRatingValue(participant.rating),
           nextRating: parseTournamentRatingValue(participantsForRounds[index]?.rating),
           reason: draftRating == null ? "MINIMUM_ASSIGNED" : "MANUAL_OVERRIDE",
         };
@@ -2725,12 +2719,6 @@ function TournamentDetailsModal({
       delete next[participantId];
       return next;
     });
-    setRatingSaveStateById((prev) => {
-      if (!prev[participantId]) return prev;
-      const next = { ...prev };
-      delete next[participantId];
-      return next;
-    });
     setRatingSaveErrors((prev) => {
       if (!prev[participantId]) return prev;
       const next = { ...prev };
@@ -2762,7 +2750,6 @@ function TournamentDetailsModal({
     setMissingRatingConfirmation(null);
     setParticipantLeaveTarget(null);
     setLeaveError(null);
-    setRatingSaveStateById({});
     setRatingSaveErrors({});
     setRatingEditModeById({});
     setReplaceParticipantId(null);
@@ -2781,7 +2768,9 @@ function TournamentDetailsModal({
           id: participant.id,
           name: manualRatings[participant.id] ?? participant.name ?? "",
           phone: participant.phone ?? "",
-          rating: manualRatings[participant.id] ?? participant.rating ?? "",
+          rating: selectedType === "fpr_6x25"
+            ? participant.rating ?? ""
+            : manualRatings[participant.id] ?? savedStartRatingChanges[participant.id]?.nextRating.toFixed(5) ?? participant.rating ?? "",
         }))
         .sort(compareTournamentParticipantsByRating)
         .map((participant, index) => createTournamentManualParticipantDraft(index, participant));
@@ -2800,7 +2789,6 @@ function TournamentDetailsModal({
     setMissingRatingConfirmation(null);
     setParticipantLeaveTarget(null);
     setLeaveError(null);
-    setRatingSaveStateById({});
     setRatingSaveErrors({});
     setRatingEditModeById({});
     setReplaceParticipantId(null);
@@ -2929,7 +2917,8 @@ function TournamentDetailsModal({
     refreshingRatings,
   ]);
 
-  const handleParticipantRatingSave = async (participant: TournamentParticipantEntry) => {
+  const handleParticipantRatingSave = (participant: TournamentParticipantEntry) => {
+    if (selectedType === "fpr_6x25") return false;
     const rawRating = manualRatings[participant.id] ?? "";
     const parsedRating = parseTournamentRatingValue(rawRating);
     const previousRating = parseTournamentRatingValue(participant.rating);
@@ -2950,89 +2939,19 @@ function TournamentDetailsModal({
       return false;
     }
 
-    const ratingChangeTournamentId = String(tournamentId || draftTournamentId || "").trim();
-    if (!ratingChangeTournamentId || !profile?.id) {
-      setRatingSaveErrors((prev) => ({
-        ...prev,
-        [participant.id]: "Не удалось определить турнир или автора изменения",
-      }));
-      return false;
-    }
-
-    setRatingSaveStateById((prev) => ({
-      ...prev,
-      [participant.id]: "saving",
-    }));
-    setRatingSaveErrors((prev) => {
-      if (!prev[participant.id]) return prev;
-      const next = { ...prev };
-      delete next[participant.id];
-      return next;
-    });
-
-    const changedAt = new Date().toISOString();
-    const response = await apiSaveOnboardingLevel(buildTournamentRatingChangePayload({
-      tournamentId: ratingChangeTournamentId,
-      clientId: participant.clientId,
-      playerName: participant.name,
-      playerPhone: participant.phone,
-      previousRating,
-      nextRating: parsedRating,
-      levelLetter: getLetterGrade(parsedRating),
-      changedAt,
-      changedBy: profile,
-    }));
-
-    if (response.error) {
-      setRatingSaveStateById((prev) => ({
-        ...prev,
-        [participant.id]: "idle",
-      }));
-      setRatingSaveErrors((prev) => ({
-        ...prev,
-        [participant.id]: response.error?.message || "Не удалось сохранить рейтинг",
-      }));
-      return false;
-    }
-
-    if (participant.isOrganizerSlot) {
-      setOrganizerSlotRating(parsedRating.toFixed(5));
-    } else {
-      setParticipants((prev) =>
-        prev.map((item, idx) => {
-          const itemParticipantId = item.client?.id ?? item.id ?? `participant-${idx}`;
-          if (itemParticipantId !== participant.id) return item;
-          return {
-            ...item,
-            rating: parsedRating.toFixed(5),
-            ratingSource: "level",
-          };
-        }),
-      );
-    }
-    setFprStartRatingsRevision(revision => revision + 1);
     setSavedStartRatingChanges((prev) => ({
       ...prev,
       [participant.id]: {
-        previousRating: prev[participant.id]?.previousRating ?? previousRating,
+        previousRating: prev[participant.id] ? prev[participant.id].previousRating : previousRating,
         nextRating: parsedRating,
       },
-    }));
-    setManualRatings((prev) => {
-      const next = { ...prev };
-      delete next[participant.id];
-      return next;
-    });
-    setRatingSaveStateById((prev) => ({
-      ...prev,
-      [participant.id]: "idle",
     }));
     return true;
   };
 
   const handleOpenParticipantRatingEdit = (participant: TournamentParticipantEntry) => {
-    if (!participant.clientId) return;
-    const parsedRating = parseTournamentRatingValue(participant.rating);
+    if (!participant.clientId || selectedType === "fpr_6x25") return;
+    const parsedRating = savedStartRatingChanges[participant.id]?.nextRating ?? parseTournamentRatingValue(participant.rating);
     setRatingEditModeById((prev) => ({
       ...prev,
       [participant.id]: true,
@@ -3087,7 +3006,13 @@ function TournamentDetailsModal({
   };
 
   const sortedParticipants = useMemo(() => {
-    return [...participantEntries].sort((a, b) => {
+    const entries = participantEntries.map((participant) => {
+      const draft = savedStartRatingChanges[participant.id];
+      return draft && rosterMode !== "manual" && selectedType !== "fpr_6x25"
+        ? { ...participant, rating: draft.nextRating.toFixed(5) }
+        : participant;
+    });
+    return entries.sort((a, b) => {
       const aRating = parseTournamentRatingValue(a.rating);
       const bRating = parseTournamentRatingValue(b.rating);
       if (aRating == null && bRating == null) return 0;
@@ -3095,7 +3020,7 @@ function TournamentDetailsModal({
       if (bRating == null) return -1;
       return bRating - aRating;
     });
-  }, [participantEntries]);
+  }, [participantEntries, rosterMode, savedStartRatingChanges, selectedType]);
 
   const sortedParticipantIds = useMemo(
     () => sortedParticipants.map((participant) => participant.id),
@@ -3219,12 +3144,6 @@ function TournamentDetailsModal({
       return next;
     });
     setRatingSaveErrors((prev) => {
-      if (!prev[targetId]) return prev;
-      const next = { ...prev };
-      delete next[targetId];
-      return next;
-    });
-    setRatingSaveStateById((prev) => {
       if (!prev[targetId]) return prev;
       const next = { ...prev };
       delete next[targetId];
@@ -3716,12 +3635,12 @@ function TournamentDetailsModal({
                     const nameLineTop = nameParts[0] ?? participant.name;
                     const nameLineBottom = nameParts.length > 1 ? nameParts.slice(1).join(" ") : null;
                     const manualRating = manualRatings[participant.id] ?? "";
+                    const isFpr = selectedType === "fpr_6x25";
                     const savedRatingValue = parseTournamentRatingValue(participant.rating);
                     const hasSavedRating = savedRatingValue != null;
                     const ratingGradeDisplay = formatTournamentRatingGrade(savedRatingValue);
                     const manualParsedRating = parseTournamentRatingValue(manualRating);
                     const isEditingRating = ratingEditModeById[participant.id] === true;
-                    const isSavingRating = ratingSaveStateById[participant.id] === "saving";
                     const canLeaveParticipant =
                       Boolean(participant.bookingId)
                       && isCurrentUserParticipant(participant);
@@ -3767,7 +3686,7 @@ function TournamentDetailsModal({
                           </div>
                           <div className="tournament-participant-actions">
                             <div className="tournament-participant-main-actions">
-                              {hasSavedRating && !isEditingRating ? (
+                              {isFpr ? null : hasSavedRating && !isEditingRating ? (
                                 <button
                                   className="tournament-participant-rating tournament-participant-rating-button"
                                   type="button"
@@ -3798,7 +3717,6 @@ function TournamentDetailsModal({
                                       className="tournament-participant-rating-cancel"
                                       type="button"
                                       onClick={() => handleCloseParticipantRatingEdit(participant.id)}
-                                      disabled={isSavingRating}
                                       aria-label="Отменить редактирование рейтинга"
                                       title="Отменить редактирование"
                                     >
@@ -3808,17 +3726,16 @@ function TournamentDetailsModal({
                                   <button
                                     className="tournament-participant-rating-save"
                                     type="button"
-                                    onClick={async () => {
-                                      const saved = await handleParticipantRatingSave(participant);
-                                      if (saved) {
+                                    onClick={() => {
+                                      if (handleParticipantRatingSave(participant)) {
                                         handleCloseParticipantRatingEdit(participant.id);
                                       }
                                     }}
-                                    disabled={!participant.clientId || manualParsedRating == null || isSavingRating}
+                                    disabled={!participant.clientId || manualParsedRating == null}
                                     aria-label="Сохранить рейтинг"
                                     title="Сохранить рейтинг"
                                   >
-                                    {isSavingRating ? "…" : "✓"}
+                                    ✓
                                   </button>
                                 </div>
                               )}
@@ -4012,8 +3929,6 @@ function TournamentDetailsModal({
           <FprTournamentSetup
             key={String(tournament?.id ?? draftTournamentId ?? "manual-fpr")}
             players={sortedParticipants}
-            startRatingsRevision={fprStartRatingsRevision}
-            ratingSaveInProgress={Object.values(ratingSaveStateById).includes("saving")}
             initialState={initialFprState}
             onResume={initialFprPayload ? () => onSaved(initialFprPayload) : undefined}
             context={{

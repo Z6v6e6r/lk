@@ -3,67 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import {
-  buildTournamentRatingChangePayload,
   buildTournamentStartRatingChanges,
 } from "../../src/components/tournaments/tournamentRatingAudit.ts";
-
-test("tournament rating change records player, before/after values and actor", () => {
-  const payload = buildTournamentRatingChangePayload({
-    tournamentId: "tournament-42",
-    clientId: "client-7",
-    playerName: "Дмитрий Тестов",
-    playerPhone: "+7 919 729-52-79",
-    previousRating: 2.15778,
-    nextRating: 3.59638,
-    levelLetter: "C+",
-    changedAt: "2026-07-20T12:34:56.000Z",
-    changedBy: {
-      id: "admin-3",
-      firstName: "Анна",
-      lastName: "Организатор",
-      phone: "+7 900 000-00-03",
-    },
-  });
-
-  assert.deepEqual(payload, {
-    clientId: "client-7",
-    phone: "+7 919 729-52-79",
-    levelLetter: "C+",
-    levelNumeric: 3.59638,
-    source: "tournament_start",
-    gameId: "tournament-42",
-    playerName: "Дмитрий Тестов",
-    previousRating: 2.15778,
-    nextRating: 3.59638,
-    confirmedAt: "2026-07-20T12:34:56.000Z",
-    changedById: "admin-3",
-    changedByName: "Анна Организатор",
-    changedByPhone: "+7 900 000-00-03",
-    eventId: "rating_evt:tournament_start:tournament-42:client-7:1784550896000",
-  });
-});
-
-test("tournament rating change keeps an explicit null previous value", () => {
-  const payload = buildTournamentRatingChangePayload({
-    tournamentId: "tournament-43",
-    clientId: "client-8",
-    playerName: "Игрок без уровня",
-    previousRating: null,
-    nextRating: 1,
-    levelLetter: "D",
-    changedAt: "2026-07-20T13:00:00.000Z",
-    changedBy: {
-      id: "admin-3",
-      firstName: "Анна",
-      lastName: "Организатор",
-      phone: "",
-    },
-  });
-
-  assert.equal(payload.previousRating, null);
-  assert.equal(payload.nextRating, 1);
-  assert.equal(payload.changedByPhone, null);
-});
 
 test("tournament start records only ratings that changed", () => {
   const changes = buildTournamentStartRatingChanges({

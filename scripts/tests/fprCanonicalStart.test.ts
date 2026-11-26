@@ -40,6 +40,7 @@ test('actual API create function authenticates FPR while retaining ordinary crea
 test('canonical error identifies the roster player without displaying unknown IDs or server payload',async()=>{
  const {formatFprStartError}=await import('../../src/components/tournaments/fprCanonicalStart.ts');
  const players=[{id:'p1',name:'Иван Тестов'}];
+ assert.match(formatFprStartError({raw:{error:'FPR_START_LEVEL_REQUIRED',playerId:'p1'}},players),/Иван Тестов.*назначьте уровень в ЦУП/);
  assert.match(formatFprStartError({raw:{error:'FPR_START_HISTORY_INVALID',playerId:'p1'}},players),/Иван Тестов.*История/);
  assert.match(formatFprStartError({raw:JSON.stringify({error:'FPR_START_INVALID_LEVEL',playerId:'p1'})},players),/Иван Тестов.*числовой/);
  assert.equal(formatFprStartError({message:'Retry',raw:{playerId:'unknown',phone:'PRIVATE'}},players),'Retry');

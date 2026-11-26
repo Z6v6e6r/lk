@@ -395,6 +395,18 @@ export async function processFprProjectionOutbox(db, projectionUrl, nowIso, dryR
     const states = await db.collection('player_rating_state').find({ clientId: row.clientId }).limit(3).toArray();
     if (states.length !== 1) throw new Error('FPR_LEVEL_PROJECTION_IDENTITY_CONFLICT');
     const state = states[0];
+    // Identify the retired start task by its immutable event ID, not the
+    // current projection writer. Older recovery and result rows share a shape.
+    if (typeof row.ratingEventId === 'string' && row.ratingEventId.startsWith('rating_evt:fpr_roster_bootstrap:')) {
+      const retired = await db.collection('rating_projection_outbox').updateOne(
+        { _id: row._id, status: row.status, ...(row.status === 'SENDING'
+          ? { projectionLeaseOwner: row.projectionLeaseOwner, projectionLeaseUntil: row.projectionLeaseUntil } : {}) },
+        { $set: { status: 'SUPERSEDED', lastError: 'FPR_START_VIVA_RETIRED', updatedAt: nowIso },
+          $unset: { projectionLeaseOwner: '', projectionLeaseUntil: '' } },
+      );
+      result.superseded += retired.modifiedCount;
+      return;
+    }
     if (canonicalFingerprint(state) !== row.canonicalFingerprint) {
       const next = buildFprProjectionOutbox(state, nowIso);
       await db.collection('rating_projection_outbox').updateOne({ _id: row._id, status: row.status }, { $set: { status: 'SUPERSEDED', supersededBy: next.id, updatedAt: nowIso } });

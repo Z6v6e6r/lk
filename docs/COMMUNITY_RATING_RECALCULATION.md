@@ -89,17 +89,26 @@ The worker creates rating indexes before writes unless `--skip-indexes` is passe
 
 ## Missing canonical levels at FPR roster preparation
 
-The FPR start helper preserves an existing canonical state, a complete valid ledger
-history, or an exact numeric compatibility value. Missing CUP data alone never
-authorizes an unrated baseline. The server helper reads the exact Viva client using
-the existing root-only worker service configuration and imports a valid numeric
-level with its original precision. Only a successfully verified profile with both
-level fields empty permits baseline 1. Provider failures, invalid or ambiguous
-fields, a grade without a numeric level, and contradictory known local levels
-fail the whole roster with a participant-specific error and no rating writes.
-Provider reads happen before the retriable transaction; evidence expires after
-15 seconds and is checked again before writes. Browser input cannot supply levels
-or provider evidence. Existing canonical players do not require a Viva lookup.
+The FPR start helper preserves an existing canonical state, a complete valid CUP
+ledger history, or an exact numeric compatibility value. An unrated participant
+blocks the entire roster with `FPR_START_LEVEL_REQUIRED` and no writes. Initial
+assignment belongs to onboarding or authorized staff in CUP. Recovery from CUP
+history or compatibility data creates no Viva projection.
+
+`scripts/patch_fpr_start_cup_only.mjs` checks both target nodes against
+a hash-bound live preimage and patches the installed graph. The FPR bootstrap returns the named missing-level
+error, and the legacy `POST /lk/onboarding/level` with `source: tournament_start`
+returns 409 after authentication. Legacy requests do not identify the tournament
+format. For other formats, current clients still attach manual changes to the
+tournament protocol when creating it.
+
+The FPR worker retires queued Viva projections tied to an immutable roster
+bootstrap event ID. Historical recovery rows share their format with result rows
+and require separate reconciliation. Result projection dispatch remains available.
+Before a coordinated switch, verify the installed graph and both runtime
+manifests, and wait until both rating locks are free so an older worker cannot
+send a previously claimed row. Retain clean preimages of the graph and the
+worker/helper pair for rollback.
 
 `scripts/build_fpr_start_bootstrap.mjs` packages the clean-source helper and binds
 it to the installed worker's eleven formula/replay/locking module hashes. A helper-only
@@ -128,8 +137,8 @@ source. Keep scheduled jobs quiescent during the guarded worker `current` switch
 verify the original data lock and schedule lock are both free before switching.
 Install and verify the worker (including `scripts/lib/ratingDataLock.mjs`) before
 building/verifying/switching the helper against its eleven runtime hashes. Do not run
-old and new schedule wrappers concurrently during rollout. Existing Node-RED
-endpoints, initializer nodes and the 25-second child deadline remain unchanged.
+old and new schedule wrappers concurrently during rollout. The Node-RED
+endpoints and the 25-second child deadline stay in place.
 Rollback uses the retained worker/helper pair under the same quiescence checks;
 there are no schema changes or corrective data operations in this release.
 
