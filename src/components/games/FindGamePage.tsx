@@ -32,7 +32,7 @@ import {
   normalizeLevelGradeLabel,
   parseNumericLevel,
 } from "../../utils/customFields";
-import { bookingEndIso } from "../../utils/bookingEndTime";
+import { resolveGameBookingTimes } from "../../utils/bookingEndTime";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
@@ -338,29 +338,13 @@ function formatDateLocalIso(date: Date): string {
 }
 
 function resolveGameStartTs(game: PadelGameRecord): number | null {
-  const booking = game.booking;
-  const date = booking?.date;
-  const time = booking?.timeFrom || booking?.timeTo;
-  if (!date || !time) return null;
-  const normalizedTime = /^\d{2}:\d{2}$/.test(time) ? `${time}:00` : time;
-  const startIso = PUBLIC_GAME_TIME_ZONE
-    ? `${date}T${normalizedTime}${GAME_BOOKING_UTC_OFFSET}`
-    : `${date}T${normalizedTime}`;
-  const parsed = new Date(startIso);
-  return Number.isFinite(parsed.getTime()) ? parsed.getTime() : null;
+  const { startTs, endTs } = resolveGameBookingTimes(game.booking, GAME_BOOKING_UTC_OFFSET);
+  return startTs ?? endTs;
 }
 
 function resolveGameEndTs(game: PadelGameRecord): number | null {
-  const booking = game.booking;
-  const date = booking?.date;
-  const time = booking?.timeTo || booking?.timeFrom;
-  if (!date || !time) return null;
-  const normalizedTime = /^\d{2}:\d{2}$/.test(time) ? `${time}:00` : time;
-  const endIso = PUBLIC_GAME_TIME_ZONE
-    ? bookingEndIso(date, booking.timeFrom || time, normalizedTime, GAME_BOOKING_UTC_OFFSET)
-    : `${date}T${normalizedTime}`;
-  const parsed = new Date(endIso);
-  return Number.isFinite(parsed.getTime()) ? parsed.getTime() : null;
+  const { startTs, endTs } = resolveGameBookingTimes(game.booking, GAME_BOOKING_UTC_OFFSET);
+  return endTs ?? startTs;
 }
 
 function isGameCancelled(game: PadelGameRecord): boolean {

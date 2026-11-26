@@ -79,6 +79,7 @@ import {
   CABINET_URL,
   COMMUNITIES_BUNDLE_URL,
   GAMES_BUNDLE_URL,
+  GAME_BOOKING_UTC_OFFSET,
   IS_DEV_RELEASE_CHANNEL,
   PUBLIC_COMMUNITY_JOIN_PATH,
   PUBLIC_GAME_FIND_PATH,
@@ -89,6 +90,7 @@ import {
 } from "../../consts/api_config";
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
+import { resolveGameBookingTimes } from "../../utils/bookingEndTime";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import {
   buildReferralSubscriptionUrl,
@@ -461,29 +463,13 @@ function resolveGameCardPlayersCount(game: PadelGameRecord): number {
 }
 
 function getGameEndTimestamp(game: PadelGameRecord): number {
-  const date = game.booking?.date;
-  const rawTime = game.booking?.timeTo ?? game.booking?.timeFrom;
-  if (rawTime) {
-    const directParsed = new Date(rawTime).getTime();
-    if (Number.isFinite(directParsed)) return directParsed;
-  }
-  if (!date || !rawTime) return Number.POSITIVE_INFINITY;
-  const normalizedTime = /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : rawTime;
-  const parsed = new Date(`${date}T${normalizedTime}`).getTime();
-  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+  const { startTs, endTs } = resolveGameBookingTimes(game.booking, GAME_BOOKING_UTC_OFFSET);
+  return endTs ?? startTs ?? Number.POSITIVE_INFINITY;
 }
 
 function getGameStartTimestamp(game: PadelGameRecord): number {
-  const date = game.booking?.date;
-  const rawTime = game.booking?.timeFrom ?? game.booking?.timeTo;
-  if (rawTime) {
-    const directParsed = new Date(rawTime).getTime();
-    if (Number.isFinite(directParsed)) return directParsed;
-  }
-  if (!date || !rawTime) return Number.POSITIVE_INFINITY;
-  const normalizedTime = /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : rawTime;
-  const parsed = new Date(`${date}T${normalizedTime}`).getTime();
-  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+  const { startTs, endTs } = resolveGameBookingTimes(game.booking, GAME_BOOKING_UTC_OFFSET);
+  return startTs ?? endTs ?? Number.POSITIVE_INFINITY;
 }
 
 function getTodayDateKey(): string {

@@ -18,8 +18,8 @@ const { splitCreateEndDate, splitCreateDurationMinutes, extractConflictExerciseI
   ['splitCreateEndDate', 'splitCreateDurationMinutes', 'extractConflictExerciseId']);
 const client = ts.transpileModule(read('../src/utils/bookingEndTime.ts').replaceAll('export ', ''),
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const { endIso, endIsoWithOffset } = new Function(client
-  + ';return { endIso: moscowBookingEndIso, endIsoWithOffset: bookingEndIso };')();
+const { endIso, endIsoWithOffset, resolveGameBookingTimes } = new Function(client
+  + ';return { endIso: moscowBookingEndIso, endIsoWithOffset: bookingEndIso, resolveGameBookingTimes };')();
 
 const dates = [['2099-09-21', '2099-09-22'], ['2099-09-30', '2099-10-01'],
   ['2099-12-31', '2100-01-01'], ['2104-02-28', '2104-02-29'], ['2104-02-29', '2104-03-01']];
@@ -132,10 +132,10 @@ test('prospective preflight and finalize retain exact binding at midnight withou
 
 // Evaluate the actual client functions with inert dependencies and no network.
 const apiSource = ts.createSourceFile('apiClient.ts', read('../src/utils/apiClient.ts'), ts.ScriptTarget.ES2022, true);
-function clientFunction(name, dependencies) {
-  const statement = apiSource.statements.find(s => ts.isFunctionDeclaration(s) && s.name?.text === name);
+function clientFunction(name, dependencies, source = apiSource) {
+  const statement = source.statements.find(s => ts.isFunctionDeclaration(s) && s.name?.text === name);
   assert.ok(statement);
-  const js = ts.transpileModule(statement.getText(apiSource).replace('export ', ''),
+  const js = ts.transpileModule(statement.getText(source).replace('export ', ''),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(...Object.keys(dependencies), js + ';return ' + name + ';')(...Object.values(dependencies));
 }
@@ -178,6 +178,75 @@ test('Novokuznetsk closing boundary preserves UTC+7 and advances only the end da
   assert.equal(end, '2100-01-01T00:00:00+07:00');
   assert.equal(Date.parse(end) - Date.parse('2099-12-31T22:30:00+07:00'), 90 * 60000);
   assert.equal(endIsoWithOffset('2099-12-31', '16:00', '17:30', '+07:00'), '2099-12-31T17:30:00+07:00');
+});
+
+test('game reads preserve explicit instants and recover the legacy closing interval', () => {
+  const booking = { date: '2099-12-31', timeFrom: '22:00', timeTo: '00:00' };
+  const startTs = Date.parse('2099-12-31T22:00:00+03:00');
+  const endTs = Date.parse('2100-01-01T00:00:00+03:00');
+  const wrongEnd = '2099-12-31T00:00:00+03:00';
+  for (const fields of [
+    {},
+    { timeTo: '24:00' },
+    { startTs, endTs, timeTo: null },
+    { startTs, endTs: Date.parse(wrongEnd), timeToIso: wrongEnd },
+    { timeFromIso: '2099-12-31T19:00:00Z', timeToIso: '2099-12-31T21:00:00Z' },
+  ]) {
+    assert.deepEqual(resolveGameBookingTimes({ ...booking, ...fields }, '+03:00'), { startTs, endTs });
+  }
+  assert.equal(resolveGameBookingTimes({
+    ...booking, timeTo: '00:30', timeToIso: '2100-01-01T00:30:00+03:00',
+  }, '+03:00').endTs, endTs + 30 * 60000);
+  assert.equal(resolveGameBookingTimes({ ...booking, timeTo: '00:30' }, '+03:00').endTs, null);
+  assert.equal(resolveGameBookingTimes({ ...booking, timeTo: '23:30' }, '+03:00').endTs, endTs - 30 * 60000);
+  assert.deepEqual(resolveGameBookingTimes(booking, '+07:00'), {
+    startTs: startTs - 4 * 3600000,
+    endTs: endTs - 4 * 3600000,
+  });
+});
+
+test('a closing slot stays in search and keeps the normal cabinet card before it starts', () => {
+  const source = path => ts.createSourceFile(path, read('../' + path), ts.ScriptTarget.ES2022, true);
+  const searchSource = source('src/components/games/FindGamePage.tsx');
+  const cabinetSource = source('src/components/cabinet/Cabinet.tsx');
+  let now = Date.parse('2099-12-31T11:00:00+03:00');
+  class FixedDate extends Date {
+    constructor(...args) { super(...(args.length > 0 ? args : [now])); }
+    static now() { return now; }
+  }
+  const deps = {
+    resolveGameBookingTimes,
+    GAME_BOOKING_UTC_OFFSET: '+03:00',
+    Date: FixedDate,
+    CLUB_ON_SITE_BOOKING: false,
+    RESULT_ENTRY_GRACE_WINDOW_MS: 24 * 3600000,
+    isRecord: value => value !== null && typeof value === 'object',
+  };
+  const search = clientFunction('isJoinablePublicGame', {
+    ...deps,
+    resolveGameEndTs: clientFunction('resolveGameEndTs', deps, searchSource),
+    isGameCancelled: clientFunction('isGameCancelled', deps, searchSource),
+    isGamePendingPayment: clientFunction('isGamePendingPayment', deps, searchSource),
+    resolveMaxPlayers: () => 4,
+    countActiveParticipants: () => 2,
+    resolveViewerState: () => 'none',
+    resolveWaitlistEnabled: () => false,
+  }, searchSource);
+  for (const name of [
+    'getGameEndTimestamp', 'getGameStartTimestamp', 'getTodayDateKey', 'getGameDateKey', 'hasEnteredMatchResult',
+  ]) {
+    deps[name] = clientFunction(name, deps, cabinetSource);
+  }
+  const showResultEntry = clientFunction('shouldShowInlineResultEntry', deps, cabinetSource);
+  const game = {
+    id: 'synthetic-game', status: 'PAID', settings: { isPrivate: false }, payment: { paid: true },
+    booking: { date: '2099-12-31', timeFrom: '22:00', timeTo: '00:00' },
+  };
+  assert.equal(search(game, {}), true);
+  assert.equal(showResultEntry(game), false);
+  now = Date.parse('2100-01-01T00:01:00+03:00');
+  assert.equal(search(game, {}), false);
+  assert.equal(showResultEntry(game), true);
 });
 
 const original350 = process.env.LK_MIDNIGHT_ORIGINAL350_SOURCE;
