@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { CUP_HANDOFF_WINDOW_MS, cupHandoffStartKey, mapCupHandoff } from './cup-handoff.mjs';
 
 export const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 export const need = (condition, code) => { if (!condition) throw new Error(code); };
@@ -70,8 +71,35 @@ function mapStationCallback(raw, botId) {
   return { key, stationAction: { type: 'select', userId, chatId, callbackId, dto } };
 }
 
+const disabledCUPStart = 'CUP_HANDOFF_DISABLED';
+const invalidCUPStartErrors = new Set(['CUP_HANDOFF_PAYLOAD', 'CUP_HANDOFF_ACTOR', 'CUP_HANDOFF_ID']);
+
+function mapBotStarted(raw, botId, cupHandoffEnabled) {
+  let handoff;
+  let ignored = 'NON_CUP_HANDOFF_START';
+  try {
+    handoff = mapCupHandoff(raw, botId);
+  } catch (error) {
+    if (!invalidCUPStartErrors.has(error.message)) throw error;
+    ignored = 'INVALID_CUP_HANDOFF_START';
+  }
+  if (handoff && cupHandoffEnabled) return handoff;
+  if (handoff) ignored = disabledCUPStart;
+  const eventDigest = sha(canonical(raw));
+  return {
+    key: handoff?.key ?? sha(`MAX_BOT\0ignored_bot_started\0${eventDigest}`),
+    ignored,
+    botStartedReceipt: { update_type: 'bot_started', eventDigest },
+  };
+}
+
 // Station selections use a separate, allowlisted callback path. Ordinary messages carry content only.
-export function mapUpdate(raw, botId, stationEnabled = false) {
+export function mapUpdate(raw, botId, stationEnabled = false, cupHandoffEnabled = false) {
+  if (object(raw) && raw.update_type === 'bot_started') return mapBotStarted(raw, botId, cupHandoffEnabled);
+  if (cupHandoffEnabled) {
+    const handoff = mapCupHandoff(raw, botId);
+    if (handoff) return handoff;
+  }
   if (stationEnabled && raw?.update_type === 'message_callback') return mapStationCallback(raw, botId);
   need(object(raw) && raw.update_type === 'message_created', 'UNSUPPORTED_UPDATE');
   const m = raw.message; need(object(m) && object(m.sender) && object(m.recipient), 'INVALID_MESSAGE');
@@ -131,7 +159,10 @@ export class Inbox {
       const record = this.read(name.slice(0, 64)); this.index.set(record.key, this.summary(record)); this.bytes += fs.statSync(path.join(dir, name)).size;
     }
   }
-  summary(r) { return { phase: r.phase, acceptedAt: r.acceptedAt }; }
+  summary(r) {
+    return { phase: r.phase, acceptedAt: r.acceptedAt, cupHandoff: Boolean(r.cupHandoffAction),
+      cupHandoffRetryAt: r.cupHandoffRetryAt };
+  }
   read(key) {
     need(/^[a-f0-9]{64}$/.test(key), 'INVALID_KEY');
     const r = JSON.parse(readPrivate(path.join(this.dir, key + '.json'), 4_194_304));
@@ -148,15 +179,35 @@ export class Inbox {
       r.phase = r.stationPhase;
       delete r.stationPhase;
     }
+    if (r.cupHandoffAction !== undefined) {
+      need(!r.stationAction && object(r.cupHandoffAction) && r.dtos.length === 0
+        && Number.isFinite(Date.parse(r.acceptedAt)) && r.cupHandoffActionHash === sha(canonical(r.cupHandoffAction))
+        && ['start', 'confirm'].includes(r.cupHandoffAction.type), 'INBOX_CUP_HANDOFF_CORRUPT');
+    }
+    if (r.cupHandoffConfirmationDigest !== undefined) {
+      need(r.cupHandoffAction?.type === 'confirm' && /^[a-f0-9]{64}$/.test(r.cupHandoffConfirmationDigest),
+        'INBOX_CUP_HANDOFF_CONFIRMATION');
+    }
+    if (r.cupHandoffPhase !== undefined) {
+      need(r.cupHandoffAction && r.phase === 'REVIEW'
+        && ['QUEUED', 'DISPATCH_INTENT'].includes(r.cupHandoffPhase), 'INBOX_CUP_HANDOFF_PHASE');
+      r.phase = r.cupHandoffPhase;
+      delete r.cupHandoffPhase;
+    }
     return r;
   }
   write(record, exclusive = false) {
     privateDirectory(this.dir); const target = path.join(this.dir, record.key + '.json');
     const oldSize = exclusive ? 0 : readPrivate(target, 4_194_304).length;
     // A previous receiver understands REVIEW and leaves unfinished station actions in custody.
-    const stored = record.stationAction && ['QUEUED', 'DISPATCH_INTENT', 'RECEIPT'].includes(record.phase)
-      ? { ...record, phase: 'REVIEW', stationPhase: record.phase }
-      : record;
+    let stored = record;
+    if (record.stationAction && ['QUEUED', 'DISPATCH_INTENT', 'RECEIPT'].includes(record.phase)) {
+      stored = { ...record, phase: 'REVIEW', stationPhase: record.phase };
+    }
+    // A previous receiver must never deliver handoff records as ordinary messages.
+    if (record.cupHandoffAction && ['QUEUED', 'DISPATCH_INTENT'].includes(record.phase)) {
+      stored = { ...record, phase: 'REVIEW', cupHandoffPhase: record.phase };
+    }
     const body = Buffer.from(JSON.stringify(stored) + '\n'); need(body.length <= 4_194_304, 'RECORD_TOO_LARGE');
     need(this.bytes - oldSize + body.length <= this.maxBytes, 'INBOX_CAPACITY');
     const tmp = path.join(this.dir, '.tmp-' + crypto.randomUUID());
@@ -167,8 +218,21 @@ export class Inbox {
     this.bytes += body.length - oldSize; this.index.set(record.key, this.summary(record));
   }
   accept(raw, mapped) {
+    const storedRaw = mapped.botStartedReceipt ?? raw;
+    const hash = sha(canonical(storedRaw));
     if (this.index.has(mapped.key) || fs.existsSync(path.join(this.dir, mapped.key + '.json'))) {
-      const prior = this.read(mapped.key); need(prior.hash === sha(canonical(raw)), 'DUPLICATE_CONFLICT');
+      const prior = this.read(mapped.key);
+      // Reopening the same deep link may generate another timestamp for the same prompt.
+      const mappedStart = mapped.cupHandoffAction?.type === 'start';
+      const priorStart = prior.cupHandoffAction?.type === 'start';
+      const sameHandoffStart = mappedStart && priorStart
+        && canonical(mapped.cupHandoffAction) === canonical(prior.cupHandoffAction);
+      // Preserve the first admission across flag changes. The start key binds draft, user and chat.
+      const mappedDisabledStart = mapped.ignored === disabledCUPStart;
+      const priorDisabledStart = prior.phase === 'IGNORED' && prior.ignored === disabledCUPStart;
+      const duplicateDisabledStart = (mappedDisabledStart && (priorStart || priorDisabledStart))
+        || (mappedStart && priorDisabledStart);
+      need(prior.hash === hash || sameHandoffStart || duplicateDisabledStart, 'DUPLICATE_CONFLICT');
       // Reconcile a published file after a directory-fsync error; never overwrite or POST here.
       const fd = fs.openSync(path.join(this.dir, mapped.key + '.json'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } syncDirectory(this.dir);
@@ -177,11 +241,15 @@ export class Inbox {
     }
     const capacity = fs.statfsSync(this.dir); need(Number(capacity.bavail) * Number(capacity.bsize) >= this.minFreeBytes, 'DISK_CAPACITY');
     need(this.index.size < this.maxRecords, 'INBOX_CAPACITY');
-    const record = { version: 1, key: mapped.key, hash: sha(canonical(raw)), raw, dtos: mapped.dtos ?? [],
+    const record = { version: 1, key: mapped.key, hash, raw: storedRaw, dtos: mapped.dtos ?? [],
       dtoHash: sha(canonical(mapped.dtos ?? [])), phase: mapped.ignored ? 'IGNORED' : mapped.review ? 'REVIEW' : 'QUEUED', ignored: mapped.ignored, reason: mapped.review, nextPart: 0, acceptedAt: new Date().toISOString() };
     if (mapped.stationAction) {
       record.stationAction = mapped.stationAction;
       record.stationActionHash = sha(canonical(mapped.stationAction));
+    }
+    if (mapped.cupHandoffAction) {
+      record.cupHandoffAction = mapped.cupHandoffAction;
+      record.cupHandoffActionHash = sha(canonical(mapped.cupHandoffAction));
     }
     this.write(record, true); return { duplicate: false, key: mapped.key };
   }
@@ -190,20 +258,36 @@ export class Inbox {
 }
 
 export class Dispatcher {
-  constructor(inbox, { ready, post, confirm, station, paused = () => false }) {
+  constructor(inbox, { ready, post, confirm, station, cupHandoff, paused = () => false }) {
     need(typeof paused === 'function', 'PAUSE_CONFIGURATION');
-    Object.assign(this, { inbox, ready, post, confirm, station, paused }); this.running = false; this.stopping = false;
+    Object.assign(this, { inbox, ready, post, confirm, station, cupHandoff, paused }); this.running = false; this.stopping = false;
   }
   isPaused() { try { return this.paused() !== false; } catch { return true; } }
   stop() { this.stopping = true; }
   async tick() {
     if (this.running || this.stopping || this.isPaused()) return; this.running = true;
-    try { for (const key of this.inbox.pending()) { if (this.stopping || this.isPaused()) break; await this.process(key); } }
-    finally { this.running = false; }
+    try {
+      let handoffKey;
+      for (const key of this.inbox.pending()) {
+        if (this.stopping || this.isPaused()) break;
+        const summary = this.inbox.index.get(key);
+        if (summary.cupHandoff) {
+          if (this.cupHandoff && (summary.cupHandoffRetryAt ?? 0) <= Date.now()) handoffKey ??= key;
+          continue;
+        }
+        await this.process(key);
+      }
+      // Prioritize legacy traffic and limit the separate handoff to one handoff record per tick.
+      if (handoffKey && !this.stopping && !this.isPaused()) await this.process(handoffKey);
+    } finally { this.running = false; }
   }
   async process(key) {
     if (this.isPaused()) return;
     const r = this.inbox.read(key);
+    if (r.cupHandoffAction) {
+      if (this.cupHandoff) await this.processCupHandoff(r);
+      return;
+    }
     if (r.stationAction && !this.station) return;
     // An intent surviving a crash is uncertain. It must never become a second POST.
     if (r.phase === 'DISPATCH_INTENT') { this.review(r, r.stationReply ? 'UNKNOWN_STATION_REPLY' : 'UNKNOWN_DISPATCH'); return; }
@@ -240,6 +324,84 @@ export class Dispatcher {
     r.phase = 'RECEIPT'; r.receipt = { message: receipt.message, dialogId: receipt.dialog.id, clientId: receipt.client.id };
     if (r.stationAction) r.receipt.stationId = stationId;
     this.inbox.write(r); await this.verify(r);
+  }
+  deferCupHandoff(r) {
+    r.cupHandoffAttempts = (r.cupHandoffAttempts ?? 0) + 1;
+    const delay = Math.min(5_000 * 2 ** Math.min(r.cupHandoffAttempts - 1, 4), 60_000);
+    r.cupHandoffRetryAt = Date.now() + delay;
+    r.phase = 'QUEUED';
+    this.inbox.write(r);
+  }
+  async processCupHandoff(r) {
+    const action = r.cupHandoffAction;
+    const now = Date.now();
+    const receivedAt = Date.parse(r.acceptedAt);
+    if (!['QUEUED', 'DISPATCH_INTENT'].includes(r.phase) || this.stopping || this.isPaused()
+      || (r.cupHandoffRetryAt ?? 0) > now) return;
+    if (receivedAt + CUP_HANDOFF_WINDOW_MS <= now) {
+      this.review(r, 'CUP_HANDOFF_EXPIRED'); return;
+    }
+    if (r.cupHandoffConfirmationDigest) {
+      await this.sendCupHandoffReturn(r);
+      return;
+    }
+    if (action.type === 'start') {
+      if (r.phase !== 'QUEUED') { this.review(r, 'CUP_HANDOFF_UNKNOWN_PROMPT'); return; }
+      let verified;
+      try { verified = await this.cupHandoff.verifiedDialog(action); }
+      catch { this.deferCupHandoff(r); return; }
+      if (!verified) { this.review(r, 'CUP_HANDOFF_DIALOG_UNVERIFIED'); return; }
+      if (this.stopping || this.isPaused()) return;
+      r.phase = 'DISPATCH_INTENT';
+      this.inbox.write(r);
+      try { r.cupHandoffPromptId = await this.cupHandoff.prompt(action); }
+      catch { this.review(r, 'CUP_HANDOFF_UNKNOWN_PROMPT'); return; }
+    } else {
+      const startKey = cupHandoffStartKey(action);
+      const start = this.inbox.index.has(startKey) ? this.inbox.read(startKey) : undefined;
+      if (!start || start.cupHandoffAction?.type !== 'start' || start.phase !== 'DELIVERED'
+        || start.cupHandoffPromptId !== action.promptId || Date.parse(start.acceptedAt) + CUP_HANDOFF_WINDOW_MS <= receivedAt) {
+        this.review(r, 'CUP_HANDOFF_PROMPT_UNPROVEN'); return;
+      }
+      r.phase = 'DISPATCH_INTENT';
+      this.inbox.write(r);
+      let result;
+      try { result = await this.cupHandoff.deliverProof(action); }
+      catch { this.deferCupHandoff(r); return; }
+      // CUP intake binds the draft once, so an interrupted proof can be safely retried.
+      if (result?.status === 'retry') { this.deferCupHandoff(r); return; }
+      if (result?.status !== 'accepted' || !/^[a-f0-9]{64}$/.test(result.confirmationDigest)) {
+        this.review(r, result?.status === 'conflict' ? 'CUP_HANDOFF_CONFLICT' : 'CUP_HANDOFF_REFUSED'); return;
+      }
+      // Persist proof acceptance before starting an independent MAX message send.
+      r.cupHandoffConfirmationDigest = result.confirmationDigest;
+      r.phase = 'QUEUED';
+      delete r.cupHandoffRetryAt;
+      this.inbox.write(r);
+      return;
+    }
+    r.phase = 'DELIVERED';
+    delete r.cupHandoffRetryAt;
+    this.inbox.write(r);
+  }
+  async sendCupHandoffReturn(r) {
+    if (r.phase !== 'QUEUED') { this.review(r, 'CUP_HANDOFF_UNKNOWN_RETURN'); return; }
+    const action = r.cupHandoffAction;
+    if (this.cupHandoff.confirmationDigest(action) !== r.cupHandoffConfirmationDigest) {
+      this.review(r, 'CUP_HANDOFF_CONFIRMATION_KEY_CHANGED'); return;
+    }
+    let verified;
+    try { verified = await this.cupHandoff.verifiedDialog(action); }
+    catch { this.deferCupHandoff(r); return; }
+    if (!verified) { this.review(r, 'CUP_HANDOFF_DIALOG_UNVERIFIED'); return; }
+    if (this.stopping || this.isPaused()) return;
+    r.phase = 'DISPATCH_INTENT';
+    this.inbox.write(r);
+    try { await this.cupHandoff.deliverReturn(action); }
+    catch { this.review(r, 'CUP_HANDOFF_UNKNOWN_RETURN'); return; }
+    r.phase = 'DELIVERED';
+    delete r.cupHandoffRetryAt;
+    this.inbox.write(r);
   }
   async verify(r) {
     let confirmed = false;
