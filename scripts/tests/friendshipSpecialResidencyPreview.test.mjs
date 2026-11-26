@@ -115,9 +115,22 @@ test('valid supported residency response preserves the established discount with
   assert.equal(ctx.quotes[1].amountMinor,200000);assert.equal(ctx.quotes[1].freeMinutes,0);
   assert.equal(ctx.quotes[1].appliedSubscriptionProductId,undefined);
 });
+test('residency never requests a discount for a PRO training even on an older policy',()=>{
+  const ctx=context([resident],'GROUP_TRAINING');
+  ctx.target.proTraining=true;
+  ctx.exercise.direction.id=5506;
+  ctx.exercise.type.id=605;
+  const result=execute(ctx);
+  assert.deepEqual(result.ports,[4]);
+  assert.equal(ctx.quotes.length,1);
+  assert.equal(ctx.quotes[0].status,'UNAVAILABLE');
+  assert.equal(ctx.quotes[0].amountMinor,null);
+  assert.equal(ctx.quotes[0].reasonCode,'RESIDENCY_PRO_TRAINING_EXCLUDED');
+});
 test('validated residency quote identifies its subscription product for new games only',()=>{
   for(const targetKind of ['NEW_GAME','EXISTING_GAME']) {
     const ctx=context([resident],null);
+    ctx.basePriceMinor=60000;
     const evidence=residencyFixture({clientSubscriptionId:resident});
     ctx.target={...ctx.target,targetKind,startsAt:evidence.startsAt};
     ctx.existingGame=targetKind==='EXISTING_GAME';
@@ -130,7 +143,7 @@ test('validated residency quote identifies its subscription product for new game
     assert.equal(ctx.statusCode,200,ctx.error);
     assert.equal(ctx.quotes.length,1);
     assert.equal(ctx.quotes[0].status,'AVAILABLE');
-    assert.equal(ctx.quotes[0].amountMinor,280000);
+    assert.equal(ctx.quotes[0].amountMinor,42000);
     assert.equal(ctx.quotes[0].appliedSubscriptionProductId,targetKind==='NEW_GAME'?RESIDENCY_PRODUCT_ID:undefined);
   }
 });
