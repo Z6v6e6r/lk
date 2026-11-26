@@ -74,8 +74,8 @@ test("production roster builder uses the merge without reintroducing authority a
 test("paid converted open game keeps its roster and classification on ordinary PATCH", () => {
   const metadata = { source: "cabinet_booking_convert", typeId: 1613, joinPrice: "1050" };
   const member = { id: "participant", status: "CONFIRMED" };
-  const run = (participants: unknown[], changes = metadata) => {
-    const msg = { payload: [{ organizer, metadata, settings: { payMode: "self" },
+  const run = (participants: unknown[], changes = metadata, saved: Record<string, unknown> = metadata) => {
+    const msg = { payload: [{ organizer, metadata: saved, settings: { payMode: "self" },
       participants: [member, { id: "pending", status: "PENDING" }] }],
       _organizerGuardBody: { participants, metadata: changes } };
     return new Function("msg", guardSource)(structuredClone(msg));
@@ -89,7 +89,7 @@ test("paid converted open game keeps its roster and classification on ordinary P
   for (const alias of [{ typeId: 0, typeName: "Своя-игра" }, { typeId: 0, directionId: 6180 }]) {
     assert.equal(run([member, { id: "unbooked", status: "CONFIRMED" }], metadata, {
       ...metadata, ...alias,
-    } as typeof metadata)[1].payload.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+    })[1].payload.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
   }
   assert.ok(guard(metadata, { ...metadata, typeId: 0, typeName: "Аренда корта" })[0]);
 });
