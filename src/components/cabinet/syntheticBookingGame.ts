@@ -88,6 +88,8 @@ export function buildSyntheticCabinetGameFromBooking(
       date,
       timeFrom,
       timeTo,
+      timeFromIso: exercise.timeFrom,
+      timeToIso: exercise.timeTo,
       durationMinutes: resolveDurationMinutes(booking),
       studioId: String(exercise.studio.id),
       roomId: String(exercise.room.id),
