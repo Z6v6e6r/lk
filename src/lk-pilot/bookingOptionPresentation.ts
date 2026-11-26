@@ -1,5 +1,5 @@
 import type { SubscriptionPricePreview } from "../components/games/subscriptionPricePreview";
-import { resolveSubscriptionCategoryDailyLimitPlanKey } from "../utils/subscriptionCategoryDailyLimit.ts";
+import { resolveSubscriptionCategoryDailyLimitPlanKey, SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS } from "../utils/subscriptionCategoryDailyLimit.ts";
 import type { SubscriptionEventDiscountQuote } from "../utils/groupSubscriptionDiscount";
 
 export type BookingOption = {
@@ -41,9 +41,12 @@ export function gameBookingOptions(
   for (const { subscriptionId, name } of subscriptions) {
     const quote = previews[subscriptionId];
     if (!quote || quote.state === "checking") continue;
-    const plan = resolveSubscriptionCategoryDailyLimitPlanKey(ownedById.get(subscriptionId));
-    const displayName = plan === "friendship_two_hours" || /^(?:падел[.\s]+)?дружба\s*2\.0$/iu.test(name.trim())
-      ? "По подписке Дружба2.0"
+    const friendshipTwoHours = quote.subscriptionProductId
+      ? quote.subscriptionProductId === SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS.friendship_two_hours
+      : resolveSubscriptionCategoryDailyLimitPlanKey(ownedById.get(subscriptionId)) === "friendship_two_hours"
+        || /^(?:падел[.\s]+)?дружба\s*2\.0$/iu.test(name.trim());
+    const displayName = friendshipTwoHours
+      ? "по Подписке Дружба2.0"
       : name === "Абонемент" ? "По подписке" : name;
     if (quote.state !== "available" || quote.amountMinor === null) {
       explanations.push(`${displayName} · ${quote.label}`);

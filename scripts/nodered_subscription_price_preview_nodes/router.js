@@ -112,13 +112,14 @@ const http = (step, path, admin = false) => {
   return out(0);
 };
 const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paidMinutes = 0, reasonCode = null, courtCoPay = null) => {
+  const subscriptionProductId = !eventRoute && status === 'AVAILABLE' ? ctx.metadata?.[subscriptionId]?.productId : undefined;
   ctx.quotes.push({ subscriptionId, selectionKey: ctx.selectionKey, status, basePriceMinor: ctx.basePriceMinor,
     amountMinor, freeMinutes, paidMinutes, reasonCode,
+    ...(subscriptionProductId ? { subscriptionProductId } : {}),
     ...(eventRoute ? { kind: courtCoPay ? COURT_COPAY_QUOTE_KIND : eventRoute.kind, exerciseId: ctx.exerciseId,
       actorClientId: ctx.actorClientId, productId: ctx.priceProductId, subscriptionName: ctx.metadata[subscriptionId] ? ctx.catalog[ctx.metadata[subscriptionId].productId] : undefined,
       discountPercent: ctx.groupDiscountPercent, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } : {}),
-    // Only the court co-pay carries the court's own numbers; every other event and game quote keeps
-    // exactly the fields it had before, so the existing client validators see the same shape.
+    // Only the court co-pay carries the court's own numbers.
     ...(eventRoute && courtCoPay ? { chargeableHours: courtCoPay.chargeableHours,
       hourlyCourtPriceMinor: courtCoPay.hourlyCourtPriceMinor, perHourMinor: courtCoPay.perHourMinor } : {}),
     evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });

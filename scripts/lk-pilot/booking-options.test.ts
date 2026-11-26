@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { gameBookingOptions, eventBookingOptions } from "../../src/lk-pilot/bookingOptionPresentation.ts";
-import type { SubscriptionPricePreview } from "../../src/components/games/subscriptionPricePreview.ts";
+import { subscriptionPricePreviewsById, type SubscriptionPricePreview } from "../../src/components/games/subscriptionPricePreview.ts";
 import type { SubscriptionEventDiscountQuote } from "../../src/utils/groupSubscriptionDiscount.ts";
 import { SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS } from "../../src/utils/subscriptionCategoryDailyLimit.ts";
 import { sanitizeSubscriptionSnapshot } from "../../src/utils/subscriptionSnapshotData.ts";
@@ -105,7 +105,7 @@ test("second game with a confirmed discounted quarter shows 30% and 2,800 rubles
   };
   const result = gameBookingOptions([{ subscriptionId: "owned", name: "Дружба 2.0" }], { owned: quote }, 120);
   assert.deepEqual(result.options, [{
-    id: "owned", name: "По подписке Дружба2.0", amountMinor: 280_000, basePriceMinor: 400_000,
+    id: "owned", name: "по Подписке Дружба2.0", amountMinor: 280_000, basePriceMinor: 400_000,
     benefit: "Скидка 30% на запись",
   }]);
   const ambiguous = gameBookingOptions([{ subscriptionId: "owned", name: "Дружба 2.0" }],
@@ -130,8 +130,36 @@ test("the pilot labels the owned Friendship 2.0 product even when Viva omits its
     { subscriptionId: "other", name: "Другая подписка" },
   ], { v2: quote, legacy: quote, other: quote }, 120, owned.content);
   assert.deepEqual(result.options.map(({ name, amountMinor }) => [name, amountMinor]), [
-    ["По подписке Дружба2.0", 280_000],
+    ["по Подписке Дружба2.0", 280_000],
     ["По подписке", 280_000],
     ["Другая подписка", 280_000],
+  ]);
+});
+
+test("a free game entry shows Friendship 2.0 from the confirmed quote even with a generic provider label", () => {
+  const price = {
+    selectionKey: "current-game", status: "AVAILABLE" as const, basePriceMinor: 400_000, amountMinor: 0,
+    freeMinutes: 120, paidMinutes: 0, reasonCode: "ALLOWED", evaluatedAt: 100, expiresAt: 200,
+  };
+  const productIds = SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS;
+  const previews = subscriptionPricePreviewsById({
+    selectionKey: price.selectionKey, durationMinutes: 120, subscriptionIds: ["v2", "other", "unknown"],
+    quotes: [
+      { ...price, subscriptionId: "v2", subscriptionProductId: productIds.friendship_two_hours.toUpperCase() },
+      { ...price, subscriptionId: "other", subscriptionProductId: productIds.friendship },
+      { ...price, subscriptionId: "unknown" },
+    ],
+    loading: false, now: 150,
+  });
+  const owned = [{ subscriptionId: "other", name: "Дружба 2 часа" }];
+  const result = gameBookingOptions([
+    { subscriptionId: "v2", name: "Абонемент" },
+    { subscriptionId: "other", name: "Другая подписка" },
+    { subscriptionId: "unknown", name: "Абонемент" },
+  ], previews, 120, owned);
+  assert.deepEqual(result.options, [
+    { id: "v2", name: "по Подписке Дружба2.0", amountMinor: 0, basePriceMinor: 400_000, benefit: "Участие по подписке без доплаты" },
+    { id: "other", name: "Другая подписка", amountMinor: 0, basePriceMinor: 400_000, benefit: "Участие по подписке без доплаты" },
+    { id: "unknown", name: "По подписке", amountMinor: 0, basePriceMinor: 400_000, benefit: "Участие по подписке без доплаты" },
   ]);
 });
