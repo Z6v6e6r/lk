@@ -141,11 +141,6 @@ test("backend missing-exercise 409 cannot fall through aliases or legacy create"
   assert.match(writer.slice(failFast, fallbackContinue), /return \{ data: null/);
 
   const syncSource = fs.readFileSync("src/utils/paymentSync.ts", "utf8");
-  const syncGuard = syncSource.indexOf(
-    "isGameExerciseIdMissingGuard(confirmResult.status, confirmResult.error?.raw)",
-  );
-  const legacyCreate = syncSource.indexOf('stage: "legacy_create"', syncGuard);
-  assert.ok(syncGuard >= 0);
-  assert.ok(legacyCreate > syncGuard);
-  assert.match(syncSource.slice(syncGuard, legacyCreate), /continue;/);
+  assert.doesNotMatch(syncSource, /stage:\s*"legacy_create"/);
+  assert.doesNotMatch(syncSource, /apiCreatePadelGameRecord\(/);
 });

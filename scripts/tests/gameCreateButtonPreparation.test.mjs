@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import ts from 'typescript';
+import { isExactWholeCourtDraftReadback } from '../../src/utils/serverGameDraftPersistencePolicy.ts';
 import { bookingEndIso, moscowBookingEndIso } from '../../src/utils/bookingEndTime.ts';
 import { isRequestTimeoutError, runWithAbortTimeout } from '../../src/utils/requestTimeout.ts';
 
@@ -29,10 +30,10 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
 function harness(stage) {
   const read = deferred();
   const state = { error: null, profileReads: 0, slotReads: 0, writes: 0, profileUpdates: 0, slotUpdates: 0, signal: null,
-    cardPayloads: [], completed: [], step: null };
+    cardPayloads: [], savedDrafts: [], redirects: [], completed: [], step: null };
   const context = {
-    AbortController, Promise, Date, Math, Set, isRequestTimeoutError, runWithAbortTimeout,
-    CLUB_ON_SITE_BOOKING: false, clubBookingOnly: false,
+    AbortController, Promise, Date, Math, Set, URL, isRequestTimeoutError, runWithAbortTimeout,
+    CLUB_ON_SITE_BOOKING: false, clubBookingOnly: false, ENABLE_WHOLE_COURT_DURABLE_DRAFT: false,
     subscriptionUsageShadowEnabled: false, studioId: 'studio', selectedDate: new Date('2030-01-01'),
     courtId: 'court', time: '20:00', duration: 60, selectedSlotId: 'slot', studioMasterServiceId: 'master',
     studioName: 'Station', selectedCourtName: 'Court', resolvedSelectedSubServiceIds: ['service'],
@@ -60,6 +61,15 @@ function harness(stage) {
     SPLIT_OPEN_GAME_DIRECTION_ID: 4588, SPLIT_OPEN_GAME_EXERCISE_TYPE_ID: 1613,
     apiCreatePadelSplitGamePayment: async () => { state.writes++; return { error: { message: 'test stop' } }; },
     apiPayMasterService: async () => { state.writes++; return { error: { message: 'test stop' } }; },
+    findPendingWholeCourtDrafts: () => state.savedDrafts,
+    savePendingPaidGameDraft: (paymentRef, payload, bookingIds) => { state.savedDrafts.push({ paymentRef, payload, bookingIds }); },
+    isExactWholeCourtDraftReadback, isPersistedGamePaymentTerminal: record => record.status === 'PAID',
+    isPersistedGamePaymentFailedTerminal: record => record.status === 'EXPIRED',
+    extractBookingIdsFromUrl: () => [], enqueuePendingPaymentSync: () => {}, normalizeBookingId: value => value ?? null,
+    parseBookingIdsFromUnknown: value => value ?? [],
+    setSlotPrice: () => {}, gameSnapshot: null, waitlistEnabled: true, createMaxPlayers: 4,
+    promoCodeApplied: null, promoDiscountAmount: null,
+    navigateToExternalUrl: url => { state.redirects.push(url); return true; },
     resolveSubscriptionCategoryDailyLimitErrorMessage: () => null,
     isRecordObject: value => value !== null && typeof value === 'object' && !Array.isArray(value),
     resolveSubscriptionDecisionPresentation: () => ({}), formatSubscriptionDecisionPresentation: () => 'test stop',
@@ -84,7 +94,7 @@ function harness(stage) {
   };
   vm.createContext(context);
   for (const name of ['resolveCurrentClientProfile', 'revalidateSelectedSlotForPayment', 'prepareGamePayment',
-    'handleSplitGamePay', 'submitSplitGamePayment', 'handleMasterServicePay']) {
+    'handleSplitGamePay', 'submitSplitGamePayment', 'handleMasterServicePay', 'submitMasterServicePay']) {
     const callback = declarations.get(name).initializer.arguments[0].getText(file);
     vm.runInContext(emit(`globalThis.${name} = ${callback}`), context);
   }
@@ -168,6 +178,81 @@ test('full-court payment also stops before a write on preparation timeout', asyn
   await flush();
   assert.equal(h.state.writes, 0);
   assert.equal(h.visual().busy, false);
+});
+
+function fullCourtHarness() {
+  const h = harness('slot');
+  h.context.ENABLE_WHOLE_COURT_DURABLE_DRAFT = true;
+  h.context.apiFetchMasterServiceTimeslots = async () => { h.state.slotReads++; return { data: [] }; };
+  h.context.apiPayMasterService = async (params) => {
+    h.state.writes++;
+    assert.equal(params.recoverCheckout, true);
+    return { data: { paymentUrl: 'https://pay.vivacrm.ru/original', bookingIds: ['booking-original'],
+      exerciseId: 'exercise-original', toPay: 8000 } };
+  };
+  return h;
+}
+
+test('full court opens the original checkout only after matching server readback', async () => {
+  const h = fullCourtHarness();
+  const save = deferred();
+  h.context.persistServerGameDraftBeforeRedirect = (...args) => { h.state.cardPayloads.push(args); return save.promise; };
+  const first = h.context.submitMasterServicePay();
+  await flush();
+  await h.context.submitMasterServicePay();
+  assert.equal(h.state.writes, 1);
+  assert.deepEqual(h.state.redirects, []);
+  const [paymentRef, payload] = h.state.cardPayloads[0];
+  assert.equal(paymentRef, 'ref');
+  assert.equal(payload.metadata.wholeCourtCheckoutVersion, 1);
+  save.resolve({ record: { ...payload, id: 'original-game' } });
+  await first;
+  assert.deepEqual(h.state.redirects, ['https://pay.vivacrm.ru/original']);
+});
+
+test('full court retry checks its original draft even when that reservation occupies the slot', async () => {
+  const h = fullCourtHarness();
+  h.context.persistServerGameDraftBeforeRedirect = async () => ({ record: null });
+  await h.context.submitMasterServicePay();
+  assert.deepEqual(h.state.redirects, []);
+  assert.match(h.state.error, /исходную бронь/);
+  const reads = [];
+  h.context.readWholeCourtDraftForCheckout = async (ref, ids, payload) => {
+    reads.push({ ref, ids });
+    return { ...payload, id: 'existing-game', status: 'PAID' };
+  };
+  await h.context.submitMasterServicePay();
+  assert.equal(h.state.writes, 1);
+  assert.equal(h.state.slotReads, 1);
+  assert.equal(reads.length, 1);
+  assert.equal(reads[0].ref, 'ref');
+  assert.equal(reads[0].ids[0], 'booking-original');
+  assert.deepEqual(h.state.redirects, []);
+  assert.equal(h.state.step, 'details');
+});
+
+test('full court does not save a draft for a session that changed during Viva checkout', async () => {
+  const h = fullCourtHarness();
+  const provider = deferred();
+  h.context.apiPayMasterService = () => provider.promise;
+  h.context.persistServerGameDraftBeforeRedirect = async () => { throw Error('must not save'); };
+  const pending = h.context.submitMasterServicePay();
+  await flush();
+  h.context.readAuthToken = () => 'new-session';
+  provider.resolve({ data: { paymentUrl: 'https://pay.vivacrm.ru/original', bookingIds: ['booking-original'],
+    exerciseId: 'exercise-original', toPay: 8000 } });
+  await pending;
+  assert.deepEqual(h.state.savedDrafts, []);
+  assert.deepEqual(h.state.redirects, []);
+});
+
+test('full court cannot open another checkout when local attempts are ambiguous', async () => {
+  const h = fullCourtHarness();
+  h.state.savedDrafts.push({ paymentRef: 'first' }, { paymentRef: 'second' });
+  await h.context.submitMasterServicePay();
+  assert.equal(h.state.writes, 0);
+  assert.equal(h.state.slotReads, 0);
+  assert.match(h.state.error, /однозначно/);
 });
 
 test('a normal submission reaches CREATE once after successful revalidation', async () => {

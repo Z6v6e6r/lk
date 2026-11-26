@@ -94,12 +94,20 @@ import {
   PAYMENT_REF_QUERY_KEY,
   enqueuePendingPaymentSync,
   extractBookingIdsFromUrl,
+  findPendingWholeCourtDrafts,
   getPendingPaidGameDraft,
+  isPersistedGamePaymentFailedTerminal,
+  isPersistedGamePaymentTerminal,
   processPendingPaymentSyncQueue,
+  removePendingPaidGameDraft,
   savePendingPaidGameDraft,
   type PendingPaidGameDraft,
 } from "../../utils/paymentSync";
-import { persistServerGameDraftBeforeRedirect } from "../../utils/serverGameDraftPersistence";
+import {
+  isExactWholeCourtDraftReadback,
+  persistServerGameDraftBeforeRedirect,
+  readWholeCourtDraftForCheckout,
+} from "../../utils/serverGameDraftPersistence";
 import {
   getPendingSplitRosterPaymentConfirmation,
   removePendingSplitRosterPaymentConfirmation,
@@ -195,6 +203,8 @@ import {
   isExerciseConvertibleToGameFromBooking,
   resolveExerciseCategoryFromValue,
 } from "../../utils/exerciseCategory";
+
+const ENABLE_WHOLE_COURT_DURABLE_DRAFT = import.meta.env.VITE_ENABLE_WHOLE_COURT_DURABLE_DRAFT === "true";
 
 interface GamesPageProps {
   onBack: () => void;
@@ -5517,6 +5527,9 @@ export default function GamesPage({
     fallbackPaymentUrlRaw: string | null | undefined,
     fallbackSnapshot: MatchSnapshot | null | undefined,
   ): Promise<VivaPaymentCheckResult> => {
+    if (game?.metadata?.wholeCourtCheckoutVersion === 1) {
+      return { paid: null, paymentUrl: null, cancelled: false, matchedBookings: [] };
+    }
     const lookup = buildBookingLookupContext(game, fallbackPaymentUrlRaw, fallbackSnapshot);
     const hasLookupSignal = lookup.bookingIds.length > 0
       || lookup.slotIds.length > 0
@@ -11393,7 +11406,10 @@ export default function GamesPage({
     }
   }, [duration, handleSplitGamePay]);
 
-  const handleMasterServicePay = useCallback(async () => {
+  const handleMasterServicePay = useCallback(async (
+    isCurrentCreation: () => boolean = () => true,
+    isSameSession: () => boolean = () => true,
+  ) => {
     if (subscriptionUsageShadowEnabled) {
       await previewSubscriptionUsageShadow(subscriptionUsageShadowCreatePreview);
       return;
@@ -11414,8 +11430,20 @@ export default function GamesPage({
       [PAYMENT_REF_QUERY_KEY]: paymentRef,
     });
 
-    const profile = await prepareGamePayment();
-    if (!profile) {
+    let pendingDrafts: PendingPaidGameDraft[] = [];
+    const profile = await prepareGamePayment((actor) => {
+      if (!ENABLE_WHOLE_COURT_DURABLE_DRAFT || CLUB_ON_SITE_BOOKING || !actor.clientId) return false;
+      pendingDrafts = findPendingWholeCourtDrafts({
+        organizerId: actor.clientId,
+        studioId,
+        roomId: courtId,
+        date: fromDate,
+        timeFrom: fromTime,
+        timeTo: toTime,
+      });
+      return pendingDrafts.length > 0;
+    });
+    if (!profile || !isCurrentCreation()) {
       setLoadingPay(false);
       return;
     }
@@ -11460,6 +11488,42 @@ export default function GamesPage({
       return;
     }
 
+    if (ENABLE_WHOLE_COURT_DURABLE_DRAFT && (!clientId || pendingDrafts.length > 1)) {
+      setPayError("Не удалось однозначно определить исходную бронь. Проверьте записи в личном кабинете.");
+      setLoadingPay(false);
+      return;
+    }
+    const originalDraft = pendingDrafts[0];
+    if (originalDraft) {
+      try {
+        const saved = await readWholeCourtDraftForCheckout(
+          originalDraft.paymentRef,
+          originalDraft.bookingIds,
+          originalDraft.payload,
+        );
+        if (!isCurrentCreation()) return;
+        if (saved && isPersistedGamePaymentTerminal(saved)) {
+          upsertGameRecordInStores(saved, { communityMode: "upsert" });
+          setGameRecordId(saved.id);
+          setGameRecordStatus(saved.status);
+          setGamePaid(true);
+          setStep("details");
+          return;
+        }
+        if (saved && isPersistedGamePaymentFailedTerminal(saved)) {
+          removePendingPaidGameDraft(originalDraft.paymentRef);
+          setPayError("Предыдущая оплата завершилась без записи. Можно начать новую попытку.");
+          return;
+        }
+        setPayError("Проверяем исходную бронь. Посмотрите её в личном кабинете или обратитесь в поддержку.");
+      } catch {
+        if (isCurrentCreation()) setPayError("Не удалось проверить исходную бронь. Повторите проверку через несколько секунд.");
+      } finally {
+        if (isCurrentCreation()) setLoadingPay(false);
+      }
+      return;
+    }
+
     const paymentResult = await apiPayMasterService({
       date: fromDate,
       fromTime,
@@ -11472,9 +11536,11 @@ export default function GamesPage({
       clientPhone,
       baseRedirectUrl,
       promoCode: promoCodeApplied,
+      recoverCheckout: ENABLE_WHOLE_COURT_DURABLE_DRAFT,
     });
+    if (!isSameSession()) return;
 
-    if (paymentResult.data?.toPay && paymentResult.data.toPay > 0) {
+    if (paymentResult.data?.toPay && paymentResult.data.toPay > 0 && isCurrentCreation()) {
       setSlotPrice(paymentResult.data.toPay);
     }
 
@@ -11503,11 +11569,12 @@ export default function GamesPage({
         ratingNumeric: profileRatingNumeric,
       };
     const bookingIdsFromPaymentResult = parseBookingIdsFromUnknown(paymentResult.data?.bookingIds);
+    let checkoutUrl: URL | null = null;
     let bookingIdsFromPaymentUrl: string[] = [];
     try {
       if (paymentResult.data?.paymentUrl) {
-        const paymentUrl = new URL(paymentResult.data.paymentUrl);
-        bookingIdsFromPaymentUrl = extractBookingIdsFromUrl(paymentUrl);
+        checkoutUrl = new URL(paymentResult.data.paymentUrl);
+        bookingIdsFromPaymentUrl = extractBookingIdsFromUrl(checkoutUrl);
       }
     } catch {
       bookingIdsFromPaymentUrl = [];
@@ -11665,6 +11732,15 @@ export default function GamesPage({
     }
 
     if (paymentResult.data?.paymentUrl) {
+      if (ENABLE_WHOLE_COURT_DURABLE_DRAFT && (
+        checkoutUrl?.origin !== "https://pay.vivacrm.ru" || checkoutUrl.username || checkoutUrl.password
+      )) {
+        if (isCurrentCreation()) {
+          setPayError("Не удалось проверить ссылку исходной оплаты. Проверьте бронь в личном кабинете.");
+          setLoadingPay(false);
+        }
+        return;
+      }
       const draftPayload: PadelGameRecordPayload = {
         paymentRef,
         tenantKey: null,
@@ -11724,6 +11800,7 @@ export default function GamesPage({
           exerciseId: resolvedExerciseId,
           vivaExerciseId: resolvedExerciseId,
           source: "games_widget",
+          ...(ENABLE_WHOLE_COURT_DURABLE_DRAFT ? { wholeCourtCheckoutVersion: 1 } : {}),
           promoCode: promoCodeApplied,
           promoDiscount: promoDiscountAmount,
           gameFormat: resolvedGameFormat,
@@ -11738,6 +11815,24 @@ export default function GamesPage({
       };
 
       savePendingPaidGameDraft(paymentRef, draftPayload, resolvedBookingIds);
+      if (ENABLE_WHOLE_COURT_DURABLE_DRAFT) {
+        let persistedDraft: Awaited<ReturnType<typeof persistServerGameDraftBeforeRedirect>> | null = null;
+        try {
+          persistedDraft = await persistServerGameDraftBeforeRedirect(paymentRef, draftPayload, resolvedBookingIds);
+        } catch {
+          // The server may have saved the draft before the response was lost.
+        }
+        if (!isCurrentCreation()) return;
+        const saved = persistedDraft?.record;
+        if (!isExactWholeCourtDraftReadback(saved, draftPayload, paymentRef, resolvedBookingIds)
+          || saved.status !== "PAYMENT_PENDING" || saved.payment?.paid !== false) {
+          setPayError("Сохраняем исходную бронь. Нажмите ещё раз, чтобы проверить её статус.");
+          setLoadingPay(false);
+          return;
+        }
+        upsertGameRecordInStores(saved, { communityMode: "upsert" });
+      }
+      if (!isCurrentCreation()) return;
       enqueuePendingPaymentSync(paymentRef, resolvedBookingIds, "pay_click");
 
       if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
@@ -11792,6 +11887,30 @@ export default function GamesPage({
     subscriptionUsageShadowEnabled,
   ]);
 
+  const submitMasterServicePay = useCallback(async () => {
+    if (!ENABLE_WHOLE_COURT_DURABLE_DRAFT) {
+      await handleMasterServicePay();
+      return;
+    }
+    if (gameCreationRef.current) return;
+    const controller = new AbortController();
+    const originalSession = readAuthToken();
+    gameCreationRef.current = controller;
+    const isSameSession = () => readAuthToken() === originalSession;
+    const isCurrentCreation = () => !controller.signal.aborted
+      && gameCreationRef.current === controller && isSameSession();
+    try {
+      await handleMasterServicePay(isCurrentCreation, isSameSession);
+    } catch {
+      if (isCurrentCreation()) {
+        setPayError("Не удалось завершить проверку брони. Проверьте записи в личном кабинете.");
+        setLoadingPay(false);
+      }
+    } finally {
+      if (gameCreationRef.current === controller) gameCreationRef.current = null;
+    }
+  }, [handleMasterServicePay]);
+
   const handleA3PayDevVivaBookingCreate = useCallback(async (
     operationId: string,
   ): Promise<A3PayDevVivaBookingResult> => {
@@ -11840,14 +11959,14 @@ export default function GamesPage({
       void submitSplitGamePayment("one_time");
       return;
     }
-    void handleMasterServicePay();
+    void submitMasterServicePay();
   }, [
     splitPaymentSelected,
     splitCheckoutMode,
     splitHasSubscriptionPaymentOptions,
     selectedSplitSubscriptionId,
     submitSplitGamePayment,
-    handleMasterServicePay,
+    submitMasterServicePay,
     previewSubscriptionUsageShadow,
     subscriptionUsageShadowCreatePreview,
     subscriptionUsageShadowEnabled,
@@ -12156,7 +12275,7 @@ export default function GamesPage({
       return;
     }
 
-    void handleMasterServicePay();
+    void submitMasterServicePay();
   };
 
   const handleCopyInvite = async () => {
@@ -12279,6 +12398,19 @@ export default function GamesPage({
     setGameRecordError(null);
 
     try {
+      if (activeGameRecord?.metadata?.wholeCourtCheckoutVersion === 1) {
+        const freshGame = await apiFetchPadelGameRecord(activeGameRecord.id);
+        if (freshGame.data?.id === activeGameRecord.id && isPersistedGamePaymentTerminal(freshGame.data)) {
+          setGamePaid(true);
+          setGameRecordStatus(freshGame.data.status);
+          upsertGameRecordInStores(freshGame.data, { communityMode: "if_exists" });
+          void runPaidGameCommunityMembershipAndPublication(freshGame.data, "payment_status_sync");
+        } else {
+          setGameRecordError("Подтверждение исходной оплаты ещё не получено. Обновите запись позже.");
+        }
+        setRetryingPayment(false);
+        return;
+      }
       const vivaStatus = await resolveGamePaymentByVivaBookings(
         activeGameRecord,
         gamePaymentUrl,
@@ -18321,7 +18453,7 @@ export default function GamesPage({
                 if (splitPaymentSelected) {
                   void submitSplitGamePayment(splitHasEligibleSubscriptions ? "one_time" : undefined);
                 } else {
-                  void handleMasterServicePay();
+                  void submitMasterServicePay();
                 }
               }}
               type="button"
