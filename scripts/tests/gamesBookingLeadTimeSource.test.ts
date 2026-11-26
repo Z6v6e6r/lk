@@ -21,16 +21,19 @@ test("payment rejection explains the 30-minute lead time", () => {
   );
 });
 
-test("self payment revalidates the selected slot before calling Viva pay", () => {
+test("self payment revalidates the slot unless it reads an existing draft instead of calling Viva pay", () => {
   const handlerStart = gamesSource.indexOf("const handleMasterServicePay = useCallback");
   const handlerEnd = gamesSource.indexOf("const handleCreateSubmit = useCallback", handlerStart);
   const handlerSource = gamesSource.slice(handlerStart, handlerEnd);
-  const revalidateIndex = handlerSource.indexOf("await prepareGamePayment()");
+  const revalidateIndex = handlerSource.indexOf("await prepareGamePayment(");
   const payIndex = handlerSource.indexOf("await apiPayMasterService(");
 
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, "self-payment handler must exist");
   assert.ok(revalidateIndex >= 0, "self-payment must revalidate the selected slot");
   assert.ok(payIndex > revalidateIndex, "self-payment revalidation must run before Viva pay");
+  const recoveryBranch = handlerSource.slice(revalidateIndex, payIndex);
+  assert.match(recoveryBranch, /return pendingDrafts\.length > 0;/);
+  assert.match(recoveryBranch, /if \(originalDraft\) \{[\s\S]*await readWholeCourtDraftForCheckout\([\s\S]*return;\s*\}\s*$/);
 });
 
 test("split payment prepares the slot before CREATE and permits only an existing-attempt recovery exception", () => {
