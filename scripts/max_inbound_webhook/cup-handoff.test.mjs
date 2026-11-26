@@ -41,10 +41,11 @@ const dispatcher = (inbox, cupHandoff, legacy = {}) => new Dispatcher(inbox, {
 });
 
 test('the reserved payload is opt-in, exact, and never routes to a station', () => {
-  assert.throws(() => mapUpdate(start(), botId, true), /UNSUPPORTED_UPDATE/);
+  assert.equal(mapUpdate(start(), botId, true).ignored, 'CUP_HANDOFF_DISABLED');
   assert.equal(mapUpdate(click(), botId, true).ignored, 'NON_STATION_CALLBACK');
-  assert.equal(mapUpdate({ ...click(), callback: { ...click().callback, payload: 'station:tereh' } }, botId, true, true)
-    .stationAction.dto.action, 'tereh');
+  const station = { ...click(), callback: { ...click().callback, payload: 'station:tereh' } };
+  assert.deepEqual(map(station), mapUpdate(station, botId, true));
+  assert.equal(map(station).stationAction.dto.action, 'tereh');
   const textEvent = { update_type: 'message_created', timestamp: Date.now(),
     message: { sender: user, recipient: { ...recipient, user_id: Number(botId) },
       body: { mid: 'legacy-content', text: payload } } };
@@ -53,13 +54,14 @@ test('the reserved payload is opt-in, exact, and never routes to a station', () 
   assert.deepEqual(map(click()).cupHandoffAction, { type: 'confirm', draft, userId: '111', chatId: '222', promptId: 'confirmation-prompt' });
 
   for (const malformed of [payload + '\n', 'cup2_' + draft.toUpperCase(), 'cup2_x']) {
-    assert.throws(() => map({ ...start(), payload: malformed }), /CUP_HANDOFF_PAYLOAD/);
+    assert.equal(map({ ...start(), payload: malformed }).ignored, 'INVALID_CUP_HANDOFF_START');
     assert.throws(() => map({ ...click(), callback: { ...click().callback, payload: malformed } }), /CUP_HANDOFF_PAYLOAD/);
   }
   for (const chat_id of [0, -4, '002', '111\n', '9223372036854775808', Number.MAX_SAFE_INTEGER + 1]) {
-    assert.throws(() => map({ ...start(), chat_id }), /CUP_HANDOFF_ID/);
+    assert.equal(map({ ...start(), chat_id }).ignored, 'INVALID_CUP_HANDOFF_START');
   }
-  assert.throws(() => map({ ...start(), user: { user_id: 111, is_bot: true } }), /CUP_HANDOFF_ACTOR/);
+  assert.equal(map({ ...start(), user: { user_id: 111, is_bot: true } }).ignored, 'INVALID_CUP_HANDOFF_START');
+  assert.throws(() => map({ update_type: 'bot_stopped' }), /UNSUPPORTED_UPDATE/);
   assert.throws(() => map({ ...click(), message: { ...click().message, recipient: { ...recipient, chat_type: 'chat' } } }), /CUP_HANDOFF_DIALOG/);
   assert.throws(() => map({ ...click(), message: { ...click().message, recipient: { ...recipient, user_id: 123 } } }), /CUP_HANDOFF_RECIPIENT/);
   assert.throws(() => map({ ...click(), message: { ...click().message, sender: { user_id: 33, is_bot: true } } }), /CUP_HANDOFF_DIALOG/);
@@ -160,6 +162,70 @@ test('webhook authentication precedes admission, with durable starts and callbac
   assert.equal((await (await send(click())).json()).duplicate, true);
   assert.equal((await send({ ...click(), callback: { ...click().callback, payload: 'cup2_d1b75de3-ad05-4831-b82e-1a31d021ccca' } })).status, 409);
   assert.equal(openInbox(inbox.dir).counts().QUEUED, 2);
+});
+
+test('ordinary and malformed bot starts receive bounded durable ACKs without dispatch', async t => {
+  const inbox = new Inbox(makeInbox(t).dir, { minFreeBytes: 0, maxRecords: 3 });
+  const server = createIngress({ secret: webhookSecret, botId, inbox, stationEnabled: true, cupHandoffEnabled: true });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const url = 'http://127.0.0.1:' + server.address().port + '/webhook';
+  const send = (raw, secret = webhookSecret) => fetch(url, { method: 'POST', body: JSON.stringify(raw),
+    headers: { 'Content-Type': 'application/json', 'X-Max-Bot-Api-Secret': secret } });
+  const ordinary = { update_type: 'bot_started', user: { ...user, first_name: 'Fixture name' }, chat_id: 222,
+    timestamp: 1_795_700_000_000 };
+  const reordered = { timestamp: ordinary.timestamp, chat_id: ordinary.chat_id,
+    user: { first_name: 'Fixture name', is_bot: false, user_id: 111 }, update_type: 'bot_started' };
+  const unrecognized = { ...ordinary, payload: 'a-different-product' };
+  const malformed = { ...ordinary, payload: 'cup2_' + 'x'.repeat(60_000) };
+
+  assert.equal((await send(ordinary, 'b'.repeat(64))).status, 401);
+  assert.equal(inbox.counts().records, 0);
+  for (const raw of [ordinary, unrecognized, malformed]) {
+    const response = await send(raw);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, accepted: true, duplicate: false });
+  }
+  for (const raw of [reordered, unrecognized, malformed]) {
+    const response = await send(raw);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, accepted: true, duplicate: true });
+  }
+  assert.equal((await send({ ...ordinary, timestamp: ordinary.timestamp + 1 })).status, 503);
+  assert.equal((await send({ update_type: 'bot_stopped' })).status, 400);
+
+  const reopened = openInbox(inbox.dir);
+  assert.equal(reopened.counts().IGNORED, 3);
+  assert.ok(reopened.counts().bytes < 1_500);
+  for (const raw of [ordinary, unrecognized, malformed]) {
+    const record = reopened.read(map(raw).key);
+    assert.deepEqual(Object.keys(record.raw).sort(), ['eventDigest', 'update_type']);
+    assert.match(record.raw.eventDigest, /^[0-9a-f]{64}$/);
+    assert.equal(record.raw.update_type, 'bot_started');
+    assert.deepEqual(record.dtos, []);
+  }
+  assert.deepEqual(reopened.pending(), []);
+  await dispatcher(reopened, { verifiedDialog: noLegacy, prompt: noLegacy, deliverProof: noLegacy }).tick();
+});
+
+test('first start admission survives flag changes without activating an ignored start', t => {
+  const inbox = makeInbox(t);
+  const disabled = raw => mapUpdate(raw, botId, true);
+  const kickoff = start();
+  const retry = { ...kickoff, timestamp: kickoff.timestamp + 1 };
+  const inactiveKey = inbox.accept(kickoff, disabled(kickoff)).key;
+  const reopened = openInbox(inbox.dir);
+  assert.equal(reopened.accept(retry, disabled(retry)).duplicate, true);
+  assert.equal(reopened.accept(retry, map(retry)).duplicate, true);
+  assert.equal(reopened.read(inactiveKey).ignored, 'CUP_HANDOFF_DISABLED');
+  assert.deepEqual(reopened.pending(), []);
+
+  const fresh = { ...kickoff, payload: 'cup2_d1b75de3-ad05-4831-b82e-1a31d021ccca' };
+  const activeKey = reopened.accept(fresh, map(fresh)).key;
+  const afterRollback = openInbox(inbox.dir);
+  assert.equal(afterRollback.accept(fresh, disabled(fresh)).duplicate, true);
+  assert.deepEqual(afterRollback.pending(), [activeKey]);
+  assert.equal(afterRollback.read(activeKey).cupHandoffAction.type, 'start');
 });
 
 test('only the delivered prompt in the same verified dialog authorizes the callback', async t => {

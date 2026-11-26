@@ -71,8 +71,31 @@ function mapStationCallback(raw, botId) {
   return { key, stationAction: { type: 'select', userId, chatId, callbackId, dto } };
 }
 
+const disabledCUPStart = 'CUP_HANDOFF_DISABLED';
+const invalidCUPStartErrors = new Set(['CUP_HANDOFF_PAYLOAD', 'CUP_HANDOFF_ACTOR', 'CUP_HANDOFF_ID']);
+
+function mapBotStarted(raw, botId, cupHandoffEnabled) {
+  let handoff;
+  let ignored = 'NON_CUP_HANDOFF_START';
+  try {
+    handoff = mapCupHandoff(raw, botId);
+  } catch (error) {
+    if (!invalidCUPStartErrors.has(error.message)) throw error;
+    ignored = 'INVALID_CUP_HANDOFF_START';
+  }
+  if (handoff && cupHandoffEnabled) return handoff;
+  if (handoff) ignored = disabledCUPStart;
+  const eventDigest = sha(canonical(raw));
+  return {
+    key: handoff?.key ?? sha(`MAX_BOT\0ignored_bot_started\0${eventDigest}`),
+    ignored,
+    botStartedReceipt: { update_type: 'bot_started', eventDigest },
+  };
+}
+
 // Station selections use a separate, allowlisted callback path. Ordinary messages carry content only.
 export function mapUpdate(raw, botId, stationEnabled = false, cupHandoffEnabled = false) {
+  if (object(raw) && raw.update_type === 'bot_started') return mapBotStarted(raw, botId, cupHandoffEnabled);
   if (cupHandoffEnabled) {
     const handoff = mapCupHandoff(raw, botId);
     if (handoff) return handoff;
@@ -195,12 +218,21 @@ export class Inbox {
     this.bytes += body.length - oldSize; this.index.set(record.key, this.summary(record));
   }
   accept(raw, mapped) {
+    const storedRaw = mapped.botStartedReceipt ?? raw;
+    const hash = sha(canonical(storedRaw));
     if (this.index.has(mapped.key) || fs.existsSync(path.join(this.dir, mapped.key + '.json'))) {
       const prior = this.read(mapped.key);
       // Reopening the same deep link may generate another timestamp for the same prompt.
-      const sameHandoffStart = mapped.cupHandoffAction?.type === 'start'
+      const mappedStart = mapped.cupHandoffAction?.type === 'start';
+      const priorStart = prior.cupHandoffAction?.type === 'start';
+      const sameHandoffStart = mappedStart && priorStart
         && canonical(mapped.cupHandoffAction) === canonical(prior.cupHandoffAction);
-      need(prior.hash === sha(canonical(raw)) || sameHandoffStart, 'DUPLICATE_CONFLICT');
+      // Preserve the first admission across flag changes. The start key binds draft, user and chat.
+      const mappedDisabledStart = mapped.ignored === disabledCUPStart;
+      const priorDisabledStart = prior.phase === 'IGNORED' && prior.ignored === disabledCUPStart;
+      const duplicateDisabledStart = (mappedDisabledStart && (priorStart || priorDisabledStart))
+        || (mappedStart && priorDisabledStart);
+      need(prior.hash === hash || sameHandoffStart || duplicateDisabledStart, 'DUPLICATE_CONFLICT');
       // Reconcile a published file after a directory-fsync error; never overwrite or POST here.
       const fd = fs.openSync(path.join(this.dir, mapped.key + '.json'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } syncDirectory(this.dir);
@@ -209,7 +241,7 @@ export class Inbox {
     }
     const capacity = fs.statfsSync(this.dir); need(Number(capacity.bavail) * Number(capacity.bsize) >= this.minFreeBytes, 'DISK_CAPACITY');
     need(this.index.size < this.maxRecords, 'INBOX_CAPACITY');
-    const record = { version: 1, key: mapped.key, hash: sha(canonical(raw)), raw, dtos: mapped.dtos ?? [],
+    const record = { version: 1, key: mapped.key, hash, raw: storedRaw, dtos: mapped.dtos ?? [],
       dtoHash: sha(canonical(mapped.dtos ?? [])), phase: mapped.ignored ? 'IGNORED' : mapped.review ? 'REVIEW' : 'QUEUED', ignored: mapped.ignored, reason: mapped.review, nextPart: 0, acceptedAt: new Date().toISOString() };
     if (mapped.stationAction) {
       record.stationAction = mapped.stationAction;

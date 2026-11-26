@@ -136,6 +136,15 @@ human and dialogue and name the retained MAX message ID of that delivered
 keyboard. The start event alone cannot confirm a request. Ordinary content,
 station selection and existing support delivery keep their existing dispatch.
 
+Ordinary and malformed `bot_started` events are acknowledged after recording a
+compact receipt in the private inbox. The receipt retains an event digest
+without the payload or user fields and never enters dispatch. Identical
+redeliveries reuse their receipt. A valid handoff start acknowledged with the
+flag disabled stays ignored if MAX retries it after activation. Start a fresh
+draft to test after enabling the flag. Each distinct ignored start uses one
+record under the existing inbox capacity and is retained without automatic
+pruning.
+
 Keep `cupStagingHandoff` absent or set `enabled: false` in the protected receiver
 config by default. The authorized STAGING activation may set `enabled: true`,
 `proofUrl: https://stg-support.tsup.space/api/support/v1/public/tenants/padlhub/intake/max-proof`
@@ -173,8 +182,9 @@ confirmation are separate activation steps. Verify a controlled private dialogue
 the single resulting STAGING draft confirmation and no legacy deliveries for
 its events. A mismatched bot/dialog identity, repeated upstream refusal or effect
 on legacy dispatch stops activation. Disable the flag and restore the prior
-subscription during an authorized rollback. Handoff records remain in custody.
-Earlier receiver versions see unfinished handoffs as REVIEW.
+subscription before restoring an earlier receiver that rejects `bot_started`.
+Handoff records remain in custody. Earlier receiver versions see unfinished
+handoffs as REVIEW.
 
 ## Release and rollback
 
