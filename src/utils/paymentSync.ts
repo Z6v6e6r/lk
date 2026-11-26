@@ -355,6 +355,27 @@ export function getPendingPaidGameDraft(paymentRefRaw: string): PendingPaidGameD
   return readLegacySessionDraft(paymentRef);
 }
 
+export function findPendingWholeCourtDrafts(target: {
+  organizerId: string;
+  studioId: string;
+  roomId: string;
+  date: string;
+  timeFrom: string;
+  timeTo: string;
+}): PendingPaidGameDraft[] {
+  return Object.values(readDraftStore()).filter((draft) => {
+    const payload = draft?.payload;
+    const booking = payload?.booking;
+    return payload?.metadata?.wholeCourtCheckoutVersion === 1
+      && payload.organizer?.id === target.organizerId
+      && booking?.studioId === target.studioId
+      && booking?.roomId === target.roomId
+      && booking?.date === target.date
+      && booking?.timeFrom === target.timeFrom
+      && booking?.timeTo === target.timeTo;
+  });
+}
+
 export function removePendingPaidGameDraft(paymentRefRaw: string): void {
   const paymentRef = paymentRefRaw.trim();
   if (!paymentRef) return;
@@ -603,6 +624,13 @@ async function processPendingPaymentSyncQueueUnlocked(
           source,
           message: errorMessage,
         });
+        registerPendingPaymentSyncFailure(paymentRef, errorMessage);
+        failed.push({ paymentRef, error: errorMessage });
+        continue;
+      }
+
+      if (persistedRecord?.metadata?.wholeCourtCheckoutVersion === 1) {
+        const errorMessage = "Ожидаем подтверждение исходной оплаты от сервера";
         registerPendingPaymentSyncFailure(paymentRef, errorMessage);
         failed.push({ paymentRef, error: errorMessage });
         continue;

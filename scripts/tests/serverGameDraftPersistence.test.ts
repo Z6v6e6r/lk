@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   isExactServerGameDraftReadback,
+  isExactWholeCourtDraftReadback,
   persistServerGameDraftWithReadback,
   type ServerGameDraftApiResult,
 } from "../../src/utils/serverGameDraftPersistencePolicy.ts";
@@ -167,4 +168,26 @@ test("draft persistence fails closed when readback never matches", async () => {
 
   assert.equal(result.record, null);
   assert.match(result.error ?? "", /не подтвердил сохранение/i);
+});
+
+test("whole-court readback binds owner, slot, booking set, checkout type and amount", () => {
+  const wholeCourt = {
+    ...record,
+    organizer: payload.organizer,
+    booking: { ...payload.booking },
+    payment: { amount: payload.payment.amount, paid: false, paymentUrl: null },
+    settings: { payMode: "self" as const },
+    metadata: { ...record.metadata, wholeCourtCheckoutVersion: 1, source: "games_widget" },
+  };
+  assert.equal(isExactWholeCourtDraftReadback(wholeCourt, payload, paymentRef, [bookingId]), true);
+  for (const changed of [
+    { organizer: { ...wholeCourt.organizer, id: "foreign-player" } },
+    { booking: { ...wholeCourt.booking, roomId: "different-room" } },
+    { booking: { ...wholeCourt.booking, bookingIds: [bookingId, "extra-booking"] } },
+    { payment: { ...wholeCourt.payment, amount: 1801 } },
+    { settings: { payMode: "split" as const } },
+  ]) {
+    assert.equal(isExactWholeCourtDraftReadback({ ...wholeCourt, ...changed }, payload, paymentRef, [bookingId]), false);
+  }
+  assert.equal(isExactWholeCourtDraftReadback(wholeCourt, payload, paymentRef, []), false);
 });

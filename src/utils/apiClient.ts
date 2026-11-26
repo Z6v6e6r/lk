@@ -9862,6 +9862,7 @@ interface MasterServicePriceParams {
 }
 
 interface MasterServicePayParams extends MasterServicePriceParams {
+  recoverCheckout?: boolean;
   clientId?: string | null;
   clientPhone?: string | null;
   baseRedirectUrl?: string | null;
@@ -10282,13 +10283,13 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
     {
       method: "POST",
       auth: true,
-      retries: 1,
+      retries: params.recoverCheckout ? 0 : 1,
       body: JSON.stringify(primaryPayPayload),
     },
   );
 
   if (payResult.error) {
-    if (oneTimeIds.length > 0) {
+    if (!params.recoverCheckout && oneTimeIds.length > 0) {
       const primaryOneTimeId = oneTimeIds[0];
       const clientPhone = params.clientPhone?.trim() || null;
       const txPayloads: Record<string, unknown>[] = [

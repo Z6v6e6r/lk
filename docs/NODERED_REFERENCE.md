@@ -286,6 +286,20 @@ still run in CI. The changed API requires the regular typecheck/lint/build gate.
 - The existing 120-second split cleanup scheduler reconciles users who never return from Viva. A verified and atomically claimed late organizer payment promotes the durable game to `PAID`; unverified entries remain non-public.
 - Guarded candidate builder: `npm run nodered:game-payment-confirmation:patch -- --input <fresh-live-flow> --output <candidate> --report <report>`. It is pinned to an exact live preimage, preserves the route set, and never imports or deploys the candidate.
 
+## LK1 whole-court durable draft development
+
+`VITE_ENABLE_WHOLE_COURT_DURABLE_DRAFT` is disabled by default. The guarded
+client saves and reads back the draft with the original payment reference
+before opening checkout. A retry reads that draft and does not reopen a stored
+checkout URL. Version 1 drafts wait for an authoritative paid game readback.
+
+Keep this switch off until LK1 has an authenticated backend that verifies the
+original whole-court transaction and active booking, then confirms the same
+draft after the browser closes. The split confirmation router on its own does
+not supply whole-court evidence or background reconciliation. Acceptance needs
+a controlled Viva response on the target and tests for pending, cancelled,
+mismatched and duplicate evidence, plus browser closure before the return URL.
+
 ## Что это и зачем
 
 Node-RED — визуальный инструмент автоматизации. В этом проекте он выступает бэкенд-слоем между фронтендом (личный кабинет) и базой данных (MongoDB). Потоки обрабатывают HTTP-запросы от фронта и MAX-бота.

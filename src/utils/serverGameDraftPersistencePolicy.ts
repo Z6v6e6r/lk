@@ -82,6 +82,30 @@ export function isExactServerGameDraftReadback(
   return expectedBookingIds.every((bookingId) => actualBookingIds.has(bookingId));
 }
 
+export function isExactWholeCourtDraftReadback(
+  record: PadelGameRecord | null | undefined,
+  draft: PadelGameRecordPayload,
+  paymentRef: string,
+  bookingIds: string[],
+): record is PadelGameRecord {
+  if (bookingIds.length === 0 || !isExactServerGameDraftReadback(record, paymentRef, bookingIds)) return false;
+  const expected = draft.booking;
+  const actual = record.booking;
+  const organizerId = draft.organizer.id;
+  const amount = draft.payment.amount;
+  return Boolean(
+    organizerId && record.organizer?.id === organizerId
+    && record.metadata?.wholeCourtCheckoutVersion === 1
+    && record.metadata?.source === "games_widget"
+    && record.settings?.payMode === "self"
+    && actual?.studioId === expected.studioId && actual?.roomId === expected.roomId
+    && actual?.date === expected.date && actual?.timeFrom === expected.timeFrom && actual?.timeTo === expected.timeTo
+    && typeof amount === "number" && Number.isFinite(amount) && amount > 0
+    && typeof record.payment?.amount === "number" && Math.round(record.payment.amount * 100) === Math.round(amount * 100)
+    && recordBookingIds(record).length === uniqueStrings(bookingIds).length
+  );
+}
+
 export async function persistServerGameDraftWithReadback(
   paymentRefRaw: string,
   payload: PadelGameRecordPayload,
