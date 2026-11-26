@@ -16,7 +16,7 @@ const extract = (source, roots) => {
 };
 const { splitCreateEndDate, splitCreateDurationMinutes, extractConflictExerciseId } = extract(routerSource,
   ['splitCreateEndDate', 'splitCreateDurationMinutes', 'extractConflictExerciseId']);
-const client = ts.transpileModule(read('../src/utils/bookingEndTime.ts').replace('export ', ''),
+const client = ts.transpileModule(read('../src/utils/bookingEndTime.ts').replaceAll('export ', ''),
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const { endIso, endIsoWithOffset, resolveGameBookingTimes } = new Function(client
   + ';return { endIso: moscowBookingEndIso, endIsoWithOffset: bookingEndIso, resolveGameBookingTimes };')();
