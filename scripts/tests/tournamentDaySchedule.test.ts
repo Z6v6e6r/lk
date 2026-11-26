@@ -78,6 +78,17 @@ test("a nonempty snapshot publishes immediately and hanging optional reads have 
   assert.equal(result.partial, true);
 });
 
+test("a successful manual Viva refresh survives a timeout reading the CUP directory", async () => {
+  const result = await load({
+    timeoutMs: 10,
+    confirmedSource: [exercise("recovered")],
+    loadExercises: async () => fail(),
+    loadSource: () => new Promise(() => {}),
+  });
+  assert.deepEqual(result.items.map(item => item.id), ["recovered"]);
+  assert.equal(result.partial, true);
+});
+
 
 test("loader retains an explicit off-day move as a tombstone before day filtering", async () => {
   const result = await load({ previous: [exercise("started")], loadSource: async () => ok([

@@ -498,13 +498,20 @@ async function fetchTournamentMechanicsSourceItems(dateKey: string) {
   };
 }
 
-async function loadMechanicsSchedule(dateKey: string, includePast: boolean, previous: Exercise[], onAvailable?: (items: Exercise[]) => void) {
+async function loadMechanicsSchedule(
+  dateKey: string,
+  includePast: boolean,
+  previous: Exercise[],
+  onAvailable?: (items: Exercise[]) => void,
+  sourceFromRefresh?: Exercise[],
+) {
   return loadTournamentDaySchedule({
     dateKey,
     previous,
     onAvailable,
     loadExercises: () => apiFetchExercisesByVisibleDate(dateKey, { includePast, includeAdjacentDays: false }),
     loadSource: () => fetchTournamentMechanicsSourceItems(dateKey),
+    confirmedSource: sourceFromRefresh,
     loadBookings: async () => (await fetchTournamentBookingItems(includePast))
       .flatMap(booking => booking.exercise ? [booking.exercise] : []),
   });
@@ -7113,20 +7120,6 @@ export default function TournamentsPage({
     setVivaRefreshError(null);
 
     try {
-      if (includePastTournaments) {
-        const cachedItems = await loadCachedTournamentSchedule(requestedDate);
-        const previous = mergeTournamentMechanicsExercises(items, cachedItems ?? [], requestedDate);
-        const refreshed = await loadMechanicsSchedule(requestedDate, true, previous);
-        if (selectedDateKeyRef.current !== requestedDate || scheduleRequestGenerationRef.current !== requestGeneration) return;
-        setItems(refreshed.items);
-        setError(null);
-        setCacheNotice(refreshed.partial || refreshed.retainedStarted
-          ? "Уже начавшиеся турниры сохранены из доступного расписания." : null);
-        void saveCachedTournamentSchedule(requestedDate, refreshed.items);
-        setVivaRefreshNotice(`Список обновлён, турниров: ${refreshed.items.filter(isTournamentExerciseCategory).length}.`);
-        return;
-      }
-
       const result = await apiRefreshTournamentMechanicsFromViva(requestedDate);
       if (result.error || !result.data) {
         throw new Error(result.error?.message || "Не удалось обновить турниры из Viva");
@@ -7141,19 +7134,33 @@ export default function TournamentsPage({
         setVivaRefreshNotice("Viva обновлена для ранее выбранной даты.");
         return;
       }
+      const cachedItems = await loadCachedTournamentSchedule(requestedDate);
+      const previous = mergeTournamentMechanicsExercises(items, cachedItems ?? [], requestedDate);
+      const sourceFromRefresh = result.data.reason === "cooldown"
+        ? undefined
+        : buildTournamentMechanicsFallbackExercises(
+          result.data.tournaments, { includeCancelled: true },
+        );
+      const refreshed = await loadMechanicsSchedule(
+        requestedDate, includePastTournaments, previous, undefined, sourceFromRefresh,
+      );
+      if (selectedDateKeyRef.current !== requestedDate
+        || scheduleRequestGenerationRef.current !== requestGeneration) return;
+      const removedIds = new Set(result.data.removedExerciseIds);
+      const freshExercises = refreshed.items.filter(exercise => !removedIds.has(String(exercise.id)));
+      setItems(freshExercises);
+      setError(null);
+      setCacheNotice(refreshed.partial || refreshed.retainedStarted
+        ? "Уже начавшиеся турниры сохранены из доступного расписания." : null);
+      void saveCachedTournamentSchedule(requestedDate, freshExercises);
+
       if (result.data.reason === "cooldown") {
         const retrySeconds = Math.max(1, Math.ceil((result.data.retryAfterMs ?? 0) / 1000));
-        setVivaRefreshNotice(`Эта дата уже обновлялась. Повторить можно через ${retrySeconds} сек.`);
+        setVivaRefreshNotice(`Список перечитан. Повторить запрос к Viva можно через ${retrySeconds} сек.`);
         return;
       }
 
-      const freshExercises = buildTournamentMechanicsFallbackExercises(result.data.tournaments);
-      setItems(freshExercises);
-      setError(null);
-      setCacheNotice(null);
-      void saveCachedTournamentSchedule(requestedDate, freshExercises);
-
-      const countLabel = `турниров получено: ${result.data.tournaments.length}`;
+      const countLabel = `турниров в списке: ${freshExercises.filter(isTournamentExerciseCategory).length}`;
       setVivaRefreshNotice(
         result.data.persisted === false
           ? `Из Viva ${countLabel}, но серверный снимок не сохранился.`
@@ -7856,7 +7863,7 @@ export default function TournamentsPage({
                 aria-busy={vivaRefreshPending}
               >
                 <span className="tournaments-viva-refresh-icon" aria-hidden="true">↻</span>
-                <span>{vivaRefreshPending ? "Обновляем..." : includePastTournaments ? "Обновить список" : "Обновить из Viva"}</span>
+                <span>{vivaRefreshPending ? "Обновляем..." : "Обновить из Viva"}</span>
               </button>
               <span className="tournaments-viva-refresh-hint">
                 Только выбранный день
