@@ -167,10 +167,11 @@ draft, user and dialogue. That value stays stable across proof retries.
 
 After HTTP 204 the receiver durably records the confirmation digest before
 sending a separate MAX message to the same verified dialogue. The message
-contains a fixed return link with a fragment and a copyable confirmation value.
-The customer returns to the original form and submits using this confirmation
-and the draft secret saved in that browser. The link carries no draft or
-contact identifier. The raw proof, raw confirmation and bot token are never
+contains a fixed return link with the draft ID and confirmation in the
+fragment and a button that copies only the confirmation. The draft secret
+stays in the browser where the form was filled. A user who opens the link in
+a different browser can paste the confirmation into the original form.
+The raw proof, raw confirmation and bot token are never
 stored in the receiver inbox or logged. A lost or interrupted MAX return send
 is retained as REVIEW and is never sent again automatically. CUP may already
 have accepted the contact proof in that case. Rotating the proof key with an

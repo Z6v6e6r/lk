@@ -140,11 +140,13 @@ export function createCupHandoffService(settings, request, fetchProof = fetch) {
     deliverReturn(action) {
       const code = confirmation(action);
       const url = new URL('/intake', CUP_PROOF_URL);
-      url.hash = new URLSearchParams({ maxProof: code }).toString();
+      url.searchParams.set('from', 'max');
+      url.hash = new URLSearchParams({ maxDraft: action.draft, maxProof: code }).toString();
       return sendMessage(action, {
-        text: 'Контакт подтверждён. Вернитесь в форму CUP, чтобы отправить обращение. Если ссылка открылась в другой вкладке, скопируйте код в исходную форму: ' + code,
+        text: 'Контакт подтверждён. Вернитесь в CUP, чтобы отправить обращение. Если открылся другой браузер, скопируйте код и вставьте его в исходную форму.\n\n' + code,
         attachments: [{ type: 'inline_keyboard', payload: { buttons: [
           [{ type: 'link', text: 'Вернуться в CUP', url: url.href }],
+          [{ type: 'clipboard', text: 'Скопировать код', payload: code }],
         ] } }],
       });
     },

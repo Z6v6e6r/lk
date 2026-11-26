@@ -118,12 +118,13 @@ test('provider verification, keyboard, and CUP proof use separate fixed destinat
     assert.equal(url.searchParams.get('chat_id'), '222');
     assert.equal(options.method, 'POST');
     const message = JSON.parse(options.body);
-    const [[button]] = message.attachments[0].payload.buttons;
+    const [[button], copyRow] = message.attachments[0].payload.buttons;
     if (!confirmation) assert.deepEqual(button, { type: 'callback', text: 'Подтвердить обращение', payload });
     else {
       assert.equal(button.type, 'link');
-      assert.equal(button.url, 'https://stg-support.tsup.space/intake#maxProof=' + confirmation);
-      assert.ok(message.text.endsWith(confirmation));
+      assert.equal(button.url, 'https://stg-support.tsup.space/intake?from=max#maxDraft=' + draft + '&maxProof=' + confirmation);
+      assert.deepEqual(copyRow, [{ type: 'clipboard', text: 'Скопировать код', payload: confirmation }]);
+      assert.equal(message.text.split('\n').at(-1), confirmation);
     }
     return click();
   }, async (url, options) => {
