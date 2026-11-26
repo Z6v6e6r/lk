@@ -68,6 +68,7 @@ export function eventBookingOptions(
   products: readonly { id: string; name: string; source: string; cost: number | null }[],
   quotes: readonly SubscriptionEventDiscountQuote[],
   now = Date.now(),
+  excludeResidency = false,
 ) {
   const tariffs = products.filter(product => product.source === "one-time" && product.cost !== null);
   const options: BookingOption[] = tariffs.map(product => ({
@@ -75,7 +76,8 @@ export function eventBookingOptions(
     name: /^Разовая(?:\s*🎾|\s+запись)?$/iu.test(product.name.trim()) ? "Разовая" : product.name,
     amountMinor: product.cost,
   }));
-  const currentQuotes = quotes.filter(quote => Number.isFinite(quote.expiresAt) && quote.expiresAt > now);
+  const currentQuotes = quotes.filter(quote => Number.isFinite(quote.expiresAt) && quote.expiresAt > now
+    && (!excludeResidency || !isEventResidencyQuote(quote)));
   const discountedQuotes = currentQuotes.filter(quote => {
     const amount = quote.amountMinor;
     return quote.status === "AVAILABLE" && amount !== null && Number.isSafeInteger(amount)

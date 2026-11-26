@@ -49,8 +49,6 @@ export function composeResidencyGateway(source) {
     "&& (resolveCategory(exercise) === 'group_training' || residencyIdentity(ctx))) return identityMoneyOwned(ctx, rows, exercise);");
   source=residencyReplace(source,"  const firstUse = preflightAvailability.resolveSplitSubscriptionLifecycle(row, null) === 'NEW_FIRST_USE_CANDIDATE';",
     "  const firstUse = !residencyIdentity(ctx) && preflightAvailability.resolveSplitSubscriptionLifecycle(row, null) === 'NEW_FIRST_USE_CANDIDATE';");
-  source=source.replaceAll('&& !isProTrainingDiscountRule(configured.rule)', '&& configured.rule.productId!==RESIDENCY_PRODUCT_ID && !isProTrainingDiscountRule(configured.rule)');
-  source=source.replaceAll('&& isProTrainingDiscountRule(productRule.rule)', '&& (productRule.rule.productId===RESIDENCY_PRODUCT_ID || isProTrainingDiscountRule(productRule.rule))');
   source=source.replaceAll('&& isTopokratyExercise(exercise)\n', '&& isTopokratyExercise(exercise) && !residencyIdentity(ctx)\n');
   source=residencyReplace(source,'    action: ctx.managedAction, lk1Policy: policy,',
     '    action: ctx.managedAction, lk1Policy: policy, residencyContext: ctx.residencyContext,');

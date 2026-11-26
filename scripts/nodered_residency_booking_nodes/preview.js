@@ -33,6 +33,10 @@ if (ctx.step==='residency_context') {
 }
 // RESIDENCY_PREVIEW_BRANCH
 if (productId.toLowerCase()===RESIDENCY_PRODUCT_ID) {
+  if (ctx.target.proTraining===true) {
+    quote(id,'UNAVAILABLE',null,0,0,'RESIDENCY_PRO_TRAINING_EXCLUDED');
+    continue;
+  }
   const config=residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),k=>typeof env!=='undefined'?env.get(k):undefined),'preview');
   if (!config) {quote(id,'UNAVAILABLE',null,0,0,'RESIDENCY_BOOKING_NOT_CONFIGURED');continue;}
   const target=residencyPreviewTarget(exercise);

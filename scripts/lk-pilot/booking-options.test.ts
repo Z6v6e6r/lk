@@ -8,6 +8,9 @@ import type { SubscriptionEventDiscountQuote } from "../../src/utils/groupSubscr
 import { SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS } from "../../src/utils/subscriptionCategoryDailyLimit.ts";
 import { sanitizeSubscriptionSnapshot } from "../../src/utils/subscriptionSnapshotData.ts";
 import { isolateBookingPilot } from "./vite.config.ts";
+import { addPilotGameResidencyCandidates } from "../../src/lk-pilot/gameResidencyCandidates.ts";
+import { filterSplitCategoryCompatibleSubscriptions, filterSplitEligibleSubscriptions } from "../../src/components/games/splitSubscriptionAvailability.ts";
+import { RESIDENCY_LIFECYCLE_PRODUCT_ID } from "../../src/residency/residencyLifecycleClient.ts";
 
 test("pilot game creation keeps one payment selector and keeps game join separate", async () => {
   const path = fileURLToPath(new URL("../../src/components/games/GamesPage.tsx", import.meta.url));
@@ -22,6 +25,53 @@ test("pilot game creation keeps one payment selector and keeps game join separat
   assert.match(transformed, /gameBookingOptions\(detailsSplitSubscriptionOptions,[^)]*,\s*detailsSplitSubscriptions\)/);
   assert.match(transformed, /gameBookingOptions\(splitSubscriptionPaymentOptions,[^)]*,\s*splitSubscriptions\)/);
   assert.doesNotMatch(transformed, /className="team-card game-create-payment-method-card"/);
+  assert.match(transformed, /addPilotGameResidencyCandidates\(filterSplitEligibleSubscriptions\(/);
+  assert.match(transformed, /addPilotGameResidencyCandidates\(filterSplitCategoryCompatibleSubscriptions\(/);
+});
+
+test("the pilot forwards an active residency with Viva's tournament-only product type to the game quote", () => {
+  const owned = sanitizeSubscriptionSnapshot({content: [
+    { subscriptionId: "10000000-0000-4000-8000-000000000001", productId: RESIDENCY_LIFECYCLE_PRODUCT_ID, status: "ACTIVE", name: 12,
+      expirationDate: "2026-12-10", visitsLeft: 0, hasTypeLimitation: true, availableTypes: [{ id: 839 }] },
+    { subscriptionId: "10000000-0000-4000-8000-000000000002", status: "ACTIVE",
+      expirationDate: "2026-12-10", visitsLeft: 0, hasTypeLimitation: true, availableTypes: [{ id: "839" }] },
+    { subscriptionId: "10000000-0000-4000-8000-000000000003", productId: "different-product", status: "ACTIVE",
+      expirationDate: "2026-12-10", visitsLeft: 0, hasTypeLimitation: true, availableTypes: [{ id: 839 }] },
+    { subscriptionId: "10000000-0000-4000-8000-000000000004", productId: RESIDENCY_LIFECYCLE_PRODUCT_ID,
+      expirationDate: "2026-11-25", status: "ACTIVE" },
+    { subscriptionId: "10000000-0000-4000-8000-000000000005", productId: RESIDENCY_LIFECYCLE_PRODUCT_ID,
+      expirationDate: "2026-12-10", status: "ACTIVE", holdUntil: "2026-12-01" },
+    { subscriptionId: "10000000-0000-4000-8000-000000000006", productId: 1, status: "ACTIVE",
+      expirationDate: "2026-12-10", hasTypeLimitation: true, availableTypes: [{ id: 839 }] },
+    { subscriptionId: "10000000-0000-4000-8000-000000000007", status: "ACTIVE",
+      subscription: { product: { uuid: "10000000-0000-4000-8000-000000000099" } },
+      expirationDate: "2026-12-10", hasTypeLimitation: true, availableTypes: [{ id: 839 }] },
+  ] });
+  assert.ok(owned);
+  const day = "2026-11-27";
+  const time = Date.parse("2026-11-26T16:00:00+03:00");
+  const types = new Set(["1613"]), directions = new Set(["4588"]);
+  const { content } = owned;
+  const create = filterSplitEligibleSubscriptions(content, types, directions, null, 1, 60, day);
+  const join = filterSplitCategoryCompatibleSubscriptions(content, types, directions, null);
+  assert.deepEqual([create, join], [[], []]);
+  for (const selected of [create, join]) {
+    const candidates = addPilotGameResidencyCandidates(selected, content, day, time);
+    assert.deepEqual(candidates.map(row => row.subscriptionId), [content[0].subscriptionId]);
+  }
+  const [verified] = addPilotGameResidencyCandidates([], content, day, time);
+  assert.equal(verified.name, "Резидентство ПадлхАБ");
+  const [expired, legacy] = addPilotGameResidencyCandidates([content[3]], content.slice(1), day, time);
+  assert.equal(expired, content[3]);
+  assert.equal(legacy.name, undefined);
+  assert.equal(legacy, content[1]);
+  const competingLegacy = { ...content[1], subscriptionId: "10000000-0000-4000-8000-000000000008" };
+  assert.deepEqual(addPilotGameResidencyCandidates([], [content[1], competingLegacy], day, time), []);
+  assert.deepEqual(addPilotGameResidencyCandidates([verified], [legacy], day, time), [verified]);
+  const full = Array.from({length: 20}, (_, index) => ({
+    ...content[3], subscriptionId: `10000000-0000-4000-8000-${String(20 + index).padStart(12, "0")}`,
+  }));
+  assert.equal(addPilotGameResidencyCandidates(full, [verified, legacy], day, time), full);
 });
 
 test("game methods show named, confirmed subscriptions and explain the free time, co-pay and limit", () => {
@@ -79,6 +129,10 @@ test("training shows the one-time tariff and only the subscription that actually
     .options.map(({ name, amountMinor }) => [name, amountMinor]);
 
   assert.deepEqual(methods([kids, residency, friendship]), [["Разовая", 550_000], ["Падел.Дружба 2.0", 275_000]]);
+  assert.deepEqual(eventBookingOptions([tariff], [residency, friendship], 150, true).options
+    .map(({ name, amountMinor }) => [name, amountMinor]), [["Разовая", 550_000], ["Падел.Дружба 2.0", 275_000]]);
+  assert.deepEqual(eventBookingOptions([tariff], [residency], 150, true).options
+    .map(({ name, amountMinor }) => [name, amountMinor]), [["Разовая", 550_000]]);
   for (const unusable of [
     kids,
     { ...friendship, expiresAt: 150 },
