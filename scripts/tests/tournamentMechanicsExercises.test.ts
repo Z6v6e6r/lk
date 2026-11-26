@@ -108,6 +108,19 @@ test("preserves direct trainer id returned by the bounded Viva refresh", () => {
   assert.equal(exercise.trainers[0]?.id, "trainer-direct-42");
 });
 
+test("a corporate CUP snapshot supplies a recognizable mechanics card without a Viva day row", () => {
+  const summary = makeSummary({
+    title: "Предприниматели-патриоты турнир",
+    format: "Турнир",
+    raw: { gameId: "6306", exerciseTypeId: "2349", isPublic: false },
+  });
+  const [exercise] = buildTournamentMechanicsFallbackExercises([summary]);
+  assert.equal(exercise.direction.name, summary.title);
+  assert.equal(exercise.direction.id, 6306);
+  assert.equal(exercise.type.id, 2349);
+  assert.equal(isTournamentExerciseCategory(exercise), true);
+});
+
 test("a skinned children's tournament keeps its Viva identity and assigned trainer in mechanics", () => {
   const summary = makeSummary({
     title: "Юные чемпионы",
