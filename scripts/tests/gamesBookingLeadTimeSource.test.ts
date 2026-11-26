@@ -31,7 +31,8 @@ test("self payment revalidates the slot unless it reads an existing draft instea
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, "self-payment handler must exist");
   assert.ok(revalidateIndex >= 0, "self-payment must revalidate the selected slot");
   assert.ok(payIndex > revalidateIndex, "self-payment revalidation must run before Viva pay");
-  const recoveryBranch = handlerSource.slice(revalidateIndex, payIndex);
+  const paymentStatement = handlerSource.lastIndexOf("const paymentResult =", payIndex);
+  const recoveryBranch = handlerSource.slice(revalidateIndex, paymentStatement);
   assert.match(recoveryBranch, /return pendingDrafts\.length > 0;/);
   assert.match(recoveryBranch, /if \(originalDraft\) \{[\s\S]*await readWholeCourtDraftForCheckout\([\s\S]*return;\s*\}\s*$/);
 });
