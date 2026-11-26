@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { createRequire } from 'node:module';
+import { addPaidBookingConversionPatchGuard } from "../prepare_paid_booking_conversion_guard.mjs";
 import { candidateFunctions, fixture, getPublic, phone, applyFixtureUpdate } from './helpers/gamePrivateProjectionFixture.mjs';
 
 const runtimeRoot = process.env.NODERED_RUNTIME_ROOT;
@@ -30,7 +31,7 @@ test('native Node-RED 4.0.9 PATCH pipeline preserves private data and organizer 
       { id: 'tab', type: 'tab', label: 'synthetic private-projection fixture', env: [{ name: 'PADLHUB_LEGACY_ROSTER_PATCH_GUARD_ENABLED', value: 'false', type: 'str' }] },
       { id: 'entry', type: 'http in', z: 'tab', url: '/lk/games/:gameId', method: 'patch', wires: [['read']] },
       { id: 'read', type: 'function', z: 'tab', outputs: 1, func: 'msg._organizerGuardBody = msg.payload; msg.payload = [global.get("game")]; return msg;', wires: [['guard']] },
-      { id: 'guard', type: 'function', z: 'tab', outputs: 2, func: functions.organizer_handoff_20260913_patch_check, wires: [['prepare'], ['response']] },
+      { id: 'guard', type: 'function', z: 'tab', outputs: 2, func: addPaidBookingConversionPatchGuard(functions.organizer_handoff_20260913_patch_check), wires: [['prepare'], ['response']] },
       { id: 'prepare', type: 'function', z: 'tab', outputs: 4, func: functions.e0d7883bc1a9fa8c, wires: [['db'], ['response'], [], []] },
       { id: 'db', type: 'function', z: 'tab', outputs: 1, func: 'global.get("counters").writes++; global.get("applyFixtureUpdate")(global.get("game"), msg); msg.payload = { acknowledged: true, matchedCount: 1 }; return msg;', wires: [['ack']] },
       { id: 'ack', type: 'function', z: 'tab', outputs: 2, func: functions.organizer_handoff_20260913_patch_ack, wires: [['response'], ['followup']] },
@@ -59,6 +60,14 @@ test('native Node-RED 4.0.9 PATCH pipeline preserves private data and organizer 
       assert.equal(counters.writes, 1);
       for (let i = 0; i < 100 && counters.followups !== 1; i++) await new Promise(resolve => setTimeout(resolve, 10));
       assert.equal(counters.followups, 1);
+      game.metadata = { ...game.metadata, source: "cabinet_booking_convert", typeId: 1613, joinPrice: "1050" };
+      const denied = await patch({
+        expectedUpdatedAt: game.updatedAt,
+        participants: [...getPublic(game).participants, { id: "unbooked", status: "PAID" }],
+      });
+      assert.equal(denied.status, 409);
+      assert.equal(denied.body.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+      assert.deepEqual(counters, { writes: 1, followups: 1 });
       assert.ok(flows.every(node => !['http request', 'inject', 'mongodb4'].includes(node.type)));
     } finally {
       await RED.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { addPaidBookingConversionPatchGuard } from "../prepare_paid_booking_conversion_guard.mjs";
 import { mergeRosterMetadata } from "../../src/components/games/rosterMetadata.ts";
 
 const authorityKeys = ["organizerId", "organizerPhone", "organizerPhoneNorm"];
@@ -69,4 +70,27 @@ test("production roster builder uses the merge without reintroducing authority a
   const builder = source.slice(source.indexOf("const buildDetailsRosterMetadata ="), source.indexOf("const cancelVivaBookingsForPlayerFromDetails ="));
   assert.match(builder, /return mergeRosterMetadata\(baseMetadata,/);
   assert.doesNotMatch(builder, /organizer(?:Id|Phone|PhoneNorm):/);
+});
+
+test("paid converted open game keeps its roster and classification on ordinary PATCH", () => {
+  const metadata = { source: "cabinet_booking_convert", typeId: 1613, joinPrice: "1050" };
+  const member = { id: "participant", status: "CONFIRMED" };
+  const run = (participants: unknown[], changes = metadata, saved: Record<string, unknown> = metadata) => {
+    const msg = { payload: [{ organizer, metadata: saved, settings: { payMode: "self" },
+      participants: [member, { id: "pending", status: "PENDING" }] }],
+      _organizerGuardBody: { participants, metadata: changes } };
+    return new Function("msg", addPaidBookingConversionPatchGuard(guardSource))(structuredClone(msg));
+  };
+  assert.equal(run([member, { id: "unbooked", status: "PAID" }])[1].payload.code,
+    "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  assert.equal(run([member, { id: "pending", status: "CONFIRMED" }])[1].payload.code,
+    "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  assert.equal(run([member, member])[1].payload.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  assert.deepEqual(run([member], { source: "games_widget", typeId: 0, joinPrice: "0" })[0].payload.metadata, metadata);
+  for (const alias of [{ typeId: 0, typeName: "Своя-игра" }, { typeId: 0, directionId: 6180 }]) {
+    assert.equal(run([member, { id: "unbooked", status: "CONFIRMED" }], metadata, {
+      ...metadata, ...alias,
+    })[1].payload.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  }
+  assert.ok(guard(metadata, { ...metadata, typeId: 0, typeName: "Аренда корта" })[0]);
 });
