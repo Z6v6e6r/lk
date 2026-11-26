@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { addPaidBookingConversionPatchGuard } from "../prepare_paid_booking_conversion_guard.mjs";
 import { mergeRosterMetadata } from "../../src/components/games/rosterMetadata.ts";
 
 const authorityKeys = ["organizerId", "organizerPhone", "organizerPhoneNorm"];
@@ -78,7 +79,7 @@ test("paid converted open game keeps its roster and classification on ordinary P
     const msg = { payload: [{ organizer, metadata: saved, settings: { payMode: "self" },
       participants: [member, { id: "pending", status: "PENDING" }] }],
       _organizerGuardBody: { participants, metadata: changes } };
-    return new Function("msg", guardSource)(structuredClone(msg));
+    return new Function("msg", addPaidBookingConversionPatchGuard(guardSource))(structuredClone(msg));
   };
   assert.equal(run([member, { id: "unbooked", status: "PAID" }])[1].payload.code,
     "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
