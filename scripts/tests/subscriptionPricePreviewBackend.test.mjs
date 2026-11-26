@@ -325,6 +325,35 @@ test('preview source never calls CREATE or a product cache miss resolver',()=>{
   assert.doesNotMatch(router,/\/split\/create|\/seliger|insertOne|updateOne|global\.set/);
 });
 
+test('available game quotes return the confirmed subscription product independently of the amount', () => {
+  const productId = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';
+  for (const targetKind of ['NEW_GAME', 'EXISTING_GAME']) {
+    for (const amountMinor of [0, 280_000]) {
+      const ctx = {
+        step: 'evaluate', target: { targetKind, durationMinutes: 120 }, pending: [], quotes: [],
+        existingGame: targetKind === 'EXISTING_GAME', selectionKey: 'fixture-game', currentId: sub,
+        metadata: { [sub]: { productId } }, basePriceMinor: 400_000,
+      };
+      const msg = {
+        _subscriptionPricePreview: ctx,
+        _managedSubscriptionPolicyDecision: {
+          eligible: true, benefit: { finalPriceMinor: amountMinor },
+          gameMinutes: { freeMinutes: amountMinor === 0 ? 120 : 0, paidOverageMinutes: amountMinor === 0 ? 0 : 120 },
+        },
+      };
+      const globals = { get: () => null };
+      assert.equal(executeBookings(msg, bookingsCanonical, globals, { log() {} })[4], msg);
+      finalizeBookings(msg, globals);
+      assert.equal(msg.statusCode, 200);
+      const [quote] = msg.payload.quotes;
+      assert.equal(quote.subscriptionId, sub);
+      assert.equal(quote.subscriptionProductId, productId);
+      assert.equal(quote.amountMinor, amountMinor);
+      assert.equal(quote.appliedSubscriptionProductId, undefined);
+    }
+  }
+});
+
 function exerciseDiagnostic(payload, overrides = {}, observer, logger) {
   const booking = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
   const roots = ['unwrapRecord', 'resolveCategory', 'eventStartsAt', 'eventDurationMinutes', 'exerciseRoomId'];

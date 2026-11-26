@@ -48,6 +48,8 @@ export function createSubscriptionPriceTarget(input: {
 
 export interface SubscriptionPriceQuote {
   subscriptionId: string;
+  /** Owned subscription product confirmed for this available game quote. */
+  subscriptionProductId?: string;
   /** Product of the validated subscription benefit, when returned on a new-game quote. */
   appliedSubscriptionProductId?: string;
   selectionKey: string;
@@ -67,6 +69,7 @@ export type SubscriptionPricePreview = {
   detail: string | null;
   basePriceMinor: number | null;
   amountMinor: number | null;
+  subscriptionProductId?: string;
   /** Minutes the server charges on top of the subscription allowance; 0 when nothing is owed. */
   paidMinutes: number;
   discounted: boolean;
@@ -134,11 +137,14 @@ export function subscriptionPricePreview(input: PreviewInput): SubscriptionPrice
   const best = [...available].sort((a, b) => a.amountMinor! - b.amountMinor!
     || a.subscriptionId.localeCompare(b.subscriptionId))[0];
   const amountMinor = best.amountMinor!;
+  const productId = best.subscriptionProductId;
   return {
     state: "available", label: `По подписке от ${money(amountMinor)} ₽`,
     detail: best.paidMinutes > 0 ? `Доплата за ${best.paidMinutes} мин` : null,
     basePriceMinor: best.basePriceMinor, amountMinor, paidMinutes: best.paidMinutes,
     discounted: amountMinor < best.basePriceMinor,
+    ...(typeof productId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(productId)
+      ? { subscriptionProductId: productId.toLowerCase() } : {}),
   };
 }
 

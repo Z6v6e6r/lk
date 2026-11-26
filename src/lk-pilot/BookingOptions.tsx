@@ -94,7 +94,7 @@ export function BookingOptions({
         ))}
       </fieldset>
       {(loading || !choices.length) && (
-        <p role="status">{loading ? "Проверяем стоимость…" : "Стоимость пока не подтверждена."}</p>
+        <p role="status">{loading ? "Проверяем ваши подписки…" : "Стоимость пока не подтверждена."}</p>
       )}
       {explanations.length > 0 && (
         <details className="matrix-unavailable" open={options.length === 0}>
