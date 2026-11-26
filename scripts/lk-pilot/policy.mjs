@@ -4,7 +4,11 @@ const id = "[a-zA-Z0-9_-]{1,128}";
 const provider = "/end-user/api/v[12]/iSkq6G";
 const masterServiceMetadata = new RegExp(`^/end-user/api/v1/iSkq6G/products/master-services/${id}/(meta|subServices|studios)$`);
 
+const vivaEventOneTimeTariffs = /^\/end-user\/api\/v2\/iSkq6G\/products\/one-times$/;
+const vivaExerciseId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const get = [
+  [viva, vivaEventOneTimeTariffs],
   [lk, /^\/lk\/onboarding\/stations$/],
   [lk, /^\/(?:seliger\/)?lk\/games$/],
   [lk, new RegExp(`^/(?:seliger/)?lk/games/${id}$`)],
@@ -33,6 +37,8 @@ export function readPilotTarget(value, method) {
   if (url.username || url.password || url.hash || url.port) return null;
   const rules = method === "GET" ? get : method === "POST" ? post : [];
   if (!rules.some(([origin, pattern]) => url.origin === origin && pattern.test(url.pathname))) return null;
+  if (vivaEventOneTimeTariffs.test(url.pathname) && (url.searchParams.size !== 1
+    || !vivaExerciseId.test(url.searchParams.get("exerciseId") ?? ""))) return null;
   if (url.pathname === "/lk/onboarding/stations" && url.search) return null;
   if (url.pathname === "/api/v1/time" && (url.searchParams.size !== 1 || !url.searchParams.get("timeZone"))) return null;
   const metadata = url.pathname.match(masterServiceMetadata)?.[1];
