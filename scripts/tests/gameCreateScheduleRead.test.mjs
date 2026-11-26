@@ -369,6 +369,99 @@ test("an owned legacy instance needs the LK1 quote for the exact product and slo
   }
 });
 
+test("returns only an owned, applicable and current subscription price when requested", async () => {
+  const payload = grouped([
+    [fragment("07:00", "07:30"), fragment("07:30", "08:00")],
+  ]);
+  const { slots: [selection] } = await readGrouped(payload);
+  const regularId = "c43d48cc-72d6-4821-a5b0-f1fcc271e1e4";
+  const expiredId = "2042defa-c252-40da-b6ef-e01df2ac4752";
+  const residencyProductId = "4037a3a3-e551-4f9a-a9db-1410e46b8635";
+  const planProductId = "df11efb7-2b2f-4951-bbf5-e4ae827a7fc2";
+
+  for (const [includeSubscriptionQuote, mode, expected] of [
+    [false, "eligible", undefined],
+    [true, "eligible", 0],
+    [true, "paid", 32000],
+    [true, "multiple", 10000],
+    [true, "partial-page", undefined],
+    [true, "duplicate", undefined],
+    [true, "other-slot", undefined],
+    [true, "no-minutes", undefined],
+    [true, "used", undefined],
+    [true, "residency-product", undefined],
+  ]) {
+    const result = await readGameCreateSchedule(
+      { ...request, query: { ...request.query, slotId: selection.id }, includeSubscriptionQuote },
+      {
+        now: () => clock,
+        fetchImpl: async (raw, options) => {
+          const url = new URL(raw);
+          if (url.pathname.endsWith("/timeslots")) return Response.json(payload);
+          if (url.pathname.endsWith("/price")) {
+            return Response.json({
+              [url.searchParams.get("subServiceIds")]: {
+                calculation: { fixture: { basePrice: { valueFrom: 2400 }, impacts: [] } },
+              },
+            });
+          }
+          if (url.pathname.endsWith("/subscriptions")) {
+            const content = [
+              { clientSubscriptionId: residencyId, productId: residencyProductId, status: "ACTIVE" },
+              { subscriptionId: regularId, status: "ACTIVE" },
+              { subscriptionId: expiredId, status: "ACTIVE" },
+            ];
+            return Response.json(mode === "partial-page"
+              ? { first: true, last: false, totalElements: 4, content }
+              : content);
+          }
+          if (url.pathname.endsWith("/residency/status")) return new Response(null, { status: 503 });
+          assert.equal(url.pathname, "/lk/subscriptions/game-price-preview");
+          const { target, subscriptionIds } = JSON.parse(options.body);
+          const quotesPlans = includeSubscriptionQuote && mode !== "partial-page";
+          assert.deepEqual(subscriptionIds, quotesPlans
+            ? [residencyId, regularId, expiredId]
+            : [residencyId]);
+          const selectionKey = JSON.stringify([
+            target.slotId, target.stationId, target.roomId, target.masterServiceId,
+            target.subServiceIds, target.startsAt, target.durationMinutes, 4,
+          ]);
+          const quote = {
+            selectionKey, status: "AVAILABLE", reasonCode: null, basePriceMinor: 60000,
+            evaluatedAt: clock - 1000, expiresAt: clock + 20000,
+          };
+          const withCopay = mode === "paid" || mode === "multiple";
+          return Response.json({ quotes: [
+            { ...quote, subscriptionId: residencyId, amountMinor: 42000, freeMinutes: 0,
+              paidMinutes: 60, appliedSubscriptionProductId: residencyProductId },
+            ...(quotesPlans ? [
+              { ...quote, subscriptionId: regularId, amountMinor: withCopay ? 32000 : 0,
+                selectionKey: mode === "other-slot" ? "other-slot" : selectionKey,
+                status: mode === "used" ? "LIMIT_USED" : "AVAILABLE",
+                paidMinutes: withCopay ? 30 : mode === "no-minutes" ? 60 : 0,
+                freeMinutes: withCopay ? 30 : mode === "no-minutes" ? 0 : 60,
+                ...(mode === "residency-product" ? { appliedSubscriptionProductId: residencyProductId } : {}),
+              },
+              { ...quote, subscriptionId: mode === "duplicate" ? regularId : expiredId,
+                amountMinor: mode === "multiple" ? 10000 : 0,
+                paidMinutes: mode === "multiple" ? 30 : 0,
+                freeMinutes: mode === "multiple" ? 30 : 60,
+                appliedSubscriptionProductId: planProductId,
+                expiresAt: mode === "multiple" ? clock + 18000 : clock },
+            ] : []),
+          ] });
+        },
+      },
+    );
+    assert.equal(result.subscriptionMinor, expected, mode);
+    assert.deepEqual(result.residency, mode === "duplicate"
+      ? { status: "UNAVAILABLE" }
+      : { status: "APPLIED", amountMinor: 42000 }, mode);
+    if (mode === "multiple") assert.equal(Date.parse(result.expiresAt), clock + 18000);
+    assert.equal(JSON.stringify(result).includes(regularId), false);
+  }
+});
+
 test("price denial leaves exact amounts unknown and preserves only verified LK1 status", async () => {
   const payload = grouped([
     [fragment("07:00", "07:30"), fragment("07:30", "08:00")],
