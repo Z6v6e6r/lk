@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { addPaidBookingConversionCreateGuard } from "../prepare_paid_booking_conversion_guard.mjs";
 
 function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
   const source = fs.readFileSync(file, "utf8");
@@ -176,14 +177,18 @@ test("backend allows cabinet booking convert for a court rental", () => {
 });
 
 test("backend blocks a separately priced place when converting an open-game booking", () => {
-  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_create.js", {
-    req: { path: "/lk/games" },
-    payload: { metadata: { source: "cabinet_booking_convert", typeId: 1613, joinPrice: "1050" } },
-  }) as unknown[];
-  assert.equal(out[0], null);
-  const response = out[1] as NodeRedFunctionResponse;
-  assert.equal(response.statusCode, 409);
-  assert.equal(response.payload?.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  const source = fs.readFileSync("scripts/nodered_games_nodes/fn_create.js", "utf8");
+  const guard = new Function("msg", addPaidBookingConversionCreateGuard(source));
+  for (const category of [{ typeId: 1613 }, { directionId: 6180 }, { typeName: "Своя — игра" }]) {
+    const out = guard({
+      req: { path: "/lk/games" },
+      payload: { metadata: { ...category, source: "cabinet_booking_convert", joinPrice: "1050" } },
+    }) as unknown[];
+    assert.equal(out[0], null);
+    const response = out[1] as NodeRedFunctionResponse;
+    assert.equal(response.statusCode, 409);
+    assert.equal(response.payload?.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  }
 });
 
 test("backend still blocks an unknown booking category", () => {

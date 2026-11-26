@@ -9,9 +9,7 @@ const targets = [
   {
     id: "e656cff36a8cd210",
     hash: "08c2b5ac7d2f5ee111efab6edb0c19c3eb663fd16e5bfa5798a1f717cc82312f",
-    file: "nodered_games_nodes/fn_create.js",
-    start: "const isBookingConvertCategoryAllowed =",
-    end: "const organizerNorm =",
+    patch: addPaidBookingConversionCreateGuard,
   },
   {
     id: "organizer_handoff_20260913_patch_check",
@@ -22,25 +20,24 @@ const targets = [
 
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 
-export function addPaidBookingConversionPatchGuard(body) {
-  const anchor = 'if (Object.prototype.hasOwnProperty.call(body, "expectedUpdatedAt")';
-  const fragment = fs.readFileSync(path.join(sourceDir,
-    "nodered_organizer_handoff_nodes/paid_booking_conversion_patch_guard.js"), "utf8");
+function addGuard(body, sourceFile, anchor) {
+  const fragment = fs.readFileSync(path.join(sourceDir, sourceFile), "utf8");
   if (body.split(anchor).length !== 2
     || body.includes("BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE")
     || !fragment.includes("BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE")) {
-    throw new Error("Exact paid join PATCH guard anchor drift");
+    throw new Error(`Exact paid join guard anchor drift in ${sourceFile}`);
   }
   return body.replace(anchor, () => fragment + anchor);
 }
 
-function bounds(source, target) {
-  const start = source.indexOf(target.start);
-  const end = source.indexOf(target.end, start + target.start.length);
-  if (start < 0 || end < 0 || source.indexOf(target.start, start + 1) >= 0) {
-    throw new Error(`Missing unique guard anchors for ${target.id}`);
-  }
-  return [start, end];
+export function addPaidBookingConversionCreateGuard(body) {
+  return addGuard(body, "nodered_games_nodes/paid_booking_conversion_create_guard.js",
+    "if (isCabinetBookingConvert && !isBookingConvertCategoryAllowed)");
+}
+
+export function addPaidBookingConversionPatchGuard(body) {
+  return addGuard(body, "nodered_organizer_handoff_nodes/paid_booking_conversion_patch_guard.js",
+    'if (Object.prototype.hasOwnProperty.call(body, "expectedUpdatedAt")');
 }
 
 function main() {
@@ -57,18 +54,7 @@ function main() {
       || crypto.createHash("sha256").update(node.func).digest("hex") !== target.hash) {
       throw new Error(`Reviewed guard preimage changed for ${target.id}`);
     }
-    if (target.patch) {
-      node.func = target.patch(node.func);
-    } else {
-      const proposed = fs.readFileSync(path.join(sourceDir, target.file), "utf8");
-      const [start, end] = bounds(node.func, target);
-      const [newStart, newEnd] = bounds(proposed, target);
-      const guard = proposed.slice(newStart, newEnd);
-      if (!guard.includes("BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE")) {
-        throw new Error(`Paid join guard source missing for ${target.id}`);
-      }
-      node.func = node.func.slice(0, start) + guard + node.func.slice(end);
-    }
+    node.func = target.patch(node.func);
     new Function("msg", "env", "node", "flow", "global", node.func);
   }
 
