@@ -65,6 +65,39 @@ test("event methods use the server's discount and suppress expired quotes", () =
   assert.deepEqual(result.explanations, ["Подписка с лимитом · Лимит исчерпан"]);
 });
 
+test("training shows the one-time tariff and only the subscription that actually discounts the event", () => {
+  const tariff = { id: "training-ticket", name: "Разовая🎾", source: "one-time", cost: 550_000 };
+  const residency: SubscriptionEventDiscountQuote = {
+    kind: "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1", exerciseId: "training", actorClientId: "synthetic",
+    subscriptionId: "residency", subscriptionName: "Резидентство ПадлхАБ", productId: tariff.id,
+    status: "AVAILABLE", basePriceMinor: 550_000, amountMinor: 275_000, discountPercent: 50,
+    startsAt: "2026-11-26T15:00:00+03:00", durationMinutes: 60, evaluatedAt: 100, expiresAt: 200,
+  };
+  const kids = { ...residency, subscriptionId: "kids", subscriptionName: "Падл.Дети", amountMinor: 550_000, discountPercent: 0 };
+  const friendship = { ...residency, subscriptionId: "friendship", subscriptionName: "Падел.Дружба 2.0" };
+  const methods = (quotes: SubscriptionEventDiscountQuote[]) => eventBookingOptions([tariff], quotes, 150)
+    .options.map(({ name, amountMinor }) => [name, amountMinor]);
+
+  assert.deepEqual(methods([kids, residency, friendship]), [["Разовая", 550_000], ["Падел.Дружба 2.0", 275_000]]);
+  for (const unusable of [
+    kids,
+    { ...friendship, expiresAt: 150 },
+    { ...friendship, status: "LIMIT_USED" as const, amountMinor: null },
+    { ...friendship, productId: "other-ticket" },
+    { ...friendship, basePriceMinor: 450_000 },
+  ]) {
+    assert.deepEqual(methods([residency, unusable]), [["Разовая", 550_000], ["Резидентство ПадлхАБ", 275_000]]);
+  }
+  assert.deepEqual(methods([]), [["Разовая", 550_000]]);
+
+  const otherTariff = { id: "premium", name: "Премиум", source: "one-time", cost: 650_000 };
+  const otherResidency = { ...residency, productId: otherTariff.id, basePriceMinor: 650_000, amountMinor: 325_000 };
+  const result = eventBookingOptions([tariff, otherTariff], [residency, friendship, otherResidency], 150);
+  assert.deepEqual(result.options.map(option => [option.name, option.amountMinor]), [
+    ["Разовая", 550_000], ["Премиум", 650_000], ["Падел.Дружба 2.0", 275_000], ["Резидентство ПадлхАБ", 325_000],
+  ]);
+});
+
 test("second game with a confirmed discounted quarter shows 30% and 2,800 rubles", () => {
   const quote: SubscriptionPricePreview = {
     state: "available", label: "По подписке", detail: "Доплата за 120 мин",

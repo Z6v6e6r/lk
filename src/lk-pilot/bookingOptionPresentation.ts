@@ -60,22 +60,40 @@ export function gameBookingOptions(
   return { options, explanations: [...new Set(explanations)] };
 }
 
+function isEventResidencyQuote(quote: SubscriptionEventDiscountQuote): boolean {
+  return /^Резидентство(?:\s+ПадлхАБ)?$/iu.test(quote.subscriptionName.trim());
+}
+
 export function eventBookingOptions(
   products: readonly { id: string; name: string; source: string; cost: number | null }[],
   quotes: readonly SubscriptionEventDiscountQuote[],
   now = Date.now(),
 ) {
-  const options: BookingOption[] = products.filter(product => product.source === "one-time" && product.cost !== null)
-    .map(product => ({ id: `tariff:${product.id}`, name: product.name, amountMinor: product.cost }));
+  const tariffs = products.filter(product => product.source === "one-time" && product.cost !== null);
+  const options: BookingOption[] = tariffs.map(product => ({
+    id: `tariff:${product.id}`,
+    name: /^Разовая(?:\s*🎾|\s+запись)?$/iu.test(product.name.trim()) ? "Разовая" : product.name,
+    amountMinor: product.cost,
+  }));
+  const currentQuotes = quotes.filter(quote => Number.isFinite(quote.expiresAt) && quote.expiresAt > now);
+  const discountedQuotes = currentQuotes.filter(quote => {
+    const amount = quote.amountMinor;
+    return quote.status === "AVAILABLE" && amount !== null && Number.isSafeInteger(amount)
+      && amount >= 0 && amount < quote.basePriceMinor
+      && (!tariffs.length || tariffs.some(tariff => tariff.id === quote.productId && tariff.cost === quote.basePriceMinor));
+  });
+  const subscriptionDiscounts = discountedQuotes.filter(quote => !isEventResidencyQuote(quote));
+  const showQuote = (quote: SubscriptionEventDiscountQuote) =>
+    !isEventResidencyQuote(quote) || !subscriptionDiscounts.some(other =>
+      other.exerciseId === quote.exerciseId && other.productId === quote.productId && other.basePriceMinor === quote.basePriceMinor);
   const explanations: string[] = [];
-  for (const quote of quotes) {
-    if (!Number.isFinite(quote.expiresAt) || quote.expiresAt <= now) continue;
-    if (quote.status !== "AVAILABLE") {
-      const reason = quote.status === "LIMIT_USED" ? "Лимит исчерпан" : "Льгота недоступна для этого события";
-      explanations.push(`${quote.subscriptionName} · ${reason}`);
-      continue;
-    }
-    if (quote.amountMinor === null) continue;
+  for (const quote of currentQuotes) {
+    if (quote.status === "AVAILABLE" || !showQuote(quote)) continue;
+    const reason = quote.status === "LIMIT_USED" ? "Лимит исчерпан" : "Льгота недоступна для этого события";
+    explanations.push(`${quote.subscriptionName} · ${reason}`);
+  }
+  for (const quote of discountedQuotes) {
+    if (!showQuote(quote)) continue;
     const benefit = quote.amountMinor === 0
       ? "Участие по подписке без доплаты"
       : quote.freeMinutes && quote.paidMinutes
