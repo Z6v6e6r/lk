@@ -521,7 +521,7 @@ const positiveBookingConvertJoinPrice = (
   && toNum(metadataInput.joinPrice) > 0
 );
 const paidOpenBookingConvert = mode === "create"
-  && bookingConvertCategory === EXERCISE_CATEGORY_OPEN_GAME
+  && (bookingConvertCategory === EXERCISE_CATEGORY_OPEN_GAME || bookingConvertDirectionId === 6180)
   && positiveBookingConvertJoinPrice;
 
 if (isCabinetBookingConvert && (!isBookingConvertCategoryAllowed || paidOpenBookingConvert)) {

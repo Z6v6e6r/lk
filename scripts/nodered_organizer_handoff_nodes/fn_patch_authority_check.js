@@ -23,8 +23,15 @@ const rawJoinPrice = metadata?.joinPrice;
 const joinPrice = typeof rawJoinPrice === "string" && /^\d+(?:[.,]\d+)?$/.test(rawJoinPrice.trim())
   ? Number(rawJoinPrice.trim().replace(",", "."))
   : rawJoinPrice;
-const openGame = Number(metadata?.typeId) === 1613 || Number(metadata?.directionId) === 4588
-  || [metadata?.typeName, metadata?.directionName].some(value => /открытая игра|open game/i.test(String(value || "")));
+const typeId = Number(metadata?.typeId);
+const directionId = Number(metadata?.directionId);
+const markers = [metadata?.typeName, metadata?.directionName]
+  .map(value => String(value || "").toLowerCase().replace(/ё/g, "е").replace(/[^a-z0-9а-я]+/g, ""));
+const otherCategory = [605, 847, 963, 1208, 1755, 839, 1013].includes(typeId)
+  || [2617, 3284, 4769, 6233].includes(directionId)
+  || markers.some(value => /турнир|tournament|американо|americano|мексикано|mexicano|roundrobin|олимп|трен|training|coach|групп|group/.test(value));
+const openGame = typeId === 1613 || [4588, 6180].includes(directionId)
+  || (!otherCategory && markers.some(value => /игра|игру|game|сплит|split/.test(value)));
 const paidConvertedGame = metadata?.source === "cabinet_booking_convert"
   && game.settings?.payMode !== "split" && openGame
   && Number.isFinite(joinPrice) && joinPrice > 0;

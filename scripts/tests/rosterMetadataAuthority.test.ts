@@ -86,5 +86,10 @@ test("paid converted open game keeps its roster and classification on ordinary P
     "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
   assert.equal(run([member, member])[1].payload.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
   assert.deepEqual(run([member], { source: "games_widget", typeId: 0, joinPrice: "0" })[0].payload.metadata, metadata);
+  for (const alias of [{ typeId: 0, typeName: "Своя-игра" }, { typeId: 0, directionId: 6180 }]) {
+    assert.equal(run([member, { id: "unbooked", status: "CONFIRMED" }], metadata, {
+      ...metadata, ...alias,
+    } as typeof metadata)[1].payload.code, "BOOKING_CONVERT_PAID_JOIN_UNAVAILABLE");
+  }
   assert.ok(guard(metadata, { ...metadata, typeId: 0, typeName: "Аренда корта" })[0]);
 });
