@@ -127,7 +127,7 @@ test('residency never requests a discount for a PRO training even on an older po
   assert.equal(ctx.quotes[0].amountMinor,null);
   assert.equal(ctx.quotes[0].reasonCode,'RESIDENCY_PRO_TRAINING_EXCLUDED');
 });
-test('validated residency quote identifies its subscription product for new games only',()=>{
+test('validated residency quote identifies its subscription product for creation and join',()=>{
   for(const targetKind of ['NEW_GAME','EXISTING_GAME']) {
     const ctx=context([resident],null);
     ctx.basePriceMinor=60000;
@@ -144,7 +144,7 @@ test('validated residency quote identifies its subscription product for new game
     assert.equal(ctx.quotes.length,1);
     assert.equal(ctx.quotes[0].status,'AVAILABLE');
     assert.equal(ctx.quotes[0].amountMinor,42000);
-    assert.equal(ctx.quotes[0].appliedSubscriptionProductId,targetKind==='NEW_GAME'?RESIDENCY_PRODUCT_ID:undefined);
+    assert.equal(ctx.quotes[0].appliedSubscriptionProductId,RESIDENCY_PRODUCT_ID);
   }
 });
 for(const order of [[friend,resident],[resident,friend]]) test('supported mixed batch survives residency401: '+order.join(','),()=>{

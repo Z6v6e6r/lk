@@ -60,7 +60,7 @@ if (productId.toLowerCase()===RESIDENCY_PRODUCT_ID) {
   quote(id,'AVAILABLE',ctx.basePriceMinor-Math.floor(ctx.basePriceMinor*percent/100),0,ctx.target.durationMinutes);
   const residencyQuote=ctx.quotes[ctx.quotes.length-1];
   residencyQuote.expiresAt=Math.min(residencyQuote.expiresAt,proof.validUntil);
-  if (!eventRoute && ctx.target.targetKind==='NEW_GAME' && action==='CREATE_GAME') {
+  if (!eventRoute) {
     residencyQuote.appliedSubscriptionProductId=proof.binding.providerProductId;
   }
   continue;

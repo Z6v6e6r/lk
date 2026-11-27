@@ -68,6 +68,15 @@ export function isolateBookingPilot(): Plugin {
             return;
           }
         }
+        if (filename === "GamesPage.tsx" && ts.isJsxSelfClosingElement(node)
+          && node.tagName.getText(sourceFile) === "SubscriptionPricePreviewAside") {
+          const preview = node.attributes.properties.find((attribute): attribute is ts.JsxAttribute =>
+            ts.isJsxAttribute(attribute) && attribute.name.getText(sourceFile) === "preview");
+          if (preview?.initializer?.getText(sourceFile) === "{publicSplitPricePreview}") {
+            seen.set("publicSplitPricePreview", (seen.get("publicSplitPricePreview") ?? 0) + 1);
+            add(preview, "preview={pilotGamePricePreview(publicSplitPricePreview, splitSubscriptionPaymentOptions, splitSubscriptions)}");
+          }
+        }
         if (detail && ts.isJsxAttribute(node) && node.name.getText(sourceFile) === "onOpen"
           && node.initializer?.getText(sourceFile).includes(detail[0])) {
           seen.set("onOpen", (seen.get("onOpen") ?? 0) + 1);
@@ -102,7 +111,8 @@ export function isolateBookingPilot(): Plugin {
       visit(sourceFile);
       const candidateFilters = filename === "GamesPage.tsx"
         ? ["filterSplitEligibleSubscriptions", "filterSplitCategoryCompatibleSubscriptions"] : [];
-      for (const name of [...Object.keys(slots), ...(detail ? ["onOpen"] : []), ...candidateFilters]) {
+      const pricePreview = filename === "GamesPage.tsx" ? ["publicSplitPricePreview"] : [];
+      for (const name of [...Object.keys(slots), ...(detail ? ["onOpen"] : []), ...candidateFilters, ...pricePreview]) {
         if (seen.get(name) !== 1) throw new Error(`LK pilot checkout slot changed: ${filename} (${name})`);
       }
       if (!edits.length) return;
@@ -113,7 +123,7 @@ export function isolateBookingPilot(): Plugin {
       const prelude = [
         'import { navigateWithinPilot, pilotHref } from "/src/lk-pilot/routes.ts";',
         ...candidateFilters.length ? ['import { addPilotGameResidencyCandidates } from "/src/lk-pilot/gameResidencyCandidates.ts";'] : [],
-        ...seen.size ? ['import { BookingOptions } from "/src/lk-pilot/BookingOptions.tsx";\nimport { minorFromRubles, gameBookingOptions, eventBookingOptions } from "/src/lk-pilot/bookingOptionPresentation.ts";'] : [],
+        ...seen.size ? ['import { BookingOptions } from "/src/lk-pilot/BookingOptions.tsx";\nimport { minorFromRubles, gameBookingOptions, eventBookingOptions, pilotGamePricePreview } from "/src/lk-pilot/bookingOptionPresentation.ts";'] : [],
       ].join("\n");
       return prelude + "\n" + apply;
     },

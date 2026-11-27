@@ -12,16 +12,33 @@ type ProductAliases = {
   product?: { id?: unknown; uuid?: unknown; productId?: unknown };
 };
 
-type OwnedSubscription = Subscription & ProductAliases & {
+type GameSubscriptionIdentity = Pick<Subscription, "subscriptionId"> & ProductAliases & {
   subscription?: ProductAliases;
   clientSubscription?: ProductAliases;
   clientSub?: ProductAliases;
   raw?: ProductAliases;
 };
 
+function readProductAliases(subscription: GameSubscriptionIdentity) {
+  return [subscription, subscription.subscription, subscription.clientSubscription,
+    subscription.clientSub, subscription.raw].flatMap(value => [
+    value?.productId, value?.subscriptionProductId, value?.templateId,
+    value?.product?.id, value?.product?.uuid, value?.product?.productId,
+  ]).filter(value => value != null);
+}
+
+function hasResidencyProduct(productIds: unknown[]): boolean {
+  return productIds.length > 0 && productIds.every(value =>
+    typeof value === "string" && value.toLowerCase() === RESIDENCY_LIFECYCLE_PRODUCT_ID);
+}
+
+export function isPilotGameResidencyProduct(subscription: GameSubscriptionIdentity | undefined): boolean {
+  return subscription !== undefined && hasResidencyProduct(readProductAliases(subscription));
+}
+
 export function addPilotGameResidencyCandidates(
   eligible: Subscription[],
-  owned: readonly OwnedSubscription[],
+  owned: readonly (Subscription & GameSubscriptionIdentity)[],
   gameDate: string | null,
   now = Date.now(),
 ): Subscription[] {
@@ -36,14 +53,8 @@ export function addPilotGameResidencyCandidates(
       || (subscription.holdUntil && Date.parse(subscription.holdUntil) > now)
       || !isSplitSubscriptionValidForGameDate(subscription, gameDate)) continue;
 
-    const productIds = [subscription, subscription.subscription, subscription.clientSubscription,
-      subscription.clientSub, subscription.raw].flatMap(value => [
-      value?.productId, value?.subscriptionProductId, value?.templateId,
-      value?.product?.id, value?.product?.uuid, value?.product?.productId,
-    ]).filter(value => value != null);
-    const exactProduct = productIds.length > 0
-      && productIds.every(value => typeof value === "string" && value.toLowerCase() === RESIDENCY_LIFECYCLE_PRODUCT_ID);
-    if (exactProduct) {
+    const productIds = readProductAliases(subscription);
+    if (hasResidencyProduct(productIds)) {
       verified.push({ ...subscription, name: "Резидентство ПадлхАБ" });
       seen.add(id);
       continue;

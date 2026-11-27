@@ -16,7 +16,7 @@ const preview = (quotes: SubscriptionPriceQuote[] | null, overrides = {}) => sub
 
 test("90 minute game displays the server amount and paid 30 minutes", () => {
   assert.deepEqual(preview([quote()]), {state: "available", label: "По подписке от 750 ₽", detail: "Доплата за 30 мин",
-    basePriceMinor: 300000, amountMinor: 75000, paidMinutes: 30, discounted: true});
+    basePriceMinor: 300000, amountMinor: 75000, paidMinutes: 30, discounted: true, confirmedSubscriptionId: "subscription-a"});
 });
 test("minimum includes the legacy free subscription without choosing it for checkout", () => {
   const result = preview([quote(), quote("subscription-b", {amountMinor: 0, freeMinutes: 90, paidMinutes: 0})],
@@ -24,6 +24,17 @@ test("minimum includes the legacy free subscription without choosing it for chec
   assert.equal(result.label, "По подписке от 0 ₽"); assert.equal(result.detail, null);
   assert.equal("selectedSubscriptionId" in result, false);
 });
+test("product identity follows only the winner of a complete and valid quote batch", () => {
+  const a = quote("subscription-a", { appliedSubscriptionProductId: "product-a" });
+  const b = quote("subscription-b", { amountMinor: 50000, appliedSubscriptionProductId: "product-b" });
+  const options = { subscriptionIds: ["subscription-a", "subscription-b"] };
+  const best = preview([a, b], options);
+  assert.equal(best.confirmedSubscriptionId, "subscription-b");
+  assert.equal(best.appliedSubscriptionProductId, "product-b");
+  assert.equal(preview([a], options).appliedSubscriptionProductId, undefined);
+  assert.equal(preview([a, {...b, expiresAt: now}], options).confirmedSubscriptionId, undefined);
+});
+
 test("120 minute overage and fractional rubles remain the server values", () => {
   assert.equal(preview([quote("subscription-a", {paidMinutes: 60, amountMinor: 150050})],
     {durationMinutes: 120}).label, "По подписке от 1 500,5 ₽");

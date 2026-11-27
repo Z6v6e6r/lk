@@ -1,6 +1,8 @@
 import type { SubscriptionPricePreview } from "../components/games/subscriptionPricePreview";
 import { resolveSubscriptionCategoryDailyLimitPlanKey } from "../utils/subscriptionCategoryDailyLimit.ts";
 import type { SubscriptionEventDiscountQuote } from "../utils/groupSubscriptionDiscount";
+import { RESIDENCY_LIFECYCLE_PRODUCT_ID } from "../residency/residencyLifecycleClient.ts";
+import { isPilotGameResidencyProduct } from "./gameResidencyCandidates.ts";
 
 export type BookingOption = {
   id: string;
@@ -20,20 +22,48 @@ export const money = (minor: number) => new Intl.NumberFormat("ru-RU", {
   style: "currency", currency: "RUB", maximumFractionDigits: 2,
 }).format(minor / 100);
 
-function confirmedGameDiscount(quote: SubscriptionPricePreview): string | null {
+const residencyLabel = "Резидентство ПадлхАБ";
+const friendshipLabel = "По подписке Дружба2.0";
+const isResidencyName = (name: string) => /^резидентство(?:\s+падлхаб)?$/iu.test(name.trim());
+type GameOption = { subscriptionId: string; name: string };
+type OwnedGameSubscription = NonNullable<Parameters<typeof isPilotGameResidencyProduct>[0]>;
+
+function gameOptionName(name: string, quote: SubscriptionPricePreview, owned: OwnedGameSubscription | undefined): string {
+  if (quote.appliedSubscriptionProductId?.toLowerCase() === RESIDENCY_LIFECYCLE_PRODUCT_ID
+    || (!quote.appliedSubscriptionProductId && isPilotGameResidencyProduct(owned))) return residencyLabel;
+  if (resolveSubscriptionCategoryDailyLimitPlanKey(owned) === "friendship_two_hours"
+    || /^(?:падел[.\s]+)?дружба\s*2\.0$/iu.test(name.trim())) return friendshipLabel;
+  return name === "Абонемент" || isResidencyName(name) ? "По подписке" : name;
+}
+
+export function pilotGamePricePreview(
+  quote: SubscriptionPricePreview,
+  subscriptions: readonly GameOption[],
+  ownedSubscriptions: readonly OwnedGameSubscription[],
+): SubscriptionPricePreview {
+  if (quote.state !== "available" || quote.amountMinor === null) return quote;
+  const option = subscriptions.find(item => item.subscriptionId === quote.confirmedSubscriptionId);
+  const owned = ownedSubscriptions.find(item => item.subscriptionId.trim() === quote.confirmedSubscriptionId);
+  const label = gameOptionName(option?.name ?? "Абонемент", quote, owned);
+  if (label !== residencyLabel && label !== friendshipLabel) return quote;
+  return { ...quote, label: `${label} · от ${money(quote.amountMinor)}`,
+    detail: label === residencyLabel ? null : quote.detail };
+}
+
+function confirmedGameDiscount(quote: SubscriptionPricePreview, residency: boolean): string | null {
   if (!quote.discounted || quote.amountMinor === null || !quote.basePriceMinor) return null;
   const base = quote.basePriceMinor;
   const discount = Math.round((base - quote.amountMinor) * 100 / base);
   return discount > 0 && discount < 100 && base - Math.floor(base * discount / 100) === quote.amountMinor
     ? `Скидка ${discount}% на запись`
-    : "Применена скидка подписки";
+    : residency ? "Применена скидка по резидентству" : "Применена скидка подписки";
 }
 
 export function gameBookingOptions(
-  subscriptions: readonly { subscriptionId: string; name: string }[],
+  subscriptions: readonly GameOption[],
   previews: Readonly<Record<string, SubscriptionPricePreview>>,
   durationMinutes: number,
-  ownedSubscriptions: readonly { subscriptionId: string }[] = [],
+  ownedSubscriptions: readonly OwnedGameSubscription[] = [],
 ) {
   const options: BookingOption[] = [];
   const explanations: string[] = [];
@@ -41,10 +71,7 @@ export function gameBookingOptions(
   for (const { subscriptionId, name } of subscriptions) {
     const quote = previews[subscriptionId];
     if (!quote || quote.state === "checking") continue;
-    const plan = resolveSubscriptionCategoryDailyLimitPlanKey(ownedById.get(subscriptionId));
-    const displayName = plan === "friendship_two_hours" || /^(?:падел[.\s]+)?дружба\s*2\.0$/iu.test(name.trim())
-      ? "По подписке Дружба2.0"
-      : name === "Абонемент" ? "По подписке" : name;
+    const displayName = gameOptionName(name, quote, ownedById.get(subscriptionId));
     if (quote.state !== "available" || quote.amountMinor === null) {
       explanations.push(`${displayName} · ${quote.label}`);
       continue;
@@ -54,14 +81,14 @@ export function gameBookingOptions(
       ? "Участие по подписке без доплаты"
       : freeMinutes > 0 && quote.paidMinutes > 0
         ? `${freeMinutes} мин бесплатно · доплата за ${quote.paidMinutes} мин`
-        : confirmedGameDiscount(quote);
+        : confirmedGameDiscount(quote, displayName === residencyLabel);
     options.push({ id: subscriptionId, name: displayName, amountMinor: quote.amountMinor, basePriceMinor: quote.basePriceMinor, benefit });
   }
   return { options, explanations: [...new Set(explanations)] };
 }
 
 function isEventResidencyQuote(quote: SubscriptionEventDiscountQuote): boolean {
-  return /^Резидентство(?:\s+ПадлхАБ)?$/iu.test(quote.subscriptionName.trim());
+  return isResidencyName(quote.subscriptionName);
 }
 
 export function eventBookingOptions(
@@ -92,7 +119,7 @@ export function eventBookingOptions(
   for (const quote of currentQuotes) {
     if (quote.status === "AVAILABLE" || !showQuote(quote)) continue;
     const reason = quote.status === "LIMIT_USED" ? "Лимит исчерпан" : "Льгота недоступна для этого события";
-    explanations.push(`${quote.subscriptionName} · ${reason}`);
+    explanations.push(`${isEventResidencyQuote(quote) ? residencyLabel : quote.subscriptionName} · ${reason}`);
   }
   for (const quote of discountedQuotes) {
     if (!showQuote(quote)) continue;
@@ -101,7 +128,7 @@ export function eventBookingOptions(
       : quote.freeMinutes && quote.paidMinutes
         ? `${quote.freeMinutes} мин бесплатно · доплата за ${quote.paidMinutes} мин`
         : quote.discountPercent > 0 ? `Скидка ${quote.discountPercent}% на запись` : null;
-    options.push({ id: `quote:${quote.subscriptionId}:${quote.productId}`, name: quote.subscriptionName,
+    options.push({ id: `quote:${quote.subscriptionId}:${quote.productId}`, name: isEventResidencyQuote(quote) ? residencyLabel : quote.subscriptionName,
       amountMinor: quote.amountMinor, basePriceMinor: quote.basePriceMinor, benefit });
   }
   return { options, explanations: [...new Set(explanations)] };

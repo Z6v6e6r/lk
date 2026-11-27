@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { gameBookingOptions, eventBookingOptions } from "../../src/lk-pilot/bookingOptionPresentation.ts";
+import { gameBookingOptions, eventBookingOptions, pilotGamePricePreview } from "../../src/lk-pilot/bookingOptionPresentation.ts";
 import type { SubscriptionPricePreview } from "../../src/components/games/subscriptionPricePreview.ts";
 import type { SubscriptionEventDiscountQuote } from "../../src/utils/groupSubscriptionDiscount.ts";
 import { SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS } from "../../src/utils/subscriptionCategoryDailyLimit.ts";
@@ -24,9 +24,24 @@ test("pilot game creation keeps one payment selector and keeps game join separat
   assert.match(transformed, /<BookingOptions category="game" title="Запись на игру"/);
   assert.match(transformed, /gameBookingOptions\(detailsSplitSubscriptionOptions,[^)]*,\s*detailsSplitSubscriptions\)/);
   assert.match(transformed, /gameBookingOptions\(splitSubscriptionPaymentOptions,[^)]*,\s*splitSubscriptions\)/);
+  assert.match(transformed, /preview=\{pilotGamePricePreview\(publicSplitPricePreview, splitSubscriptionPaymentOptions, splitSubscriptions\)\}/);
   assert.doesNotMatch(transformed, /className="team-card game-create-payment-method-card"/);
   assert.match(transformed, /addPilotGameResidencyCandidates\(filterSplitEligibleSubscriptions\(/);
   assert.match(transformed, /addPilotGameResidencyCandidates\(filterSplitCategoryCompatibleSubscriptions\(/);
+});
+
+test("training and tournament details use the shared event presentation", async () => {
+  const hook = isolateBookingPilot().transform as CallableFunction;
+  for (const [directory, filename, category] of [
+    ["group-schedule", "GroupSchedulePage.tsx", "training"],
+    ["tournament-signup", "TournamentSignupPage.tsx", "tournament"],
+  ]) {
+    const path = fileURLToPath(new URL(`../../src/components/${directory}/${filename}`, import.meta.url));
+    const transformed = Reflect.apply(hook, undefined, [await readFile(path, "utf8"), path]);
+    assert.equal([...transformed.matchAll(/<BookingOptions\b/g)].length, 1);
+    assert.ok(transformed.includes(`<BookingOptions category="${category}"`));
+    assert.match(transformed, /eventBookingOptions\(checkout\?\.oneTimes/);
+  }
 });
 
 test("the pilot forwards an active residency with Viva's tournament-only product type to the game quote", () => {
@@ -74,6 +89,38 @@ test("the pilot forwards an active residency with Viva's tournament-only product
   assert.equal(addPilotGameResidencyCandidates(full, [verified, legacy], day, time), full);
 });
 
+test("both game selectors name a verified residency, even when Viva sends a generic name", () => {
+  const subscriptionId = "residency";
+  const subscriptions = [{ subscriptionId, name: "Абонемент" }];
+  const price: SubscriptionPricePreview = {
+    state: "available", label: "По подписке от 2 100 ₽", detail: "Доплата за 90 мин",
+    amountMinor: 210_000, basePriceMinor: 300_000, paidMinutes: 90, discounted: true,
+    confirmedSubscriptionId: subscriptionId,
+  };
+  const cases = [
+    { quote: { ...price, appliedSubscriptionProductId: RESIDENCY_LIFECYCLE_PRODUCT_ID }, owned: [] },
+    { quote: price, owned: [{ subscriptionId, product: { id: RESIDENCY_LIFECYCLE_PRODUCT_ID } }] },
+  ];
+  for (const { quote, owned } of cases) {
+    assert.deepEqual(gameBookingOptions(subscriptions, { [subscriptionId]: quote }, 90, owned).options, [{
+      id: subscriptionId, name: "Резидентство ПадлхАБ", amountMinor: 210_000, basePriceMinor: 300_000,
+      benefit: "Скидка 30% на запись",
+    }]);
+    const firstStep = pilotGamePricePreview(quote, subscriptions, owned);
+    assert.match(firstStep.label, /^Резидентство ПадлхАБ · от 2\s100,00\s₽$/u);
+    assert.equal(firstStep.detail, null);
+  }
+  // The same amount or the presence of a different residency on the account is not product evidence.
+  const otherResidency = [{ subscriptionId: "other", productId: RESIDENCY_LIFECYCLE_PRODUCT_ID }];
+  assert.equal(gameBookingOptions(subscriptions, { [subscriptionId]: price }, 90, otherResidency).options[0].name, "По подписке");
+  assert.equal(pilotGamePricePreview(price, subscriptions, otherResidency), price);
+  const ambiguousName = [{ subscriptionId, name: "Резидентство" }];
+  const foreignProduct = [{ subscriptionId, productId: "other-product" }];
+  assert.equal(gameBookingOptions(ambiguousName, { [subscriptionId]: price }, 90, foreignProduct).options[0].name, "По подписке");
+  const denied = { ...price, state: "unavailable" as const, amountMinor: null };
+  assert.deepEqual(gameBookingOptions(subscriptions, { [subscriptionId]: denied }, 90).options, []);
+});
+
 test("game methods show named, confirmed subscriptions and explain the free time, co-pay and limit", () => {
   const quote: SubscriptionPricePreview = {
     state: "available", label: "По подписке", detail: null,
@@ -109,8 +156,9 @@ test("event methods use the server's discount and suppress expired quotes", () =
     ...quote, subscriptionId: "limited", subscriptionName: "Подписка с лимитом",
     status: "LIMIT_USED", amountMinor: null,
   }], 150);
-  assert.deepEqual(result.options.map(({ id, benefit }) => [id, benefit]), [
-    ["tariff:event-ticket", undefined], ["quote:active:event-ticket", "Скидка 50% на запись"],
+  assert.deepEqual(result.options.map(({ id, name, benefit }) => [id, name, benefit]), [
+    ["tariff:event-ticket", "Разовая", undefined],
+    ["quote:active:event-ticket", "Резидентство ПадлхАБ", "Скидка 50% на запись"],
   ]);
   assert.deepEqual(result.explanations, ["Подписка с лимитом · Лимит исчерпан"]);
 });
