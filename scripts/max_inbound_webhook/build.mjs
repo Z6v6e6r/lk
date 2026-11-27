@@ -11,7 +11,7 @@ if (!target || !path.isAbsolute(target) || target.startsWith(root + '/') || fs.e
 if (git(['status', '--porcelain'])) throw Error('CLEAN_SOURCE_REQUIRED');
 const commit = git(['rev-parse', 'HEAD']), branch = git(['branch', '--show-current']);
 if (!/^codex\//.test(branch) || git(['ls-remote', 'origin', 'refs/heads/' + branch]).split(/\s/)[0] !== commit) throw Error('PUSHED_TASK_SOURCE_REQUIRED');
-const names = ['core.mjs', 'server.mjs', 'nginx_patch.mjs', 'padlhub-max-inbound.service', 'package.json', 'package-lock.json'];
+const names = ['core.mjs', 'server.mjs', 'cup-handoff.mjs', 'nginx_patch.mjs', 'padlhub-max-inbound.service', 'package.json', 'package-lock.json'];
 fs.mkdirSync(target, { mode: 0o700 });
 const rows = names.map(name => { const raw = fs.readFileSync(path.join(directory, name)); const tracked = execFileSync('git', ['show', `${commit}:scripts/max_inbound_webhook/${name}`], { cwd: root }); if (!raw.equals(tracked)) throw Error('SOURCE_DRIFT'); fs.writeFileSync(path.join(target, name), raw, { flag: 'wx', mode: 0o600 }); return { path: name, bytes: raw.length, sha256: crypto.createHash('sha256').update(raw).digest('hex') }; });
 const oldLock = execFileSync('git', ['show', `${commit}:scripts/lk1_unpaid_cancel_service/package-lock.json`], { cwd: root });

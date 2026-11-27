@@ -10,6 +10,8 @@ import type { BookingCancellationExecutionResult } from "./BookingCancellationDi
 import type { BookingCancellationAction } from "../../utils/bookingCancellation";
 import { Modal } from "../UI/Modal";
 import { TournamentBookingCard } from "./TournamentBookingCard";
+import { GAME_BOOKING_UTC_OFFSET } from "../../consts/api_config";
+import { resolveGameBookingTimes } from "../../utils/bookingEndTime";
 import {
   isExerciseConvertibleToGameFromBooking,
   resolveCabinetBookingCategory,
@@ -78,19 +80,8 @@ function getBookingTimestamp(booking: Booking): number {
 }
 
 function getGameTimestamp(game: PadelGameRecord, type: "start" | "end" = "start"): number {
-  const date = game.booking?.date;
-  const rawTime =
-    type === "end"
-      ? (game.booking?.timeTo ?? game.booking?.timeFrom)
-      : (game.booking?.timeFrom ?? game.booking?.timeTo);
-  if (rawTime) {
-    const directParsed = new Date(rawTime).getTime();
-    if (Number.isFinite(directParsed)) return directParsed;
-  }
-  if (!date || !rawTime) return Number.POSITIVE_INFINITY;
-  const normalizedTime = /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : rawTime;
-  const parsed = new Date(`${date}T${normalizedTime}`).getTime();
-  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+  const { startTs, endTs } = resolveGameBookingTimes(game.booking, GAME_BOOKING_UTC_OFFSET);
+  return (type === "end" ? endTs ?? startTs : startTs ?? endTs) ?? Number.POSITIVE_INFINITY;
 }
 
 function getBookingDateKey(booking: Booking): string | null {
@@ -147,6 +138,12 @@ function getGameWithBookingSchedule(game: PadelGameRecord, booking: Booking): Pa
       date: bookingDate ?? game.booking?.date ?? null,
       timeFrom: timeFrom ?? game.booking?.timeFrom ?? null,
       timeTo: timeTo ?? game.booking?.timeTo ?? null,
+      ...(hasScheduleOverride ? {
+        timeFromIso: booking.exercise?.timeFrom ?? null,
+        timeToIso: booking.exercise?.timeTo ?? null,
+        startTs: null,
+        endTs: null,
+      } : {}),
       durationMinutes: getBookingDurationMinutes(booking) ?? game.booking?.durationMinutes ?? null,
       studioId: booking.exercise?.studio?.id != null ? String(booking.exercise.studio.id) : game.booking?.studioId ?? null,
       roomId: booking.exercise?.room?.id != null ? String(booking.exercise.room.id) : game.booking?.roomId ?? null,

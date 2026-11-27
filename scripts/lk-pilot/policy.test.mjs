@@ -10,6 +10,9 @@ import { createPilotServer } from "./server.mjs";
 const lk = "https://padlhub.su";
 const viva = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
 const quotes = lk + "/lk/subscriptions/game-price-preview";
+const eventTariffs = viva.replace("/v1/", "/v2/") + "/products/one-times";
+const exerciseId = "00000000-0000-4000-8000-000000000001";
+const eventTariffQuery = "?exerciseId=" + exerciseId;
 
 test("pilot opens the established browse and tariff contracts", () => {
   for (const url of [
@@ -20,6 +23,7 @@ test("pilot opens the established browse and tariff contracts", () => {
     viva + "/products/master-services/123abc/price", viva + "/products/master-services/123abc/meta",
     viva + "/products/master-services/123abc/subServices?studioId=123&showAll=true",
     viva + "/products/master-services/123abc/studios",
+    eventTariffs + eventTariffQuery,
   ]) assert.ok(readPilotTarget(url, "GET"), url);
   for (const url of [quotes, viva + "/transactions/preview", viva + "/products/master-services/123abc/timeslots"]) {
     assert.ok(readPilotTarget(url, "POST"), url);
@@ -47,6 +51,14 @@ test("pilot rejects writes, side-effecting reads and unreviewed routes", () => {
     ["POST", viva + "/transactions"],
     ["POST", viva + "/products/master-services/123abc/pay"],
     ["DELETE", viva + "/bookings/123abc"],
+    ["POST", eventTariffs + eventTariffQuery],
+    ["GET", eventTariffs],
+    ["GET", eventTariffs + "?exerciseId=fixture"],
+    ["GET", eventTariffs + eventTariffQuery + "&exerciseId=" + exerciseId],
+    ["GET", eventTariffs + eventTariffQuery + "&clientId=fixture"],
+    ["GET", eventTariffs.replace("/v2/", "/v1/") + eventTariffQuery],
+    ["GET", eventTariffs.replace("iSkq6G", "tenant") + eventTariffQuery],
+    ["GET", eventTariffs.replace("api.vivacrm.ru", "unexpected.example") + eventTariffQuery],
   ]) assert.equal(readPilotTarget(target, method), null, target);
   assert.equal(isPilotPostBodyAllowed(new URL(quotes), { action: "checkout" }), false);
   assert.equal(isPilotPostBodyAllowed(new URL(quotes), { target: { targetKind: "GROUP_TRAINING_RESIDENCY_PURCHASE", exerciseId: "x" } }), false);
@@ -85,6 +97,13 @@ test("gateway forwards a vetted query once and never follows payment redirects",
   assert.equal(calls[0][1].headers.authorization, "Bearer fixture");
   assert.equal((await run("GET", lk + "/lk/games?public=true")).status, 502);
   assert.equal(calls[1][1].redirect, "manual");
+  assert.equal((await run("POST", eventTariffs + eventTariffQuery, {})).status, 405);
+  assert.equal((await run("GET", eventTariffs + eventTariffQuery + "&clientId=fixture")).status, 405);
+  assert.equal(calls.length, 2);
+  assert.equal((await run("GET", eventTariffs + eventTariffQuery)).status, 200);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2][0], eventTariffs + eventTariffQuery);
+  assert.equal(calls[2][1].method, "GET");
   assert.equal((await fetch(local + `/lk-pilot/${version}/release.json`)).status, 200);
   assert.equal((await fetch(local + `/lk-pilot/${"b".repeat(24)}/release.json`)).status, 404);
 });

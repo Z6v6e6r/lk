@@ -11,6 +11,9 @@ const residencyConfig = (ctx) => {
 };
 const residencyEnsure = (ctx,exercise,phase) => {
   if (!residencyIdentity(ctx)) return null;
+  if (typeof isProTrainingExercise==='function' && resolveCategory(exercise)==='group_training' && isProTrainingExercise(exercise)) {
+    return lk1Stop(ctx,'RESIDENCY_PRO_TRAINING_EXCLUDED');
+  }
   const config=residencyConfig(ctx);
   if (!config || !isObj(exercise)) return lk1Stop(ctx,'RESIDENCY_BOOKING_NOT_CONFIGURED');
   if (ctx.residencyContinuePhase===phase) {

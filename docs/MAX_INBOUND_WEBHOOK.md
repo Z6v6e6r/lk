@@ -126,11 +126,72 @@ Provider contracts: [callback event](https://dev.max.ru/docs-api/objects/Update/
 [keyboard](https://dev.max.ru/docs-api/use-cases/sending-messages/keyboard/),
 [callback answer](https://dev.max.ru/docs-api/methods/POST/answers/).
 
+## CUP Support STAGING handoff
+
+This opt-in path handles only the main bot's own private-dialog flow. An
+authenticated `bot_started` with a canonical `cup2_<lowercase UUID>` payload
+checks the bot and direct dialogue through MAX before sending one confirmation
+keyboard. A `message_callback` with that same payload must come from the same
+human and dialogue and name the retained MAX message ID of that delivered
+keyboard. The start event alone cannot confirm a request. Ordinary content,
+station selection and existing support delivery keep their existing dispatch.
+
+Ordinary and malformed `bot_started` events are acknowledged after recording a
+compact receipt in the private inbox. The receipt retains an event digest
+without the payload or user fields and never enters dispatch. Identical
+redeliveries reuse their receipt. A valid handoff start acknowledged with the
+flag disabled stays ignored if MAX retries it after activation. Start a fresh
+draft to test after enabling the flag. Each distinct ignored start uses one
+record under the existing inbox capacity and is retained without automatic
+pruning.
+
+Keep `cupStagingHandoff` absent or set `enabled: false` in the protected receiver
+config by default. The authorized STAGING activation may set `enabled: true`,
+`proofUrl: https://stg-support.tsup.space/api/support/v1/public/tenants/padlhub/intake/max-proof`
+and a separately issued `proofKey` consisting of at least 32 random bytes in
+canonical unpadded base64url. MAX identity checks and the keyboard use the bot
+token already held by this receiver. The token stays in the receiver. The
+handoff endpoint receives only a short-lived HS256 proof in the JSON body.
+No incoming event can select a destination or add headers.
+
+The existing private inbox acknowledges durable admission before dispatch.
+Handoff records are distinct from station and support records and have a
+15-minute local dispatch window. An ambiguous MAX keyboard send is retained as
+REVIEW and is never sent again automatically. CUP confirmation retries (timeout,
+HTTP 408/429/5xx or interrupted intent) preserve the fixed draft/user/chat and
+use a fresh short-lived proof with bounded backoff. CUP must acknowledge the
+same already-bound draft and identity with 204. A different identity or
+inactive draft returns 409 and is retained for review. The proof also carries a
+128-bit confirmation value derived with a domain-separated HMAC from the
+draft, user and dialogue. That value stays stable across proof retries.
+
+After HTTP 204 the receiver durably records the confirmation digest before
+sending a separate MAX message to the same verified dialogue. The message
+contains a fixed return link with the draft ID and confirmation in the
+fragment and a button that copies only the confirmation. The draft secret
+stays in the browser where the form was filled. A user who opens the link in
+a different browser can paste the confirmation into the original form.
+The raw proof, raw confirmation and bot token are never
+stored in the receiver inbox or logged. A lost or interrupted MAX return send
+is retained as REVIEW and is never sent again automatically. CUP may already
+have accepted the contact proof in that case. Rotating the proof key with an
+outstanding return places that return under review.
+
+Changing MAX subscription types (adding `bot_started` while preserving
+`message_created` and `message_callback`), enabling the flag, and sending a live
+confirmation are separate activation steps. Verify a controlled private dialogue,
+the single resulting STAGING draft confirmation and no legacy deliveries for
+its events. A mismatched bot/dialog identity, repeated upstream refusal or effect
+on legacy dispatch stops activation. Disable the flag and restore the prior
+subscription before restoring an earlier receiver that rejects `bot_started`.
+Handoff records remain in custody. Earlier receiver versions see unfinished
+handoffs as REVIEW.
+
 ## Release and rollback
 
 Build from a clean, pushed task commit using
 `node scripts/max_inbound_webhook/build.mjs /absolute/new/private/bundle`.
-The manifest pins all six runtime/config sources and the existing Mongo7.2
+The manifest pins all seven runtime/config sources and the existing Mongo7.2
 worker dependency lock. No new dependency version is introduced. The release
 uses an isolated dependency/runtime copy; shared Node-RED/CUP/worker files stay
 unchanged. Before activation verify current source/process/config, archive1041

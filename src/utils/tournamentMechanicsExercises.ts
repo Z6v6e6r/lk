@@ -172,6 +172,7 @@ function buildSyntheticTournamentExercise(summary: TournamentSignupSummary): Exe
       name:
         pickString(direction, ["name", "title"])
         || pickString(summary.raw, ["directionName"])
+        || summary.title
         || "Турнир",
     },
     type: {

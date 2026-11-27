@@ -25,7 +25,7 @@ const replacements: Record<string, Record<string, string>> = {
   },
   "GroupSchedulePage.tsx": {
     "tournament-signup-registration group-schedule-registration group-schedule-registration--trainer":
-      '<BookingOptions category="training" key={selectedTraining.id} title={selectedTraining.title} amountMinor={null} {...eventBookingOptions(checkout?.oneTimes ?? [], currentDiscountQuotes)} loading={discountPending} />',
+      '<BookingOptions category="training" key={selectedTraining.id} title={selectedTraining.title} amountMinor={null} {...eventBookingOptions(checkout?.oneTimes ?? [], currentDiscountQuotes, Date.now(), proTrainingSelected)} loading={discountPending} />',
   },
   "TournamentSignupPage.tsx": {
     "tournament-signup-register-stack":
@@ -56,6 +56,27 @@ export function isolateBookingPilot(): Plugin {
       }
 
       function visit(node: ts.Node) {
+        if (filename === "GamesPage.tsx" && ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+          const callee = node.expression.text;
+          const create = callee === "filterSplitEligibleSubscriptions";
+          if (create || callee === "filterSplitCategoryCompatibleSubscriptions") {
+            if (node.arguments.length !== (create ? 7 : 4)) throw new Error(`LK pilot subscription filter changed: ${callee}`);
+            seen.set(callee, (seen.get(callee) ?? 0) + 1);
+            const subscriptions = node.arguments[0].getText(sourceFile);
+            const date = create ? node.arguments[6].getText(sourceFile) : "bookingDate";
+            add(node, `addPilotGameResidencyCandidates(${node.getText(sourceFile)}, ${subscriptions}, ${date})`);
+            return;
+          }
+        }
+        if (filename === "GamesPage.tsx" && ts.isJsxSelfClosingElement(node)
+          && node.tagName.getText(sourceFile) === "SubscriptionPricePreviewAside") {
+          const preview = node.attributes.properties.find((attribute): attribute is ts.JsxAttribute =>
+            ts.isJsxAttribute(attribute) && attribute.name.getText(sourceFile) === "preview");
+          if (preview?.initializer?.getText(sourceFile) === "{publicSplitPricePreview}") {
+            seen.set("publicSplitPricePreview", (seen.get("publicSplitPricePreview") ?? 0) + 1);
+            add(preview, "preview={pilotGamePricePreview(publicSplitPricePreview, splitSubscriptionPaymentOptions, splitSubscriptions)}");
+          }
+        }
         if (detail && ts.isJsxAttribute(node) && node.name.getText(sourceFile) === "onOpen"
           && node.initializer?.getText(sourceFile).includes(detail[0])) {
           seen.set("onOpen", (seen.get("onOpen") ?? 0) + 1);
@@ -88,7 +109,10 @@ export function isolateBookingPilot(): Plugin {
       }
 
       visit(sourceFile);
-      for (const name of [...Object.keys(slots), ...(detail ? ["onOpen"] : [])]) {
+      const candidateFilters = filename === "GamesPage.tsx"
+        ? ["filterSplitEligibleSubscriptions", "filterSplitCategoryCompatibleSubscriptions"] : [];
+      const pricePreview = filename === "GamesPage.tsx" ? ["publicSplitPricePreview"] : [];
+      for (const name of [...Object.keys(slots), ...(detail ? ["onOpen"] : []), ...candidateFilters, ...pricePreview]) {
         if (seen.get(name) !== 1) throw new Error(`LK pilot checkout slot changed: ${filename} (${name})`);
       }
       if (!edits.length) return;
@@ -98,7 +122,8 @@ export function isolateBookingPilot(): Plugin {
       );
       const prelude = [
         'import { navigateWithinPilot, pilotHref } from "/src/lk-pilot/routes.ts";',
-        ...seen.size ? ['import { BookingOptions } from "/src/lk-pilot/BookingOptions.tsx";\nimport { minorFromRubles, gameBookingOptions, eventBookingOptions } from "/src/lk-pilot/bookingOptionPresentation.ts";'] : [],
+        ...candidateFilters.length ? ['import { addPilotGameResidencyCandidates } from "/src/lk-pilot/gameResidencyCandidates.ts";'] : [],
+        ...seen.size ? ['import { BookingOptions } from "/src/lk-pilot/BookingOptions.tsx";\nimport { minorFromRubles, gameBookingOptions, eventBookingOptions, pilotGamePricePreview } from "/src/lk-pilot/bookingOptionPresentation.ts";'] : [],
       ].join("\n");
       return prelude + "\n" + apply;
     },

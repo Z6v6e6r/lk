@@ -40,7 +40,9 @@ test('unsafe IDs/wrong bot/unsupported events cannot become client messages; ech
   const raw = event(); raw.message.sender.user_id = Number.MAX_SAFE_INTEGER + 1; assert.throws(() => mapUpdate(raw, '333'), /UNSAFE_ID/);
   for (let code = 0; code <= 0x20; code++) { const bad = event(); bad.message.sender.user_id = 'id' + String.fromCharCode(code); assert.throws(() => mapUpdate(bad, '333'), /INVALID_ID/); }
   const valid = event(); valid.message.sender.user_id = '!client'; assert.equal(mapUpdate(valid, '333').dtos[0].externalUserId, '!client');
-  assert.throws(() => mapUpdate(event(), '444'), /WRONG_BOT/); assert.throws(() => mapUpdate({ update_type: 'bot_started' }, '333'), /UNSUPPORTED_UPDATE/);
+  assert.throws(() => mapUpdate(event(), '444'), /WRONG_BOT/);
+  assert.throws(() => mapUpdate({ update_type: 'bot_stopped' }, '333'), /UNSUPPORTED_UPDATE/);
+  assert.equal(mapUpdate({ update_type: 'bot_started' }, '333').ignored, 'NON_CUP_HANDOFF_START');
   const echo = event(); echo.message.sender.is_bot = true; assert.equal(mapUpdate(echo, '333').ignored, 'BOT_ECHO');
 });
 test('durable admission, canonical duplicate and conflict survive reconstruction', t => {
