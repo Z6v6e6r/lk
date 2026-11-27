@@ -176,3 +176,9 @@ html[data-preview-skin] .find-game-training-price { max-width: 160px; white-spac
 
 html[data-preview-skin] .details-date-capitalize { text-transform: none; }
 html[data-preview-skin] .details-date-capitalize::first-letter { text-transform: uppercase; }
+
+.matrix-add-on-heading { margin-top: 8px; color: #5d536d; font-size: 13px; font-weight: 600; }
+.matrix-add-on-cost { margin: 16px 0 0; }
+.matrix-add-on-cost div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin: 4px 0; }
+.matrix-add-on-cost div:last-child { font-weight: 700; }
+.matrix-add-on-cost dd { margin: 0; }

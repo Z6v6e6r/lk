@@ -89,6 +89,35 @@ test("the pilot forwards an active residency with Viva's tournament-only product
   assert.equal(addPilotGameResidencyCandidates(full, [verified, legacy], day, time), full);
 });
 
+test("both game flows send Viva's two-type residency record for server verification", () => {
+  const summary = sanitizeSubscriptionSnapshot({ content: [{
+    subscriptionId: "10000000-0000-4000-8000-000000000010",
+    status: "ACTIVE", expirationDate: "2026-12-10", holdUntil: null,
+    hasStudioLimitation: false,
+    hasTypeLimitation: true, availableTypes: [{ id: 839, name: "Падел Турнир" }, { id: 2572, name: "Резидентство" }],
+    hasDirectionLimitation: true, availableDirections: [{ id: 7291, name: "Турнир Резидент" }],
+  }] });
+  assert.ok(summary);
+  const { content } = summary;
+  const [subscription] = content;
+  const date = "2026-11-27";
+  const types = new Set(["1613"]), directions = new Set(["4588"]);
+  const create = filterSplitEligibleSubscriptions(content, types, directions, null, 1, 60, date);
+  const join = filterSplitCategoryCompatibleSubscriptions(content, types, directions, null);
+  assert.deepEqual([create, join], [[], []]);
+  for (const eligible of [create, join]) {
+    assert.deepEqual(addPilotGameResidencyCandidates(eligible, content, date), [subscription]);
+  }
+  assert.deepEqual(addPilotGameResidencyCandidates([], [{
+    ...subscription, availableDirections: [{ id: 7292, name: "Другое направление" }],
+  }], date), []);
+  assert.deepEqual(addPilotGameResidencyCandidates([], [{
+    ...subscription, availableTypes: [{ id: 839, name: "Падел Турнир" }, { id: 2572, name: "Другая подписка" }],
+  }], date), []);
+  const malformed = { ...subscription, availableTypes: { length: 2 } as unknown as typeof subscription.availableTypes };
+  assert.deepEqual(addPilotGameResidencyCandidates([], [malformed, subscription], date), [subscription]);
+});
+
 test("both game selectors name a verified residency, even when Viva sends a generic name", () => {
   const subscriptionId = "residency";
   const subscriptions = [{ subscriptionId, name: "Абонемент" }];
@@ -236,4 +265,18 @@ test("the pilot labels the owned Friendship 2.0 product even when Viva omits its
     ["По подписке", 280_000],
     ["Другая подписка", 280_000],
   ]);
+});
+
+test("Energy 5 requires an owned visit option for the event and a confirmed positive balance", () => {
+  const pack = {
+    id: "fixture-pack", name: "Энергия 5", type: "SUBSCRIPTION", source: "client-subscription", cost: null,
+    visitsTotal: 5, raw: { productId: "dfa72adf-233b-4285-8d69-e5eab4234fbe", visitsLeft: 3 },
+  } as const;
+  const valid = eventBookingOptions([], [], 100, false, [pack]);
+  assert.deepEqual(valid.options, [{ id: "pack:fixture-pack", name: "По абонементу Энергия 5", amountMinor: 0, visitsLeft: 3 }]);
+  for (const unconfirmed of [
+    { ...pack, source: "subscription" as const },
+    { ...pack, raw: { ...pack.raw, visitsLeft: 0 } },
+    { ...pack, raw: { productId: pack.raw.productId } },
+  ]) assert.deepEqual(eventBookingOptions([], [], 100, false, [unconfirmed]).options, []);
 });

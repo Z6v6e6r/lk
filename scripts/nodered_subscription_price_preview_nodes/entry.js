@@ -28,6 +28,10 @@ const bad = code => {
 };
 if (invalid(Object.keys(body || {}).some(key => !['target', 'subscriptionIds'].includes(key)), 'BODY_EXTRA_KEYS', body)) return bad('PRICE_PREVIEW_REQUEST_INVALID');
 if (!auth || !/^Bearer\s+\S+$/i.test(auth) || !body || typeof body !== 'object' || Array.isArray(body)) return bad('PRICE_PREVIEW_AUTH_REQUIRED');
+const pilotRaBoost = msg.req?.query?.pilotOffer !== undefined;
+if (pilotRaBoost && invalid(Object.keys(msg.req.query).length !== 1
+  || msg.req.query.pilotOffer !== 'ra-boost' || Object.hasOwn(body, 'subscriptionIds'),
+  'PILOT_OFFER_SHAPE', body)) return bad('PRICE_PREVIEW_REQUEST_INVALID');
 const target = body.target;
 const ids = body.subscriptionIds;
 const eventCategory = ['GROUP_TRAINING', 'TOURNAMENT'].includes(target?.targetKind) ? target.targetKind : null;
@@ -40,7 +44,7 @@ if (eventCategory) {
       || invalid(new Set(ids).size !== ids.length, 'SUBSCRIPTIONS_DUPLICATE', ids)
       || ids.some(id => invalid(!uuid(id), 'SUBSCRIPTION_ID_SHAPE', id))))) return bad('PRICE_PREVIEW_REQUEST_INVALID');
   msg._subscriptionPricePreview = { done: false, step: 'start', auth, tenantKey: 'iSkq6G',
-    target: { ...target }, exerciseId: target.exerciseId, eventCategory, groupTraining: eventCategory === 'GROUP_TRAINING', requestedIds: ids,
+    target: { ...target }, ...(pilotRaBoost ? { pilotRaBoost } : {}), exerciseId: target.exerciseId, eventCategory, groupTraining: eventCategory === 'GROUP_TRAINING', requestedIds: ids,
     selectionKey: JSON.stringify([eventCategory, target.exerciseId]), startedAt: Date.now() };
   return msg;
 }
@@ -64,12 +68,12 @@ if (invalid(!target || typeof target !== 'object' || Array.isArray(target), 'TAR
   || invalid(Date.parse(target.startsAt) <= Date.now(), 'START_NOT_FUTURE', target.startsAt)
   || invalid(new Date(Date.parse(target.startsAt) + 180 * 60000).toISOString().slice(0, 19) !== target.startsAt.slice(0, 19), 'START_CALENDAR', target.startsAt)
   || invalid(![60, 90, 120].includes(target.durationMinutes), 'DURATION_ENUM', target.durationMinutes)
-  || invalid(!Array.isArray(ids), 'SUBSCRIPTIONS_SHAPE', ids)
-  || invalid(ids.length < 1 || ids.length > 20, 'SUBSCRIPTIONS_COUNT', ids)
-  || invalid(new Set(ids).size !== ids.length, 'SUBSCRIPTIONS_DUPLICATE', ids)
-  || ids.some(id => invalid(!uuid(id), 'SUBSCRIPTION_ID_SHAPE', id))) return bad('PRICE_PREVIEW_REQUEST_INVALID');
+  || (!pilotRaBoost && (invalid(!Array.isArray(ids), 'SUBSCRIPTIONS_SHAPE', ids)
+    || invalid(ids.length < 1 || ids.length > 20, 'SUBSCRIPTIONS_COUNT', ids)
+    || invalid(new Set(ids).size !== ids.length, 'SUBSCRIPTIONS_DUPLICATE', ids)
+    || ids.some(id => invalid(!uuid(id), 'SUBSCRIPTION_ID_SHAPE', id))))) return bad('PRICE_PREVIEW_REQUEST_INVALID');
 msg._subscriptionPricePreview = {
-  done: false, step: 'start', auth, tenantKey: 'iSkq6G', requestedIds: ids,
+  done: false, step: 'start', auth, tenantKey: 'iSkq6G', requestedIds: ids, ...(pilotRaBoost ? { pilotRaBoost } : {}),
   target: existing ? { ...target } : { ...target, subServiceIds: [...target.subServiceIds].sort() }, startedAt: Date.now(),
   existingGame: existing,
   selectionKey: existing ? JSON.stringify([target.targetKind, target.gameId, target.startsAt, target.durationMinutes])

@@ -2,6 +2,9 @@ import type { SubscriptionPricePreview } from "../components/games/subscriptionP
 import { resolveSubscriptionCategoryDailyLimitPlanKey } from "../utils/subscriptionCategoryDailyLimit.ts";
 import type { SubscriptionEventDiscountQuote } from "../utils/groupSubscriptionDiscount";
 import { RESIDENCY_LIFECYCLE_PRODUCT_ID } from "../residency/residencyLifecycleClient.ts";
+import { getGroupScheduleOwnedPacks, getProEnergyPackName } from "../utils/groupScheduleOwnedPacks.ts";
+import { pickSubscriptionVisitsLeft } from "../utils/subscriptionValidity.ts";
+import type { TournamentVivaProduct } from "../utils/tournamentSignupApi";
 import { isPilotGameResidencyProduct } from "./gameResidencyCandidates.ts";
 
 export type BookingOption = {
@@ -10,6 +13,7 @@ export type BookingOption = {
   amountMinor: number | null;
   basePriceMinor?: number | null;
   benefit?: string | null;
+  visitsLeft?: number;
 };
 
 export function minorFromRubles(value: number | null | undefined, shares = 1): number | null {
@@ -84,7 +88,10 @@ export function gameBookingOptions(
         : confirmedGameDiscount(quote, displayName === residencyLabel);
     options.push({ id: subscriptionId, name: displayName, amountMinor: quote.amountMinor, basePriceMinor: quote.basePriceMinor, benefit });
   }
-  return { options, explanations: [...new Set(explanations)] };
+  const hasSubscriptionRate = options.some(option => option.name !== residencyLabel
+    && option.amountMinor !== null && option.basePriceMinor != null && option.amountMinor < option.basePriceMinor);
+  return { options: hasSubscriptionRate ? options.filter(option => option.name !== residencyLabel) : options,
+    explanations: [...new Set(explanations)] };
 }
 
 function isEventResidencyQuote(quote: SubscriptionEventDiscountQuote): boolean {
@@ -96,6 +103,7 @@ export function eventBookingOptions(
   quotes: readonly SubscriptionEventDiscountQuote[],
   now = Date.now(),
   excludeResidency = false,
+  ownedProducts: TournamentVivaProduct[] = [],
 ) {
   const tariffs = products.filter(product => product.source === "one-time" && product.cost !== null);
   const options: BookingOption[] = tariffs.map(product => ({
@@ -130,6 +138,13 @@ export function eventBookingOptions(
         : quote.discountPercent > 0 ? `Скидка ${quote.discountPercent}% на запись` : null;
     options.push({ id: `quote:${quote.subscriptionId}:${quote.productId}`, name: isEventResidencyQuote(quote) ? residencyLabel : quote.subscriptionName,
       amountMinor: quote.amountMinor, basePriceMinor: quote.basePriceMinor, benefit });
+  }
+  for (const pack of getGroupScheduleOwnedPacks(ownedProducts)) {
+    if (getProEnergyPackName(pack) !== "Энергия 5") continue;
+    const visitsLeft = pickSubscriptionVisitsLeft(pack.raw);
+    if (visitsLeft === null || !Number.isSafeInteger(visitsLeft) || visitsLeft <= 0) continue;
+    if (options.some(option => option.id.startsWith(`quote:${pack.id}:`))) continue;
+    options.push({ id: `pack:${pack.id}`, name: "По абонементу Энергия 5", amountMinor: 0, visitsLeft });
   }
   return { options, explanations: [...new Set(explanations)] };
 }

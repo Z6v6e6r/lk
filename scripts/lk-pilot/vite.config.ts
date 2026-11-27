@@ -6,12 +6,14 @@ import cssInjectedByJs from "vite-plugin-css-injected-by-js";
 const replacements: Record<string, Record<string, string>> = {
   "GamesPage.tsx": {
     "details-action-row details-join-action-row": `<BookingOptions category="game" title="Запись на игру"
+      offerTarget={step === "details" && canCurrentUserCheckSplitSubscriptionsInDetails ? detailsJoinPricePreview.target : null}
       amountMinor={minorFromRubles(detailsSplitShareAmount)} regularLabel="Разовое участие"
       regularDetail={isDetailsSplitPaymentGame ? \`Моя доля 1/\${detailsSplitShareCount} стоимости\` : undefined}
       {...gameBookingOptions(detailsSplitSubscriptionOptions, detailsJoinPricePreview.bySubscriptionId, detailsDurationMinutes,
         detailsSplitSubscriptions)}
       loading={detailsSplitSubscriptionsLoading} />`,
     "game-payment-stack": `<BookingOptions category="game" title="Создание игры"
+      offerTarget={splitPaymentSelected ? publicSplitPricePreview.target : null}
       amountMinor={minorFromRubles(basePaymentAmount, splitPaymentSelected ? splitShareCount : 1)}
       regularLabel={splitPaymentSelected ? "Разовое участие" : "Полная оплата корта"}
       regularDetail={splitPaymentSelected ? \`Моя доля 1/\${splitShareCount} стоимости\` : "Оплата всего корта без применения льгот"}
@@ -25,11 +27,11 @@ const replacements: Record<string, Record<string, string>> = {
   },
   "GroupSchedulePage.tsx": {
     "tournament-signup-registration group-schedule-registration group-schedule-registration--trainer":
-      '<BookingOptions category="training" key={selectedTraining.id} title={selectedTraining.title} amountMinor={null} {...eventBookingOptions(checkout?.oneTimes ?? [], currentDiscountQuotes, Date.now(), proTrainingSelected)} loading={discountPending} />',
+      '<BookingOptions category="training" key={selectedTraining.id} title={selectedTraining.title} offerTarget={selectedTraining.status === "AVAILABLE" && !selectedTraining.inBooking && !selectedTraining.inWaitlist ? { targetKind: "GROUP_TRAINING", exerciseId: selectedTraining.id } : null} amountMinor={null} {...eventBookingOptions(checkout?.oneTimes ?? [], currentDiscountQuotes, Date.now(), proTrainingSelected, checkout?.clientSubscriptions)} loading={discountPending} />',
   },
   "TournamentSignupPage.tsx": {
     "tournament-signup-register-stack":
-      '<BookingOptions category="tournament" key={selectedExerciseId} title={selectedTournament?.title ?? "Запись на турнир"} amountMinor={null} {...eventBookingOptions(checkout?.oneTimes ?? [], currentDiscountQuotes)} loading={discountPending} />',
+      '<BookingOptions category="tournament" key={selectedExerciseId} title={selectedTournament?.title ?? "Запись на турнир"} offerTarget={selectedExerciseId && selectedTournament?.status === "AVAILABLE" && registration?.canRegister ? { targetKind: "TOURNAMENT", exerciseId: selectedExerciseId } : null} amountMinor={null} {...eventBookingOptions(checkout?.oneTimes ?? [], currentDiscountQuotes, Date.now(), false, checkout?.clientSubscriptions)} loading={discountPending} />',
   },
 };
 
