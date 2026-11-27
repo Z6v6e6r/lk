@@ -271,3 +271,31 @@ read-only majority verification and no credential forwarding on redirects.
 MAX requires HTTPS443/trusted certificate and recommends mandatory webhook
 secret. References: https://dev.max.ru/docs-api/methods/POST/subscriptions/ and
 https://dev.max.ru/docs-api/objects/Message .
+
+## CUP Support ticket conversations on STAGING
+
+`cupStagingTicketReplies` is optional and disabled by default. When enabled it
+requires the existing `cupStagingHandoff` and its own `key`, a canonical
+base64url value encoding 32 random bytes. The outbound MAX token stays in the
+receiver. The CUP credential only reaches the pinned private service on
+`cup-replies-private.tsup.space:19445`, via its exact `claim`, `finish` and
+`receive` routes. The existing webhook endpoint and webhook secret serve all
+events as before.
+
+Only private text from a chat with a retained accepted CUP confirmation can
+enter the ticket bridge. A quote can address a delivered Staff reply in the
+same verified chat. Plain text goes to the only matching open ticket. CUP
+returns a hint if it cannot pick a ticket in an already bound chat. Chats
+without a CUP confirmation and existing slash commands or attachment paths use
+legacy dispatch. Definitive no-binding results from CUP also use legacy
+dispatch. Uncertain CUP results retry against the same provider message ID
+before going to REVIEW. A successful ticket response and an uncertain provider
+send are never replayed into the legacy system.
+
+For activation, confirm the migration and private endpoints on the CUP side
+first. Test one synthetic ticket through both directions, ordinary text with
+one or several open tickets, a closed ticket, and a separate MAX chat on the
+legacy path. Before reverting the receiver or disabling its key, pause
+dispatch and reconcile pending CUP receipts. Older receivers leave pending
+ticket records in REVIEW. Keep inbox data and the CUP migration ledger for
+recovery.

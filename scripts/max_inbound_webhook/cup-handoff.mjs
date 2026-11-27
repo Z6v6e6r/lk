@@ -119,6 +119,7 @@ export function createCupHandoffService(settings, request, fetchProof = fetch) {
   }
   return {
     confirmationDigest,
+    sendMessage,
     async verifiedDialog({ chatId, userId }) {
       if (!verifiedBot) {
         const bot = await request(new URL('/me', maxOrigin), { headers: maxHeaders });
