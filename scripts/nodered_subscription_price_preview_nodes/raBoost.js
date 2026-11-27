@@ -30,6 +30,18 @@ function pilotRaBoostCoverage({ plan, service, pro, activeCount, gameMinutes, ev
   return service === 'open_game' ? Math.min(duration, Math.floor(slots * 60)) : Number(slots >= 1) * duration;
 }
 
+function pilotRaBoostOwnedProductId(ctx, canonical, row) {
+  const products = new Set(canonical.collectExactProductIds(row));
+  if (products.size > 1) return null;
+  const [providerId] = products;
+  const subscriptionId = row.subscriptionId || row.clientSubscriptionId || row.id;
+  const mappedId = row.status === 'ACTIVE' && typeof subscriptionId === 'string'
+    && Object.hasOwn(ctx.metadata, subscriptionId)
+    ? ctx.metadata[subscriptionId].productId.toLowerCase() : null;
+  if (providerId && mappedId && providerId !== mappedId) return null;
+  return providerId || mappedId || null;
+}
+
 function pilotRaBoostCandidate(ctx, canonical, service, now) {
   const policy = ctx.pilotRaBoostPolicy;
   const duration = ctx.target.durationMinutes;
@@ -43,10 +55,14 @@ function pilotRaBoostCandidate(ctx, canonical, service, now) {
     || !policy.scopes.some(scope => scope.targetKind === ctx.target.targetKind
       && scope.stationId === ctx.target.stationId && scope.scopeId === targetScopeId)
     || !Array.isArray(ctx.bookings) || !Array.isArray(ctx.activeBookings) || !Array.isArray(ctx.operations)
-    || !ctx.pilotRaBoostSubscriptions || !ctx.pilotRaBoostSubscriptions.every(row => {
-      const ids = canonical.collectExactProductIds(row);
-      return new Set(ids).size === 1;
-    })) return null;
+    || !Array.isArray(ctx.pilotRaBoostSubscriptions)) return null;
+
+  // Active legacy rows can omit product aliases. The normal preview pipeline has
+  // already linked those instances to the actor and checked provider conflicts.
+  const ownedProducts = ctx.pilotRaBoostSubscriptions.map(row => ({
+    row, productId: pilotRaBoostOwnedProductId(ctx, canonical, row),
+  }));
+  if (ownedProducts.some(({ productId }) => !productId)) return null;
 
   const facts = pilotRaBoostProviderFacts(policy.providerFacts);
   if (!facts || (facts.hasStudioLimitation && !facts.availableStudios.includes(ctx.target.stationId))) return null;
@@ -59,11 +75,12 @@ function pilotRaBoostCandidate(ctx, canonical, service, now) {
 
   const available = ctx.quotes.filter(quote => quote.status === 'AVAILABLE'
     && Number.isSafeInteger(quote.amountMinor) && quote.amountMinor >= 0);
+  if (!available.length || available.some(quote => !Number.isSafeInteger(quote.expiresAt) || quote.expiresAt <= now)) return null;
+  const baseQuotesExpireAt = Math.min(...available.map(quote => quote.expiresAt));
   const bestPrice = Math.min(ctx.basePriceMinor, ...available.map(quote => quote.amountMinor));
   if (bestPrice <= 0 || Object.keys(ctx.instanceErrors).length) return null;
 
-  const ownsBoost = ctx.pilotRaBoostSubscriptions.filter(row =>
-    canonical.collectExactProductIds(row)[0] === policy.productId);
+  const ownsBoost = ownedProducts.filter(({ productId }) => productId === policy.productId).map(({ row }) => row);
   // Ambiguous, frozen, unactivated and not-yet-effective instances cannot lead to a
   // duplicate offer or an included price.
   const covers = row => row?.status === 'ACTIVE' && row.isFrozen !== true && !row.frozenUntil && !row.holdUntil
@@ -113,7 +130,8 @@ function pilotRaBoostCandidate(ctx, canonical, service, now) {
     const plan = Object.hasOwn(policy.baseProducts, productId) ? policy.baseProducts[productId] : null;
     // AVAILABLE at the one-time price is the legacy fallback, not proof that
     // the base product applies to this event.
-    if (quote.amountMinor >= ctx.basePriceMinor || !plan || !covers(row) || canonical.collectExactProductIds(row)[0] !== productId) continue;
+    if (quote.amountMinor >= ctx.basePriceMinor || !plan || !covers(row)
+      || pilotRaBoostOwnedProductId(ctx, canonical, row) !== productId) continue;
     const free = pilotRaBoostCoverage({ plan, service, pro: !game && canonical.isProTrainingExercise(ctx.exercise),
       activeCount: ctx.activeBookings.filter(canonical.isSubscriptionBooking).length, gameMinutes, eventCount, proUsed, duration });
     if (free <= 0) continue;
@@ -124,7 +142,7 @@ function pilotRaBoostCandidate(ctx, canonical, service, now) {
     best = { kind: 'RA_BOOST', mode: ownsBoost.length ? 'included' : 'offer', selectionKey: ctx.selectionKey,
       productId: policy.productId, durationDays: policy.durationDays, participationAmountMinor,
       productAmountMinor: ownsBoost.length ? 0 : policy.productAmountMinor, basePriceMinor: ctx.basePriceMinor, basePlan: plan,
-      baseAmountMinor: quote.amountMinor, baseSubscriptionId: quote.subscriptionId };
+      baseAmountMinor: quote.amountMinor, baseSubscriptionId: quote.subscriptionId, expiresAt: baseQuotesExpireAt };
   }
   return best;
 }

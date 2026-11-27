@@ -32,6 +32,10 @@ function hasResidencyProduct(productIds: unknown[]): boolean {
     typeof value === "string" && value.toLowerCase() === RESIDENCY_LIFECYCLE_PRODUCT_ID);
 }
 
+function isVivaId(value: unknown, id: number): boolean {
+  return value === id || value === id.toString();
+}
+
 export function isPilotGameResidencyProduct(subscription: GameSubscriptionIdentity | undefined): boolean {
   return subscription !== undefined && hasResidencyProduct(readProductAliases(subscription));
 }
@@ -59,10 +63,18 @@ export function addPilotGameResidencyCandidates(
       seen.add(id);
       continue;
     }
-    const type: unknown = subscription.availableTypes?.[0]?.id;
+    const types = Array.isArray(subscription.availableTypes) ? subscription.availableTypes : [];
+    const directions = Array.isArray(subscription.availableDirections) ? subscription.availableDirections : [];
+    const hasTournamentType = types.some(type => isVivaId(type?.id, 839));
+    const hasResidencyType = types.some(type => isVivaId(type?.id, 2572)
+      && typeof type.name === "string" && /^резидентство$/iu.test(type.name.trim()));
+    const hasResidencyDirection = subscription.hasDirectionLimitation === true && directions.length === 1
+      && isVivaId(directions[0]?.id, 7291);
+    const matchesLegacyResidency = hasTournamentType && (types.length === 1
+      || types.length === 2 && hasResidencyType && hasResidencyDirection);
     const name = typeof subscription.name === "string" ? subscription.name.trim() : "";
     if (!productIds.length && subscription.hasTypeLimitation === true
-      && subscription.availableTypes?.length === 1 && (type === 839 || type === "839")
+      && matchesLegacyResidency
       && (!name || /^(?:абонемент|резидентство(?:\s+падлхаб)?)$/iu.test(name))) {
       unidentified.push(subscription);
       seen.add(id);

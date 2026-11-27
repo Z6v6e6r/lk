@@ -429,8 +429,12 @@ if (ctx.step === 'subscriptions') {
     const active = list.filter(row => row.status === 'ACTIVE');
     if (ctx.pilotRaBoost) {
       const boostId = ctx.pilotRaBoostPolicy.productId;
-      ctx.pilotRaBoostSubscriptions = list.filter(row => row.status === 'ACTIVE'
-        || row.status !== 'FINISHED' && row.status !== 'CANCELLED' && canonical.collectExactProductIds(row).includes(boostId));
+      ctx.pilotRaBoostSubscriptions = list.filter(row => {
+        if (row.status === 'ACTIVE') return true;
+        if (row.status === 'FINISHED' || row.status === 'CANCELLED') return false;
+        const productIds = canonical.collectExactProductIds(row);
+        return new Set(productIds).size !== 1 || productIds.includes(boostId);
+      });
     }
     ctx.requestedIds = active.map(row => eventRoute ? row.subscriptionId || row.clientSubscriptionId || row.id : row.subscriptionId);
     if (ctx.requestedIds.length > 20 || ctx.requestedIds.some(id => typeof id !== 'string'
@@ -948,7 +952,8 @@ if (ctx.step === 'pilotRaBoostProduct') {
   const policy = ctx.pilotRaBoostPolicy;
   if (ok() && msg.responseUrl === `https://api.vivacrm.ru/end-user/api/v1/${ctx.tenantKey}/products/subscriptions/${policy.productId}`
     && pilotRaBoostProviderMatches(canonical.unwrapRecord(msg.payload), policy)) {
-    ctx.pilotOffer = { ...ctx.pilotRaBoostCandidate, expiresAt: Math.min(Date.now() + 25_000, policy.validUntilMs) };
+    ctx.pilotOffer = { ...ctx.pilotRaBoostCandidate,
+      expiresAt: Math.min(ctx.pilotRaBoostCandidate.expiresAt, Date.now() + 25_000, policy.validUntilMs) };
   }
   ctx.done = true;
   return out(4);

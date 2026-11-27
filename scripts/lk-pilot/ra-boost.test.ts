@@ -58,7 +58,8 @@ const quoteContext = (kind: string = game.targetKind, basePlan = "residency") =>
     pilotRaBoostPolicy: { ...terms, baseProducts: { [baseProduct]: basePlan } },
     pilotRaBoostSubscriptions: [owned(baseProduct)],
     subscriptions: { [subscriptionId]: owned(baseProduct) }, metadata: { [subscriptionId]: { productId: baseProduct } },
-    instanceErrors: {}, basePriceMinor: 100_000, quotes: [{ status: "AVAILABLE", amountMinor: 70_000, subscriptionId }],
+    instanceErrors: {}, basePriceMinor: 100_000,
+    quotes: [{ status: "AVAILABLE", amountMinor: 70_000, subscriptionId, expiresAt: Date.now() + 30_000 }],
     bookings: [] as Array<Record<string, unknown>>, activeBookings: [] as Array<Record<string, unknown>>,
     operations: [] as Array<Record<string, unknown>>,
   };
@@ -74,7 +75,7 @@ test("all four price targets can return a 0 RUB participation price with a separ
     assert.deepEqual(candidate, {
       kind: "RA_BOOST", mode: "offer", selectionKey: ctx.selectionKey, productId: boostProduct, durationDays: 7,
       participationAmountMinor: 0, productAmountMinor: 880_000, basePriceMinor: 100_000,
-      baseAmountMinor: 70_000, basePlan: "residency", baseSubscriptionId: subscriptionId,
+      baseAmountMinor: 70_000, basePlan: "residency", baseSubscriptionId: subscriptionId, expiresAt: ctx.quotes[0].expiresAt,
     }, kind);
   }
 });
@@ -90,13 +91,29 @@ test("owned Boost replaces purchase, 90 minutes charges the uncovered part and f
   assert.equal(pilotRaBoostCandidate({ ...ctx, target: { ...ctx.target, shareCount: 2 } }, canonical, "open_game", Date.now()), null);
 });
 
+test("legacy ownership requires an actor-bound product mapping when Viva omits the product alias", () => {
+  const ctx = quoteContext();
+  const row = { ...owned(baseProduct), subscriptionId, productIds: [] };
+  ctx.pilotRaBoostSubscriptions = [row];
+  ctx.subscriptions = { [subscriptionId]: row };
+  assert.equal(pilotRaBoostCandidate(ctx, canonical, "open_game", Date.now()).participationAmountMinor, 0);
+  assert.equal(pilotRaBoostCandidate({ ...ctx, metadata: {} }, canonical, "open_game", Date.now()), null);
+  assert.equal(pilotRaBoostCandidate({
+    ...ctx, pilotRaBoostSubscriptions: [{ ...row, productIds: [boostProduct] }],
+  }, canonical, "open_game", Date.now()), null);
+  assert.equal(pilotRaBoostCandidate({
+    ...ctx, pilotRaBoostSubscriptions: [row, { ...row, subscriptionId: id(99), status: "NEW" }],
+  }, canonical, "open_game", Date.now()), null);
+});
+
 test("purchase is hidden if already free, identity/terms are unresolved, limits used or outside policy", () => {
   const ctx = quoteContext();
   const today = game.startsAt.slice(0, 10);
   const use = { paidBy: "subscription", date: today, category: "open_game", durationMinutes: 60 };
   for (const alternative of [
-    { quotes: [{ status: "AVAILABLE", amountMinor: 0, subscriptionId }] },
-    { quotes: [{ status: "AVAILABLE", amountMinor: 100_000, subscriptionId }] },
+    { quotes: [{ ...ctx.quotes[0], amountMinor: 0 }] },
+    { quotes: [{ ...ctx.quotes[0], amountMinor: 100_000 }] },
+    { quotes: [{ ...ctx.quotes[0], expiresAt: Date.now() - 1 }] },
     { bookings: [use] },
     { bookings: [{ ...use, date: undefined }] },
     { bookings: [{ ...use, category: "unknown" }] },
@@ -170,6 +187,8 @@ test("the Node-RED finalize path reads the exact product from Viva and declines 
   ] as const) {
     const ctx = { ...quoteContext(), pending: [], step: "next", startedAt: Date.now(), auth: "Bearer fixture", tenantKey: terms.tenantKey,
       pilotRaBoost: true };
+    const baseExpiresAt = Date.now() + 8_000;
+    ctx.quotes[0].expiresAt = baseExpiresAt;
     const dispatch = new Function("msg", "global", "env", "canonical", termsSource + "\n" + node("router"));
     const out = dispatch({ _subscriptionPricePreview: ctx }, globals, env, canonical);
     assert.equal(out[0].method, "GET");
@@ -177,6 +196,7 @@ test("the Node-RED finalize path reads the exact product from Viva and declines 
     const result = dispatch({ ...out[0], responseUrl, payload, statusCode: 200 }, globals, env, canonical);
     const reply = finalize(result[4], globals).payload;
     assert.equal(Boolean(reply.pilotOffer), expected);
+    if (expected) assert.equal(reply.pilotOffer.expiresAt, baseExpiresAt);
     assert.deepEqual(reply.quotes, []);
   }
 });
