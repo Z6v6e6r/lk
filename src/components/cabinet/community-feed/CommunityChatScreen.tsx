@@ -5,13 +5,14 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type FormEventHandler,
+  type FormEvent,
   type KeyboardEventHandler,
   type ReactNode,
   type RefObject,
   type UIEventHandler,
 } from "react";
 import type { CommunityChatMessage, CommunityRecord } from "../../../utils/communityApi";
+import { loadStationChatPhoto, prepareStationChatPhoto, type StationChatPhotoDraft } from "../../../utils/stationChatPhotos";
 import { MembersCountIcon } from "./CommunityIcons";
 import { CommunitySecondaryNav, type CommunitySecondaryNavItemId } from "./CommunitySecondaryNav";
 import { formatFeedDayLabel, formatFeedTimeLabel } from "./feedFormatters";
@@ -22,7 +23,7 @@ import type { CommunityBottomNavItemId } from "./feedTypes";
 interface CommunityChatScreenProps {
   community: Pick<
     CommunityRecord,
-    "name" | "logo" | "memberCount" | "joinRule"
+    "name" | "logo" | "memberCount" | "joinRule" | "communityType"
   >;
   messages: CommunityChatMessage[];
   isLoading: boolean;
@@ -32,6 +33,7 @@ interface CommunityChatScreenProps {
   error: string | null;
   draft: string;
   canSend: boolean;
+  canAttachPhoto: boolean;
   unreadCount: number;
   unreadBadgeCount: number;
   currentUserId: string | null;
@@ -39,7 +41,7 @@ interface CommunityChatScreenProps {
   scrollRef: RefObject<HTMLDivElement | null>;
   onScroll: UIEventHandler<HTMLDivElement>;
   onDraftChange: (value: string) => void;
-  onSubmit: FormEventHandler<HTMLFormElement>;
+  onSubmit: (event: FormEvent<HTMLFormElement>, photo: StationChatPhotoDraft | null) => Promise<boolean>;
   onOpenMenu: () => void;
   onClose: () => void;
   onSelectSectionNav: (itemId: CommunitySecondaryNavItemId) => void;
@@ -386,16 +388,92 @@ function DayDivider({ label }: { label: string }) {
   );
 }
 
+type OpenChatPhoto = (message: CommunityChatMessage) => void;
+
+function ChatMessageContent({ message, onOpenPhoto }: {
+  message: CommunityChatMessage;
+  onOpenPhoto?: OpenChatPhoto;
+}) {
+  const photo = message.photo;
+  return (
+    <>
+      {photo && onOpenPhoto ? (
+        <button className="community-chat-figma-photo-button" type="button" onClick={() => onOpenPhoto(message)}>
+          Открыть фото
+        </button>
+      ) : null}
+      {!photo || photo.hasCaption || !onOpenPhoto ? (
+        <div className="community-chat-figma-message-text">{message.text}</div>
+      ) : null}
+    </>
+  );
+}
+
+function ChatPhotoViewer({ message, onClose }: { message: CommunityChatMessage; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  const [attempt, setAttempt] = useState(0);
+  const [result, setResult] = useState<{ attempt: number; url: string | null } | null>(null);
+  const current = result?.attempt === attempt ? result : null;
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    let url: string | undefined;
+    void loadStationChatPhoto(message.communityId, message.id, abort.signal)
+      .then((photo) => {
+        if (!abort.signal.aborted) {
+          url = URL.createObjectURL(photo);
+          setResult({ attempt, url });
+        }
+      })
+      .catch(() => {
+        if (!abort.signal.aborted) setResult({ attempt, url: null });
+      });
+    return () => {
+      abort.abort();
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [attempt, message.communityId, message.id]);
+
+  return (
+    <dialog ref={dialogRef} className="community-chat-figma-photo-viewer" aria-labelledby={titleId} onClose={onClose}>
+      <header>
+        <h2 id={titleId}>Фото в чате</h2>
+        <button className="community-chat-figma-photo-button" type="button" onClick={() => dialogRef.current?.close()}>
+          Закрыть
+        </button>
+      </header>
+      {!current ? <p role="status">Загружаем фото…</p> : current.url ? (
+        <img src={current.url} alt={message.photo?.hasCaption ? message.text : "Фото из сообщения"} />
+      ) : (
+        <div>
+          <p role="alert">Не удалось открыть фото.</p>
+          <button className="community-chat-figma-photo-button" type="button" onClick={() => setAttempt(attempt + 1)}>
+            Повторить
+          </button>
+        </div>
+      )}
+    </dialog>
+  );
+}
+
 function IncomingMessageBubble({
   message,
   showAvatar,
   showAuthorMeta,
   showTail,
+  onOpenPhoto,
 }: {
   message: CommunityChatMessage;
   showAvatar: boolean;
   showAuthorMeta: boolean;
   showTail: boolean;
+  onOpenPhoto?: OpenChatPhoto;
 }) {
   return (
     <div className="community-chat-figma-row">
@@ -415,7 +493,7 @@ function IncomingMessageBubble({
           </div>
         ) : null}
 
-        <div className="community-chat-figma-message-text">{message.text}</div>
+        <ChatMessageContent message={message} onOpenPhoto={onOpenPhoto} />
 
         <div className="community-chat-figma-bubble-meta">
           <span className="community-chat-figma-bubble-time">{formatFeedTimeLabel(message.createdAt)}</span>
@@ -430,14 +508,16 @@ function IncomingMessageBubble({
 function OutgoingMessageBubble({
   message,
   showTail,
+  onOpenPhoto,
 }: {
   message: CommunityChatMessage;
   showTail: boolean;
+  onOpenPhoto?: OpenChatPhoto;
 }) {
   return (
     <div className="community-chat-figma-row community-chat-figma-row--mine">
       <div className="community-chat-figma-bubble community-chat-figma-bubble--mine">
-        <div className="community-chat-figma-message-text">{message.text}</div>
+        <ChatMessageContent message={message} onOpenPhoto={onOpenPhoto} />
 
         <div className="community-chat-figma-delivery">
           <span className="community-chat-figma-delivery-time">
@@ -457,9 +537,11 @@ function OutgoingMessageBubble({
 function ChatSeries({
   isMine,
   messages,
+  onOpenPhoto,
 }: {
   isMine: boolean;
   messages: Array<{ key: string; message: CommunityChatMessage }>;
+  onOpenPhoto?: OpenChatPhoto;
 }) {
   return (
     <div className={`community-chat-figma-series${isMine ? " community-chat-figma-series--mine" : ""}`}>
@@ -473,6 +555,7 @@ function ChatSeries({
               key={item.key}
               message={item.message}
               showTail={isLastInSeries}
+            onOpenPhoto={onOpenPhoto}
             />
           );
         }
@@ -484,6 +567,7 @@ function ChatSeries({
             showAvatar={isFirstInSeries}
             showAuthorMeta={isFirstInSeries}
             showTail={isLastInSeries}
+            onOpenPhoto={onOpenPhoto}
           />
         );
       })}
@@ -493,6 +577,7 @@ function ChatSeries({
 
 function ChatMessageList({
   messages,
+  onOpenPhoto,
   isLoading,
   hasMore,
   isLoadingMore,
@@ -503,6 +588,7 @@ function ChatMessageList({
   onScroll,
 }: {
   messages: CommunityChatMessage[];
+  onOpenPhoto?: OpenChatPhoto;
   isLoading: boolean;
   hasMore: boolean;
   isLoadingMore: boolean;
@@ -544,6 +630,7 @@ function ChatMessageList({
                     key={item.key}
                     isMine={item.isMine}
                     messages={item.messages}
+                    onOpenPhoto={onOpenPhoto}
                   />
                 );
               })}
@@ -561,6 +648,7 @@ function ChatComposer({
   community,
   draft,
   canSend,
+  canAttach,
   isSending,
   onDraftChange,
   onSubmit,
@@ -572,16 +660,41 @@ function ChatComposer({
   community: Pick<CommunityRecord, "joinRule">;
   draft: string;
   canSend: boolean;
+  canAttach: boolean;
   isSending: boolean;
   onDraftChange: (value: string) => void;
-  onSubmit: FormEventHandler<HTMLFormElement>;
+  onSubmit: (event: FormEvent<HTMLFormElement>, photo: StationChatPhotoDraft | null) => Promise<boolean>;
   onFocusChange?: (isFocused: boolean) => void;
   joinActionLabel?: string | null;
   isJoinActionLoading: boolean;
   onJoinAction?: (() => void) | null;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const hasDraft = draft.trim().length > 0;
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [photo, setPhoto] = useState<StationChatPhotoDraft | null>(null);
+  const [isPreparingPhoto, setIsPreparingPhoto] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const visiblePhoto = canSend ? photo : null;
+  const photoSendingDisabled = visiblePhoto !== null && !canAttach;
+  const hasDraft = draft.trim().length > 0 || visiblePhoto !== null;
+
+  const choosePhoto = async (file: File) => {
+    setIsPreparingPhoto(true);
+    setPhotoError(null);
+    try {
+      setPhoto(await prepareStationChatPhoto(file));
+    } catch (error) {
+      setPhotoError(error instanceof Error ? error.message : "Не удалось подготовить фото.");
+    } finally {
+      setIsPreparingPhoto(false);
+    }
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isPreparingPhoto || isSending || !hasDraft || !canSend || photoSendingDisabled) return;
+    if (await onSubmit(event, visiblePhoto)) setPhoto(null);
+  };
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -632,14 +745,44 @@ function ChatComposer({
 
       <form
         className={`community-chat-figma-compose${!canSend ? " is-disabled" : ""}`}
-        onSubmit={onSubmit}
+        onSubmit={(event) => { void submit(event); }}
       >
+        {canAttach && (
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (file) void choosePhoto(file);
+            }}
+          />
+        )}
+        {visiblePhoto && (
+          <div className="community-chat-figma-photo-draft">
+            <img src={visiblePhoto.url} alt="Фото перед отправкой" />
+            <button
+              className="community-chat-figma-photo-button"
+              type="button"
+              disabled={isSending || isPreparingPhoto}
+              onClick={() => { setPhoto(null); setPhotoError(null); }}
+            >
+              Убрать фото
+            </button>
+          </div>
+        )}
+        {photoSendingDisabled ? <p role="status" className="community-chat-figma-photo-note">Отправка фото сейчас недоступна.</p> : null}
+        {isPreparingPhoto ? <p role="status" className="community-chat-figma-photo-note">Готовим фото…</p> : null}
+        {photoError && canAttach ? <p role="alert" className="community-form-error">{photoError}</p> : null}
         <div className={`community-chat-figma-compose-shell${hasDraft ? " has-value" : ""}`}>
           <button
             type="button"
             className="community-chat-figma-attach-button"
-            aria-label="Добавить файл"
-            disabled
+            aria-label="Добавить фото"
+            onClick={() => inputRef.current?.click()}
+            disabled={!canAttach || isSending || isPreparingPhoto}
           >
             <AttachPlusIcon className="community-chat-figma-attach-icon" />
           </button>
@@ -652,7 +795,7 @@ function ChatComposer({
             onFocus={() => onFocusChange?.(true)}
             onBlur={() => onFocusChange?.(false)}
             onKeyDown={handleInputKeyDown}
-            placeholder="Введите сообщение"
+            placeholder={visiblePhoto ? "Добавить подпись" : "Введите сообщение"}
             disabled={!canSend || isSending}
             rows={1}
           />
@@ -661,8 +804,8 @@ function ChatComposer({
             <button
               type="submit"
               className="community-chat-figma-send-button"
-              aria-label="Отправить сообщение"
-              disabled={!canSend || isSending}
+              aria-label={visiblePhoto ? "Отправить фото" : "Отправить сообщение"}
+              disabled={!canSend || isSending || isPreparingPhoto || photoSendingDisabled}
             >
               <SendIcon />
             </button>
@@ -705,6 +848,7 @@ export function CommunityChatScreen({
   error,
   draft,
   canSend,
+  canAttachPhoto,
   unreadCount,
   unreadBadgeCount,
   currentUserId,
@@ -724,6 +868,8 @@ export function CommunityChatScreen({
 }: CommunityChatScreenProps) {
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const [openedPhoto, setOpenedPhoto] = useState<CommunityChatMessage | null>(null);
+  const canOpenPhoto = community.communityType === "STATION" && canSend && Boolean(currentUserId);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -770,7 +916,12 @@ export function CommunityChatScreen({
         onSelectSection={onSelectSectionNav}
       />
 
+      {openedPhoto && canOpenPhoto && (
+        <ChatPhotoViewer key={openedPhoto.id} message={openedPhoto} onClose={() => setOpenedPhoto(null)} />
+      )}
+
       <ChatMessageList
+        onOpenPhoto={canOpenPhoto ? setOpenedPhoto : undefined}
         messages={messages}
         isLoading={isLoading}
         hasMore={hasMore}
@@ -786,6 +937,7 @@ export function CommunityChatScreen({
         community={community}
         draft={draft}
         canSend={canSend}
+        canAttach={canOpenPhoto && canAttachPhoto}
         isSending={isSending}
         onDraftChange={onDraftChange}
         onSubmit={onSubmit}

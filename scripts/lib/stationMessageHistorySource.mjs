@@ -6,7 +6,7 @@ import { stationLifetimeRuntimeSource } from './stationMembershipReceiverSource.
 
 export const historyNodeIds = Object.fromEntries(['router','canonical','legacy','community','count','catch','summariesIn','summariesAuth','summariesBegin','summariesRouter','summariesCommunity','summariesCount','summariesCatch'].map(key => [key, 'station_history_v2_' + key]));
 export const historyRuntimeSource = () => stationLifetimeRuntimeSource() + '\n' + fs.readFileSync(new URL('./stationMessageHistory.mjs', import.meta.url), 'utf8').replace(/^import .*;\n/gm, '').replace(/^export /gm, '');
-const streamHistorySource = () => ['stationMessageStream.mjs','stationStreamHistory.mjs'].map(name=>fs.readFileSync(new URL('./'+name,import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'')).join('\n');
+const streamHistorySource = () => ['stationMessageProof.mjs','stationMessageStream.mjs','stationStreamHistory.mjs'].map(name=>fs.readFileSync(new URL('./'+name,import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'')).join('\n');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
 /** Add only the opt-in reader to an already authenticated community graph. No runtime apply. */

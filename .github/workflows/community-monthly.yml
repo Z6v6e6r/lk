@@ -13,6 +13,8 @@ on:
       - scripts/community_monthly_reports.mjs
       - scripts/build_rating_worker_release.mjs
       - scripts/lib/stationMessage*.mjs
+      - scripts/lib/stationChatPhotos*.mjs
+      - scripts/tests/stationChatPhotos.test.mjs
       - scripts/lib/stationNotificationFeed*.mjs
       - scripts/tests/stationNotificationFeed*
       - scripts/tests/helpers/stationNotificationHarness.mjs
@@ -95,6 +97,8 @@ on:
       - scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs
       - scripts/tests/fixtures/managed-self-leave-v1-contract.json
       - scripts/lib/stationMessage*.mjs
+      - scripts/lib/stationChatPhotos*.mjs
+      - scripts/tests/stationChatPhotos.test.mjs
       - scripts/lib/stationNotificationFeed*.mjs
       - scripts/tests/stationNotificationFeed*
       - scripts/tests/helpers/stationNotificationHarness.mjs
@@ -200,6 +204,7 @@ jobs:
       - name: Test station message commit barrier, retry and physical Mongo races
         run: node --test scripts/tests/stationMessageOwner.test.mjs
           scripts/tests/stationMessageOwnerPatch.test.mjs
+          scripts/tests/stationChatPhotos.test.mjs
           scripts/tests/stationMessageOwnerMongo.test.mjs
           scripts/tests/stationMessageWorker.test.mjs
           scripts/tests/stationMessageRetry.test.mjs

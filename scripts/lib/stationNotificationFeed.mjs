@@ -1,6 +1,6 @@
 import { smKeys, smId, smUuid, smDigest, smSequence, smHash, smMongoIdentity, smEqual, smIdentity, smReadPosition } from './stationMembershipLifetime.mjs';
 import { stationStreamEnvelope } from './stationMessageStream.mjs';
-import { committedProof, requestKey } from './stationMessageProof.mjs';
+import { stationMessageReceiptProof, requestKey } from './stationMessageProof.mjs';
 
 export const NF_VERSION = 'station-notifications.v1';
 export const NF_NAMESPACE = 'iSkq6G'; // Same installed owner namespace as message request keys, never a canonical tenant alias.
@@ -40,7 +40,7 @@ export function nfFact(community, document) {
   return nfFactAtSnapshot(community, document, nfReadiness(community));
 }
 function nfFactAtSnapshot(community, document, s) {
-  if (!document || !nfUuid(document.requestId) || !nfSafeId(document.actorId) || !committedProof({ key: requestKey(document.actorId, document.requestId), requestId: document.requestId, actorId: document.actorId, communityId: s.communityId }, document) || document.recordType !== 'MESSAGE' || document.streamId !== s.streamId || !smEqual(document.communityIdentity, smMongoIdentity(community)) || document.sequence > s.publishedSequence) nfFail();
+  if (!document || !nfUuid(document.requestId) || !nfSafeId(document.actorId) || !stationMessageReceiptProof({ key: requestKey(document.actorId, document.requestId), requestId: document.requestId, actorId: document.actorId, communityId: s.communityId }, document) || document.recordType !== 'MESSAGE' || document.streamId !== s.streamId || !smEqual(document.communityIdentity, smMongoIdentity(community)) || document.sequence > s.publishedSequence) nfFail();
   const fact = { messageId: document.id, sequence: document.sequence, authorPlayerId: document.actorId };
   return { ...fact, proofHash: smHash('station-notification-fact:v1', { ownerNamespace: NF_NAMESPACE, communityId: s.communityId, incarnationHash: s.incarnationHash, streamId: s.streamId, ...fact, requestHash: document.requestHash }) };
 }

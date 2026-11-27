@@ -69,7 +69,7 @@ test('bounded deadline/store failure/mutating descriptors never become success o
 });
 test('immutable owner proof extraction remains byte-identical to reviewed baseline functions',()=>{
  const source=readFileSync(new URL('../lib/stationMessageProof.mjs',import.meta.url),'utf8').replace(/^export /gm,'');
- const extracted=source.slice(source.indexOf('const uuid ='));
+ const extracted=source.slice(source.indexOf('const uuid ='), source.indexOf('// Photo requests') - 1);
  assert.equal(crypto.createHash('sha256').update(extracted).digest('hex'),'90bc2e6ae267d84296d6951439a70f10e0d6e80cd3ba73315c3ae8286ce734d4');
 });
 
