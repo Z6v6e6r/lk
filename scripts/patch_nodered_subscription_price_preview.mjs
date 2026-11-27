@@ -382,7 +382,7 @@ export function previewSources(flow, options = {}) {
     const lk1Stop = (_context, code) => { msg.previewError = code; return msg; };
     ${usage}
   };`;
-  const router = `${canonical}\n${pricing}\n${joinPricing}\n${usageFunction}\n${read('router')}`;
+  const router = `${canonical}\n${pricing}\n${joinPricing}\n${usageFunction}\n${read('raBoost')}\n${read('router')}`;
   // Compose-time proof that the generated node is executable and that the router
   // can really reach the resolver the way it calls it. The same proof covers every
   // other `canonical.*` helper the router reaches, not only the injected ones.
@@ -562,6 +562,75 @@ export function composeGroupSubscriptionPricePreviewArtifacts(liveBytes, deploym
     allowedChanges: [...['entry', 'router'].map(name => ({id: PREFIX + name, fields: ['func']})),
       { id: 'lk_subscription_booking_router_20260804', fields: ['func'] },
       { id: prepareId, fields: ['func'] }], allowedAdditionIds: [] });
+  validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
+  return { candidate, candidateBytes, contract };
+}
+
+// The pilot is an opt-in annotation on the installed read-only preview. These
+// pins preserve production overlays, including the residency proof from #518.
+const RA_BOOST_PREIMAGES = {
+  entry: '3e2c2c42db8fce2f76640a0cf7302389f685cce2c1e5a3f5b3940309f57af246',
+  router: '4f178d271e19a972bda9f61688dccd119055e169db7228afa9ead58c737b53b3',
+  final: 'b6e02adde87f8f5245fda1b44b97a36cea48ffa73cc25d8ba3a8b65a6d12745f',
+};
+
+function pilotReplace(source, before, after) {
+  if (source.split(before).length !== 2) throw new Error('RA Boost preview anchor drift');
+  return source.replace(before, () => after);
+}
+
+function pilotSourceRange(source, start, end) {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from + start.length);
+  if (from < 0 || to < 0 || source.indexOf(start, from + start.length) >= 0) {
+    throw new Error('RA Boost preview source range drift');
+  }
+  return source.slice(from, to);
+}
+
+export function composePilotRaBoostPreviewArtifacts(liveBytes, deploymentId) {
+  const candidate = JSON.parse(Buffer.from(liveBytes).toString('utf8'));
+  const versions = Object.fromEntries(Object.entries(RA_BOOST_PREIMAGES).map(([name, digest]) => {
+    const node = candidate.find(item => item.id === PREFIX + name);
+    if (node?.type !== 'function' || sha(node.func) !== digest) throw new Error(`RA Boost ${name} preimage drift`);
+    return [name, node];
+  }));
+  const entry = read('entry');
+  const target = 'const target = body.target;';
+  const ids = "  || invalid(!Array.isArray(ids), 'SUBSCRIPTIONS_SHAPE', ids)";
+  const entryDone = '  target: existing ?';
+  versions.entry.func = pilotReplace(versions.entry.func, target,
+    pilotSourceRange(entry, 'const pilotRaBoost =', target) + target);
+  versions.entry.func = pilotReplace(versions.entry.func,
+    '    target: { ...target }, exerciseId:', '    target: { ...target }, ...(pilotRaBoost ? { pilotRaBoost } : {}), exerciseId:');
+  versions.entry.func = pilotReplace(versions.entry.func,
+    pilotSourceRange(versions.entry.func, ids, entryDone),
+    pilotSourceRange(entry, "  || (!pilotRaBoost && (invalid(!Array.isArray(ids), 'SUBSCRIPTIONS_SHAPE', ids)", entryDone));
+
+  const router = read('router');
+  const start = "if (ctx.step === 'start')";
+  const profile = "if (ctx.step === 'profile')";
+  const subscriptions = "  if (eventRoute && ctx.requestedIds === undefined)";
+  const count = '    if (ctx.requestedIds.length > 20';
+  const next = "while (ctx.step === 'next')";
+  const instance = '  if (ctx.instanceErrors?.[id])';
+  for (const [oldStart, newStart, end] of [
+    [start, start, profile],
+    [subscriptions, '  if ((eventRoute || ctx.pilotRaBoost)', count],
+    [next, "if (ctx.step === 'pilotRaBoostProduct')", instance],
+  ]) {
+    versions.router.func = pilotReplace(versions.router.func,
+      pilotSourceRange(versions.router.func, oldStart, end), pilotSourceRange(router, newStart, end));
+  }
+  versions.router.func = read('raBoost') + '\n' + versions.router.func;
+
+  versions.final.func = pilotReplace(versions.final.func,
+    ': { quotes: ctx.quotes || [], serverTimeMs: Date.now() };',
+    pilotSourceRange(read('final'), ': { quotes: ctx.pilotRaBoost', 'delete msg._subscriptionPricePreview;').trimEnd());
+  for (const node of Object.values(versions)) new Function('msg', 'node', node.func);
+  const candidateBytes = Buffer.from(`${JSON.stringify(candidate, null, 2)}\n`);
+  const allowedChanges = Object.keys(versions).map(name => ({ id: PREFIX + name, fields: ['func'] }));
+  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId, allowedChanges });
   validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
   return { candidate, candidateBytes, contract };
 }

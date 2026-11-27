@@ -168,7 +168,14 @@ if (ctx.done) return out(4);
 if (eventRoute && typeof canonical.identityMoneyOwned !== 'function') return stop(eventRoute.error + '_BACKEND_NOT_READY');
 if (msg.error) return stop('PRICE_PREVIEW_READ_FAILED');
 if (Date.now() - ctx.startedAt > 28000) return stop('PRICE_PREVIEW_TIMEOUT');
-if (ctx.step === 'start') return http('profile', `/end-user/api/v1/${ctx.tenantKey}/profile`);
+if (ctx.step === 'start') {
+  if (ctx.pilotRaBoost) {
+    ctx.pilotRaBoostPolicy = typeof readPilotRaBoostPolicy === 'function' && typeof env !== 'undefined'
+      ? readPilotRaBoostPolicy(env.get('LK_TEST_RA_BOOST_PUBLISHED_TERMS'), ctx.tenantKey, Date.now()) : null;
+    if (!ctx.pilotRaBoostPolicy) { ctx.done = true; return out(4); }
+  }
+  return http('profile', `/end-user/api/v1/${ctx.tenantKey}/profile`);
+}
 if (ctx.step === 'profile') {
   const profile = canonical.unwrapRecord(msg.payload);
   if (!ok() || !profile || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(profile.id || profile.clientId || '')) return stop('PRICE_PREVIEW_AUTH_REQUIRED', 401);
@@ -418,8 +425,14 @@ if (ctx.step === 'subscriptions') {
       || (body.totalPages !== undefined && ![0, 1].includes(body.totalPages)) || body.last === false || body.hasNext === true))) {
     return stop('PRICE_PREVIEW_SUBSCRIPTIONS_INCOMPLETE');
   }
-  if (eventRoute && ctx.requestedIds === undefined) {
-    ctx.requestedIds = list.filter(row => row.status === 'ACTIVE').map(row => row.subscriptionId || row.clientSubscriptionId || row.id);
+  if ((eventRoute || ctx.pilotRaBoost) && ctx.requestedIds === undefined) {
+    const active = list.filter(row => row.status === 'ACTIVE');
+    if (ctx.pilotRaBoost) {
+      const boostId = ctx.pilotRaBoostPolicy.productId;
+      ctx.pilotRaBoostSubscriptions = list.filter(row => row.status === 'ACTIVE'
+        || row.status !== 'FINISHED' && row.status !== 'CANCELLED' && canonical.collectExactProductIds(row).includes(boostId));
+    }
+    ctx.requestedIds = active.map(row => eventRoute ? row.subscriptionId || row.clientSubscriptionId || row.id : row.subscriptionId);
     if (ctx.requestedIds.length > 20 || ctx.requestedIds.some(id => typeof id !== 'string'
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
       || new Set(ctx.requestedIds).size !== ctx.requestedIds.length) return stop('PRICE_PREVIEW_OWNERSHIP_UNRESOLVED');
@@ -931,9 +944,25 @@ if (ctx.step === 'evaluate') {
   delete msg._managedSubscriptionPolicyDecision; delete msg._managedSubscriptionPolicyInput;
   ctx.step = 'next';
 }
+if (ctx.step === 'pilotRaBoostProduct') {
+  const policy = ctx.pilotRaBoostPolicy;
+  if (ok() && msg.responseUrl === `https://api.vivacrm.ru/end-user/api/v1/${ctx.tenantKey}/products/subscriptions/${policy.productId}`
+    && pilotRaBoostProviderMatches(canonical.unwrapRecord(msg.payload), policy)) {
+    ctx.pilotOffer = { ...ctx.pilotRaBoostCandidate, expiresAt: Math.min(Date.now() + 25_000, policy.validUntilMs) };
+  }
+  ctx.done = true;
+  return out(4);
+}
 while (ctx.step === 'next') {
   const id = ctx.pending.shift();
-  if (!id) { ctx.done = true; ctx.statusCode = 200; return out(4); }
+  if (!id) {
+    if (ctx.pilotRaBoostPolicy) {
+      ctx.pilotRaBoostCandidate = pilotRaBoostCandidate(ctx, canonical, eventRoute?.category || 'open_game', Date.now());
+      if (ctx.pilotRaBoostCandidate) return http('pilotRaBoostProduct',
+        `/end-user/api/v1/${ctx.tenantKey}/products/subscriptions/${ctx.pilotRaBoostPolicy.productId}`);
+    }
+    ctx.done = true; ctx.statusCode = 200; return out(4);
+  }
   if (ctx.instanceErrors?.[id]) {
     quote(id, 'UNAVAILABLE', null, 0, 0, ctx.instanceErrors[id]);
     continue;

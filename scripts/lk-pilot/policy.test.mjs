@@ -145,3 +145,16 @@ test("gateway gives an exact game subscription quote more time and aborts abando
   await Promise.all([rejected, aborted]);
   assert.deepEqual(deadlines, [29_000, 8_000]);
 });
+
+test("RA Boost pilot request forwards only the advisory action and a normal target", () => {
+  const url = quotes + "?pilotOffer=ra-boost";
+  const target = { targetKind: "GROUP_TRAINING", exerciseId };
+  assert.equal(readPilotTarget(url, "POST")?.href, url);
+  assert.equal(readPilotTarget(url + "&pilotOffer=ra-boost", "POST"), null);
+  assert.equal(readPilotTarget(url + "&force=true", "POST"), null);
+  assert.equal(readPilotTarget(quotes + "?pilotOffer=purchase", "POST"), null);
+  assert.equal(readPilotTarget(viva + "/transactions?pilotOffer=ra-boost", "POST"), null);
+  assert.ok(isPilotPostBodyAllowed(new URL(url), { target }));
+  assert.equal(isPilotPostBodyAllowed(new URL(url), { target, subscriptionIds: [] }), false);
+  assert.equal(isPilotPostBodyAllowed(new URL(url), { target: { ...target, offerAmount: 0 } }), false);
+});

@@ -44,6 +44,9 @@ export function readPilotTarget(value, method) {
   const metadata = url.pathname.match(masterServiceMetadata)?.[1];
   if (metadata && url.search && (metadata !== "subServices" || url.searchParams.size !== 2
     || !new RegExp(`^${id}$`).test(url.searchParams.get("studioId") ?? "") || url.searchParams.get("showAll") !== "true")) return null;
+  if (url.searchParams.has("pilotOffer") && (method !== "POST" || url.origin !== lk
+    || url.pathname !== "/lk/subscriptions/game-price-preview" || url.searchParams.size !== 1
+    || url.searchParams.get("pilotOffer") !== "ra-boost")) return null;
   const game = url.pathname.match(/^\/(?:seliger\/)?lk\/games(?:\/([^/]+))?$/);
   if (game) {
     if (game[1]) {
@@ -67,7 +70,8 @@ export function isPilotPostBodyAllowed(target, body) {
   if (!body || Array.isArray(body) || typeof body !== "object") return false;
   if (target.origin !== lk) return true;
 
-  if (!Object.keys(body).every((key) => key === "target" || key === "subscriptionIds")) return false;
+  if (target.searchParams.has("pilotOffer") ? Object.keys(body).length !== 1 || !Object.hasOwn(body, "target")
+    : !Object.keys(body).every((key) => key === "target" || key === "subscriptionIds")) return false;
   const selection = body.target;
   if (!selection || Array.isArray(selection) || typeof selection !== "object") return false;
   const shapes = {

@@ -1380,6 +1380,12 @@ function validationGuardFingerprint(source) {
   function normalize(n) {
     if (ts.isParenthesizedExpression(n)) return normalize(n.expression);
     if (ts.isCallExpression(n) && n.expression.getText(sf) === 'invalid') return normalize(n.arguments[0]);
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+      && n.left.getText(sf) === '!pilotRaBoost') {
+      // Compare the guards evaluated for ordinary requests. The opted-in
+      // request takes its owned subscription IDs from the verified profile.
+      return normalize(n.right);
+    }
     if (ts.isBinaryExpression(n) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken].includes(n.operatorToken.kind)) {
       const op = n.operatorToken.kind;
       const flatten = x => Array.isArray(x) && x[0] === op ? x.slice(1) : [x];
@@ -1392,7 +1398,8 @@ function validationGuardFingerprint(source) {
   const guards = [], dependencies = {};
   function walk(n) {
     if (ts.isIfStatement(n) && ts.isReturnStatement(n.thenStatement)
-      && n.thenStatement.expression && ts.isCallExpression(n.thenStatement.expression) && n.thenStatement.expression.expression.getText(sf) === 'bad') guards.push(normalize(n.expression));
+      && n.thenStatement.expression && ts.isCallExpression(n.thenStatement.expression) && n.thenStatement.expression.expression.getText(sf) === 'bad'
+      && !n.expression.getText(sf).startsWith('pilotRaBoost && invalid(')) guards.push(normalize(n.expression));
     if (ts.isVariableDeclaration(n) && ['uuid', 'existing', 'allowedTarget', 'eventCategory'].includes(n.name.getText(sf))) dependencies[n.name.getText(sf)] = normalize(n.initializer);
     ts.forEachChild(n, walk);
   }

@@ -66,6 +66,6 @@ export function useSubscriptionPricePreview({ target, subscriptionIds, actorId, 
   const input = { selectionKey, durationMinutes: target?.durationMinutes ?? 0,
     subscriptionIds: ids, quotes: state.scope === scope ? state.quotes : null,
     loading: canCheck && (availabilityLoading || state.scope !== scope || state.loading), now: state.receivedAt };
-  return { ...subscriptionPricePreview(input), bySubscriptionId: subscriptionPricePreviewsById(input),
+  return { ...subscriptionPricePreview(input), bySubscriptionId: subscriptionPricePreviewsById(input), target,
     refresh: () => setRefreshVersion(version => version + 1) };
 }

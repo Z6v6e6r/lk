@@ -237,3 +237,17 @@ test("the pilot labels the owned Friendship 2.0 product even when Viva omits its
     ["Другая подписка", 280_000],
   ]);
 });
+
+test("Energy 5 requires an owned visit option for the event and a confirmed positive balance", () => {
+  const pack = {
+    id: "fixture-pack", name: "Энергия 5", type: "SUBSCRIPTION", source: "client-subscription", cost: null,
+    visitsTotal: 5, raw: { productId: "dfa72adf-233b-4285-8d69-e5eab4234fbe", visitsLeft: 3 },
+  } as const;
+  const valid = eventBookingOptions([], [], 100, false, [pack]);
+  assert.deepEqual(valid.options, [{ id: "pack:fixture-pack", name: "По абонементу Энергия 5", amountMinor: 0, visitsLeft: 3 }]);
+  for (const unconfirmed of [
+    { ...pack, source: "subscription" as const },
+    { ...pack, raw: { ...pack.raw, visitsLeft: 0 } },
+    { ...pack, raw: { productId: pack.raw.productId } },
+  ]) assert.deepEqual(eventBookingOptions([], [], 100, false, [unconfirmed]).options, []);
+});
