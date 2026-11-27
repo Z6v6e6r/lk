@@ -45,7 +45,9 @@ const canonical = {
   bookingSubscriptionId: (booking: { clientSubscriptionId: string }) => booking.clientSubscriptionId,
   collectExactProductIds: (subscription: { productIds: string[] }) => subscription.productIds,
   unwrapRecord: (payload: unknown) => payload,
-  managedExternalEventTypeId: (exercise: { typeKey?: string }) => exercise?.typeKey,
+  managedExternalEventTypeId: (exercise: { typeKey?: string; directionId?: number; typeId?: number }) =>
+    exercise?.typeKey ?? (exercise?.directionId && exercise.typeId
+      ? `viva:direction:${exercise.directionId}:type:${exercise.typeId}` : null),
 };
 const owned = (productId: string) => ({ status: "ACTIVE", productIds: [productId],
   activationDate: start(-172_800_000), expirationDate: start(30 * 86_400_000) });
@@ -103,6 +105,21 @@ test("legacy ownership requires an actor-bound product mapping when Viva omits t
   }, canonical, "open_game", Date.now()), null);
   assert.equal(pilotRaBoostCandidate({
     ...ctx, pilotRaBoostSubscriptions: [row, { ...row, subscriptionId: id(99), status: "NEW" }],
+  }, canonical, "open_game", Date.now()), null);
+});
+
+test("new-game Boost uses the server's open-game type for RA provider restrictions", () => {
+  const ctx = quoteContext();
+  const facts = { ...providerFacts, hasDirectionLimitation: true, availableDirections: [4588],
+    hasTypeLimitation: true, availableTypes: [1613] };
+  const configured = { ...ctx, exercise: undefined, pilotRaBoostPolicy: { ...ctx.pilotRaBoostPolicy, providerFacts: facts } };
+  assert.equal(pilotRaBoostCandidate(configured, canonical, "open_game", Date.now()).participationAmountMinor, 0);
+  assert.equal(pilotRaBoostCandidate({
+    ...configured, pilotRaBoostPolicy: { ...ctx.pilotRaBoostPolicy, providerFacts: { ...facts, availableTypes: [2572] } },
+  }, canonical, "open_game", Date.now()), null);
+  assert.equal(pilotRaBoostCandidate({
+    ...configured, target: { ...ctx.target, targetKind: "EXISTING_GAME" },
+    exercise: { typeKey: "viva:direction:7291:type:2572" },
   }, canonical, "open_game", Date.now()), null);
 });
 

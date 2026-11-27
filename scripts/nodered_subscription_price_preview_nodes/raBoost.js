@@ -4,7 +4,7 @@ function readPilotRaBoostPolicy(raw, tenant, now) {
   let policy;
   try { policy = JSON.parse(raw); } catch { return null; }
   const uuid = value => typeof value === 'string'
-    && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
+    && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
   if (!policy || policy.tenantKey !== tenant || policy.state !== 'PUBLISHED' || policy.currency !== 'RUB'
     || typeof policy.publicationDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(policy.publicationDigest)
     || !Number.isSafeInteger(policy.validUntilMs) || policy.validUntilMs <= now
@@ -67,7 +67,10 @@ function pilotRaBoostCandidate(ctx, canonical, service, now) {
   const facts = pilotRaBoostProviderFacts(policy.providerFacts);
   if (!facts || (facts.hasStudioLimitation && !facts.availableStudios.includes(ctx.target.stationId))) return null;
   if (facts.hasTypeLimitation || facts.hasDirectionLimitation) {
-    const resolvedType = canonical.managedExternalEventTypeId(ctx.exercise);
+    // A NEW_GAME has no Viva exercise yet. Use the same server-owned open-game
+    // classification as the ordinary pricing router, never a client alias.
+    const exercise = ctx.target.targetKind === 'NEW_GAME' ? { directionId: 4588, typeId: 1613 } : ctx.exercise;
+    const resolvedType = canonical.managedExternalEventTypeId(exercise);
     const ids = /^viva:direction:(\d+):type:(\d+)$/.exec(resolvedType || '');
     if (!ids || (facts.hasDirectionLimitation && !facts.availableDirections.includes(Number(ids[1])))
       || (facts.hasTypeLimitation && !facts.availableTypes.includes(Number(ids[2])))) return null;
