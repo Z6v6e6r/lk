@@ -6,7 +6,7 @@ import ts from 'typescript';
 import { bookingEndIso, moscowBookingEndIso } from '../../src/utils/bookingEndTime.ts';
 import { isRequestTimeoutError, runWithAbortTimeout } from '../../src/utils/requestTimeout.ts';
 import { isPersistedGamePaymentTerminal } from '../../src/utils/paymentSyncDraftRecovery.ts';
-import { isSplitSurchargeGameReadback } from '../../src/utils/serverGameDraftPersistencePolicy.ts';
+import { isSplitSurchargeGameReadback, persistRecoveredSubscriptionGameWithReadback } from '../../src/utils/serverGameDraftPersistencePolicy.ts';
 
 const source = fs.readFileSync('src/components/games/GamesPage.tsx', 'utf8');
 const file = ts.createSourceFile('GamesPage.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -224,6 +224,81 @@ test('late confirmed result completes one LK card with original paymentRef and d
   assert.deepEqual(h.state.completed, ['original-operation']);
   assert.equal(h.state.step, 'details');
   assert.equal(h.state.error, null);
+});
+
+function legacyRecoveredGame(h, { existingOnly = false, exists = false, writeLost = false, readable = true, conflict = false } = {}) {
+  h.context.slotPrice = 4500;
+  h.state.paidPublications = 0;
+  h.context.runPaidGameCommunityMembershipAndPublication = async () => { h.state.paidPublications++; };
+  h.context.apiCreatePadelSplitGamePayment = async (_params, options) => {
+    h.state.writes++; options.onRecovery();
+    return { data: { paymentRef: 'legacy-original-ref', operationId: 'legacy-operation',
+      exerciseId: 'existing-exercise', bookingId: 'confirmed-booking',
+      raw: { recovery: 'SPLIT_CREATE_RESULT_V1', referenceSource: existingOnly ? 'LEGACY_DAILY_OPERATION' : 'LEGACY_DAILY_RECEIPT',
+        existingCardOnly: existingOnly },
+      selectedPaymentMode: 'subscription', toPay: 0, toPayMinor: 0, shareAmount: null, paymentUrl: null } };
+  };
+  const makeCard = payload => ({
+    ...payload, id: 'restored-card', inviteUrl: '/synthetic-invite',
+    organizer: conflict ? { ...payload.organizer, id: 'other-client' } : payload.organizer,
+  });
+  let stored;
+  h.context.persistRecoveredSubscriptionGame = (payload, existingCardOnly, canWrite) => {
+    if (exists) stored = makeCard(payload);
+    return persistRecoveredSubscriptionGameWithReadback(payload, existingCardOnly, canWrite, {
+      createGame: async (value, options) => {
+        assert.deepEqual(options, { retries: 0, keepalive: true });
+        h.state.cardPayloads.push(value);
+        if (readable) stored = makeCard(value);
+        if (writeLost) throw Error('synthetic lost response');
+        return { data: null, error: null, status: 200 };
+      },
+      lookupDraft: async () => ({ data: stored ?? null, error: null, status: 200, ...(!stored ? { missing: true } : {}) }),
+      readbackDelaysMs: [0],
+    });
+  };
+}
+
+test('confirmed legacy CREATE saves the original settings and shows a link only after exact LK readback', async () => {
+  const h = harness('slot');
+  legacyRecoveredGame(h);
+  const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await pending;
+  assert.equal(h.state.writes, 1);
+  assert.equal(h.state.cardPayloads.length, 1);
+  const card = h.state.cardPayloads[0];
+  assert.equal(card.paymentRef, 'legacy-original-ref');
+  assert.equal(card.payment.amount, 0);
+  assert.equal(card.payment.paymentUrl, null);
+  assert.equal(card.metadata.gameTitle, 'Synthetic game');
+  assert.equal(card.metadata.splitPayment.shareAmount, 1125);
+  assert.equal(card.metadata.splitPayment.totalAmount, 4500);
+  assert.deepEqual(h.state.completed, ['legacy-operation']);
+  assert.equal(h.state.invite, '/synthetic-invite');
+});
+
+test('a lost card-write reply is resolved by readback and a missing readback keeps the original attempt pending', async () => {
+  for (const readable of [true, false]) {
+    const h = harness('slot');
+    legacyRecoveredGame(h, { writeLost: true, readable });
+    const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await pending;
+    assert.equal(h.state.cardPayloads.length, 1);
+    assert.equal(h.state.paidPublications, 0);
+    assert.equal(Boolean(h.state.invite), readable);
+    assert.equal(h.context.gameCreationPending, !readable);
+    assert.equal(h.state.completed.length, readable ? 1 : 0);
+  }
+});
+
+test('historical bookings reuse the exact saved card and cannot publish a missing or conflicting card', async () => {
+  for (const [exists, conflict] of [[true, false], [false, false], [true, true]]) {
+    const h = harness('slot');
+    legacyRecoveredGame(h, { existingOnly: true, exists, conflict });
+    const pending = h.submit(); await flush(); h.read.resolve({ data: [] }); await pending;
+    assert.equal(h.state.cardPayloads.length, 0);
+    assert.equal(h.state.paidPublications, 0);
+    assert.equal(Boolean(h.state.invite), exists && !conflict);
+    assert.equal(h.context.gameCreationPending, !exists || conflict);
+  }
 });
 
 function recoveredSurcharge(h, settled, { mismatch = false, existing = false, plainFallback = false } = {}) {

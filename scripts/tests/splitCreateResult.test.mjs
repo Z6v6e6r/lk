@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import fs from 'node:fs';
+import { addLegacySplitCreateProof, legacySplitCreateProof } from '../lib/splitCreateLegacyProof.mjs';
 import { createSplitCreateResultProtocol } from '../lib/splitCreateResult.mjs';
 import { buildSplitCreateResultNodes, composeSplitCreateResultFlow, updateSplitCreateResultReader, splitCreateResultNode, SPLIT_CREATE_RESULT_IDS } from '../lib/splitCreateResultFlow.mjs';
 import { splitCreateTiming, SPLIT_CREATE_TIMING_TARGETS, SPLIT_CREATE_RECEIPT_ANCHOR, SPLIT_CREATE_RECEIPT_FIELD } from '../lib/splitCreateTiming.mjs';
 
 const id = n => `11111111-1111-4111-8111-${String(n).padStart(12, '0')}`;
+const bookingRouterSource = fs.readFileSync('scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js', 'utf8');
 const now = Date.parse('2035-01-01T09:00:00Z');
 function fixture(amount = 0, mixed = false) {
   const binding = { operationId: 'lk-split-create-synthetic', paymentRef: 'synthetic-ref',
@@ -49,12 +52,148 @@ function run(f, mutate = () => {}) {
     let body = stage === 'profile' ? { id: id(1) } : ['operation', 'operation_recheck'].includes(stage)
       ? [structuredClone(f.op)] : stage === 'exercise' ? structuredClone(f.exercise)
         : stage === 'surcharge' ? structuredClone(f.transaction) : { content: [structuredClone(f.booking)], last: true, number: 0, totalElements: 1 };
+    if (f.selfBookings && stage === 'operation') body = [];
+    if (stage === 'legacy_self_bookings') body = structuredClone(f.selfBookings);
+    if (stage === 'legacy_operation' || stage === 'legacy_recheck') body = [structuredClone(f.op)];
     const event = { status: 200, body };
     mutate(stage, event, next.state);
     next = p.step(next.state, event, now + count);
   }
   assert.fail('unbounded protocol');
 }
+function legacyFixture(withProof = true, limitMode = 'shared_day') {
+  const f = fixture(0, true);
+  f.booking.detailedPaymentType = 'SUBSCRIPTION';
+  f.booking.cancelled = null; // Exercise list omits some aliases on active rows.
+  Object.assign(f.exercise, { type: { id: 1613 }, direction: { id: 4588 } });
+  const serviceDate = f.binding.fromTime.slice(0, 10);
+  const baseKey = `iSkq6G:${id(2)}:${serviceDate}`;
+  f.op = {
+    _id: baseKey + (limitMode === 'category_day' ? ':open_game' : limitMode === 'event' ? ':' + id(5) : ''),
+    tenantKey: 'iSkq6G', actorClientId: id(1), operationId: f.binding.operationId, category: 'open_game',
+    serviceDate, limitMode, clientSubscriptionId: id(2), state: 'CONFIRMED', exerciseId: id(5),
+    bookingId: id(6), upstreamBookingId: id(6), managedEnvironment: null, managedDecision: null,
+    confirmedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
+  };
+  const ctx = { ...f.op, caller: 'split', managedAction: 'CREATE_GAME', subscriptionVisitCount: 2 };
+  f.splitMessage = {
+    req: { method: 'POST', url: '/lk/games/split/create?operationId=' + f.op.operationId },
+    _splitCtx: { action: 'create', ownsExercise: true, bookingPaymentType: 'SUBSCRIPTION', selectedPaymentMode: 'subscription',
+      exerciseId: id(5), operationId: f.op.operationId, clientSubscriptionId: id(2),
+      date: serviceDate, fromTime: '07:00', toTime: '08:30', verifiedStudioId: id(3), studioId: id(3),
+      verifiedRoomId: id(4), roomId: id(4), spot: 1, maxClientsCount: 4, paymentRef: 'original-legacy-ref' },
+  };
+  if (withProof) Object.assign(f.op, legacySplitCreateProof(ctx, f.splitMessage));
+  f.selfBookings = { content: [{ id: id(6), isCancelled: false, paymentType: 'SUBSCRIPTION',
+    clientSubscriptionId: id(2), exercise: f.exercise }], number: 0, last: true, totalElements: 1 };
+  return f;
+}
+
+for (const mode of ['shared_day', 'category_day', 'event']) {
+  test(`legacy ${mode}: index lookup, confirmed 90-minute subscription, original reference and no payment`, () => {
+    const f = legacyFixture(true, mode);
+    assert.equal(f.op.legacySplitCreate.schemaVersion, 1);
+    const result = run(f);
+    assert.equal(result.status, 200);
+    assert.equal(result.body.paymentRef, 'original-legacy-ref');
+    assert.equal(result.body.referenceSource, 'LEGACY_DAILY_RECEIPT');
+    assert.equal(result.body.existingCardOnly, false);
+    assert.equal(result.body.subscriptionVisitCount, 2);
+    assert.equal(result.body.maxClientsCount, 4);
+    assert.equal(result.body.toPayMinor, 0);
+    assert.equal(result.body.shareAmount, null);
+    assert.equal(result.body.transactionId, null);
+    assert.equal(result.body.paymentUrl, null);
+    const reads = result.effects.filter(effect => effect.kind === 'find');
+    assert.equal(reads.length, 3);
+    assert.deepEqual(reads[1].query, reads[2].query);
+    assert.ok(reads[1].query._id.$in.includes(f.op._id));
+    assert.equal(reads[1].query.actorClientId, id(1));
+    assert.equal(reads[1].query.operationId, f.op.operationId);
+    assert.ok(reads.every(effect => effect.options.readConcern.level === 'majority'));
+    const http = result.effects.filter(effect => effect.kind === 'http');
+    assert.equal(http[1].auth, 'actor');
+    assert.ok(http.every(effect => effect.method === 'GET' && !effect.path.includes('/transactions/')));
+    assert.doesNotMatch(JSON.stringify(result.body), /PRIVATE_PHONE|actorClientId|legacySplitCreate/);
+  });
+}
+
+test('historical legacy row without CREATE provenance conveys existing-card-only recovery', () => {
+  const result = run(legacyFixture(false));
+  assert.equal(result.status, 200);
+  assert.equal(result.body.paymentRef, null);
+  assert.equal(result.body.referenceSource, 'LEGACY_DAILY_OPERATION');
+  assert.equal(result.body.existingCardOnly, true);
+});
+
+test('only the internal split CREATE owning the Viva exercise may store the legacy proof', () => {
+  const f = legacyFixture();
+  const ctx = { ...f.op, caller: 'split', managedAction: 'CREATE_GAME', subscriptionVisitCount: 2 };
+  for (const modify of [
+    m => { m.req.url = '/lk/subscription-bookings'; },
+    m => { m._splitCtx.action = 'join'; },
+    m => { m._splitCtx.ownsExercise = false; },
+    m => { m._splitCtx.verifiedRoomId = id(9); },
+    m => { m._splitCtx.operationId += 'wrong'; },
+  ]) {
+    const message = structuredClone(f.splitMessage);
+    modify(message);
+    assert.deepEqual(legacySplitCreateProof(ctx, message), {});
+  }
+  assert.deepEqual(legacySplitCreateProof({ ...ctx, caller: 'http' }, f.splitMessage), {});
+  assert.deepEqual(legacySplitCreateProof({ ...ctx, managedEnforcement: { enabled: true } }, f.splitMessage), {});
+  const midnight = structuredClone(f.splitMessage);
+  midnight._splitCtx.fromTime = '23:00';
+  midnight._splitCtx.toTime = '00:30';
+  assert.equal(legacySplitCreateProof(ctx, midnight).legacySplitCreate.toTime, '2035-01-03T00:30:00+03:00');
+});
+
+test('the patched legacy gateway stores the proof on insert and invalidates it on unrelated reclaim', () => {
+  const f = legacyFixture(), gateway = new Function('msg', 'global', addLegacySplitCreateProof(bookingRouterSource));
+  const ctx = { ...f.op, step: 'operation_find', caller: 'split', managedAction: 'CREATE_GAME',
+    subscriptionVisitCount: 2, operationKey: f.op._id };
+  const execute = (payload, message, overrides = {}) => {
+    return gateway({ ...structuredClone(message), payload, _subscriptionBooking: { ...ctx, ...overrides } },
+      { get: () => undefined }).find(Boolean);
+  };
+  assert.deepEqual(execute([], f.splitMessage).payload.legacySplitCreate, f.op.legacySplitCreate);
+  const released = { ...f.op, state: 'RELEASED', operationId: 'old-operation' };
+  const otherCaller = { caller: 'http', managedAction: null };
+  assert.equal(execute([released], { req: { method: 'POST', url: '/lk/subscription-bookings' } }, otherCaller)
+    .payload[1].$set.legacySplitCreate, null);
+  delete released.legacySplitCreate;
+  assert.equal('legacySplitCreate' in execute([released], { req: { method: 'POST', url: '/lk/subscription-bookings' } }, otherCaller)
+    .payload[1].$set, false);
+});
+
+for (const [name, mutate] of Object.entries({
+  'incomplete self page': f => { f.selfBookings.last = false; },
+  'wrong self actor': f => { f.selfBookings.content[0].clientId = id(9); },
+  'wrong op key': f => { f.op._id += ':other'; },
+  'released booking': f => { f.op.releaseBookingId = id(6); },
+  'wrong slot proof': f => { f.op.legacySplitCreate.roomId = id(9); },
+  'wrong series type': f => { f.exercise.type.id = 2200; },
+  'canceled booking': f => { f.booking.isCancelled = true; },
+  'other roster owner': f => { f.booking.client.id = id(9); },
+  'wrong booking exercise alias': f => { f.booking.exerciseId = id(9); },
+  'wrong booking subscription alias': f => { f.booking.clientSubscriptionId = id(9); },
+  'non-organizer spot with CREATE proof': f => { f.booking.spot = 2; },
+})) test(`legacy ${name} stays pending`, () => {
+  const f = legacyFixture();
+  mutate(f);
+  assert.equal(run(f).status, 202);
+});
+
+test('legacy recovery rechecks uniqueness and refuses release or a rewritten CREATE proof', () => {
+  for (const mutate of [
+    body => body.push(structuredClone(body[0])),
+    body => { body[0].state = 'RELEASED'; },
+    body => { body[0].legacySplitCreate.paymentRef += '-changed'; },
+  ]) assert.equal(run(legacyFixture(), (stage, event) => {
+    if (stage === 'legacy_recheck') mutate(event.body);
+  }).status, 202);
+});
+
 test('late confirmed free create: only profile/exercise/bookings GETs and majority reads, whitelisted result', () => {
   const r = run(fixture());
   assert.equal(r.status, 200);
@@ -222,7 +361,7 @@ test('candidate adds isolated GET reader and timing wrappers while preserving or
     { id: 'lk_subscription_booking_find_20260804', type: 'mongodb4', clientNode: 'db', wires: [[]] },
     { id: 'db', type: 'mongodb4-client', dbName: 'games' },
     ...SPLIT_CREATE_TIMING_TARGETS.map(id => ({ id, type: 'function', z: 'tab',
-      func: (id === 'lk_subscription_booking_router_20260804' ? `if (false) { const record = {\n${SPLIT_CREATE_RECEIPT_ANCHOR}\n}; }\n` : '')
+      func: (id === 'lk_subscription_booking_router_20260804' ? `if (false) {\n${bookingRouterSource}\n}\nif (false) { const record = {\n${SPLIT_CREATE_RECEIPT_ANCHOR}\n}; }\n` : '')
         + 'msg.payload = { business: true }; return msg;', outputs: 1, wires: [[]] }))];
   const bytes = Buffer.from(JSON.stringify(flow)), sha = createHash('sha256').update(bytes).digest('hex');
   const r = composeSplitCreateResultFlow(bytes, sha), result = JSON.parse(r.candidateBytes);
@@ -230,7 +369,9 @@ test('candidate adds isolated GET reader and timing wrappers while preserving or
   for (const n of flow) {
     const next = result.find(x => x.id === n.id);
     if (SPLIT_CREATE_TIMING_TARGETS.includes(n.id)) {
-      assert.ok(next.func.replace(SPLIT_CREATE_RECEIPT_FIELD, '').includes(n.func));
+      if (n.id === 'lk_subscription_booking_router_20260804') {
+        assert.ok(next.func.replace(SPLIT_CREATE_RECEIPT_FIELD, '').includes(addLegacySplitCreateProof(bookingRouterSource)));
+      } else assert.ok(next.func.includes(n.func));
       assert.deepEqual(new Function('msg', 'global', 'node', next.func)({}, {}, {}), { payload: { business: true } });
     } else assert.deepEqual(next, n);
   }
@@ -277,4 +418,20 @@ test('installed-reader update changes only the numbered handler and rejects a mi
     const wrongGraph = Buffer.from(JSON.stringify(wrongFlow));
     assert.throws(() => updateSplitCreateResultReader(wrongGraph, sha(wrongGraph), sha(handler.func)), /graph mismatch/);
   }
+});
+
+test('installed upgrade changes precisely the checked reader and legacy booking router', () => {
+  const owner = { id: 'lk_subscription_booking_find_20260804', type: 'mongodb4', clientNode: 'db' };
+  const router = { id: 'lk_subscription_booking_router_20260804', type: 'function', z: 'tab', func: bookingRouterSource };
+  const nodes = buildSplitCreateResultNodes('tab', 'db');
+  const handler = nodes.find(node => node.id === SPLIT_CREATE_RESULT_IDS.handler);
+  handler.func = 'return null; // provider-independent fixture';
+  const flow = [{ id: 'tab', type: 'tab' }, owner, router, ...nodes];
+  const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+  const bytes = Buffer.from(JSON.stringify(flow));
+  const result = updateSplitCreateResultReader(bytes, sha(bytes), sha(handler.func), sha(router.func));
+  const changed = JSON.parse(result.candidateBytes).filter((node, index) => JSON.stringify(node) !== JSON.stringify(flow[index]));
+  assert.deepEqual(changed.map(node => node.id), [router.id, handler.id]);
+  assert.equal(changed[0].func, addLegacySplitCreateProof(bookingRouterSource));
+  assert.throws(() => updateSplitCreateResultReader(bytes, sha(bytes), sha(handler.func), '0'.repeat(64)), /router preimage/);
 });

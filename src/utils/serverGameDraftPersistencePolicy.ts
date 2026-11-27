@@ -170,3 +170,70 @@ export async function persistServerGameDraftWithReadback(
     error: lastLookupError || writeError || "Сервер не подтвердил сохранение черновика игры",
   };
 }
+
+
+export async function persistRecoveredSubscriptionGameWithReadback(
+  payload: PadelGameRecordPayload,
+  existingCardOnly: boolean,
+  canWrite: () => boolean,
+  dependencies: Pick<ServerGameDraftPersistenceDependencies, "lookupDraft" | "wait" | "readbackDelaysMs"> & {
+    createGame: ServerGameDraftPersistenceDependencies["createDraft"];
+  },
+): Promise<ServerGameDraftPersistenceResult & { reused?: boolean }> {
+  const ref = payload.paymentRef;
+  const bookingIds = payload.booking.bookingIds ?? [];
+  const exerciseId = payload.booking.exerciseId;
+  if (!ref || bookingIds.length !== 1 || !exerciseId || !payload.organizer.id) {
+    return { record: null, error: "Не удалось связать игру с подтверждённой бронью" };
+  }
+  const lookup = () => dependencies.lookupDraft(ref, bookingIds);
+  const matches = (game: PadelGameRecord | null): game is PadelGameRecord => {
+    const booking = game?.booking;
+    const split = game?.metadata?.splitPayment as Record<string, unknown> | undefined;
+    const bookingExerciseIds = [booking?.exerciseId, booking?.vivaExerciseId, split?.vivaExerciseId]
+      .filter(value => value != null);
+    return !!game?.id && game.archived !== true && (game.status === "PAID" || game.status === "PAYED")
+      && game.payment?.paid === true && game.payment.amount === 0 && !game.payment.paymentUrl
+      && game.settings?.payMode === "split" && split?.selectedPaymentMode === "subscription"
+      && split.organizerBookingId === bookingIds[0]
+      && game.organizer?.id === payload.organizer.id
+      && bookingExerciseIds.length > 0 && bookingExerciseIds.every(id => id === exerciseId)
+      && recordBookingIds(game).includes(bookingIds[0])
+      && booking?.studioId === payload.booking.studioId && booking?.roomId === payload.booking.roomId
+      && Date.parse(booking.timeFromIso ?? "") === Date.parse(payload.booking.timeFromIso)
+      && Date.parse(booking.timeToIso ?? "") === Date.parse(payload.booking.timeToIso)
+      && game.invite?.maxPlayers === payload.invite?.maxPlayers;
+  };
+  const complete = (result: ServerGameDraftApiResult) => result.status === 200 && !result.error;
+  const existing = await lookup();
+  if (complete(existing) && matches(existing.data)) return { record: existing.data, error: null, reused: true };
+  if (existingCardOnly && complete(existing) && existing.missing === true && !existing.data) {
+    return { record: null, error: "Бронь подтверждена. Обратитесь в поддержку для восстановления карточки." };
+  }
+  if (existingCardOnly || !complete(existing) || existing.missing !== true || existing.data || !canWrite()) {
+    return { record: null, error: existing.error?.message || "Не удалось подтвердить карточку по исходной брони" };
+  }
+
+  // Independent lookups of both aliases proved absence. The original
+  // server receipt supplies the same paymentRef as the initial publisher.
+  // The revision-fenced writer admits only the first insert for that identity.
+  let writeError: string | null = null;
+  let acknowledged = false;
+  try {
+    const write = await dependencies.createGame(payload, { retries: 0, keepalive: true });
+    writeError = write.error?.message ?? null;
+    acknowledged = !write.error && write.status === 200;
+  } catch {
+    // A lost response may still have committed. Resolve it only by readback.
+  }
+
+  const wait = dependencies.wait ?? ((delayMs: number) => new Promise<void>(resolve => globalThis.setTimeout(resolve, delayMs)));
+  for (const delay of dependencies.readbackDelaysMs ?? DEFAULT_READBACK_DELAYS_MS) {
+    if (delay > 0) await wait(delay);
+    if (!canWrite()) break;
+    const saved = await lookup();
+    if (complete(saved) && matches(saved.data)) return { record: saved.data, error: null, reused: !acknowledged };
+    if (saved.data) break;
+  }
+  return { record: null, error: writeError || "Сохранение карточки пока не подтверждено" };
+}

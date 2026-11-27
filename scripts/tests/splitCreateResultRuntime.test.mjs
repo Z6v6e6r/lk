@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
+import { legacySplitCreateProof } from '../lib/splitCreateLegacyProof.mjs';
 import { composeSplitCreateResultFlow, SPLIT_CREATE_RESULT_IDS as ids } from '../lib/splitCreateResultFlow.mjs';
 import { SPLIT_CREATE_RECEIPT_ANCHOR, SPLIT_CREATE_TIMING_TARGETS as targets } from '../lib/splitCreateTiming.mjs';
 
@@ -32,6 +33,7 @@ test('real Node-RED GET recovery, CORS, crypto libs, receipt guards and inverse;
       state: 'CONFIRMED', exerciseId: uid(5), bookingId: uid(6), lk1: q,
       confirmedAt: '2035-01-01T09:00:00Z', updatedAt: '2035-01-01T09:00:00Z',
       createReceipt: { schemaVersion: 1, paymentRef: 'original-ref', deadlineAt: '2035-01-01T09:25:00Z', assembleDeadlineAt: '2035-01-01T04:00:00Z' } };
+    let legacyOp = null;
     let cancelled = false, failTransport = false, providerReads = 0, providerWrites = 0, dbReads = 0;
     let transactionStatus = 'UNPAID', checkout = null;
     const readPaths = [];
@@ -40,15 +42,19 @@ test('real Node-RED GET recovery, CORS, crypto libs, receipt guards and inverse;
       if (req.method !== 'GET') { providerWrites++; res.writeHead(405); res.end(); return; }
       if (failTransport) { req.socket.destroy(); return; }
       providerReads++; readPaths.push(req.url); res.setHeader('Content-Type', 'application/json');
+      const publicExercise = { id: uid(5), studio: { id: uid(3) }, room: { id: uid(4) }, canceled: false,
+        type: { id: 1613 }, direction: { id: 4588 }, maxClientsCount: 4, timeFrom: createPayload.timeFrom, timeTo: createPayload.timeTo };
+      const booking = { id: uid(6), client: { id: uid(1) }, clientSubscriptionId: uid(2),
+        paymentType: 'SUBSCRIPTION', isCancelled: cancelled, spot: 1 };
+      const list = row => ({ content: [row], number: 0, last: true, totalElements: 1 });
       const body = req.url === '/api/v1/transactions/' + uid(7) ? {
         id: uid(7), status: transactionStatus, client: { id: uid(1) }, toPay: 21000,
         products: [{ id: uid(8), paymentBookingIds: [uid(6)] }],
         cardPaymentInfo: { status: transactionStatus === 'PAID' ? 'CONFIRMED' : 'NEW', paymentUrl: checkout },
         paymentDate: transactionStatus === 'PAID' ? new Date(Date.now() - 60_000).toISOString() : null,
       } : req.url.endsWith('/profile') ? { id: req.headers.authorization === 'Bearer synthetic-foreign' ? uid(9) : uid(1) }
-        : req.url.includes('/bookings?') ? { content: [{ id: uid(6), client: { id: uid(1) }, clientSubscriptionId: uid(2), paymentType: 'SUBSCRIPTION', isCancelled: cancelled, spot: 1 }], number: 0, last: true, totalElements: 1 }
-          : { id: uid(5), studio: { id: uid(3) }, room: { id: uid(4) }, canceled: false,
-            maxClientsCount: 4, timeFrom: createPayload.timeFrom, timeTo: createPayload.timeTo };
+        : req.url.startsWith('/end-user/api/v2/') ? list({ ...booking, exercise: publicExercise })
+          : req.url.includes('/bookings?') ? list(booking) : publicExercise;
       res.end(JSON.stringify(body));
     });
     const app = express(), server = http.createServer(app);
@@ -85,14 +91,17 @@ test('real Node-RED GET recovery, CORS, crypto libs, receipt guards and inverse;
         this.on('input', (msg, send, done) => {
           dbReads++;
           assert.equal(msg.payload[1].readConcern.level, 'majority'); assert.equal(msg.payload[1].limit, 2);
-          msg.payload = msg.payload[0].actorClientId === uid(1) ? [structuredClone(op)] : [];
+          const query = msg.payload[0], row = legacyOp ?? op;
+          const keys = query._id.$in ?? [query._id];
+          msg.payload = query.actorClientId === uid(1) && keys.includes(row._id) ? [structuredClone(row)] : [];
           send(msg); done();
         });
       });
+      const bookingRouterSource = fs.readFileSync('scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js', 'utf8');
       const funcs = [
         `msg._splitCtx = { action: msg.req.params.action, step: 'pricing_policy', paymentRef: 'synthetic-ref', deadlineAt: '2035-01-01T09:25:00Z', assembleDeadlineAt: '2035-01-01T04:00:00Z' }; return msg;`,
         `msg._subscriptionBooking = { step: 'profile' }; return msg;`,
-        `const ctx = { managedAction: msg._splitCtx.action === 'create' ? 'CREATE_GAME' : 'JOIN_GAME', lk1: {} }; const record = {\n${SPLIT_CREATE_RECEIPT_ANCHOR}\n}; msg.payload = record; return msg;`,
+        `if (false) {\n${bookingRouterSource}\n}\nconst ctx = { managedAction: msg._splitCtx.action === 'create' ? 'CREATE_GAME' : 'JOIN_GAME', lk1: {} }; const record = {\n${SPLIT_CREATE_RECEIPT_ANCHOR}\n}; msg.payload = record; return msg;`,
         `return msg;`,
       ];
       const source = [{ id: 'tab', type: 'tab', label: 'synthetic recovery fixture' },
@@ -199,6 +208,33 @@ test('real Node-RED GET recovery, CORS, crypto libs, receipt guards and inverse;
       const failed = await fetchLocal(endpoint, { headers: auth }); assert.equal(failed.status, 202);
       assert.doesNotMatch(JSON.stringify(await failed.json()), /ECONN|synthetic-user|synthetic-service|http:/);
       failTransport = false;
+      cancelled = false;
+      const serviceDate = '2035-01-02';
+      legacyOp = { _id: `iSkq6G:${uid(2)}:${serviceDate}`, tenantKey: 'iSkq6G', actorClientId: uid(1),
+        operationId: opId, clientSubscriptionId: uid(2), category: 'open_game', serviceDate, limitMode: 'shared_day',
+        state: 'CONFIRMED', upstreamBookingId: uid(6), exerciseId: uid(5), bookingId: uid(6),
+        confirmedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      const historical = await fetchLocal(endpoint, { headers: auth });
+      assert.equal(historical.status, 200);
+      assert.equal((await historical.json()).existingCardOnly, true);
+      const proof = legacySplitCreateProof({ ...legacyOp, caller: 'split', managedAction: 'CREATE_GAME', subscriptionVisitCount: 2 }, {
+        req: { method: 'POST', url: '/lk/games/split/create?operationId=' + opId },
+        _splitCtx: { ...legacyOp, action: 'create', ownsExercise: true, bookingPaymentType: 'SUBSCRIPTION',
+          selectedPaymentMode: 'subscription', verifiedStudioId: uid(3), studioId: uid(3), verifiedRoomId: uid(4), roomId: uid(4),
+          spot: 1, date: serviceDate, fromTime: '07:00', toTime: '08:30', maxClientsCount: 4, paymentRef: 'original-legacy-ref' },
+      });
+      Object.assign(legacyOp, proof);
+      const legacy = await fetchLocal(endpoint, { headers: auth });
+      assert.equal(legacy.status, 200);
+      const legacyResult = await legacy.json();
+      assert.equal(legacyResult.referenceSource, 'LEGACY_DAILY_RECEIPT');
+      assert.equal(legacyResult.paymentRef, 'original-legacy-ref');
+      assert.equal(legacyResult.bookingId, uid(6));
+      assert.equal(legacyResult.existingCardOnly, false);
+      assert.equal(legacyResult.toPayMinor, 0);
+      assert.equal(legacyResult.transactionId, null);
+      assert.equal(readPaths.filter(path => path.includes('/api/v1/transactions/')).length, 3);
+      assert.equal(providerWrites, 0);
       const create = await (await fetchLocal('/timing/create')).json(); assert.equal(create.createReceipt.schemaVersion, 1);
       const join = await (await fetchLocal('/timing/join')).json(); assert.equal(join.createReceipt, undefined);
       const timings = logs.map(e => e.msg).filter(x => typeof x === 'string' && x.includes('SPLIT_CREATE_STAGE_TIMING_V1'));

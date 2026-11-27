@@ -1,11 +1,13 @@
 import {
   apiCreatePadelGameDraft,
+  apiCreatePadelGameRecord,
   apiFetchPadelGameByPaymentRef,
   apiFetchPadelGamesByBookingReferences,
   type PadelGameRecordPayload,
 } from "./apiClient";
 import {
   persistServerGameDraftWithReadback,
+  persistRecoveredSubscriptionGameWithReadback,
   type ServerGameDraftApiResult,
   type ServerGameDraftPersistenceResult,
   type SplitSurchargeDraftBinding,
@@ -17,7 +19,7 @@ export {
   type ServerGameDraftPersistenceResult,
 } from "./serverGameDraftPersistencePolicy";
 
-async function lookupSplitSurchargeDraft(paymentRef: string, bookingIds: string[]): Promise<ServerGameDraftApiResult> {
+async function lookupGameByBothReferences(paymentRef: string, bookingIds: string[]): Promise<ServerGameDraftApiResult> {
   const { data, status, error } = await apiFetchPadelGamesByBookingReferences(paymentRef, bookingIds);
   if (error || status !== 200 || !data?.complete || data.games.length !== data.total || data.games.length > 1) {
     return { data: null, status, error: error ?? { message: "Не удалось однозначно проверить исходную игру" } };
@@ -35,7 +37,19 @@ export async function persistServerGameDraftBeforeRedirect(
   return persistServerGameDraftWithReadback(paymentRefRaw, payload, bookingIdsRaw, {
     createDraft: apiCreatePadelGameDraft,
     lookupDraft: splitSurcharge
-      ? lookupSplitSurchargeDraft
+      ? lookupGameByBothReferences
       : (paymentRef, bookingIds) => apiFetchPadelGameByPaymentRef(paymentRef, bookingIds, { mode: "combined" }),
   }, splitSurcharge);
+}
+
+
+export function persistRecoveredSubscriptionGame(
+  payload: PadelGameRecordPayload,
+  existingCardOnly: boolean,
+  canWrite: () => boolean,
+) {
+  return persistRecoveredSubscriptionGameWithReadback(payload, existingCardOnly, canWrite, {
+    createGame: apiCreatePadelGameRecord,
+    lookupDraft: lookupGameByBothReferences,
+  });
 }

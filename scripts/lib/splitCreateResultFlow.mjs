@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { addLegacySplitCreateProof } from './splitCreateLegacyProof.mjs';
 import { createSplitCreateResultProtocol } from './splitCreateResult.mjs';
 import { instrumentSplitCreateTimings } from './splitCreateTiming.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from '../nodered_reviewed_flow_deploy/runtime_contract.mjs';
@@ -91,6 +92,9 @@ export function composeSplitCreateResultFlow(liveBytes, expectedSha256) {
     || mongo?.type !== 'mongodb4' || !mongo.clientNode) throw Error('Split result owning graph unavailable');
   const nodes = buildSplitCreateResultNodes(route[0].z, mongo.clientNode);
   const allowedChanges = instrumentSplitCreateTimings(flow);
+  const bookingRouter = flow.find(node => node.id === 'lk_subscription_booking_router_20260804');
+  bookingRouter.func = addLegacySplitCreateProof(bookingRouter.func);
+  new Function('msg', 'global', 'node', bookingRouter.func);
   const candidateBytes = Buffer.from(`${JSON.stringify([...flow, ...nodes], null, 2)}\n`);
   const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId: 'split-create-result-20261113',
     allowedChanges, allowedAdditionIds: nodes.map(n => n.id) });
@@ -100,7 +104,7 @@ export function composeSplitCreateResultFlow(liveBytes, expectedSha256) {
 
 // The installed GET reader already owns the route. Only replace its protocol
 // after checking both the source preimage and the existing read-only graph.
-export function updateSplitCreateResultReader(liveBytes, expectedSha256, expectedHandlerSha256) {
+export function updateSplitCreateResultReader(liveBytes, expectedSha256, expectedHandlerSha256, expectedBookingRouterSha256) {
   if (!/^[a-f0-9]{64}$/.test(expectedSha256) || sha(liveBytes) !== expectedSha256
     || !/^[a-f0-9]{64}$/.test(expectedHandlerSha256)) throw Error('Split result flow preimage mismatch');
   const flow = JSON.parse(liveBytes);
@@ -122,10 +126,21 @@ export function updateSplitCreateResultReader(liveBytes, expectedSha256, expecte
     }
   }
 
+  const changes = [{ id: handler.id, fields: ['func'] }];
+  if (expectedBookingRouterSha256 !== undefined) {
+    const router = byId.get('lk_subscription_booking_router_20260804');
+    if (!/^[a-f0-9]{64}$/.test(expectedBookingRouterSha256) || router?.type !== 'function'
+      || typeof router.func !== 'string' || sha(router.func) !== expectedBookingRouterSha256) {
+      throw Error('Legacy split CREATE proof router preimage mismatch');
+    }
+    router.func = addLegacySplitCreateProof(router.func);
+    new Function('msg', 'global', 'node', router.func);
+    changes.push({ id: router.id, fields: ['func'] });
+  }
   handler.func = splitCreateResultFunctionSource();
   const candidateBytes = Buffer.from(JSON.stringify(flow, null, 2) + '\n');
-  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId: 'split-create-result-surcharge',
-    allowedChanges: [{ id: handler.id, fields: ['func'] }], allowedAdditionIds: [] });
+  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId: 'split-create-result-recovery',
+    allowedChanges: changes, allowedAdditionIds: [] });
   validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
   return { candidateBytes, contract, nodes: [] };
 }

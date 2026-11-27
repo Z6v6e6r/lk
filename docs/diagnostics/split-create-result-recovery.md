@@ -63,6 +63,39 @@ A failed card save or confirmation retains the attempt. The next check uses the
 same operation. If the evidence is incomplete or the unpaid checkout has expired,
 the result remains pending.
 
+## Legacy daily subscription bookings
+
+The incident variant uses the legacy daily operations collection with no
+`lk1-product` key or managed quote. When the managed key is absent, the reader
+uses the same Viva bearer to read the actor's active bookings. A complete
+bounded page yields the shared-day, category-day and event keys. The Mongo
+read stays indexed by `_id` and constrained by tenant, actor and operation ID.
+The reader confirms the exact active exercise and subscription booking in
+Viva and repeats the same majority read before returning a result.
+
+The legacy booking gateway stores `legacySplitCreate` when its internal split
+CREATE owns the new exercise. This records the original reference, location,
+time, capacity and visit count. A public booking request or split JOIN cannot
+add the receipt. Reclaim clears a previous receipt when the new operation has
+no matching CREATE evidence. The reader requires the receipt to agree with the
+current booking, actor and provider slot before permitting fresh publication.
+
+For an older row without the receipt, the browser can reconnect an existing LK
+card with the same organizer, booking and slot. If the card is missing, it
+shows that the booking is confirmed and directs the organizer to support.
+Historical rows contain no authoritative CREATE provenance. The browser
+reads the original operation and opens the invite only after a unique exact
+card is read back. A new-card attempt sends a single revision-fenced write
+using the server receipt's original reference. A later check looks up both
+booking and payment aliases first. A transport error can therefore recover a
+committed card without starting another booking or charge.
+
+The legacy daily result returns zero organizer cash due and no payment URL,
+transaction or synthetic payment deadline. It omits the participant tariff
+because the old operation provides no quote snapshot. The browser uses the
+existing exact-slot price if available. A one-time join still checks the
+authoritative court tariff before taking payment.
+
 ## Price, reference and deadline compatibility
 
 The normal legacy free response omits operationId. Its normalized create result
@@ -114,14 +147,18 @@ existing deployment lock/lease and the dependent cancellation-worker generation
 pins. Coordinate the worker's existing re-attestation procedure; never weaken its
 drift guard. Use the existing reviewed-flow mechanism and separately authorized
 deployment procedure. Apply/verify the backend before publishing the frontend.
-For an existing reader, pass `--update-reader <reviewed handler SHA256>` to the
-same preparation script. That mode checks the existing route and read-only graph
-and replaces only the function body. The game-payment confirmation graph must include
+For an existing reader, pass
+`--update-reader <reviewed handler SHA256> <reviewed booking router SHA256>`
+to the same preparation script. This checks the existing route and read-only
+graph, then changes the result handler and the legacy booking router function
+bodies. The proof insertion is anchored to the legacy Mongo insert and reclaim.
+The reader, proof producer and revision-fenced game writer must be verified
+together before activating legacy publication recovery. The game-payment confirmation graph must include
 `fn_game_payment_confirm_router.js` and its existing claim and readback nodes.
 The create/draft paths must persist the canonical tenant and revision and fence
 the pending draft with the unique `(tenantKey, id)` index. A legacy
 payment-reference-only upsert can overwrite a concurrent paid card and cannot
-serve as this rollout's draft writer.
+serve as this rollout's card or draft writer.
 The mixed branch uses the reader on the same Node-RED instance
 (`127.0.0.1:1880` on the LK host). Validate both backend paths together.
 An older reader yields pending for the mixed booking. The browser never repeats
@@ -137,12 +174,13 @@ payment or data-repair authority.
 ## Verification
 
 - `splitCreateResult.test.mjs`: identities, quote/receipt/checkout, live readback,
-  cancellation/release fence, mixed paid and unpaid provider evidence, unknown
-  results, redaction and exact composition.
+  cancellation/release fence, mixed paid and unpaid provider evidence, legacy
+  receipt and ownership checks, redaction and exact composition.
 - `splitCreateRecovery.test.ts`: one original POST, GET-only recovery, preserved
   refs/reload/quota behavior, strict results, bounded reads and session/abort guards.
 - `gameCreateButtonPreparation.test.mjs`: real extracted callbacks, busy/pending
-  UI, title/comment/tariff preservation, one LK draft, paid invite and stale-owner suppression.
+  UI, title/comment/tariff preservation, one LK write, exact readback before
+  showing the invitation and stale-owner suppression.
 - `gamePaymentConfirmation.nodered.test.ts` and `serverGameDraftPersistence.test.ts`:
   exact mixed settlement, transaction claim, durable readback, no downgrade of an
   already paid card and rejection of mismatched evidence.

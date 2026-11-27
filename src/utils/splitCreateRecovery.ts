@@ -28,14 +28,27 @@ export function confirmedSplitCreateResult(value: unknown, binding: SplitCreateR
   if (!record(value) || value.schemaVersion !== 1 || value.recovery !== 'SPLIT_CREATE_RESULT_V1'
     || value.state !== 'CONFIRMED' || value.mode !== 'create' || value.selectedPaymentMode !== 'subscription'
     || !Object.entries(binding).every(([key, expected]) => ['paymentRef', 'maxClientsCount'].includes(key) || value[key] === expected)
-    || !(value.referenceSource === 'STORED_RECEIPT' && typeof value.paymentRef === 'string'
-        && /^[A-Za-z0-9._:-]{1,200}$/.test(value.paymentRef)
-      || value.referenceSource === 'LEGACY_OPERATION' && value.paymentRef === null && value.toPayMinor === 0)
     || !uuid(value.exerciseId) || !uuid(value.bookingId)
     || typeof value.toPayMinor !== 'number' || !Number.isSafeInteger(value.toPayMinor)
-    || typeof value.shareAmountMinor !== 'number' || !Number.isSafeInteger(value.shareAmountMinor)
-    || value.shareAmountMinor < 0 || value.shareAmountMinor > 1_000_000 || value.shareAmount !== value.shareAmountMinor / 100
     || value.toPayMinor < 0 || value.toPayMinor > 1_000_000 || value.toPay !== value.toPayMinor / 100) return false;
+  const storedRef = typeof value.paymentRef === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value.paymentRef);
+  if (value.referenceSource === 'LEGACY_DAILY_OPERATION' || value.referenceSource === 'LEGACY_DAILY_RECEIPT') {
+    const existingOnly = value.referenceSource === 'LEGACY_DAILY_OPERATION';
+    return value.existingCardOnly === existingOnly
+      && (existingOnly ? value.paymentRef === null : storedRef && (value.subscriptionVisitCount === 1 || value.subscriptionVisitCount === 2))
+      && value.toPayMinor === 0 && value.settlementState === 'CONFIRMED'
+      && value.paymentUrl === null && value.transactionId === null && value.deadlineAt === null
+      && value.shareAmountMinor === null && value.shareAmount === null
+      && (value.maxClientsCount === 2 || value.maxClientsCount === 4)
+      && (binding.maxClientsCount === undefined || value.maxClientsCount === binding.maxClientsCount)
+      && value.directionId === 4588 && value.exerciseTypeId === 1613
+      && typeof value.assembleDeadlineAt === 'string'
+      && Date.parse(value.assembleDeadlineAt) === Date.parse(binding.fromTime) - 24 * 60 * 60_000;
+  }
+  if (!(value.referenceSource === 'STORED_RECEIPT' && storedRef
+    || value.referenceSource === 'LEGACY_OPERATION' && value.paymentRef === null && value.toPayMinor === 0)
+    || typeof value.shareAmountMinor !== 'number' || !Number.isSafeInteger(value.shareAmountMinor)
+    || value.shareAmountMinor < 0 || value.shareAmountMinor > 1_000_000 || value.shareAmount !== value.shareAmountMinor / 100) return false;
   if (value.toPayMinor === 0) return value.settlementState === 'CONFIRMED' && !value.paymentUrl && !value.transactionId;
   if (!uuid(value.transactionId)) return false;
   const mixed = value.subscriptionVisitCount === 1;
@@ -93,7 +106,7 @@ export async function recoverSplitCreateResult(
     if (result.status === 401 || result.status === 403) return result;
     if (!result.error && result.status === 200 && confirmedSplitCreateResult(result.data, binding)) {
       const data = result.data as Record<string, unknown>;
-      return { ...result, data: { ...data, paymentRef: data.referenceSource === 'STORED_RECEIPT' ? data.paymentRef : binding.paymentRef } };
+      return { ...result, data: { ...data, paymentRef: data.paymentRef ?? binding.paymentRef } };
     }
     // A missing/newer backend never falls through to POST. Keep the attempt unresolved.
     if (result.status === 404 || result.status === 405) break;

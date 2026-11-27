@@ -237,7 +237,7 @@ test("surcharge recovery never writes on mismatch, unknown absence or stale wiza
 test("the surcharge lookup requires a complete union and reports separate alias collisions", async () => {
   const source = fs.readFileSync("src/utils/serverGameDraftPersistence.ts", "utf8");
   const ast = ts.createSourceFile("serverGameDraftPersistence.ts", source, ts.ScriptTarget.ES2022, true);
-  const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "lookupSplitSurchargeDraft");
+  const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "lookupGameByBothReferences");
   assert.ok(fn);
   const js = ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const alias = { ...paidSurcharge, id: "other-alias" };
@@ -248,7 +248,7 @@ test("the surcharge lookup requires a complete union and reports separate alias 
     { games: [alias], complete: true, total: 1 },
     { games: [], complete: true, total: 0 },
   ]) {
-    const lookup = new Function("apiFetchPadelGamesByBookingReferences", js + "\nreturn lookupSplitSurchargeDraft;")(
+    const lookup = new Function("apiFetchPadelGamesByBookingReferences", js + "\nreturn lookupGameByBothReferences;")(
       async (ref: string, ids: string[]) => {
         assert.equal(ref, paymentRef);
         assert.deepEqual(ids, [bookingId]);

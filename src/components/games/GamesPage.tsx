@@ -99,7 +99,7 @@ import {
   savePendingPaidGameDraft,
   type PendingPaidGameDraft,
 } from "../../utils/paymentSync";
-import { persistServerGameDraftBeforeRedirect } from "../../utils/serverGameDraftPersistence";
+import { persistRecoveredSubscriptionGame, persistServerGameDraftBeforeRedirect } from "../../utils/serverGameDraftPersistence";
 import { isPersistedGamePaymentTerminal } from "../../utils/paymentSyncDraftRecovery";
 import { isSplitSurchargeGameReadback } from "../../utils/serverGameDraftPersistencePolicy";
 import {
@@ -11071,6 +11071,10 @@ export default function GamesPage({
 
     const recoveredCreate = isRecordObject(paymentResult.data.raw)
       && paymentResult.data.raw.recovery === "SPLIT_CREATE_RESULT_V1";
+    const legacyDailyRecovery = recoveredCreate && isRecordObject(paymentResult.data.raw)
+      && ["LEGACY_DAILY_OPERATION", "LEGACY_DAILY_RECEIPT"].includes(String(paymentResult.data.raw.referenceSource));
+    const existingCardOnly = legacyDailyRecovery && isRecordObject(paymentResult.data.raw)
+      && paymentResult.data.raw.existingCardOnly === true;
     const splitSurcharge = recoveredCreate && paymentResult.data.selectedPaymentMode === "subscription"
       && paymentResult.data.subscriptionVisitCount === 1
       && paymentResult.data.toPayMinor != null && paymentResult.data.toPayMinor > 0
@@ -11129,13 +11133,18 @@ export default function GamesPage({
       ?? (recoveredCreate ? null : new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString());
     const resolvedDirectionId = paymentResult.data.directionId ?? SPLIT_OPEN_GAME_DIRECTION_ID;
     const resolvedExerciseTypeId = paymentResult.data.exerciseTypeId ?? SPLIT_OPEN_GAME_EXERCISE_TYPE_ID;
-    const resolvedSplitShareAmount = paymentResult.data.shareAmount ?? shareAmount;
-    const resolvedSplitShareAmountMinor = paymentResult.data.shareAmountMinor ?? Math.round(resolvedSplitShareAmount * 100);
+    const verifiedLegacyTotal = legacyDailyRecovery && slotPrice != null && Number.isFinite(slotPrice) && slotPrice > 0
+      ? slotPrice
+      : null;
+    const legacyShare = verifiedLegacyTotal == null ? null : Math.round(verifiedLegacyTotal * 100 / splitShareCount) / 100;
+    const resolvedSplitShareAmount = paymentResult.data.shareAmount ?? (legacyDailyRecovery ? legacyShare : shareAmount);
+    const resolvedSplitShareAmountMinor = paymentResult.data.shareAmountMinor
+      ?? (resolvedSplitShareAmount == null ? null : Math.round(resolvedSplitShareAmount * 100));
     const resolvedBaseShareAmount = paymentResult.data.baseShareAmount ?? baseShareAmount;
     const resolvedBaseShareAmountMinor = paymentResult.data.baseShareAmountMinor ?? Math.round(resolvedBaseShareAmount * 100);
     const resolvedDiscountAmount = paymentResult.data.discountAmount ?? discountAmount;
     const resolvedDiscountAmountMinor = paymentResult.data.discountAmountMinor ?? Math.round(resolvedDiscountAmount * 100);
-    const resolvedSplitTotalAmount = paymentResult.data.totalAmount ?? resolvedTotalAmount;
+    const resolvedSplitTotalAmount = paymentResult.data.totalAmount ?? (legacyDailyRecovery ? verifiedLegacyTotal : resolvedTotalAmount);
     const resolvedOneTimeBaseAmount = paymentResult.data.oneTimeBaseAmount
       ?? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.baseShareAmount;
     const splitMetadata = {
@@ -11267,11 +11276,11 @@ export default function GamesPage({
     };
 
     const operationId = paymentResult.data.operationId;
-    const showPaidGame = (createdRecord: PadelGameRecord) => {
+    const showPaidGame = (createdRecord: PadelGameRecord, publish = true) => {
       completePadelSplitCreate(operationId);
       const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
       upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
-      void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
+      if (publish) void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
       setGameRecordId(createdRecord.id);
       setGameRecordStatus(createdRecord.status ?? "PAID");
       setInviteLink(resolveGameInviteUrl(createdRecord) ?? fallbackInviteUrl);
@@ -11290,6 +11299,19 @@ export default function GamesPage({
     };
 
     if (!paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0) {
+      if (legacyDailyRecovery) {
+        const restored = await persistRecoveredSubscriptionGame(payload, existingCardOnly, isCurrentCreation);
+        if (!isCurrentCreation()) { setLoadingPay(false); return; }
+        if (restored.record) {
+          showPaidGame(restored.record, !restored.reused);
+        } else {
+          setPayError(restored.error || "Сохранение карточки пока не подтверждено");
+          setGameCreationPending(true);
+          setLoadingPay(false);
+        }
+        return;
+      }
+
       const directCreateResult = await apiCreatePadelGameRecord({
         ...payload,
         status: "PAID",
@@ -11389,6 +11411,7 @@ export default function GamesPage({
     profileRatingNumeric,
     profilePhoto,
     paymentAmount,
+    slotPrice,
     gameTitleDraft,
     gameParticipantCommentDraft,
     gameJoinPriceDraft,
