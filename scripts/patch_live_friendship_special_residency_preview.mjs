@@ -59,7 +59,10 @@ export function patchInstalledResidencyPreview(source) {
   const branchEnd = "  if (!eventRoute && ['availableStudios', 'availableTypes', 'availableDirections'].some";
   const start = out.indexOf(branchStart), end = out.indexOf(branchEnd, start);
   if (start < 0 || end < 0 || out.indexOf(branchStart, start + 1) >= 0) throw new Error('Residency preview branch drift');
-  out = out.slice(0, start) + branch.trimStart() + '\n' + out.slice(end);
+  // Preserve this patch’s original new-game-only response shape when composing the historical packet.
+  const historicalBranch = replaceOnce(branch, '  if (!eventRoute) {',
+    "  if (!eventRoute && ctx.target.targetKind==='NEW_GAME' && action==='CREATE_GAME') {");
+  out = out.slice(0, start) + historicalBranch.trimStart() + '\n' + out.slice(end);
   new Function('msg', 'node', 'global', 'env', out);
   return out;
 }

@@ -48,7 +48,7 @@ export function createSubscriptionPriceTarget(input: {
 
 export interface SubscriptionPriceQuote {
   subscriptionId: string;
-  /** Product of the validated subscription benefit, when returned on a new-game quote. */
+  /** Product of the validated subscription benefit, when returned on a game quote. */
   appliedSubscriptionProductId?: string;
   selectionKey: string;
   status: "AVAILABLE" | "LIMIT_USED" | "UNAVAILABLE";
@@ -70,6 +70,8 @@ export type SubscriptionPricePreview = {
   /** Minutes the server charges on top of the subscription allowance; 0 when nothing is owed. */
   paidMinutes: number;
   discounted: boolean;
+  confirmedSubscriptionId?: string;
+  appliedSubscriptionProductId?: string;
 };
 
 export function subscriptionPriceSelectionKey(target: SubscriptionPriceTarget): string {
@@ -139,6 +141,9 @@ export function subscriptionPricePreview(input: PreviewInput): SubscriptionPrice
     detail: best.paidMinutes > 0 ? `Доплата за ${best.paidMinutes} мин` : null,
     basePriceMinor: best.basePriceMinor, amountMinor, paidMinutes: best.paidMinutes,
     discounted: amountMinor < best.basePriceMinor,
+    confirmedSubscriptionId: best.subscriptionId,
+    ...(typeof best.appliedSubscriptionProductId === "string"
+      ? { appliedSubscriptionProductId: best.appliedSubscriptionProductId } : {}),
   };
 }
 

@@ -18,7 +18,7 @@ type ComparisonQuote = {
 };
 
 function comparisonKey(category: ComparisonCategory) {
-  return `lk1-pilot-comparison:${category}`;
+  return `lk1-pilot-comparison-v2:${category}`;
 }
 
 export function readComparisonQuote(category: ComparisonCategory, scope: string | null): ComparisonQuote | null {
