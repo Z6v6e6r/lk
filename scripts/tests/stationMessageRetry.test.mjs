@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 const component=fs.readFileSync('src/components/cabinet/CommunitiesSection.tsx','utf8');
-const handler=component.split(/  const handleSendChatMessage = async \(.*\) => \{/)[1].split('\n  const canPostInSelectedCommunity')[0];
+const handler=component.split(/ {2}const handleSendChatMessage = async \(.*\) => \{/)[1].split('\n  const canPostInSelectedCommunity')[0];
 function harness(api){return new Function('apiCreateCommunityChatMessage','crypto',`
  let chatDraft='Synthetic',isCurrentChatSending=false;const chatDraftRevisionRef={current:0},chatRequestRef={current:new Map()},currentMember={id:'actor'},selectedCommunity={id:'community'},canChatInSelectedCommunity=true,chatScrollActionRef={current:null};
  const setChatSendingId=()=>{},setChatError=()=>{},setChatByCommunityId=()=>{},setChatLoadedByCommunityId=()=>{},communityErrorMessage=()=>'';
