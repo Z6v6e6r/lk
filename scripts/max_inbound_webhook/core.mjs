@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { mapCupTicketMessage } from './cup-ticket-replies.mjs';
 import { CUP_HANDOFF_WINDOW_MS, cupHandoffStartKey, mapCupHandoff } from './cup-handoff.mjs';
 
 export const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -94,7 +95,7 @@ function mapBotStarted(raw, botId, cupHandoffEnabled) {
 }
 
 // Station selections use a separate, allowlisted callback path. Ordinary messages carry content only.
-export function mapUpdate(raw, botId, stationEnabled = false, cupHandoffEnabled = false) {
+export function mapUpdate(raw, botId, stationEnabled = false, cupHandoffEnabled = false, cupTicketsEnabled = false) {
   if (object(raw) && raw.update_type === 'bot_started') return mapBotStarted(raw, botId, cupHandoffEnabled);
   if (cupHandoffEnabled) {
     const handoff = mapCupHandoff(raw, botId);
@@ -133,6 +134,9 @@ export function mapUpdate(raw, botId, stationEnabled = false, cupHandoffEnabled 
   if (stationEnabled && text === '/station' && attachments.length === 0) {
     return { key, stationAction: { type: 'menu', userId: user, chatId: chat } };
   }
+  const cupTicketMessage = cupTicketsEnabled
+    ? mapCupTicketMessage(m, { user, chat, mid, timestamp, text, attachments })
+    : undefined;
   if (!text) text = types.length ? `[Вложение MAX: ${types.join(', ')}]` : '[Сообщение MAX без текста]';
   // Preserve long messages in full as bounded ordered parts accepted by the current CUP DTO.
   const chunks = []; for (let i = 0; i < text.length; i += 1900) { const chunk = text.slice(i, i + 1900).trim(); if (chunk) chunks.push(chunk); }
@@ -147,21 +151,33 @@ export function mapUpdate(raw, botId, stationEnabled = false, cupHandoffEnabled 
     ...(index === 0 && images.length ? { attachments: images } : {}),
     meta: { provider: 'max', maxWebhook: { mid, part: index + 1, parts: chunks.length, raw } },
   }));
-  return { key, dtos, hash: sha(canonical(raw)) };
+  return { key, dtos, hash: sha(canonical(raw)), ...(cupTicketMessage && { cupTicketMessage }) };
+}
+
+function cupContactKey(subject, chat) {
+  return sha(`MAX_CUP_CONTACT\0${subject}\0${chat}`);
 }
 
 export class Inbox {
   constructor(dir, { maxRecords = 20_000, maxBytes = 1_073_741_824, minFreeBytes = 268_435_456 } = {}) {
     privateDirectory(dir); this.dir = dir; this.maxRecords = maxRecords; this.maxBytes = maxBytes; this.minFreeBytes = minFreeBytes;
-    this.index = new Map(); this.bytes = 0;
+    this.index = new Map(); this.cupContacts = new Set(); this.bytes = 0;
     for (const name of fs.readdirSync(dir)) {
       if (!/^[a-f0-9]{64}\.json$/.test(name)) { need(name.startsWith('.tmp-') || name === '.runtime.lock', 'UNKNOWN_INBOX_FILE'); if (name === '.runtime.lock') readPrivate(path.join(dir, name), 1024); continue; }
-      const record = this.read(name.slice(0, 64)); this.index.set(record.key, this.summary(record)); this.bytes += fs.statSync(path.join(dir, name)).size;
+      const record = this.read(name.slice(0, 64)); this.index.set(record.key, this.summary(record)); this.trackCupContact(record); this.bytes += fs.statSync(path.join(dir, name)).size;
+    }
+  }
+  trackCupContact(record) {
+    if (record.cupHandoffConfirmationDigest) {
+      const { userId, chatId } = record.cupHandoffAction;
+      this.cupContacts.add(cupContactKey(userId, chatId));
     }
   }
   summary(r) {
     return { phase: r.phase, acceptedAt: r.acceptedAt, cupHandoff: Boolean(r.cupHandoffAction),
-      cupHandoffRetryAt: r.cupHandoffRetryAt };
+      cupHandoffRetryAt: r.cupHandoffRetryAt,
+      cupTicketPending: Boolean(r.cupTicketMessage) && r.cupTicketOutcome !== 'legacy',
+      cupTicketRetryAt: r.cupTicketRetryAt };
   }
   read(key) {
     need(/^[a-f0-9]{64}$/.test(key), 'INVALID_KEY');
@@ -194,6 +210,16 @@ export class Inbox {
       r.phase = r.cupHandoffPhase;
       delete r.cupHandoffPhase;
     }
+    if (r.cupTicketMessage !== undefined) {
+      need(object(r.cupTicketMessage) && !r.stationAction && !r.cupHandoffAction &&
+        r.cupTicketHash === sha(canonical(r.cupTicketMessage)), 'INBOX_CUP_TICKET_CORRUPT');
+    }
+    if (r.cupTicketPhase !== undefined) {
+      need(r.cupTicketMessage && r.phase === 'REVIEW' && ['QUEUED', 'DISPATCH_INTENT'].includes(r.cupTicketPhase),
+        'INBOX_CUP_TICKET_PHASE');
+      r.phase = r.cupTicketPhase;
+      delete r.cupTicketPhase;
+    }
     return r;
   }
   write(record, exclusive = false) {
@@ -208,6 +234,9 @@ export class Inbox {
     if (record.cupHandoffAction && ['QUEUED', 'DISPATCH_INTENT'].includes(record.phase)) {
       stored = { ...record, phase: 'REVIEW', cupHandoffPhase: record.phase };
     }
+    if (record.cupTicketMessage && record.cupTicketOutcome !== 'legacy' && ['QUEUED', 'DISPATCH_INTENT'].includes(record.phase)) {
+      stored = { ...record, phase: 'REVIEW', cupTicketPhase: record.phase };
+    }
     const body = Buffer.from(JSON.stringify(stored) + '\n'); need(body.length <= 4_194_304, 'RECORD_TOO_LARGE');
     need(this.bytes - oldSize + body.length <= this.maxBytes, 'INBOX_CAPACITY');
     const tmp = path.join(this.dir, '.tmp-' + crypto.randomUUID());
@@ -215,7 +244,7 @@ export class Inbox {
     try { fs.writeFileSync(fd, body); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     try { if (exclusive) need(!fs.existsSync(target), 'EXISTING_RECORD'); fs.renameSync(tmp, target); syncDirectory(this.dir); }
     catch (e) { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); throw e; }
-    this.bytes += body.length - oldSize; this.index.set(record.key, this.summary(record));
+    this.bytes += body.length - oldSize; this.index.set(record.key, this.summary(record)); this.trackCupContact(record);
   }
   accept(raw, mapped) {
     const storedRaw = mapped.botStartedReceipt ?? raw;
@@ -236,7 +265,7 @@ export class Inbox {
       // Reconcile a published file after a directory-fsync error; never overwrite or POST here.
       const fd = fs.openSync(path.join(this.dir, mapped.key + '.json'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } syncDirectory(this.dir);
-      if (!this.index.has(mapped.key)) { this.bytes += fs.statSync(path.join(this.dir, mapped.key + '.json')).size; this.index.set(mapped.key, this.summary(prior)); }
+      if (!this.index.has(mapped.key)) { this.bytes += fs.statSync(path.join(this.dir, mapped.key + '.json')).size; this.index.set(mapped.key, this.summary(prior)); this.trackCupContact(prior); }
       return { duplicate: true, key: mapped.key };
     }
     const capacity = fs.statfsSync(this.dir); need(Number(capacity.bavail) * Number(capacity.bsize) >= this.minFreeBytes, 'DISK_CAPACITY');
@@ -251,6 +280,11 @@ export class Inbox {
       record.cupHandoffAction = mapped.cupHandoffAction;
       record.cupHandoffActionHash = sha(canonical(mapped.cupHandoffAction));
     }
+    const candidate = mapped.cupTicketMessage;
+    if (candidate && this.cupContacts.has(cupContactKey(candidate.subject, candidate.chat))) {
+      record.cupTicketMessage = candidate;
+      record.cupTicketHash = sha(canonical(record.cupTicketMessage));
+    }
     this.write(record, true); return { duplicate: false, key: mapped.key };
   }
   counts() { const counts = { records: this.index.size, bytes: this.bytes }; for (const r of this.index.values()) counts[r.phase] = (counts[r.phase] ?? 0) + 1; return counts; }
@@ -258,9 +292,9 @@ export class Inbox {
 }
 
 export class Dispatcher {
-  constructor(inbox, { ready, post, confirm, station, cupHandoff, paused = () => false }) {
+  constructor(inbox, { ready, post, confirm, station, cupHandoff, cupTickets, paused = () => false }) {
     need(typeof paused === 'function', 'PAUSE_CONFIGURATION');
-    Object.assign(this, { inbox, ready, post, confirm, station, cupHandoff, paused }); this.running = false; this.stopping = false;
+    Object.assign(this, { inbox, ready, post, confirm, station, cupHandoff, cupTickets, paused }); this.running = false; this.stopping = false;
   }
   isPaused() { try { return this.paused() !== false; } catch { return true; } }
   stop() { this.stopping = true; }
@@ -268,6 +302,7 @@ export class Dispatcher {
     if (this.running || this.stopping || this.isPaused()) return; this.running = true;
     try {
       let handoffKey;
+      let cupTicketKey;
       for (const key of this.inbox.pending()) {
         if (this.stopping || this.isPaused()) break;
         const summary = this.inbox.index.get(key);
@@ -275,10 +310,16 @@ export class Dispatcher {
           if (this.cupHandoff && (summary.cupHandoffRetryAt ?? 0) <= Date.now()) handoffKey ??= key;
           continue;
         }
+        if (summary.cupTicketPending) {
+          if (this.cupTickets && (summary.cupTicketRetryAt ?? 0) <= Date.now()) cupTicketKey ??= key;
+          continue;
+        }
         await this.process(key);
       }
       // Prioritize legacy traffic and limit the separate handoff to one handoff record per tick.
       if (handoffKey && !this.stopping && !this.isPaused()) await this.process(handoffKey);
+      if (cupTicketKey && !this.stopping && !this.isPaused()) await this.process(cupTicketKey);
+      await this.cupTickets?.flush(() => this.stopping || this.isPaused());
     } finally { this.running = false; }
   }
   async process(key) {
@@ -287,6 +328,10 @@ export class Dispatcher {
     if (r.cupHandoffAction) {
       if (this.cupHandoff) await this.processCupHandoff(r);
       return;
+    }
+    if (r.cupTicketMessage && r.cupTicketOutcome !== 'legacy') {
+      if (this.cupTickets) await this.processCupTicket(r);
+      if (r.cupTicketOutcome !== 'legacy') return;
     }
     if (r.stationAction && !this.station) return;
     // An intent surviving a crash is uncertain. It must never become a second POST.
@@ -324,6 +369,45 @@ export class Dispatcher {
     r.phase = 'RECEIPT'; r.receipt = { message: receipt.message, dialogId: receipt.dialog.id, clientId: receipt.client.id };
     if (r.stationAction) r.receipt.stationId = stationId;
     this.inbox.write(r); await this.verify(r);
+  }
+  async processCupTicket(r) {
+    if (r.phase === 'DISPATCH_INTENT') {
+      this.review(r, 'UNKNOWN_CUP_TICKET_HINT');
+      return;
+    }
+    if (r.phase !== 'QUEUED' || this.stopping || this.isPaused()) return;
+    if (!r.cupTicketOutcome) {
+      let outcome;
+      try {
+        outcome = await this.cupTickets.receive(r.cupTicketMessage);
+      } catch {
+        r.cupTicketAttempts = (r.cupTicketAttempts ?? 0) + 1;
+        if (r.cupTicketAttempts >= 10) {
+          this.review(r, 'CUP_TICKET_RECEIVE_UNCONFIRMED');
+          return;
+        }
+        r.cupTicketRetryAt = Date.now() + Math.min(5_000 * 2 ** (r.cupTicketAttempts - 1), 60_000);
+        this.inbox.write(r);
+        return;
+      }
+      r.cupTicketOutcome = ['unmatched', 'stale'].includes(outcome) ? 'legacy' : outcome;
+      delete r.cupTicketRetryAt;
+      this.inbox.write(r);
+    }
+    if (r.cupTicketOutcome === 'legacy') return;
+    if (this.cupTickets.hasHint(r.cupTicketOutcome)) {
+      if (this.stopping || this.isPaused()) return;
+      r.phase = 'DISPATCH_INTENT';
+      this.inbox.write(r);
+      try {
+        await this.cupTickets.hint(r.cupTicketMessage, r.cupTicketOutcome, () => this.stopping || this.isPaused());
+      } catch {
+        this.review(r, 'UNKNOWN_CUP_TICKET_HINT');
+        return;
+      }
+    }
+    r.phase = 'DELIVERED';
+    this.inbox.write(r);
   }
   deferCupHandoff(r) {
     r.cupHandoffAttempts = (r.cupHandoffAttempts ?? 0) + 1;

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { createCupTicketReplies, cupTicketReplyKey } from './cup-ticket-replies.mjs';
 import { createCupHandoffService, cupHandoffConfig } from './cup-handoff.mjs';
 import { authorized, Inbox, Dispatcher, mapUpdate, need, validSecret, readPrivate, canonical, privateDirectory, sha, stationButtons } from './core.mjs';
 
@@ -35,7 +36,7 @@ export function dispatchHealth(dispatcher, pauseReader = readDispatchPause) {
 }
 
 export const MAX_BODY = 65_536;
-export function createIngress({ secret, botId, inbox, stationEnabled = false, cupHandoffEnabled = false, notify = () => {}, health = () => ({}) }) {
+export function createIngress({ secret, botId, inbox, stationEnabled = false, cupHandoffEnabled = false, cupTicketsEnabled = false, notify = () => {}, health = () => ({}) }) {
   need(validSecret(secret), 'SECRET_CONFIGURATION');
   return http.createServer(async (req, res) => {
     const reply = (status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
@@ -49,7 +50,7 @@ export function createIngress({ secret, botId, inbox, stationEnabled = false, cu
     try {
       for await (const chunk of req) { bytes += chunk.length; if (bytes > MAX_BODY) { reply(413, { ok: false }); req.destroy(); return; } chunks.push(chunk); }
       const raw = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      const mapped = mapUpdate(raw, botId, stationEnabled, cupHandoffEnabled); const result = inbox.accept(raw, mapped);
+      const mapped = mapUpdate(raw, botId, stationEnabled, cupHandoffEnabled, cupTicketsEnabled); const result = inbox.accept(raw, mapped);
       reply(200, { ok: true, accepted: true, duplicate: result.duplicate }); notify();
     } catch (e) {
       const capacity = ['DISK_CAPACITY', 'INBOX_CAPACITY', 'ENOSPC', 'EIO'].includes(e.code ?? e.message);
@@ -184,6 +185,8 @@ export async function main() {
     && config.mongo.serviceMessages !== config.mongo.messages), 'STATION_COLLECTION_CONFIGURATION');
   const cupHandoffSettings = cupHandoffConfig(config);
   const cupHandoff = cupHandoffSettings ? createCupHandoffService(cupHandoffSettings, jsonFetch) : undefined;
+  const ticketReplyKey = cupTicketReplyKey(config, cupHandoff);
+  const cupTickets = ticketReplyKey ? createCupTicketReplies(ticketReplyKey, cupHandoff) : undefined;
   const require = createRequire(import.meta.url); const { MongoClient } = require('mongodb');
   const mongo = new MongoClient(config.mongo.uri, { serverSelectionTimeoutMS: 5000, appName: 'max-padlhub-webhook' }); await mongo.connect();
   const db = mongo.db(config.mongo.db);
@@ -196,10 +199,11 @@ export async function main() {
     confirm: persistenceConfirmer(db, config.mongo),
     station,
     cupHandoff,
+    cupTickets,
   });
   const server = createIngress({ secret: config.webhookSecret, botId: config.botId, inbox,
-    stationEnabled: Boolean(station), cupHandoffEnabled: Boolean(cupHandoff),
-    health: () => ({ ...dispatchHealth(dispatcher), stationEnabled: Boolean(station), cupHandoffEnabled: Boolean(cupHandoff) }) });
+    stationEnabled: Boolean(station), cupHandoffEnabled: Boolean(cupHandoff), cupTicketsEnabled: Boolean(cupTickets),
+    health: () => ({ ...dispatchHealth(dispatcher), stationEnabled: Boolean(station), cupHandoffEnabled: Boolean(cupHandoff), cupTicketsEnabled: Boolean(cupTickets) }) });
   server.maxConnections = 64; server.keepAliveTimeout = 2000; server.requestTimeout = 15_000; server.headersTimeout = 10_000; server.maxHeadersCount = 32;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(18941, '127.0.0.1', resolve); });
   let stopping = false;
