@@ -1,3 +1,4 @@
+import { stationMessageRequestHash } from './stationMessageProof.mjs';
 import { smStream, smLifetime, smMongoIdentity, smUuid, smId, smEqual, smHash, smIdentity, smSequence, smKeys } from './stationMembershipLifetime.mjs';
 
 // Concrete STATION stream storage. No automatic adoption, collection or index creation.
@@ -6,7 +7,7 @@ export function stationStreamAdoptionPlan(community, streamId) {
     (community.communityMessageOutbox !== undefined && (!Array.isArray(community.communityMessageOutbox) || community.communityMessageOutbox.length))) throw Error('STREAM_ADOPTION_REQUIRES_DRAIN');
   const previous = smLifetime(community);
   if (previous.version !== 1 || !smSequence(previous.revision + 1) || !Array.isArray(community.members)) throw Error('STREAM_ADOPTION_INVALID');
-  const players = structuredClone(previous.players), seen = new Set();
+  const players = previous.players.map(player => ({...player})), seen = new Set();
   for (const member of community.members) {
     const id = smIdentity(member);
     if (!id || seen.has(id) || (member.status && member.status !== 'ACTIVE')) throw Error('STREAM_ADOPTION_INVALID');
@@ -41,7 +42,7 @@ export function stationStreamEnvelope(community) {
     keys.add(intent.id);
     if (intent.kind === 'MESSAGE') {
       if (!smSequence(intent.sequence) || intent.sequence < 1 || intent.sequence <= stream.publishedSequence || intent.sequence > stream.acceptedSequence || sequences.has(intent.sequence) || typeof intent.published !== 'boolean') throw Error('STATION_STREAM_SEQUENCE_INVALID');
-      if(intent.message?.recordType!=='MESSAGE'||intent.message.streamId!==stream.streamId||intent.message.sequence!==intent.sequence||!smUuid(intent.message.id)||intent.message.communityId!==community.id||intent.message.authorId!==intent.actorId||typeof intent.message.text!=='string'||intent.event?.type!=='CHAT_MESSAGE_CREATED'||intent.event.streamId!==stream.streamId||intent.event.sequence!==intent.sequence||intent.event.payload?.messageId!==intent.message.id||intent.requestHash!==smHash('station-message-request:v1',{communityId:community.id,actorId:intent.actorId,text:intent.message.text}))throw Error('STATION_STREAM_INTENT_INVALID');
+      if(intent.message?.recordType!=='MESSAGE'||intent.message.streamId!==stream.streamId||intent.message.sequence!==intent.sequence||!smUuid(intent.message.id)||intent.message.communityId!==community.id||intent.message.authorId!==intent.actorId||typeof intent.message.text!=='string'||intent.event?.type!=='CHAT_MESSAGE_CREATED'||intent.event.streamId!==stream.streamId||intent.event.sequence!==intent.sequence||intent.event.payload?.messageId!==intent.message.id||intent.requestHash!==stationMessageRequestHash({communityId:community.id,actorId:intent.actorId,text:intent.message.text,photo:intent.message.photo}))throw Error('STATION_STREAM_INTENT_INVALID');
       sequences.add(intent.sequence);
     } else if ('sequence' in intent || 'message' in intent || 'event' in intent || 'published' in intent) throw Error('STATION_READ_INTENT_INVALID');
   }
@@ -52,7 +53,7 @@ export function stationStreamEnvelope(community) {
 export function stationStreamAppend(community, intent) {
   const stream = stationStreamEnvelope(community);
   if (stream.intents.length >= 32 || !smSequence(stream.revision + 1) || stream.intents.some(i => i.id === intent.id)) throw Error('MESSAGE_OUTBOX_FULL');
-  const next = structuredClone(stream);
+  const next = { ...stream, intents:[...stream.intents] };
   next.revision++;
   if (intent.kind === 'MESSAGE') {
     if (!smSequence(stream.acceptedSequence + 1) || intent.sequence !== stream.acceptedSequence + 1) throw Error('STATION_STREAM_SEQUENCE_INVALID');
@@ -64,7 +65,7 @@ export function stationStreamAppend(community, intent) {
 
 // Only a caller that read back the exact durable message AND event may publish a slot.
 export function stationStreamPublished(community, originalIntent) {
-  const stream = stationStreamEnvelope(community), next = structuredClone(stream);
+  const stream = stationStreamEnvelope(community), next = { ...stream, intents:stream.intents.map(intent => ({...intent})) };
   const found = next.intents.find(i => i.id === originalIntent.id);
   if (!found || !smEqual({ ...found, published: false }, { ...originalIntent, published: false }) || found.kind !== 'MESSAGE') throw Error('STATION_STREAM_INTENT_CHANGED');
   found.published = true;

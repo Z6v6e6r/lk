@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
-import { uuid, requestKey, committedProof } from './stationMessageProof.mjs';
-import { smHash, smEqual, smId, smUuid, smMongoIdentity, smLifetime, smPlayer, smFence, smIdentity, smStream, smSequence } from './stationMembershipLifetime.mjs';
+import { uuid, requestKey, stationMessageReceiptProof, stationMessageRequestHash } from './stationMessageProof.mjs';
+import { smEqual, smId, smUuid, smMongoIdentity, smLifetime, smPlayer, smFence, smIdentity, smStream, smSequence } from './stationMembershipLifetime.mjs';
 
 import { recoverStationReadIntent, runStationRead } from './stationMessageRead.mjs';
 import { stationStreamEnvelope, stationStreamAppend, stationStreamPublished } from './stationMessageStream.mjs';
@@ -29,17 +29,18 @@ const result = ctx => {
   if(!ctx.canReply)return errorResult(ctx,409,'MESSAGE_ACCEPTED_ACCESS_CHANGED');
   const d=ctx.committed;
   if(d.archived===true)return errorResult(ctx,409,'MESSAGE_ACCEPTED_UNAVAILABLE');
-  return {ctx,response:{status:200,body:{ok:true,requestId:ctx.requestId,message:{id:d.id,communityId:d.communityId,text:d.text,createdAt:d.createdAt,createdTs:d.createdTs,authorId:d.authorId,authorName:d.authorName,authorAvatar:d.authorAvatar}}}};
+  return {ctx,response:{status:200,body:{ok:true,requestId:ctx.requestId,message:{id:d.id,communityId:d.communityId,text:d.text,createdAt:d.createdAt,createdTs:d.createdTs,authorId:d.authorId,authorName:d.authorName,authorAvatar:d.authorAvatar,...(d.photo?{photo:{hasCaption:d.photo.hasCaption}}:{})}}}};
 };
-export function beginStationMessage({communityId,actor,requestId,text,requiredContract=false,nowIso=new Date().toISOString()}) {
+export function beginStationMessage({communityId,actor,requestId,text,photo,requiredContract=false,nowIso=new Date().toISOString()}) {
   if(!smId(communityId)||!smId(actor?.id))throw Error('MESSAGE_ACTOR_REQUIRED');
   if(typeof text!=='string'||!text.trim()||text.trim().length>8000)throw Error('MESSAGE_TEXT_INVALID');
   if(requiredContract&&text.length>8000)throw Error('MESSAGE_TEXT_INVALID');
   if(requiredContract&&!smUuid(requestId))throw Error('MESSAGE_REQUEST_ID_REQUIRED');
   if(requestId!==undefined && requestId!==null && !smUuid(requestId))throw Error('MESSAGE_REQUEST_ID_INVALID');
+  if(photo!==undefined&&(requiredContract||!smUuid(requestId)))throw Error('STATION_PHOTO_REQUEST_INVALID');
   const id=requestId??crypto.randomUUID(),actorId=actor.id,body=text.trim();
   const key=requestKey(actorId,id);
-  const ctx={key,requiredContract:requiredContract===true,requestId:id,communityId,actorId,text:body,nowIso,retries:0,requestHash:smHash('station-message-request:v1',{communityId,actorId,text:body})};
+  const ctx={key,requiredContract:requiredContract===true,requestId:id,communityId,actorId,text:body,photo,nowIso,retries:0,requestHash:stationMessageRequestHash({communityId,actorId,text:body,photo})};
   return readCandidate(ctx);
 }
 export function beginStationMessageStatus({communityId,actor,requestId}) {
@@ -51,7 +52,7 @@ function advanceStationMessageStatus(ctx,payload,error) {
   if(error||!Array.isArray(payload))return errorResult(ctx,503,'MESSAGE_STORE_UNAVAILABLE');
   const d=payload[0];
   if(ctx.step==='status_candidate'){
-    if(payload.length===1&&committedProof(ctx,d)){
+    if(payload.length===1&&stationMessageReceiptProof(ctx,d)){
       ctx.committed=d;ctx.candidate=d;
       return op(ctx,'status_event',events,'find',{_id:d.stationMessageEvent._id},{limit:2,maxTimeMS:3000});
     }
@@ -71,13 +72,18 @@ function advanceStationMessageStatus(ctx,payload,error) {
 function project(ctx) {
   const d=ctx.candidate,i=ctx.intent;
   if(!i || i.id!==ctx.key || i.requestHash!==ctx.requestHash || !smEqual(i.communityIdentity,d.communityIdentity) || i.message?.id!==d.publicId ||
-    smHash('station-message-request:v1',{communityId:d.communityId,actorId:d.actorId,text:i.message?.text})!==d.requestHash || i.message.authorId!==d.actorId || i.event?.payload?.messageId!==d.publicId)throw Error('MESSAGE_INTENT_INVALID');
+    stationMessageRequestHash({communityId:d.communityId,actorId:d.actorId,text:i.message?.text,photo:i.message?.photo})!==d.requestHash || i.message.authorId!==d.actorId || i.event?.payload?.messageId!==d.publicId)throw Error('MESSAGE_INTENT_INVALID');
   if(d.streamId && (i.kind!=='MESSAGE'||i.streamId!==d.streamId||i.message.streamId!==d.streamId||i.message.sequence!==i.sequence||i.event.streamId!==d.streamId||i.event.sequence!==i.sequence))throw Error('MESSAGE_INTENT_INVALID');
   return op(ctx,'message_write',messages,'updateOne',{_id:d._id,state:'RESERVED',requestHash:d.requestHash},{$set:{...i.message,state:'COMMITTED',stationMessageEvent:i.event}},{upsert:false,maxTimeMS:3000});
 }
 export function advanceStationMessage(ctx,payload,error=false) {
   try {
     if(ctx.statusOnly)return advanceStationMessageStatus(ctx,payload,error);
+    if(ctx.step==='photo_store'){
+      if(error||payload!==true)return errorResult(ctx,503,'STATION_PHOTO_STORAGE_UNAVAILABLE');
+      ctx.photoStored=true;
+      return readCommunity(ctx);
+    }
     if(ctx.step==='candidate_write')return readCandidate(ctx,'candidate_readback');
     if(ctx.step==='accept_write'){ctx.acceptAmbiguous=Boolean(error)||payload?.acknowledged!==true;return readCommunity(ctx,'accept_readback');}
     if(ctx.step==='message_write')return readCandidate(ctx,'message_readback');
@@ -89,13 +95,13 @@ export function advanceStationMessage(ctx,payload,error=false) {
     if(ctx.step==='stream_reply_access'){
       if(rows.length!==1||!active(d,ctx.actorId)||!identityMatches(d,ctx.candidate))return errorResult(ctx,403,'COMMUNITY_MESSAGE_ACCESS_UNAVAILABLE');
       const stream=stationStreamEnvelope(d);
-      if(stream.streamId!==ctx.committed.streamId||stream.publishedSequence<ctx.committed.sequence||!committedProof(ctx,ctx.committed))return errorResult(ctx,503,'MESSAGE_RECEIPT_UNPROVEN');
+      if(stream.streamId!==ctx.committed.streamId||stream.publishedSequence<ctx.committed.sequence||!stationMessageReceiptProof(ctx,ctx.committed))return errorResult(ctx,503,'MESSAGE_RECEIPT_UNPROVEN');
       ctx.streamProven=true;return result(ctx);
     }
     if(ctx.step==='canonical_reply_access'){
       if(rows.length!==1||!active(d,ctx.actorId)||!identityMatches(d,ctx.candidate))return errorResult(ctx,403,'COMMUNITY_MESSAGE_ACCESS_UNAVAILABLE');
       if(ctx.committed.streamId && (smStream(d)?.streamId!==ctx.committed.streamId || smStream(d).publishedSequence<ctx.committed.sequence))return errorResult(ctx,200,'MESSAGE_RECEIPT_UNPROVEN');
-      if(!committedProof(ctx,ctx.committed))return errorResult(ctx,503,'MESSAGE_RECEIPT_UNPROVEN');
+      if(!stationMessageReceiptProof(ctx,ctx.committed))return errorResult(ctx,503,'MESSAGE_RECEIPT_UNPROVEN');
       return confirmedResult(ctx);
     }
     if(['publish_select','publish_readback'].includes(ctx.step)){
@@ -117,7 +123,7 @@ export function advanceStationMessage(ctx,payload,error=false) {
       if(rows.length!==1||!sameCandidate(ctx,d))return errorResult(ctx,409,'MESSAGE_REQUEST_CONFLICT');
       ctx.candidate=d;
       if(d.state==='COMMITTED'){
-        if((ctx.requiredContract||d.streamId)&&!committedProof(ctx,d))return errorResult(ctx,503,'MESSAGE_RECEIPT_UNPROVEN');
+        if((ctx.requiredContract||d.streamId||d.photo)&&!stationMessageReceiptProof(ctx,d))return errorResult(ctx,503,'MESSAGE_RECEIPT_UNPROVEN');
         if(d.id!==d.publicId||typeof d.text!=='string'||!d.stationMessageEvent)return errorResult(ctx,503,'MESSAGE_COMMIT_INVALID');
         ctx.committed=d;
         if(ctx.step==='candidate'||ctx.step==='candidate_readback')return readCommunity(ctx,'reply_access');
@@ -154,11 +160,12 @@ export function advanceStationMessage(ctx,payload,error=false) {
       if(ctx.step==='accept_readback')return readCandidate(ctx,'accept_candidate_readback');
       if(!ctx.canReply || smPlayer(c,ctx.actorId).epoch!==ctx.candidate.epoch || c.typeSettingsRevision!==ctx.candidate.policyRevision)return errorResult(ctx,403,'COMMUNITY_MESSAGE_ACCESS_CHANGED');
       if(intents.length>=MESSAGE_OUTBOX_LIMIT)return errorResult(ctx,503,'MESSAGE_OUTBOX_FULL');
+      if(ctx.photo&&!ctx.photoStored)return op(ctx,'photo_store',null,'storePhoto',{id:ctx.candidate.publicId,photo:ctx.photo});
       if(++ctx.retries>3)return errorResult(ctx,409,'MESSAGE_ACCEPTANCE_CONFLICT');
       const member=c.members.find(m=>smIdentity(m)===ctx.actorId),createdAt=ctx.candidate.reservedAt;
       const sequence=stream?stream.acceptedSequence+1:null;
       if(stream&&!smSequence(sequence))return errorResult(ctx,503,'MESSAGE_OUTBOX_FULL');
-      const message={...(stream?{recordType:'MESSAGE',streamId:stream.streamId,sequence}:{}),id:ctx.candidate.publicId,communityId:ctx.communityId,text:ctx.text,createdAt,createdTs:Date.parse(createdAt),authorId:ctx.actorId,authorName:String(member.name||'Игрок').slice(0,120),authorAvatar:typeof member.avatar==='string'&&member.avatar.length<=2048?member.avatar:null,archived:false};
+      const message={...(stream?{recordType:'MESSAGE',streamId:stream.streamId,sequence}:{}),id:ctx.candidate.publicId,communityId:ctx.communityId,text:ctx.text,...(ctx.photo?{photo:ctx.photo}:{}),createdAt,createdTs:Date.parse(createdAt),authorId:ctx.actorId,authorName:String(member.name||'Игрок').slice(0,120),authorAvatar:typeof member.avatar==='string'&&member.avatar.length<=2048?member.avatar:null,archived:false};
       const event={...(stream?{streamId:stream.streamId,sequence}:{}),_id:'station-message-event:'+message.id,id:uuid('event:'+message.id),communityId:ctx.communityId,type:'CHAT_MESSAGE_CREATED',createdAt,createdTs:message.createdTs,actor:{id:ctx.actorId,name:message.authorName},payload:{messageId:message.id,textPreview:ctx.text.slice(0,120)}};
       ctx.intent={...(stream?{kind:'MESSAGE',streamId:stream.streamId,epoch:ctx.candidate.epoch,sequence,published:false}:{}),id:ctx.key,requestId:ctx.requestId,requestHash:ctx.requestHash,actorId:ctx.actorId,communityId:ctx.communityId,communityIdentity:ctx.communityIdentity,message,event};
       const filter={_id:c._id,id:c.id,communityType:'STATION',archived:{$ne:true},typeSettingsRevision:ctx.candidate.policyRevision,...smFence(c)};
@@ -176,13 +183,13 @@ export function advanceStationMessage(ctx,payload,error=false) {
     return errorResult(ctx,503,'MESSAGE_STATE_INVALID');
   }catch{return errorResult(ctx,503,'MESSAGE_STATE_INVALID');}
 }
-export async function runStationMessage(db,operation,{before,after}={}) {
+export async function runStationMessage(db,operation,{before,after,storePhoto}={}) {
   let next=operation;
   for(let step=0;step<40;step++){
     if(next.response||next.complete)return next;
     if(next.ctx.statusOnly&&next.method!=='find')return errorResult(next.ctx,503,'MESSAGE_STATUS_WRITE_FORBIDDEN');
     const fault=await before?.(next);let value,error=false;
-    try{value=fault?.skip?fault.value:next.method==='find'?await db.collection(next.store).find(...next.args).toArray():await db.collection(next.store).updateOne(...next.args);error=Boolean(fault?.error);}catch{error=true;}
+    try{value=fault?.skip?fault.value:next.method==='storePhoto'?await storePhoto?.(next.args[0]):next.method==='find'?await db.collection(next.store).find(...next.args).toArray():await db.collection(next.store).updateOne(...next.args);error=Boolean(fault?.error);}catch{error=true;}
     const changed=await after?.(next,value);if(changed?.error)error=true;
     next=advanceStationMessage(next.ctx,value,error);
   }

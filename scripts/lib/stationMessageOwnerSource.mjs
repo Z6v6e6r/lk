@@ -3,12 +3,14 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { addCommunityPolicyAuth, COMMUNITY_AUTH_SUBFLOW } from './communityPolicyAuth.mjs';
 import { addTypedCommunityResponseRedaction } from './communityResponseRedaction.mjs';
+import { STATION_PHOTO_ROUTE } from './stationChatPhotos.mjs';
+import { addStationPhotoNodes, stationPhotoNodes, stationPhotoReservedIds } from './stationChatPhotosSource.mjs';
 import { stationLifetimeRuntimeSource } from './stationMembershipReceiverSource.mjs';
 export const messageOwnerIds=Object.fromEntries(['router','messageFind','messageWrite','communityFind','communityWrite','eventFind','eventWrite','response','catch','legacyWrite','legacyAck','legacyCatch','canonicalIn','canonicalAuth','canonicalBegin','statusIn','statusAuth','statusBegin','readIn','readAuth','readBegin','readStatusIn','readStatusAuth','readStatusBegin'].map(k=>[k,'station_message_owner_'+k+'_v1']));
 export const messageOwnerRuntimeSource=()=>stationLifetimeRuntimeSource()+'\n'+fs.readFileSync(new URL('./stationMessageProof.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+fs.readFileSync(new URL('./stationMessageStream.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+fs.readFileSync(new URL('./stationMessageHistory.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+fs.readFileSync(new URL('./stationMessageRead.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+fs.readFileSync(new URL('./stationMessageOwner.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
-export function patchStationMessageOwner(bytes,{expectedFlowSha256,mongoClientId}){
+export function patchStationMessageOwner(bytes,{expectedFlowSha256,mongoClientId,stationPhotos=false}){
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==expectedFlowSha256)throw Error('MESSAGE_GRAPH_PREIMAGE');
-  const flow=addTypedCommunityResponseRedaction(JSON.parse(bytes)),ids=new Set(Object.values(messageOwnerIds)),byId=new Map(flow.map(n=>[n.id,n]));
+  const flow=addTypedCommunityResponseRedaction(JSON.parse(bytes)),ids=new Set([...Object.values(messageOwnerIds),...stationPhotoReservedIds]),byId=new Map(flow.map(n=>[n.id,n]));
   const reserved=v=>typeof v==='string'?ids.has(v):v&&typeof v==='object'?Object.values(v).some(reserved):false;
   if(flow.some(reserved))throw Error('MESSAGE_GRAPH_RESERVED_REFERENCE');
   if(!flow.some(n=>n.id===mongoClientId&&n.type==='mongodb4-client'))throw Error('MESSAGE_MONGO_CLIENT_REQUIRED');
@@ -31,6 +33,19 @@ export function patchStationMessageOwner(bytes,{expectedFlowSha256,mongoClientId
   if(!byId.has(COMMUNITY_AUTH_SUBFLOW)||byId.get(ingress[0].wires[0][0])?.type!=='subflow:'+COMMUNITY_AUTH_SUBFLOW)throw Error('MESSAGE_VERIFIED_SUBFLOW_REQUIRED');
   addCommunityPolicyAuth(flow); // Exact existing subflow definitions and ingress bindings must validate.
   const newRoutes=[['post','/lk/communities/:communityId/message-requests'],['get','/lk/communities/:communityId/message-requests/:requestId'],['post','/lk/communities/:communityId/message-read-requests'],['get','/lk/communities/:communityId/message-read-requests/:requestId']];
+  if(stationPhotos){
+    newRoutes.push(['post',STATION_PHOTO_ROUTE],['get',STATION_PHOTO_ROUTE+'/:messageId']);
+    const render=flow.filter(n=>n.type==='function'&&n.name==='Build community chat response'&&n.d!==true);
+    if(render.length!==1||render[0].func.split('      text,').length!==2)throw Error('STATION_PHOTO_HISTORY_RENDER_REQUIRED');
+    render[0].func=render[0].func.replace('      text,', "      text,\n      ...(item.stationMessageOwner === 1 && item.state === 'COMMITTED' && typeof item.photo?.hasCaption === 'boolean' ? {photo:{hasCaption:item.photo.hasCaption}} : {}),");
+    const query=flow.filter(n=>n.type==='function'&&n.name==='Build community chat query'&&n.d!==true);
+    const queryAnchor='const beforeTs = Number.isFinite(Number(ctx.beforeTs))';
+    if(query.length!==1||!query[0].func.includes('function historyActorAllowed(')||query[0].func.split(queryAnchor).length!==2||
+       render[0].func.split('  messages: sliced,').length!==2)throw Error('STATION_PHOTO_HISTORY_QUERY_REQUIRED');
+    query[0].func=query[0].func.replace(queryAnchor,"msg._stationPhotoSendEnabled = env.get('LK_STATION_CHAT_PHOTO_SEND_ENABLED') === 'true' && historyActorAllowed(community,msg._verifiedCommunityActor);\n"+queryAnchor);
+    render[0].func=render[0].func.replace('  messages: sliced,',"  messages: sliced,\n  ...(msg._stationPhotoSendEnabled === true ? {stationPhotoSendEnabled:true} : {}),");
+    if(flow.some(n=>n.z===writer.z&&['catch','complete'].includes(n.type)&&(!Array.isArray(n.scope)||!n.scope.length)))throw Error('STATION_PHOTO_OBSERVER_SCOPE_UNSAFE');
+  }
   for(const n of flow)if(n.type==='http in'&&['get','post','all'].includes(String(n.method||'get').toLowerCase())){
     const path=String(n.url||'').replace(/\/$/,'');
     for(const [method,route]of newRoutes){
@@ -120,17 +135,21 @@ try{msg._stationMessageOperation=beginStationRead({communityId:msg.req?.params?.
       {id:messageOwnerIds[mode+'Auth'],type:'subflow:'+COMMUNITY_AUTH_SUBFLOW,z,wires:[[messageOwnerIds[mode+'Begin']]]},
       {id:messageOwnerIds[mode+'Begin'],type:'function',z,name:statusOnly?'Read original station read request':'Begin station read-through request',func:begin,libs:[{var:'nodeCrypto',module:'crypto'}],outputs:2,wires:[[messageOwnerIds.router],[messageOwnerIds.response]]});
   }
-  const router=messageOwnerRuntimeSource()+String.raw`
+  const router=messageOwnerRuntimeSource()+'\nconst stationPhotos='+JSON.stringify(stationPhotos)+';\n'+String.raw`
 const next=msg._stationMessageOperation||(msg._stationMessage?.readCommand?advanceStationRead(msg._stationMessage,msg.payload,Boolean(msg.error)):advanceStationMessage(msg._stationMessage,msg.payload,Boolean(msg.error)));
 delete msg._stationMessageOperation;delete msg.error;
-if(next.response){delete msg._stationMessage;msg.statusCode=next.response.status;msg.payload=next.response.body;msg.headers={'Content-Type':'application/json','Cache-Control':'no-store'};return [null,null,null,null,null,null,msg];}
-if(next.ctx.statusOnly&&next.method!=='find'){msg.statusCode=503;msg.payload=stationMessageUnknown(next.ctx.requestId,503,'MESSAGE_STATUS_WRITE_FORBIDDEN').body;delete msg._stationMessage;return [null,null,null,null,null,null,msg];}
+const outputs=Array(stationPhotos?8:7).fill(null);
+const reply=(statusCode,payload)=>{outputs[6]={req:msg.req,res:msg.res,_msgid:msg._msgid,statusCode,payload,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}};return outputs;};
+if(next.response)return reply(next.response.status,next.response.body);
+if(next.ctx.committed||next.ctx.intent)delete msg._stationPhotoBytes;
+if(next.ctx.statusOnly&&next.method!=='find')return reply(503,stationMessageUnknown(next.ctx.requestId,503,'MESSAGE_STATUS_WRITE_FORBIDDEN').body);
 msg._stationMessage=next.ctx;msg.payload=next.args;
+if(next.method==='storePhoto'&&stationPhotos){outputs[7]=msg;return outputs;}
 const stores=['lk_community_chat_messages','lk_communities','lk_community_events'];
-const port=stores.indexOf(next.store)*2+(next.method==='find'?0:1),outputs=Array(7).fill(null);
+const port=stores.indexOf(next.store)*2+(next.method==='find'?0:1);
 if(port<0||port>5)throw Error('MESSAGE_OWNER_ROUTE_INVALID');outputs[port]=msg;return outputs;
 `;
-  flow.push({id:messageOwnerIds.router,type:'function',z,name:'Advance station message custody',func:router,libs:[{var:'nodeCrypto',module:'crypto'}],outputs:7,wires:['messageFind','messageWrite','communityFind','communityWrite','eventFind','eventWrite','response'].map(k=>[messageOwnerIds[k]])});
+  flow.push({id:messageOwnerIds.router,type:'function',z,name:'Advance station message custody',func:router,libs:[{var:'nodeCrypto',module:'crypto'}],outputs:stationPhotos?8:7,wires:[...['messageFind','messageWrite','communityFind','communityWrite','eventFind','eventWrite','response'].map(k=>[messageOwnerIds[k]]),...(stationPhotos?[[stationPhotoNodes.put]]:[])]});
   for(const [prefix,collection] of [['message','lk_community_chat_messages'],['community','lk_communities'],['event','lk_community_events']])for(const [suffix,operation]of[['Find','find'],['Write','updateOne']])flow.push({id:messageOwnerIds[prefix+suffix],type:'mongodb4',z,collection,operation,clientNode:mongoClientId,mode:'collection',output:'toArray',handleDocId:false,maxTimeMS:'3000',wires:[[messageOwnerIds.router]]});
   flow.push({id:messageOwnerIds.legacyWrite,type:'mongodb4',z,collection:'lk_communities',operation:'updateOne',clientNode:mongoClientId,mode:'collection',output:'toArray',handleDocId:false,maxTimeMS:'3000',wires:[[messageOwnerIds.legacyAck]]},
     {id:messageOwnerIds.legacyAck,type:'function',z,name:'Confirm legacy community message acceptance',outputs:4,wires,func:String.raw`
@@ -149,6 +168,7 @@ return deferred;
 `},
     {id:messageOwnerIds.legacyCatch,type:'catch',z,scope:[messageOwnerIds.legacyWrite],uncaught:false,wires:[[messageOwnerIds.legacyAck]]});
   flow.push({id:messageOwnerIds.response,type:'http response',z,wires:[]},{id:messageOwnerIds.catch,type:'catch',z,scope:['messageFind','messageWrite','communityFind','communityWrite','eventFind','eventWrite'].map(k=>messageOwnerIds[k]),uncaught:false,wires:[[messageOwnerIds.router]]});
+  if(stationPhotos)addStationPhotoNodes(flow,{z,mongoClientId,ownerIds:messageOwnerIds,ownerRuntime:messageOwnerRuntimeSource()});
   if(new Set(flow.map(n=>n.id)).size!==flow.length)throw Error('MESSAGE_GRAPH_DUPLICATE_ID');
   const allIds=new Set(flow.map(n=>n.id));
   for(const n of flow)for(const target of [...(n.wires||[]).flat(),...(n.links||[]),...(Array.isArray(n.scope)?n.scope:[])])if(!allIds.has(target))throw Error('MESSAGE_GRAPH_DANGLING_REFERENCE');

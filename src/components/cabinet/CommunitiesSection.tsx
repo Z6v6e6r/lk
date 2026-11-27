@@ -85,6 +85,7 @@ import { getGameCommunityAutopublishState } from "../../utils/gameCommunityAutop
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { resolveTournamentSignupExerciseId } from "../../utils/tournamentExerciseId";
 import { CommunityScreen } from "./community-feed/CommunityScreen";
+import type { StationChatPhotoDraft } from "../../utils/stationChatPhotos";
 import { CommunityChatScreen } from "./community-feed/CommunityChatScreen";
 import { CommunityFab } from "./community-feed/CommunityFab";
 import { CommunityRankingScreen } from "./community-feed/CommunityRankingScreen";
@@ -1647,6 +1648,7 @@ export function CommunitiesSection({
   const [feedLoadingMoreId, setFeedLoadingMoreId] = useState<string | null>(null);
   const [chatLoadingId, setChatLoadingId] = useState<string | null>(null);
   const [chatLoadingMoreId, setChatLoadingMoreId] = useState<string | null>(null);
+  const [chatPhotoSendByScope, setChatPhotoSendByScope] = useState<Record<string, boolean>>({});
   const [chatSendingId, setChatSendingId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [rankingRefreshLoadingId, setRankingRefreshLoadingId] = useState<string | null>(null);
@@ -2398,6 +2400,12 @@ export function CommunitiesSection({
     }
 
     const nextChunk = response.data?.messages ?? [];
+    if (mode !== "older") {
+      setChatPhotoSendByScope((current) => ({
+        ...current,
+        [JSON.stringify([communityId, profile.id])]: response.data?.stationPhotoSendEnabled === true,
+      }));
+    }
     const hasNewMessages = nextChunk.some((message) => !existingKeys.has(getCommunityChatMessageStableKey(message)));
     setChatByCommunityId((current) => ({
       ...current,
@@ -4651,36 +4659,36 @@ export function CommunitiesSection({
     setIsFeedComposerOpen(false);
   };
 
-  const handleSendChatMessage = async (event: FormEvent) => {
+  const handleSendChatMessage = async (event: FormEvent, photo: StationChatPhotoDraft | null) => {
     event.preventDefault();
 
-    if (!selectedCommunity) return;
+    if (!selectedCommunity) return false;
     if (!canChatInSelectedCommunity) {
       setChatError("Писать в чат могут только участники сообщества.");
-      return;
+      return false;
     }
 
     const text = chatDraft.trim();
     if (isCurrentChatSending) {
-      return;
+      return false;
     }
 
-    if (!text) {
+    if (!text && !photo) {
       setChatError("Напиши сообщение для чата.");
-      return;
+      return false;
     }
 
     setChatSendingId(selectedCommunity.id);
     setChatError(null);
 
     const draftRevision = chatDraftRevisionRef.current;
-    const binding = JSON.stringify([selectedCommunity.id, currentMember.id, text]);
+    const binding = JSON.stringify([selectedCommunity.id, currentMember.id, text, photo?.key]);
     let request = chatRequestRef.current.get(binding);
     if (!request) {
       if (chatRequestRef.current.size >= 8) {
         setChatSendingId(null);
         setChatError("Сначала повтори отправку одного из сообщений с неподтверждённым результатом.");
-        return;
+        return false;
       }
       request = { requestId: crypto.randomUUID() };
       chatRequestRef.current.set(binding, request);
@@ -4689,6 +4697,7 @@ export function CommunitiesSection({
       requestId: request.requestId,
       member: currentMember,
       text,
+      photoJpeg: photo?.jpeg,
     });
 
     setChatSendingId((current) => (current === selectedCommunity.id ? null : current));
@@ -4697,7 +4706,7 @@ export function CommunitiesSection({
       setChatError(
         communityErrorMessage(response.error, "Не удалось отправить сообщение в чат сообщества"),
       );
-      return;
+      return false;
     }
 
     if (chatRequestRef.current.get(binding) === request) chatRequestRef.current.delete(binding);
@@ -4719,6 +4728,7 @@ export function CommunitiesSection({
       setChatDraft((current) => current.trim() === text ? "" : current);
     }
     setChatError(null);
+    return true;
   };
 
   const canPostInSelectedCommunity = selectedCommunity
@@ -5731,6 +5741,7 @@ export function CommunitiesSection({
 
             {activeCommunityTab === "CHAT" && (
               <CommunityChatScreen
+                key={JSON.stringify([selectedCommunity.id, profileId])}
                 community={selectedCommunity}
                 messages={currentChatMessages}
                 isLoading={isCurrentChatLoading && currentChatMessages.length === 0}
@@ -5740,6 +5751,7 @@ export function CommunitiesSection({
                 error={chatError}
                 draft={chatDraft}
                 canSend={canChatInSelectedCommunity}
+                canAttachPhoto={chatPhotoSendByScope[JSON.stringify([selectedCommunity.id, profileId])] === true}
                 unreadCount={currentChatUnreadCount}
                 unreadBadgeCount={currentChatUnreadBadgeCount}
                 currentUserId={profileId}

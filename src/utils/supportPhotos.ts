@@ -25,7 +25,7 @@ export function normalizeSupportPhotos(value: unknown): SupportPhoto[] {
   });
 }
 
-export async function prepareSupportPhoto(file: File): Promise<SupportPhoto> {
+export async function prepareSupportPhoto(file: File, maxBytes = 1048576): Promise<SupportPhoto> {
   if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size > 20 * 1024 * 1024) {
     throw new Error("Выберите фото JPG, PNG или WebP размером до 20 МБ.");
   }
@@ -40,9 +40,10 @@ export async function prepareSupportPhoto(file: File): Promise<SupportPhoto> {
     const ctx = canvas.getContext("2d"); if (!ctx) throw new Error("Не удалось обработать фото.");
     ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
     let url = canvas.toDataURL("image/jpeg", 0.85);
-    if (url.length > 1400000) url = canvas.toDataURL("image/jpeg", 0.65);
+    if (url.length > Math.min(1400000, maxBytes * 4 / 3)) url = canvas.toDataURL("image/jpeg", 0.65);
+    if (maxBytes < 1048576 && url.length > maxBytes * 4 / 3) url = canvas.toDataURL("image/jpeg", 0.45);
     const size = Math.floor((url.split(",")[1]?.length || 0) * 3 / 4);
-    if (size > 1048576) throw new Error("Не удалось уменьшить фото. Выберите файл меньшего размера.");
+    if (size > maxBytes) throw new Error("Не удалось уменьшить фото. Выберите файл меньшего размера.");
     return { id: crypto.randomUUID(), type: "IMAGE", url, name: file.name.slice(0, 240), mimeType: "image/jpeg", size };
   } finally { URL.revokeObjectURL(source); }
 }

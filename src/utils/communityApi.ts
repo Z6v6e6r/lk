@@ -299,6 +299,7 @@ export interface CommunityChatMessage {
   authorPhone: string | null;
   authorName: string;
   authorAvatar: string | null;
+  photo?: { hasCaption: boolean };
 }
 
 export interface CommunityChatMessagesResponse {
@@ -307,6 +308,7 @@ export interface CommunityChatMessagesResponse {
   hasMore: boolean;
   nextBeforeTs: number | null;
   totalFetched: number;
+  stationPhotoSendEnabled?: boolean;
 }
 
 export interface CommunityActorPayload {
@@ -401,6 +403,7 @@ export interface CreateCommunityChatMessagePayload {
   requestId?: string;
   member: CommunityActorPayload;
   text: string;
+  photoJpeg?: string;
 }
 
 export interface CommunityLogoUploadResponse {
@@ -958,6 +961,8 @@ function normalizeCommunityChatMessage(value: unknown): CommunityChatMessage | n
     id,
     communityId,
     text,
+    ...(isRecord(value.photo) && typeof value.photo.hasCaption === "boolean"
+      ? { photo: { hasCaption: value.photo.hasCaption } } : {}),
     createdAt,
     createdTs,
     authorId:
@@ -1153,6 +1158,7 @@ function extractCommunityChatMessagesResponse(
     ),
     nextBeforeTs: explicitNextBeforeTs ?? inferredNextBeforeTs,
     totalFetched: explicitTotalFetched ?? messages.length,
+    ...(isPayloadRecord && payload.stationPhotoSendEnabled === true ? { stationPhotoSendEnabled: true } : {}),
   };
 }
 
@@ -2184,16 +2190,19 @@ export async function apiCreateCommunityChatMessage(
     return errorResult<CommunityChatMessage>(400, "Не указан communityId", null);
   }
 
-  if (!text) {
+  if (!text && !payload.photoJpeg) {
     return errorResult<CommunityChatMessage>(400, "Не указан текст сообщения", null);
   }
 
+  const photo = payload.photoJpeg;
+  const route = photo ? "message-photos" : "messages";
   const response = await requestCommunityMutation<unknown>(
-    `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/messages`,
+    `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/${route}`,
     {
       method: "POST",
       retries: 0,
-      body: JSON.stringify({
+      ...(photo ? { redirect: "error" } : {}),
+      body: JSON.stringify(photo ? { requestId: payload.requestId, caption: text, jpeg: photo } : {
         member: buildMemberPayload(payload.member),
         text,
         requestId: payload.requestId,
@@ -2214,7 +2223,8 @@ export async function apiCreateCommunityChatMessage(
     (nestedData ? normalizeCommunityChatMessage(nestedData) : null) ??
     normalizeCommunityChatMessage(response.data);
 
-  if (!message) {
+  if (!message || (photo && (payloadRecord.requestId !== payload.requestId ||
+      message.communityId !== normalizedCommunityId || message.photo?.hasCaption !== Boolean(text)))) {
     return errorResult<CommunityChatMessage>(response.status, MESSAGE_DELIVERY_UNCONFIRMED, null);
   }
 

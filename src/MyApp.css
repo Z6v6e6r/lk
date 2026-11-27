@@ -21204,3 +21204,75 @@ body.lk-idle-data-stale {
 .game-split-subscription-option-copy [role="status"] { font-size: 13px; line-height: 1.4; }
 .game-split-subscription-option-validity { flex-shrink: 0; font-size: 12px; max-width: 105px; text-align: right; }
 .game-split-subscription-option--preview:disabled { opacity: 0.65; cursor: not-allowed; }
+
+.community-chat-figma-photo-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid #dccfed;
+  border-radius: 12px;
+  background: #fff;
+  color: #48356a;
+  font: inherit;
+  cursor: pointer;
+}
+
+.community-chat-figma-photo-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.community-chat-figma-photo-draft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.community-chat-figma-photo-draft img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 10px;
+}
+
+.community-chat-figma-photo-note {
+  margin: 0 0 8px;
+}
+
+.community-chat-figma-photo-viewer {
+  box-sizing: border-box;
+  width: min(92vw, 880px);
+  max-height: 90dvh;
+  padding: 16px;
+  border: 0;
+  border-radius: 20px;
+  background: #fff;
+  color: #312552;
+  font-family: "RF Dewi", "Inter Display", sans-serif;
+}
+
+.community-chat-figma-photo-viewer::backdrop {
+  background: rgba(21, 15, 34, 0.78);
+}
+
+.community-chat-figma-photo-viewer header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.community-chat-figma-photo-viewer h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.community-chat-figma-photo-viewer img {
+  display: block;
+  width: 100%;
+  max-height: 74dvh;
+  object-fit: contain;
+}

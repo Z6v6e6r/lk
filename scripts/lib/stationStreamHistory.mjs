@@ -1,4 +1,5 @@
-import { smId, smUuid, smSequence, smPlayer, smReadPosition, smEqual, smLifetime, smStream, smHash, smKeys } from './stationMembershipLifetime.mjs';
+import { stationMessageRequestHash } from './stationMessageProof.mjs';
+import { smId, smUuid, smSequence, smPlayer, smReadPosition, smEqual, smLifetime, smStream, smKeys } from './stationMembershipLifetime.mjs';
 import { stationStreamEnvelope } from './stationMessageStream.mjs';
 import { historyActorAllowed, historyMongoIdentity, historyRequest, historyFindArguments, historyPage } from './stationMessageHistory.mjs';
 const ssFail=code=>{throw Error(code);};
@@ -78,7 +79,7 @@ export function streamSummaryClassification(community,actor,authorized){
     smLifetime(community);
     if(community.communityMessageOutbox!==undefined&&(!Array.isArray(community.communityMessageOutbox)||community.communityMessageOutbox.length>32))ssFail('HISTORY_UNAVAILABLE');
     for(const intent of community.communityMessageOutbox??[]){
-      if(!smKeys(intent,['id','requestId','requestHash','actorId','communityId','communityIdentity','message','event'])||typeof intent.id!=='string'||!smUuid(intent.requestId)||!smId(intent.actorId)||intent.communityId!==community.id||!smEqual(intent.communityIdentity,historyMongoIdentity(community))||typeof intent.message?.text!=='string'||intent.message.authorId!==intent.actorId||intent.event?.type!=='CHAT_MESSAGE_CREATED'||intent.event.payload?.messageId!==intent.message.id||intent.requestHash!==smHash('station-message-request:v1',{communityId:community.id,actorId:intent.actorId,text:intent.message.text}))ssFail('HISTORY_UNAVAILABLE');
+      if(!smKeys(intent,['id','requestId','requestHash','actorId','communityId','communityIdentity','message','event'])||typeof intent.id!=='string'||!smUuid(intent.requestId)||!smId(intent.actorId)||intent.communityId!==community.id||!smEqual(intent.communityIdentity,historyMongoIdentity(community))||typeof intent.message?.text!=='string'||intent.message.authorId!==intent.actorId||intent.event?.type!=='CHAT_MESSAGE_CREATED'||intent.event.payload?.messageId!==intent.message.id||intent.requestHash!==stationMessageRequestHash({communityId:community.id,actorId:intent.actorId,text:intent.message.text,photo:intent.message.photo}))ssFail('HISTORY_UNAVAILABLE');
     }
     return {communityId:community.id,availability:'UNADOPTED'};
   }
