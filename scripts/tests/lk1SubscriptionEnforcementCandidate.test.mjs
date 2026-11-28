@@ -1,6 +1,7 @@
 import { restoreSourceBeforeKidsTrainingGuard } from "../prepare_kids_training_subscription_release.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import test from "node:test";
 import {
@@ -46,6 +47,18 @@ function frozenBusinessHash(file) {
     // source. Never advance a historical deployment/rebase contract to new code.
     assert.equal(sha256(text), '0b06938e198a63cb798dfc65a050fa20f866ceaf55ab2a95a34aa74b753fdcc6', file);
     text = applyPaginationEdits(text, subscriptionBookingPaginationEdits().reverse().map(([before, after]) => [after, before]));
+  }
+  if (file === 'scripts/nodered_games_nodes/fn_game_payment_confirm_router.js') {
+    // This successor serves the new reader. The historical full-flow candidate
+    // remains bound to the original observer and original business source.
+    assert.equal(sha256(text), '33177e2262fd3a59b2131f0583b98e643e68aece6785af87ed72f6c961838dad', file);
+    const currentBusiness = text.slice(text.indexOf('const TOKEN_URL'))
+      .replace('  lkDiagnostic({ code, httpStatus: statusCode, outcome: "refused" });\n', '');
+    assert.ok(text.includes(`sourceHash: "${sha256(currentBusiness)}"`), file);
+    assert.notEqual(sha256(currentBusiness), 'a956766184f16afb4b6185fd5956776ba7a98c00140a44f207e4b470ebccf324', file);
+    text = execFileSync('git', ['cat-file', 'blob', '3e58599d4a834e98f4117766830591d438f31c1d'], {
+      encoding: 'utf8', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+    });
   }
   const pin = observerPins[file];
   if (!pin) return sha256(text);

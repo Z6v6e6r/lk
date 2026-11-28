@@ -99,7 +99,9 @@ import {
   savePendingPaidGameDraft,
   type PendingPaidGameDraft,
 } from "../../utils/paymentSync";
-import { persistServerGameDraftBeforeRedirect } from "../../utils/serverGameDraftPersistence";
+import { persistRecoveredSubscriptionGame, persistServerGameDraftBeforeRedirect } from "../../utils/serverGameDraftPersistence";
+import { isPersistedGamePaymentTerminal } from "../../utils/paymentSyncDraftRecovery";
+import { isSplitSurchargeGameReadback } from "../../utils/serverGameDraftPersistencePolicy";
 import {
   getPendingSplitRosterPaymentConfirmation,
   removePendingSplitRosterPaymentConfirmation,
@@ -11067,7 +11069,30 @@ export default function GamesPage({
     paymentRef = paymentResult.data.paymentRef || paymentRef;
     baseRedirectUrl = buildBaseRedirectUrl(fromDate, { [PAYMENT_REF_QUERY_KEY]: paymentRef, splitPayment: "organizer" });
 
-    const subscriptionDecisionNotice = resolvedPaymentMode === "subscription"
+    const recoveredCreate = isRecordObject(paymentResult.data.raw)
+      && paymentResult.data.raw.recovery === "SPLIT_CREATE_RESULT_V1";
+    const legacyDailyRecovery = recoveredCreate && isRecordObject(paymentResult.data.raw)
+      && ["LEGACY_DAILY_OPERATION", "LEGACY_DAILY_RECEIPT"].includes(String(paymentResult.data.raw.referenceSource));
+    const existingCardOnly = legacyDailyRecovery && isRecordObject(paymentResult.data.raw)
+      && paymentResult.data.raw.existingCardOnly === true;
+    const splitSurcharge = recoveredCreate && paymentResult.data.selectedPaymentMode === "subscription"
+      && paymentResult.data.subscriptionVisitCount === 1
+      && paymentResult.data.toPayMinor != null && paymentResult.data.toPayMinor > 0
+      && paymentResult.data.operationId && paymentResult.data.transactionId
+      && paymentResult.data.exerciseId && paymentResult.data.bookingId
+      ? {
+          operationId: paymentResult.data.operationId,
+          transactionId: paymentResult.data.transactionId,
+          exerciseId: paymentResult.data.exerciseId,
+          clientId,
+          amountMinor: paymentResult.data.toPayMinor,
+          canWrite: isCurrentCreation,
+        }
+      : undefined;
+    const recoveredPaidSurcharge = Boolean(splitSurcharge && paymentResult.data.settlementState === "PAID");
+    const subscriptionDecisionNotice = recoveredPaidSurcharge
+      ? "Подписка применена, доплата подтверждена"
+      : resolvedPaymentMode === "subscription"
       ? formatSubscriptionDecisionPresentation(resolveSubscriptionDecisionPresentation({
           action: "CREATE_GAME",
           requestedPaymentMode: "subscription",
@@ -11103,20 +11128,23 @@ export default function GamesPage({
     const resolvedBookingIds = paymentResult.data.bookingId ? [paymentResult.data.bookingId] : [];
     const resolvedPaymentAmount = paymentResult.data.toPay ?? shareAmount;
     const paidAt = new Date().toISOString();
-    const organizerPaymentStatus = paymentResult.data.paymentUrl ? "PAYMENT_PENDING" : "PAID";
-    const recoveredCreate = isRecordObject(paymentResult.data.raw)
-      && paymentResult.data.raw.recovery === "SPLIT_CREATE_RESULT_V1";
+    const organizerPaymentStatus = paymentResult.data.paymentUrl || resolvedPaymentAmount > 0 ? "PAYMENT_PENDING" : "PAID";
     const splitDeadlineAt = paymentResult.data.deadlineAt
       ?? (recoveredCreate ? null : new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString());
     const resolvedDirectionId = paymentResult.data.directionId ?? SPLIT_OPEN_GAME_DIRECTION_ID;
     const resolvedExerciseTypeId = paymentResult.data.exerciseTypeId ?? SPLIT_OPEN_GAME_EXERCISE_TYPE_ID;
-    const resolvedSplitShareAmount = paymentResult.data.shareAmount ?? shareAmount;
-    const resolvedSplitShareAmountMinor = paymentResult.data.shareAmountMinor ?? Math.round(resolvedSplitShareAmount * 100);
+    const verifiedLegacyTotal = legacyDailyRecovery && slotPrice != null && Number.isFinite(slotPrice) && slotPrice > 0
+      ? slotPrice
+      : null;
+    const legacyShare = verifiedLegacyTotal == null ? null : Math.round(verifiedLegacyTotal * 100 / splitShareCount) / 100;
+    const resolvedSplitShareAmount = paymentResult.data.shareAmount ?? (legacyDailyRecovery ? legacyShare : shareAmount);
+    const resolvedSplitShareAmountMinor = paymentResult.data.shareAmountMinor
+      ?? (resolvedSplitShareAmount == null ? null : Math.round(resolvedSplitShareAmount * 100));
     const resolvedBaseShareAmount = paymentResult.data.baseShareAmount ?? baseShareAmount;
     const resolvedBaseShareAmountMinor = paymentResult.data.baseShareAmountMinor ?? Math.round(resolvedBaseShareAmount * 100);
     const resolvedDiscountAmount = paymentResult.data.discountAmount ?? discountAmount;
     const resolvedDiscountAmountMinor = paymentResult.data.discountAmountMinor ?? Math.round(resolvedDiscountAmount * 100);
-    const resolvedSplitTotalAmount = paymentResult.data.totalAmount ?? resolvedTotalAmount;
+    const resolvedSplitTotalAmount = paymentResult.data.totalAmount ?? (legacyDailyRecovery ? verifiedLegacyTotal : resolvedTotalAmount);
     const resolvedOneTimeBaseAmount = paymentResult.data.oneTimeBaseAmount
       ?? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.baseShareAmount;
     const splitMetadata = {
@@ -11142,6 +11170,7 @@ export default function GamesPage({
       selectedPaymentMode: paymentResult.data.selectedPaymentMode ?? resolvedPaymentMode,
       paymentModes: paymentResult.data.paymentModes,
       clientSubscriptionId: resolvedClientSubscriptionId,
+      ...(splitSurcharge ? { createOperationId: splitSurcharge.operationId } : {}),
       subscriptionProductId: paymentResult.data.subscriptionProductId,
       subscriptionProductName: paymentResult.data.subscriptionProductName,
       oneTimeProductId: paymentResult.data.oneTimeProductId,
@@ -11246,7 +11275,43 @@ export default function GamesPage({
       },
     };
 
+    const operationId = paymentResult.data.operationId;
+    const showPaidGame = (createdRecord: PadelGameRecord, publish = true) => {
+      completePadelSplitCreate(operationId);
+      const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
+      upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
+      if (publish) void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
+      setGameRecordId(createdRecord.id);
+      setGameRecordStatus(createdRecord.status ?? "PAID");
+      setInviteLink(resolveGameInviteUrl(createdRecord) ?? fallbackInviteUrl);
+      setGamePaymentUrl(null);
+      setGamePaid(true);
+      setGameSnapshot(
+        mergeMatchSnapshots(
+          buildMatchSnapshotFromPayload(payload),
+          buildMatchSnapshotFromRecord(createdRecord),
+        ),
+      );
+      setConfirmCancelUnpaidGame(false);
+      setLoadingPay(false);
+      pushCabinetFlashNotice(subscriptionDecisionNotice);
+      setStep("details");
+    };
+
     if (!paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0) {
+      if (legacyDailyRecovery) {
+        const restored = await persistRecoveredSubscriptionGame(payload, existingCardOnly, isCurrentCreation);
+        if (!isCurrentCreation()) { setLoadingPay(false); return; }
+        if (restored.record) {
+          showPaidGame(restored.record, !restored.reused);
+        } else {
+          setPayError(restored.error || "Сохранение карточки пока не подтверждено");
+          setGameCreationPending(true);
+          setLoadingPay(false);
+        }
+        return;
+      }
+
       const directCreateResult = await apiCreatePadelGameRecord({
         ...payload,
         status: "PAID",
@@ -11264,35 +11329,17 @@ export default function GamesPage({
         return;
       }
 
-      const createdRecord = directCreateResult.data;
-      completePadelSplitCreate(paymentResult.data.operationId);
-      const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
-      upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
-      void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
-      setGameRecordId(createdRecord.id);
-      setGameRecordStatus(createdRecord.status ?? "PAID");
-      setInviteLink(resolveGameInviteUrl(createdRecord) ?? fallbackInviteUrl);
-      setGamePaymentUrl(null);
-      setGamePaid(true);
-      setGameSnapshot(
-        mergeMatchSnapshots(
-          buildMatchSnapshotFromPayload(payload),
-          buildMatchSnapshotFromRecord(createdRecord),
-        ),
-      );
-      setConfirmCancelUnpaidGame(false);
-      setLoadingPay(false);
-      pushCabinetFlashNotice(subscriptionDecisionNotice);
-      setStep("details");
+      showPaidGame(directCreateResult.data);
       return;
     }
 
-    if (paymentResult.data.paymentUrl) {
+    if (paymentResult.data.paymentUrl || recoveredPaidSurcharge) {
       savePendingPaidGameDraft(paymentRef, payload, resolvedBookingIds);
       const persistedDraft = await persistServerGameDraftBeforeRedirect(
         paymentRef,
         payload,
         resolvedBookingIds,
+        splitSurcharge,
       );
       if (!isCurrentCreation()) { setLoadingPay(false); return; }
       if (!persistedDraft.record) {
@@ -11300,16 +11347,42 @@ export default function GamesPage({
           `${persistedDraft.error || "Не удалось сохранить игру в ЛК"}. `
           + "Бронь в Viva уже создана — не создавайте игру повторно.",
         );
+        if (splitSurcharge) setGameCreationPending(true);
         setLoadingPay(false);
         return;
       }
 
-      upsertGameRecordInStores(persistedDraft.record, { communityMode: "upsert" });
+      const savedGame = persistedDraft.record;
+      if (splitSurcharge && isPersistedGamePaymentTerminal(savedGame)) {
+        showPaidGame(savedGame);
+        return;
+      }
+      upsertGameRecordInStores(savedGame, { communityMode: "upsert" });
+      if (recoveredPaidSurcharge) {
+        const syncResult = await processPendingPaymentSyncQueue({
+          forcePaymentRef: paymentRef,
+          forceBookingIds: resolvedBookingIds,
+          source: "split_create_recovery",
+          keepalive: true,
+          maxItems: 1,
+        });
+        if (!isCurrentCreation()) { setLoadingPay(false); return; }
+        const paidGame = syncResult.resolved.find(item => item.paymentRef === paymentRef)?.record;
+        if (splitSurcharge && paidGame?.id === savedGame.id && isPersistedGamePaymentTerminal(paidGame)
+          && isSplitSurchargeGameReadback(paidGame, paymentRef, resolvedBookingIds, splitSurcharge)) {
+          showPaidGame(paidGame);
+          return;
+        }
+        setPayError("Доплата уже прошла. Не удалось подтвердить карточку в ЛК. Проверьте результат этой же попытки.");
+        setGameCreationPending(true);
+        setLoadingPay(false);
+        return;
+      }
       completePadelSplitCreate(paymentResult.data.operationId);
       enqueuePendingPaymentSync(paymentRef, resolvedBookingIds, "split_pay_click");
       pushCabinetFlashNotice(subscriptionDecisionNotice);
 
-      if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
+      if (!paymentResult.data.paymentUrl || !navigateToExternalUrl(paymentResult.data.paymentUrl)) {
         setPayError("Не удалось открыть страницу оплаты");
         setLoadingPay(false);
       }
@@ -11338,6 +11411,7 @@ export default function GamesPage({
     profileRatingNumeric,
     profilePhoto,
     paymentAmount,
+    slotPrice,
     gameTitleDraft,
     gameParticipantCommentDraft,
     gameJoinPriceDraft,

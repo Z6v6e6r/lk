@@ -3981,6 +3981,7 @@ export interface PadelSplitPaymentResult {
   operationId?: string | null;
   gameId?: string | null;
   settlementState?: string | null;
+  subscriptionVisitCount?: number | null;
   paymentUrl: string | null;
   toPay: number;
   toPayMinor: number | null;
@@ -8978,6 +8979,7 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
     operationId: pickString(data, ["operationId"]) ?? null,
     gameId: pickString(data, ["gameId"]) ?? null,
     settlementState: pickString(data, ["settlementState"]) ?? null,
+    subscriptionVisitCount: pickNumeric(data, ["subscriptionVisitCount"]) ?? null,
     paymentUrl: extractPaymentUrl(data),
     toPay,
     toPayMinor,
@@ -9371,6 +9373,7 @@ async function requestPadelSplitCreateWithPendingPoll(
     clientSubscriptionId: params.clientSubscriptionId || "", studioId: params.studioId, roomId: params.roomId,
     fromTime: `${params.date}T${params.fromTime}:00+03:00`,
     toTime: moscowBookingEndIso(params.date, params.fromTime, params.toTime),
+    maxClientsCount: params.maxClientsCount ?? params.shareCount,
   };
   const query = new URLSearchParams({ operationId: binding.operationId });
   const recovered = await recoverSplitCreateResult(binding, (remainingMs) => runWithAbortTimeout(remainingMs,

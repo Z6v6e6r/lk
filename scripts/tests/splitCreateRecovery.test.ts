@@ -32,6 +32,42 @@ test('recovery accepts only a fully bound, explicit and consistent success', () 
   assert.equal(confirmedSplitCreateResult({ ...paid, paymentUrl: 'javascript:alert(1)' }, binding), false);
 });
 
+test('legacy daily recovery binds capacity, preserves the original receipt and rejects checkout or fabricated price', async () => {
+  const expected = { ...binding, maxClientsCount: 4 };
+  const data = { ...success(), referenceSource: 'LEGACY_DAILY_RECEIPT', existingCardOnly: false,
+    shareAmount: null, shareAmountMinor: null, deadlineAt: null, maxClientsCount: 4, directionId: 4588, exerciseTypeId: 1613,
+    assembleDeadlineAt: '2035-01-01T04:00:00Z', paymentRef: 'server-original-ref', subscriptionVisitCount: 2 };
+  assert.equal(confirmedSplitCreateResult(data, expected), true);
+  for (const change of [
+    { existingCardOnly: true }, { maxClientsCount: 2 }, { exerciseTypeId: 1234 },
+    { assembleDeadlineAt: '2035-01-01T05:00:00Z' }, { transactionId: id(7) }, { shareAmountMinor: 0 },
+    { paymentRef: null }, { toPay: 10, toPayMinor: 1000 },
+  ]) assert.equal(confirmedSplitCreateResult({ ...data, ...change }, expected), false);
+  const result = await recoverSplitCreateResult(expected, async () => ({ data, error: null, status: 200 }),
+    { session: () => 'synthetic-session', delaysMs: [0] });
+  assert.equal((result.data as typeof data).paymentRef, 'server-original-ref');
+
+  const old = { ...data, referenceSource: 'LEGACY_DAILY_OPERATION', existingCardOnly: true, paymentRef: null };
+  const oldResult = await recoverSplitCreateResult(expected, async () => ({ data: old, error: null, status: 200 }),
+    { session: () => 'synthetic-session', delaysMs: [0] });
+  assert.equal((oldResult.data as typeof data).paymentRef, binding.paymentRef);
+  assert.equal((oldResult.data as typeof data).existingCardOnly, true);
+  assert.equal(confirmedSplitCreateResult({ ...old, existingCardOnly: false }, expected), false);
+});
+
+test('a paid mixed recovery keeps the original positive amount and accepts no stale checkout', () => {
+  const expected = { ...binding, maxClientsCount: 4 };
+  const result = { ...success(), subscriptionVisitCount: 1, clientId: id(1), productId: id(8),
+    maxClientsCount: 4, totalAmount: 3000, toPayMinor: 21000, toPay: 210, transactionId: id(7),
+    settlementState: 'PAID', paidAt: '2035-01-01T09:05:00Z' };
+  assert.equal(confirmedSplitCreateResult(result, expected), true);
+  assert.equal(hasDeterministicSubscriptionDecision({ ...result, raw: result }, 'subscription'), true);
+  for (const change of [
+    { paidAt: 'bad' }, { subscriptionVisitCount: 0 }, { maxClientsCount: 2 }, { totalAmount: 210 },
+    { productId: null }, { transactionId: null }, { paymentUrl: 'https://example.test/expired' },
+  ]) assert.equal(confirmedSplitCreateResult({ ...result, ...change }, expected), false);
+});
+
 test('bounded reads recover pending/failed status attempts without accepting an unbound result', async () => {
   let calls = 0;
   const r = await recoverSplitCreateResult(binding, async () => {

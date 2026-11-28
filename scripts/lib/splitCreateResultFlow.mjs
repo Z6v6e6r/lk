@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { addLegacySplitCreateProof } from './splitCreateLegacyProof.mjs';
 import { createSplitCreateResultProtocol } from './splitCreateResult.mjs';
 import { instrumentSplitCreateTimings } from './splitCreateTiming.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from '../nodered_reviewed_flow_deploy/runtime_contract.mjs';
@@ -91,9 +92,55 @@ export function composeSplitCreateResultFlow(liveBytes, expectedSha256) {
     || mongo?.type !== 'mongodb4' || !mongo.clientNode) throw Error('Split result owning graph unavailable');
   const nodes = buildSplitCreateResultNodes(route[0].z, mongo.clientNode);
   const allowedChanges = instrumentSplitCreateTimings(flow);
+  const bookingRouter = flow.find(node => node.id === 'lk_subscription_booking_router_20260804');
+  bookingRouter.func = addLegacySplitCreateProof(bookingRouter.func);
+  new Function('msg', 'global', 'node', bookingRouter.func);
   const candidateBytes = Buffer.from(`${JSON.stringify([...flow, ...nodes], null, 2)}\n`);
   const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId: 'split-create-result-20261113',
     allowedChanges, allowedAdditionIds: nodes.map(n => n.id) });
   validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
   return { candidateBytes, contract, nodes };
+}
+
+// The installed GET reader already owns the route. Only replace its protocol
+// after checking both the source preimage and the existing read-only graph.
+export function updateSplitCreateResultReader(liveBytes, expectedSha256, expectedHandlerSha256, expectedBookingRouterSha256) {
+  if (!/^[a-f0-9]{64}$/.test(expectedSha256) || sha(liveBytes) !== expectedSha256
+    || !/^[a-f0-9]{64}$/.test(expectedHandlerSha256)) throw Error('Split result flow preimage mismatch');
+  const flow = JSON.parse(liveBytes);
+  const byId = new Map(flow.map(node => [node.id, node]));
+  const handler = byId.get(SPLIT_CREATE_RESULT_IDS.handler);
+  const ownerFind = byId.get('lk_subscription_booking_find_20260804');
+  if (byId.size !== flow.length || handler?.type !== 'function' || typeof handler.func !== 'string' || sha(handler.func) !== expectedHandlerSha256
+    || ownerFind?.type !== 'mongodb4' || !ownerFind.clientNode
+    || byId.get(handler.z)?.type !== 'tab' || byId.get(handler.z)?.disabled) throw Error('Split result handler preimage mismatch');
+
+  const routes = flow.filter(node => node.type === 'http in' && node.url === SPLIT_CREATE_RESULT_PATH && node.method === 'get');
+  if (routes.length !== 1 || routes[0].id !== SPLIT_CREATE_RESULT_IDS.get) throw Error('Split result route collision');
+  const fields = ['type', 'z', 'url', 'method', 'wires', 'scope', 'uncaught', 'outputs', 'ret', 'senderr',
+    'clientNode', 'collection', 'operation', 'mode', 'output', 'handleDocId', 'maxTimeMS'];
+  for (const expected of buildSplitCreateResultNodes(handler.z, ownerFind.clientNode)) {
+    const current = byId.get(expected.id);
+    if (!current || fields.some(key => JSON.stringify(current[key]) !== JSON.stringify(expected[key]))) {
+      throw Error('Split result reader graph mismatch');
+    }
+  }
+
+  const changes = [{ id: handler.id, fields: ['func'] }];
+  if (expectedBookingRouterSha256 !== undefined) {
+    const router = byId.get('lk_subscription_booking_router_20260804');
+    if (!/^[a-f0-9]{64}$/.test(expectedBookingRouterSha256) || router?.type !== 'function'
+      || typeof router.func !== 'string' || sha(router.func) !== expectedBookingRouterSha256) {
+      throw Error('Legacy split CREATE proof router preimage mismatch');
+    }
+    router.func = addLegacySplitCreateProof(router.func);
+    new Function('msg', 'global', 'node', router.func);
+    changes.push({ id: router.id, fields: ['func'] });
+  }
+  handler.func = splitCreateResultFunctionSource();
+  const candidateBytes = Buffer.from(JSON.stringify(flow, null, 2) + '\n');
+  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId: 'split-create-result-recovery',
+    allowedChanges: changes, allowedAdditionIds: [] });
+  validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
+  return { candidateBytes, contract, nodes: [] };
 }
